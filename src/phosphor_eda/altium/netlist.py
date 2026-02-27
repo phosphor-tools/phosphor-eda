@@ -44,10 +44,15 @@ def _point_on_segment(
 
 def _resolve_sheet_nets(
     records: list[dict[str, str]],
+    extra_named_coords: dict[tuple[int, int], str] | None = None,
 ) -> dict[tuple[int, int], str]:
     """Build a coordinate -> net name map from one sheet's records.
 
     Returns a dict mapping (x, y) coordinates to their net name.
+
+    extra_named_coords: optional fallback names for coordinates that should be
+    named even if no net label/power port/port is present. These have the
+    LOWEST priority — they only name a wire group if nothing else does.
     """
     uf = _UnionFind()
 
@@ -146,9 +151,12 @@ def _resolve_sheet_nets(
         root = uf.find(pp)
         group_names[root] = name
 
-    # Connect ports to wire segments
+    # Connect ports to wire segments (skip harness-type ports — those connect
+    # to signal harness wires, not regular wires, and are expanded separately)
     for rec in records:
         if rec.get("RECORD") != "18":
+            continue
+        if rec.get("HarnessType"):
             continue
         px = int(rec.get("Location.X", "0"))
         py = int(rec.get("Location.Y", "0"))
@@ -163,6 +171,20 @@ def _resolve_sheet_nets(
                 break
         root = uf.find(pp)
         group_names[root] = name
+
+    # --- Step 4.5: Fallback names for extra coordinates (lowest priority) ---
+    # Used for harness entry coordinates that name otherwise-unnamed wire groups.
+    if extra_named_coords:
+        for (ex, ey), ename in extra_named_coords.items():
+            ep = (ex, ey)
+            all_named_points.add(ep)
+            for (x1, y1), (x2, y2) in wire_segments:
+                if _point_on_segment(ex, ey, x1, y1, x2, y2):
+                    uf.union(ep, (x1, y1))
+                    break
+            root = uf.find(ep)
+            if root not in group_names:
+                group_names[root] = ename
 
     # --- Step 5: Rebuild group_names after all unions ---
     # Re-resolve roots since unions in step 4 may have changed them

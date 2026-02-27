@@ -124,12 +124,16 @@ def merge_pages(
     for port_list in ports_by_name.values():
         if len(port_list) < 2:
             continue
-        # Resolve the target net (may already have been merged by name)
+        # Resolve the target net (may already have been merged by name).
+        # When bridging, prefer the net whose name looks "primary" (no ":")
+        # so that canonical signal names survive over synthetic harness names.
         target = _resolve_net(merged_nets, port_list[0].net)
         for port in port_list[1:]:
             other = _resolve_net(merged_nets, port.net)
             if other is target:
                 continue
+            if ":" in target.name and ":" not in other.name:
+                target, other = other, target
             # Move all pins from other net to target
             for pin in other.pins:
                 pin.net = target

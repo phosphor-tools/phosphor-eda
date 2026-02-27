@@ -1,10 +1,16 @@
-"""Low-level parser for Altium SchDoc OLE FileHeader records.
+"""Low-level parser for Altium SchDoc OLE compound-document streams.
 
-Each record in the FileHeader stream has binary layout:
+A .SchDoc file is an OLE container with up to three streams:
+
+- **FileHeader** — main schematic records (components, wires, pins, …)
+- **Storage** — embedded images / icons
+- **Additional** (optional) — signal-harness records (215–218)
+
+Each stream is a sequence of binary records:
     [payload_length: 2 bytes LE] [0x00] [record_type: 1 byte] [payload]
 
-For type 0 records, payload is null-terminated pipe-delimited ASCII:
-    |KEY1=value1|KEY2=value2\0
+For type-0 records the payload is null-terminated pipe-delimited ASCII:
+    |KEY1=value1|KEY2=value2\\0
 """
 
 import olefile
@@ -22,7 +28,7 @@ def parse_record_payload(payload: bytes) -> dict[str, str]:
 
 
 def read_records(data: bytes) -> list[dict[str, str]]:
-    """Read all type-0 records from a FileHeader binary stream."""
+    """Read all type-0 records from a binary stream."""
     records: list[dict[str, str]] = []
     pos = 0
     while pos + 4 <= len(data):
@@ -40,10 +46,19 @@ def read_records(data: bytes) -> list[dict[str, str]]:
 
 
 def read_schematic_records(schdoc_path: str) -> list[dict[str, str]]:
-    """Open a .SchDoc OLE file and parse all records from its FileHeader stream."""
+    """Open a .SchDoc OLE file and return records from FileHeader + Additional.
+
+    The Additional stream (when present) contains signal-harness objects
+    (RECORD 215–218).  Its records are appended after those from FileHeader
+    so that OWNERINDEX references resolve correctly across both streams.
+    """
     ole = olefile.OleFileIO(schdoc_path)
     try:
         data = ole.openstream("FileHeader").read()
+        records = read_records(data)
+        if ole.exists("Additional"):
+            additional_data = ole.openstream("Additional").read()
+            records.extend(read_records(additional_data))
     finally:
         ole.close()
-    return read_records(data)
+    return records
