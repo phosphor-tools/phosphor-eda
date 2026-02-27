@@ -24,6 +24,7 @@ from ecad_tools.dsn.models import (
     ParsedDesign,
     PinConnection,
     PlacedInstance,
+    SchematicPage,
 )
 
 
@@ -131,16 +132,15 @@ def parse_library(data: bytes) -> tuple[list[str], list[str]]:
     return string_list, part_fields
 
 
-def parse_page(data: bytes, string_list: list[str]) -> ParsedDesign:
-    """Parse a Page stream.
+def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
+    """Parse a Page stream into a SchematicPage.
 
     Uses skip-based approach: read the header and net list precisely,
     then skip structures we don't need using prefix chain end_offsets.
     For placed instances and globals, we use end_offsets to bound our parsing
     so errors don't cascade.
     """
-    design = ParsedDesign()
-    design.string_list = string_list
+    page = SchematicPage()
     r = BinaryReader(data, "Page")
 
     # Page prefixes
@@ -148,8 +148,8 @@ def parse_page(data: bytes, string_list: list[str]) -> ParsedDesign:
     r.try_read_preamble()
 
     # Page name and size
-    design.page_name = r.read_string_len_zero()
-    design.page_size = r.read_string_len_zero()
+    page.name = r.read_string_len_zero()
+    page.size = r.read_string_len_zero()
 
     # Page settings (inline, 156 bytes)
     r.skip(PAGE_SETTINGS_SIZE)
@@ -169,7 +169,7 @@ def parse_page(data: bytes, string_list: list[str]) -> ParsedDesign:
         net = PageNetEntry()
         net.name = r.read_string_len_zero()
         net.net_id = r.read_uint32()
-        design.page_nets.append(net)
+        page.nets.append(net)
 
     # Wires — parse to extract wire ID (net assignment) and endpoint coordinates
     num_wires = r.read_uint16()
@@ -194,7 +194,7 @@ def parse_page(data: bytes, string_list: list[str]) -> ParsedDesign:
 
         if end_offset > 0:
             r.pos = end_offset
-    design._wire_net_map = wire_net_map
+    page.wire_net_map = wire_net_map
 
     # Placed instances — parse body to extract reference designator
     num_instances = r.read_uint16()
@@ -245,7 +245,7 @@ def parse_page(data: bytes, string_list: list[str]) -> ParsedDesign:
                 r.try_read_preamble()
 
                 pin = PinConnection()
-                pin.pin_number = r.read_uint16()
+                pin.pin_number = str(r.read_uint16())
                 pin.pin_x = r.read_int16()
                 pin.pin_y = r.read_int16()
                 pin.net_id = r.read_uint32()
@@ -263,7 +263,7 @@ def parse_page(data: bytes, string_list: list[str]) -> ParsedDesign:
         # Jump to end_offset for safety
         if end_offset > 0:
             r.pos = end_offset
-        design.instances.append(inst)
+        page.instances.append(inst)
 
     # Ports - skip
     num_ports = r.read_uint16()
@@ -316,7 +316,7 @@ def parse_page(data: bytes, string_list: list[str]) -> ParsedDesign:
 
         if end_offset > 0:
             r.pos = end_offset
-        design.globals.append(gi)
+        page.globals.append(gi)
         r.skip(5)  # trailing data per global at stream level
 
     # Off-page connectors - skip
@@ -325,7 +325,7 @@ def parse_page(data: bytes, string_list: list[str]) -> ParsedDesign:
         skip_structure(r)
         r.skip(5)  # trailing data
 
-    return design
+    return page
 
 
 def parse_hierarchy(data: bytes) -> list[NetIdMapping]:
@@ -531,19 +531,17 @@ def parse_dsn(dsn_path: Path) -> ParsedDesign:
     lib_data = ole.openstream("Library").read()
     string_list, part_fields = parse_library(lib_data)
 
+    design = ParsedDesign()
+    design.string_list = string_list
+    design.part_fields = part_fields
+
     # 2. Parse Page stream(s)
-    design = None
     for entry in ole.listdir():
         path = "/".join(entry)
         if path.startswith("Views/") and "/Pages/" in path:
             page_data = ole.openstream(entry).read()
-            design = parse_page(page_data, string_list)
-
-    if design is None:
-        design = ParsedDesign()
-
-    design.string_list = string_list
-    design.part_fields = part_fields
+            page = parse_page(page_data, string_list)
+            design.pages.append(page)
 
     # 3. Parse Hierarchy stream
     for entry in ole.listdir():

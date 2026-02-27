@@ -1,7 +1,9 @@
 from pathlib import Path
 
-from ecad_tools.dsn.netlist import build_netlist, write_netlist
+from ecad_tools.dsn.netlist import build_netlist
 from ecad_tools.dsn.parser import parse_dsn
+from ecad_tools.dsn.to_schematic import dsn_to_design
+from ecad_tools.serialize import write_design
 
 DSN_FILE = Path("raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN")
 
@@ -21,12 +23,14 @@ def test_build_netlist_gnd_has_many_pins():
     assert len(netlist["GND"]) > 20
 
 
-def test_write_netlist(tmp_path):
-    design = parse_dsn(DSN_FILE)
+def test_write_design(tmp_path):
+    raw = parse_dsn(DSN_FILE)
+    design = dsn_to_design(raw, name="RPI-PICO")
     out = tmp_path / "netlist.txt"
-    write_netlist(design, out)
+    write_design(design, out)
     content = out.read_text()
-    assert "PARSED DESIGN SUMMARY" in content
-    assert "Components" in content
-    assert "Netlist" in content
+    assert "DESIGN SUMMARY" in content
+    assert "COMPONENTS" in content
+    assert "NETS" in content
     assert "U1" in content
+    assert "PAGE1" in content

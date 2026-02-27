@@ -1,11 +1,18 @@
-from ecad_tools.dsn.models import ParsedDesign, PlacedInstance, Wire
+from ecad_tools.dsn.models import ParsedDesign, PlacedInstance, SchematicPage, Wire
 
 
 def test_parsed_design_defaults():
     d = ParsedDesign()
-    assert d.instances == []
-    assert d.wires == []
-    assert d.page_name == ""
+    assert d.pages == []
+    assert d.string_list == []
+
+
+def test_schematic_page_defaults():
+    p = SchematicPage()
+    assert p.name == ""
+    assert p.instances == []
+    assert p.nets == []
+    assert p.wire_net_map == {}
 
 
 def test_placed_instance_defaults():

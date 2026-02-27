@@ -1,0 +1,182 @@
+"""Parse Altium .SchDoc files into SchematicPage objects."""
+
+from pathlib import Path
+
+from ecad_tools.altium.project import parse_prjpcb_file
+from ecad_tools.altium.record_parser import read_schematic_records
+from ecad_tools.models import (
+    GraphicInst,
+    ParsedDesign,
+    PinConnection,
+    PlacedInstance,
+    SchematicPage,
+    Wire,
+)
+
+# Altium SheetStyle -> size name mapping
+_SHEET_SIZES = {
+    "0": "A4",
+    "1": "A3",
+    "2": "A2",
+    "3": "A1",
+    "4": "A0",
+    "5": "A",
+    "6": "B",
+    "7": "C",
+    "8": "D",
+    "9": "E",
+    "10": "Letter",
+    "11": "Legal",
+    "12": "Tabloid",
+    "13": "OrCAD-A",
+    "14": "OrCAD-B",
+    "15": "OrCAD-C",
+    "16": "OrCAD-D",
+    "17": "OrCAD-E",
+}
+
+
+def _int(props: dict[str, str], key: str, default: int = 0) -> int:
+    """Get an integer property, returning default if missing or invalid."""
+    val = props.get(key, "")
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return default
+
+
+def parse_schematic_sheet(schdoc_path: Path) -> SchematicPage:
+    """Parse a single .SchDoc file into a SchematicPage."""
+    records = read_schematic_records(str(schdoc_path))
+
+    page = SchematicPage()
+    page.name = schdoc_path.stem
+
+    # Index records for parent-child lookups.
+    # OwnerIndex in Altium is 0-based AFTER the header record (records[0]),
+    # so OwnerIndex=N refers to records[N+1]. We store components keyed by
+    # their OwnerIndex-compatible index (i - 1).
+    components_by_index: dict[int, PlacedInstance] = {}
+    designators: list[dict[str, str]] = []
+    pin_records: list[dict[str, str]] = []
+
+    for i, rec in enumerate(records):
+        rid = rec.get("RECORD", "")
+
+        if rid == "31":
+            # Sheet metadata
+            style = rec.get("SheetStyle", "10")
+            if rec.get("UseCustomSheet") == "T":
+                cx = rec.get("CustomX", "?")
+                cy = rec.get("CustomY", "?")
+                page.size = f"Custom ({cx}x{cy})"
+            else:
+                page.size = _SHEET_SIZES.get(style, f"Style-{style}")
+
+        elif rid == "1":
+            # Component instance
+            inst = PlacedInstance()
+            inst.package_name = rec.get("LibReference", "")
+            inst.loc_x = _int(rec, "Location.X")
+            inst.loc_y = _int(rec, "Location.Y")
+            components_by_index[i - 1] = inst
+            page.instances.append(inst)
+
+        elif rid == "2":
+            pin_records.append(rec)
+
+        elif rid == "34":
+            designators.append(rec)
+
+        elif rid == "27":
+            # Wire — may have multiple points
+            wire = Wire()
+            loc_count = _int(rec, "LocationCount", 2)
+            if loc_count >= 2:
+                wire.start_x = _int(rec, "X1")
+                wire.start_y = _int(rec, "Y1")
+                wire.end_x = _int(rec, "X2")
+                wire.end_y = _int(rec, "Y2")
+            # Store all points for net resolution
+            points = []
+            for idx in range(1, loc_count + 1):
+                x = _int(rec, f"X{idx}")
+                y = _int(rec, f"Y{idx}")
+                points.append((x, y))
+            wire._points = points  # type: ignore[attr-defined]
+            page.wires.append(wire)
+
+        elif rid == "17":
+            # Power port -> global
+            g = GraphicInst()
+            g.name = rec.get("Text", "")
+            g.loc_x = _int(rec, "Location.X")
+            g.loc_y = _int(rec, "Location.Y")
+            page.globals.append(g)
+
+        elif rid == "18":
+            # Port
+            p = GraphicInst()
+            p.name = rec.get("Name", "")
+            p.loc_x = _int(rec, "Location.X")
+            p.loc_y = _int(rec, "Location.Y")
+            page.ports.append(p)
+
+    # Assign designators to components
+    for drec in designators:
+        owner_idx = _int(drec, "OwnerIndex", -1)
+        if owner_idx in components_by_index:
+            components_by_index[owner_idx].reference = drec.get("Text", "")
+
+    # Assign pins to components.
+    # Pin Location.X/Y is the body-side origin. The wire connects at the tip,
+    # offset by PinLength in the direction given by PinConglomerate & 0x03:
+    #   0=right (+X), 1=up (+Y), 2=left (-X), 3=down (-Y)
+    for prec in pin_records:
+        owner_idx = _int(prec, "OwnerIndex", -1)
+        if owner_idx in components_by_index:
+            pin = PinConnection()
+            pin.pin_number = prec.get("Designator", "")
+            origin_x = _int(prec, "Location.X")
+            origin_y = _int(prec, "Location.Y")
+            length = _int(prec, "PinLength")
+            orientation = _int(prec, "PinConglomerate") & 0x03
+            if orientation == 0:  # right
+                pin.pin_x = origin_x + length
+                pin.pin_y = origin_y
+            elif orientation == 1:  # up
+                pin.pin_x = origin_x
+                pin.pin_y = origin_y + length
+            elif orientation == 2:  # left
+                pin.pin_x = origin_x - length
+                pin.pin_y = origin_y
+            else:  # down
+                pin.pin_x = origin_x
+                pin.pin_y = origin_y - length
+            components_by_index[owner_idx].pin_connections.append(pin)
+
+    # Store path for net resolution to re-read raw records
+    page._schdoc_path = schdoc_path  # type: ignore[attr-defined]
+    return page
+
+
+def parse_altium(path: Path) -> ParsedDesign:
+    """Parse an Altium project (.PrjPcb) or single sheet (.SchDoc).
+
+    Returns a ParsedDesign with one SchematicPage per sheet.
+    """
+    design = ParsedDesign()
+
+    if path.suffix.lower() == ".prjpcb":
+        project = parse_prjpcb_file(str(path))
+        project_dir = path.parent
+        for rel_path in project.schematic_paths:
+            schdoc = project_dir / rel_path
+            if schdoc.exists():
+                page = parse_schematic_sheet(schdoc)
+                design.pages.append(page)
+    else:
+        page = parse_schematic_sheet(path)
+        design.pages.append(page)
+
+    return design
