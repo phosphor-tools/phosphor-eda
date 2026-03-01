@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 
 from ecad_tools.schematic import Design, Pin
+from ecad_tools.validate import Severity, validate_design
 
 _MAJOR_IC_PIN_THRESHOLD = 4
 
@@ -139,6 +140,32 @@ def _format_nets(design: Design) -> list[str]:
     return lines
 
 
+def _format_validation(design: Design) -> list[str]:
+    findings = validate_design(design)
+    if not findings:
+        return ["=== VALIDATION ===", "", "No issues found.", ""]
+
+    errors = [f for f in findings if f.severity == Severity.ERROR]
+    warnings = [f for f in findings if f.severity == Severity.WARNING]
+
+    lines = ["=== VALIDATION ===", ""]
+    if errors:
+        lines.append(f"Errors ({len(errors)}):")
+        for f in errors:
+            lines.append(f"  ERROR  [{f.category.value}]  {f.message}")
+        lines.append("")
+    if warnings:
+        lines.append(f"Warnings ({len(warnings)}):")
+        for f in warnings:
+            lines.append(f"  WARN   [{f.category.value}]  {f.message}")
+        lines.append("")
+    if not errors and not warnings:
+        lines.append("No issues found.")
+        lines.append("")
+
+    return lines
+
+
 def serialize_design(design: Design) -> str:
     """Serialize a Design to a grep-friendly text string."""
     lines: list[str] = []
@@ -147,6 +174,8 @@ def serialize_design(design: Design) -> str:
     lines.extend(_format_components(design))
     lines.append("")
     lines.extend(_format_nets(design))
+    lines.append("")
+    lines.extend(_format_validation(design))
     return "\n".join(lines)
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from ecad_tools.models import ParsedDesign as RawDesign
 from ecad_tools.schematic import Component, Design, Net, Page, Pin, merge_pages
+from ecad_tools.text import strip_overline
 
 
 def dsn_to_design(raw: RawDesign, name: str = "") -> Design:
@@ -20,12 +21,18 @@ def dsn_to_design(raw: RawDesign, name: str = "") -> Design:
             net_by_id[raw_net.net_id] = net
             page.nets.append(net)
 
-        # Build coord -> net lookup from wire_net_map
+        # Build coord -> net lookup from wire_net_map.
+        # Wire net IDs not in the page's named net list are unnamed nets
+        # (wires connecting components without an explicit net label).
+        # Create synthetic nets for these so pins stay connected.
         coord_to_nets: dict[tuple[int, int], list[Net]] = {}
         for coord, net_ids in raw_page.wire_net_map.items():
             for nid in net_ids:
-                if nid in net_by_id:
-                    coord_to_nets.setdefault(coord, []).append(net_by_id[nid])
+                if nid not in net_by_id:
+                    unnamed = Net(name=f"N{nid:08d}")
+                    net_by_id[nid] = unnamed
+                    page.nets.append(unnamed)
+                coord_to_nets.setdefault(coord, []).append(net_by_id[nid])
 
         for raw_inst in raw_page.instances:
             pkg = raw_inst.package_name.replace(".Normal", "")
@@ -43,7 +50,7 @@ def dsn_to_design(raw: RawDesign, name: str = "") -> Design:
                 try:
                     pn = int(raw_pin.pin_number)
                     if 1 <= pn <= len(sym_pins):
-                        pin_name = sym_pins[pn - 1]
+                        pin_name, _overline = strip_overline(sym_pins[pn - 1])
                 except (ValueError, TypeError):
                     pass
 

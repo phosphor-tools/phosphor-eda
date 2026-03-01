@@ -10,6 +10,8 @@ Coordinate normalization happens here: fractional fields like
 
 from __future__ import annotations
 
+from ecad_tools.text import strip_overline as strip_overline  # re-export
+
 from ecad_tools.altium.records import (
     AltiumRecord,
     BlanketRec,
@@ -43,19 +45,6 @@ from ecad_tools.altium.records import (
 
 # DistanceFromTop fractional properties use 1/100000 resolution.
 _FRAC_DENOM = 100_000
-
-
-def strip_overline(name: str) -> tuple[str, bool]:
-    """Strip Altium overline markup from a name.
-
-    Altium toggles character-level overline with ``\\`` to indicate
-    active-low signals (e.g., ``D\\R\\D\\Y\\`` = DRDY with overline).
-
-    Returns ``(clean_name, had_overline)``.
-    """
-    if "\\" not in name:
-        return name, False
-    return name.replace("\\", ""), True
 
 
 def _int(props: dict[str, str], key: str, default: int = 0) -> int:
