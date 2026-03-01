@@ -86,3 +86,50 @@ def test_serialize_to_file(tmp_path):
     assert out.exists()
     text = out.read_text()
     assert "=== DESIGN SUMMARY ===" in text
+
+
+def test_serialize_suppresses_electrical_passive():
+    """electrical=passive should not appear in output (it's the default)."""
+    page = Page(name="Test")
+    comp = Component(reference="U1", part="IC", description="", pages=[page])
+    net = Net(name="SIG")
+    # Passive pin — should NOT show electrical metadata
+    pin_passive = Pin(
+        designator="1", name="A", component=comp, net=net,
+        metadata={"electrical": "passive"},
+    )
+    # Power pin — SHOULD show electrical metadata
+    pin_power = Pin(
+        designator="2", name="VCC", component=comp, net=net,
+        metadata={"electrical": "power"},
+    )
+    comp.pins = [pin_passive, pin_power]
+    net.pins = [pin_passive, pin_power]
+    page.components = [comp]
+    page.nets = [net]
+    design = Design(name="T", pages=[page], nets=[net], components=[comp])
+
+    text = serialize_design(design)
+    assert "electrical=passive" not in text
+    assert "electrical=power" in text
+
+
+def test_serialize_pin_metadata_inline():
+    """Non-default pin metadata should appear inline on pin lines."""
+    page = Page(name="Test")
+    comp = Component(reference="U1", part="IC", description="", pages=[page])
+    net = Net(name="SIG")
+    pin = Pin(
+        designator="1", name="CLK", component=comp, net=net,
+        metadata={"electrical": "input", "owner_part_id": "2"},
+    )
+    comp.pins = [pin]
+    net.pins = [pin]
+    page.components = [comp]
+    page.nets = [net]
+    design = Design(name="T", pages=[page], nets=[net], components=[comp])
+
+    text = serialize_design(design)
+    pin_line = next(l for l in text.splitlines() if "Pin 1" in l)
+    assert "electrical=input" in pin_line
+    assert "owner_part_id=2" in pin_line

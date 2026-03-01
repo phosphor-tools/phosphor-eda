@@ -63,3 +63,41 @@ def test_pin_no_connect():
 def test_net_bus_property():
     net = Net(name="DATA0", pins=[], bus="DATA[0..7]", metadata={})
     assert net.bus == "DATA[0..7]"
+
+
+def test_merge_pages_deduplicates_pins():
+    """merge_pages should keep one pin per designator, preferring connected."""
+    from ecad_tools.schematic import merge_pages
+
+    net_a = Net(name="SIG")
+
+    # Page 1: U1 has pin "1" connected to SIG
+    page1 = Page(name="P1")
+    comp1 = Component(reference="U1", part="IC", description="", pages=[page1])
+    pin1_connected = Pin(designator="1", name="A", component=comp1, net=net_a)
+    pin1_unconnected = Pin(designator="2", name="B", component=comp1)
+    comp1.pins = [pin1_connected, pin1_unconnected]
+    net_a.pins = [pin1_connected]
+    page1.components = [comp1]
+    page1.nets = [net_a]
+
+    # Page 2: U1 has pin "1" unconnected, pin "2" connected
+    net_b = Net(name="SIG2")
+    page2 = Page(name="P2")
+    comp2 = Component(reference="U1", part="IC", description="", pages=[page2])
+    pin2_unconnected = Pin(designator="1", name="A", component=comp2)
+    pin2_connected = Pin(designator="2", name="B", component=comp2, net=net_b)
+    comp2.pins = [pin2_unconnected, pin2_connected]
+    net_b.pins = [pin2_connected]
+    page2.components = [comp2]
+    page2.nets = [net_b]
+
+    design = merge_pages("T", [page1, page2])
+    u1 = next(c for c in design.components if c.reference == "U1")
+
+    assert len(u1.pins) == 2, f"Expected 2 unique pins, got {len(u1.pins)}"
+    pin1 = next(p for p in u1.pins if p.designator == "1")
+    pin2 = next(p for p in u1.pins if p.designator == "2")
+    # Each should have the connected version
+    assert pin1.net is not None, "Pin 1 should keep its SIG connection"
+    assert pin2.net is not None, "Pin 2 should keep its SIG2 connection"

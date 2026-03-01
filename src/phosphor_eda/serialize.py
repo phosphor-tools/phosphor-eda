@@ -39,14 +39,30 @@ def _format_summary(design: Design) -> list[str]:
     lines.append(f"Design: {design.name} | {n_pages} pages | {n_comp} components | {n_nets} nets")
 
     meta_parts = []
-    for key in ("Author", "Revision", "Date"):
+    for key in ("Author", "Engineer", "Revision", "Date", "Organization"):
         if key in design.metadata:
             meta_parts.append(f"{key}: {design.metadata[key]}")
     if meta_parts:
         lines.append(" | ".join(meta_parts))
 
+    # Output remaining design metadata keys not already shown
+    _SHOWN_KEYS = {"Author", "Engineer", "Revision", "Date", "Organization"}
+    for key in sorted(design.metadata):
+        if key not in _SHOWN_KEYS:
+            lines.append(f"  {key}: {design.metadata[key]}")
+
     lines.append("")
-    lines.append(f"Pages: {', '.join(p.name for p in design.pages)}")
+
+    # Pages with metadata
+    for page in design.pages:
+        page_meta_parts = []
+        for key in ("SheetSize", "SheetNumber", "PageTitle"):
+            if key in page.metadata:
+                page_meta_parts.append(f"{key}={page.metadata[key]}")
+        if page_meta_parts:
+            lines.append(f"  Page: {page.name} [{', '.join(page_meta_parts)}]")
+        else:
+            lines.append(f"  Page: {page.name}")
     lines.append("")
 
     major = [c for c in design.components if len(c.pins) > _MAJOR_IC_PIN_THRESHOLD]
@@ -76,10 +92,21 @@ def _format_components(design: Design) -> list[str]:
 
         for pin in sorted(comp.pins, key=lambda p: p.designator):
             net_str = _pin_net_str(pin)
+            meta_str = ""
+            # Filter out default/noise metadata values:
+            # - electrical=passive is the default for 88%+ of pins
+            filtered = {
+                k: v for k, v in pin.metadata.items()
+                if not (k == "electrical" and v == "passive")
+            }
+            if filtered:
+                meta_str = "  " + "  ".join(
+                    f"{k}={v}" for k, v in sorted(filtered.items())
+                )
             if pin.name:
-                lines.append(f"  Pin {pin.designator:<5s}  {pin.name:<15s} -> {net_str}")
+                lines.append(f"  Pin {pin.designator:<5s}  {pin.name:<15s} -> {net_str}{meta_str}")
             else:
-                lines.append(f"  Pin {pin.designator:<5s}  {'':<15s} -> {net_str}")
+                lines.append(f"  Pin {pin.designator:<5s}  {'':<15s} -> {net_str}{meta_str}")
 
         lines.append("")
 
@@ -96,6 +123,9 @@ def _format_nets(design: Design) -> list[str]:
             page_str = ", ".join(net_pages)
 
         lines.append(f"NET: {net.name} | Pages: {page_str}")
+
+        for key, value in sorted(net.metadata.items()):
+            lines.append(f"  [{key}: {value}]")
 
         for pin in sorted(net.pins, key=lambda p: (p.component.reference, p.designator)):
             ref_pin = f"{pin.component.reference}.{pin.designator}"
