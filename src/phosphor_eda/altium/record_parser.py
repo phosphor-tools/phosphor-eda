@@ -17,12 +17,24 @@ import olefile
 
 
 def parse_record_payload(payload: bytes) -> dict[str, str]:
-    """Parse a pipe-delimited payload into a property dict."""
-    text = payload.rstrip(b"\x00").decode("ascii", errors="replace")
+    """Parse a pipe-delimited payload into a property dict.
+
+    Altium uses Windows-1252 (cp1252) encoding for record values.  Keys
+    prefixed with ``%UTF8%`` contain UTF-8 encoded values for characters
+    outside the cp1252 range.  We split on raw bytes so each value can be
+    decoded with the correct codec.
+    """
+    raw = payload.rstrip(b"\x00")
     props: dict[str, str] = {}
-    for part in text.split("|"):
-        if "=" in part:
-            key, value = part.split("=", 1)
+    for part in raw.split(b"|"):
+        if b"=" in part:
+            key_bytes, value_bytes = part.split(b"=", 1)
+            # Keys are always ASCII-safe
+            key = key_bytes.decode("ascii", errors="replace")
+            if key.startswith("%UTF8%"):
+                value = value_bytes.decode("utf-8", errors="replace")
+            else:
+                value = value_bytes.decode("cp1252", errors="replace")
             props[key] = value
     return props
 

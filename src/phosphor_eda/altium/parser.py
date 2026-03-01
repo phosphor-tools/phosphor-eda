@@ -57,6 +57,11 @@ def parse_schematic_sheet(schdoc_path: Path) -> SchematicPage:
     # so OwnerIndex=N refers to records[N+1]. We store components keyed by
     # their OwnerIndex-compatible index (i - 1).
     components_by_index: dict[int, PlacedInstance] = {}
+    # Active display mode per component (keyed by OwnerIndex-compatible index).
+    # Altium components can have multiple display mode variants (Normal,
+    # Small, etc.) with separate pin records per variant.  Only pins matching
+    # the active DisplayMode should be included.
+    component_display_mode: dict[int, int] = {}
     designators: list[dict[str, str]] = []
     pin_records: list[dict[str, str]] = []
 
@@ -80,6 +85,7 @@ def parse_schematic_sheet(schdoc_path: Path) -> SchematicPage:
             inst.loc_x = _int(rec, "Location.X")
             inst.loc_y = _int(rec, "Location.Y")
             components_by_index[i - 1] = inst
+            component_display_mode[i - 1] = _int(rec, "DisplayMode")
             page.instances.append(inst)
 
         elif rid == "2":
@@ -135,6 +141,15 @@ def parse_schematic_sheet(schdoc_path: Path) -> SchematicPage:
     for prec in pin_records:
         owner_idx = _int(prec, "OwnerIndex", -1)
         if owner_idx in components_by_index:
+            # Skip pins belonging to inactive display mode variants.
+            # A component with DisplayModeCount > 1 has separate pin records
+            # for each visual variant (e.g. Normal vs Small symbol); only
+            # pins matching the active DisplayMode are electrically relevant.
+            pin_display_mode = _int(prec, "OwnerPartDisplayMode")
+            active_display_mode = component_display_mode.get(owner_idx, 0)
+            if pin_display_mode != active_display_mode:
+                continue
+
             pin = PinConnection()
             pin.pin_number = prec.get("Designator", "")
             origin_x = _int(prec, "Location.X")

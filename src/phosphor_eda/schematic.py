@@ -6,6 +6,7 @@ ports bridge nets across pages. See docs/plans/2026-02-25-ecad-tools-package-des
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 
 
@@ -51,6 +52,7 @@ class Port:
     page: Page
     net: Net
     harness: str | None = None
+    metadata: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -106,9 +108,38 @@ def merge_pages(
         for comp in page.components:
             if comp.reference in merged_components:
                 target = merged_components[comp.reference]
+                # Deduplicate pins by designator — shared pins
+                # (owner_part_id==0) appear on every page, and we only
+                # want one entry per designator in the merged component.
+                existing_pins: dict[str, Pin] = {
+                    p.designator: p for p in target.pins
+                }
                 for pin in comp.pins:
-                    pin.component = target
-                    target.pins.append(pin)
+                    if pin.designator not in existing_pins:
+                        pin.component = target
+                        target.pins.append(pin)
+                        existing_pins[pin.designator] = pin
+                    else:
+                        existing = existing_pins[pin.designator]
+                        # Upgrade if the new pin has a net but the old one
+                        # doesn't (or has a no-connect marker).
+                        if existing.net is None and not existing.no_connect and (
+                            pin.net is not None or pin.no_connect
+                        ):
+                            # Use identity removal — dataclass __eq__
+                            # recurses on circular Pin↔Component refs.
+                            target.pins = [
+                                p for p in target.pins if p is not existing
+                            ]
+                            pin.component = target
+                            target.pins.append(pin)
+                            existing_pins[pin.designator] = pin
+                        else:
+                            # Discard duplicate — remove from its net
+                            if pin.net is not None:
+                                pin.net.pins = [
+                                    p for p in pin.net.pins if p is not pin
+                                ]
                 if page not in target.pages:
                     target.pages.append(page)
                 target.metadata.update(comp.metadata)
@@ -125,23 +156,46 @@ def merge_pages(
         if len(port_list) < 2:
             continue
         # Resolve the target net (may already have been merged by name).
-        # When bridging, prefer the net whose name looks "primary" (no ":")
-        # so that canonical signal names survive over synthetic harness names.
         target = _resolve_net(merged_nets, port_list[0].net)
         for port in port_list[1:]:
             other = _resolve_net(merged_nets, port.net)
-            if other is target:
-                continue
-            if ":" in target.name and ":" not in other.name:
-                target, other = other, target
-            # Move all pins from other net to target
-            for pin in other.pins:
-                pin.net = target
-                target.pins.append(pin)
-            # Remove other from merged_nets
-            for k, v in list(merged_nets.items()):
-                if v is other:
-                    del merged_nets[k]
+            target = _unify_nets(merged_nets, target, other)
+
+    # Pass 3: Hierarchical net resolution — bridge child-page nets
+    # through parent-page net identity.
+    #
+    # If two ports (A and B) on the SAME page share the same net
+    # (because they're wired together on that page), then ports with
+    # matching names on OTHER pages should have their nets unified.
+    #
+    # Example: parent page has sheet entries DRDY and GPIO_B1_09 both
+    # wired to net ADC_DRDY.  Child pages have ports DRDY → local net
+    # ADC_DRDY and GPIO_B1_09 → local net GPIO_B1_09.  Pass 2 bridges
+    # each port name individually, but doesn't know the parent net
+    # links them.  Pass 3 finds the shared parent net and unifies.
+    page_net_groups: dict[tuple[str, int], list[Port]] = defaultdict(list)
+    for page in pages:
+        for port in page.ports:
+            resolved = _resolve_net(merged_nets, port.net)
+            page_net_groups[(page.name, id(resolved))].append(port)
+
+    for group_ports in page_net_groups.values():
+        if len(group_ports) < 2:
+            continue
+        # Collect nets from matching ports on other pages
+        nets_to_unify: list[Net] = []
+        parent_page = group_ports[0].page.name
+        for gport in group_ports:
+            for other_port in ports_by_name.get(gport.name, []):
+                if other_port.page.name != parent_page:
+                    nets_to_unify.append(
+                        _resolve_net(merged_nets, other_port.net),
+                    )
+        # Unify all collected nets
+        if len(nets_to_unify) >= 2:
+            target = nets_to_unify[0]
+            for other in nets_to_unify[1:]:
+                target = _unify_nets(merged_nets, target, other)
 
     return Design(
         name=name,
@@ -150,6 +204,39 @@ def merge_pages(
         components=sorted(merged_components.values(), key=lambda c: c.reference),
         metadata=metadata or {},
     )
+
+
+def _unify_nets(
+    merged_nets: dict[str, Net], target: Net, other: Net,
+) -> Net:
+    """Merge *other* into *target*, returning the surviving net.
+
+    Prefers the net whose name looks "primary" (no ``:``) so that
+    canonical signal names survive over synthetic harness names.
+
+    Guards against duplicate pin appends: after a net is absorbed its
+    ``.pins`` list becomes stale (still references the moved pins).  If
+    a later pass re-encounters the absorbed net and calls ``_unify_nets``
+    again, the guard prevents the same Pin objects from appearing twice
+    in ``target.pins``.
+    """
+    if other is target:
+        return target
+    if ":" in target.name and ":" not in other.name:
+        target, other = other, target
+    existing = {id(p) for p in target.pins}
+    for pin in other.pins:
+        pin.net = target
+        if id(pin) not in existing:
+            target.pins.append(pin)
+            existing.add(id(pin))
+    if other.bus and not target.bus:
+        target.bus = other.bus
+    target.metadata.update(other.metadata)
+    for k, v in list(merged_nets.items()):
+        if v is other:
+            del merged_nets[k]
+    return target
 
 
 def _resolve_net(merged_nets: dict[str, Net], net: Net) -> Net:
