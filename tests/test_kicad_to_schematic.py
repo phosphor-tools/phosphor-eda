@@ -71,6 +71,23 @@ def test_component_metadata(design):
     assert u3.metadata["Value"] == "RP2040"
 
 
+def test_component_description(design):
+    """Descriptions come from ki_description in lib_symbols."""
+    c1 = _find_component(design, "C1")
+    assert c1 is not None
+    assert "capacitor" in c1.description.lower()
+
+    j1 = _find_component(design, "J1")
+    assert j1 is not None
+    assert "USB" in j1.description
+
+
+def test_component_footprint(design):
+    c1 = _find_component(design, "C1")
+    assert c1.metadata.get("Footprint")
+    assert "0805" in c1.metadata["Footprint"]
+
+
 # --- Nets ---
 
 

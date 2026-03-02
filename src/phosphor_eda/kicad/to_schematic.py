@@ -99,17 +99,27 @@ _ELECTRICAL_MAP = {
 
 def _parse_lib_symbols(
     lib_syms: list,
-) -> dict[str, list[tuple[str, str, str, float, float]]]:
-    """Parse embedded lib_symbols into pin definitions.
+) -> tuple[
+    dict[str, list[tuple[str, str, str, float, float]]],
+    dict[str, str],
+]:
+    """Parse embedded lib_symbols into pin definitions and descriptions.
 
-    Returns: {lib_id: [(pin_number, pin_name, electrical_type, x, y), ...]}
-    where x, y are in library coordinates (Y-up).
+    Returns:
+        (pins_by_lib_id, descriptions_by_lib_id)
+        pins: {lib_id: [(pin_number, pin_name, electrical_type, x, y), ...]}
+              where x, y are in library coordinates (Y-up).
+        descriptions: {lib_id: description_text}
     """
-    result: dict[str, list[tuple[str, str, str, float, float]]] = {}
+    pins_result: dict[str, list[tuple[str, str, str, float, float]]] = {}
+    desc_result: dict[str, str] = {}
     for sym in lib_syms[1:]:
         if _tag(sym) != "symbol":
             continue
         lib_id = str(sym[1])
+        desc = _property(sym[2:], "ki_description")
+        if desc:
+            desc_result[lib_id] = desc
         pins: list[tuple[str, str, str, float, float]] = []
         # Pins live in sub-symbol units (e.g., "RP2040_0_1", "RP2040_1_1")
         for child in sym[2:]:
@@ -130,8 +140,8 @@ def _parse_lib_symbols(
                             px = float(pe[1])
                             py = float(pe[2])
                     pins.append((pnum, pname, pin_type, px, py))
-        result[lib_id] = pins
-    return result
+        pins_result[lib_id] = pins
+    return pins_result, desc_result
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +213,10 @@ def kicad_to_design(path: Path, name: str = "") -> Design:
 
     # Parse embedded symbol library
     lib_syms_node = _find(data[1:], "lib_symbols")
-    lib_pins = _parse_lib_symbols(lib_syms_node) if lib_syms_node else {}
+    if lib_syms_node:
+        lib_pins, lib_descs = _parse_lib_symbols(lib_syms_node)
+    else:
+        lib_pins, lib_descs = {}, {}
 
     # Discover child sheets
     child_sheets = _find_all(data[1:], "sheet")
@@ -211,7 +224,7 @@ def kicad_to_design(path: Path, name: str = "") -> Design:
     design_meta: dict[str, str] = {}
 
     # Build root page
-    root_page, root_meta = _build_page(data, name, lib_pins)
+    root_page, root_meta = _build_page(data, name, lib_pins, lib_descs)
     pages.append(root_page)
     design_meta.update(root_meta)
 
@@ -224,8 +237,13 @@ def kicad_to_design(path: Path, name: str = "") -> Design:
         with open(child_path) as f:
             child_data = sexpdata.loads(f.read())
         child_lib_node = _find(child_data[1:], "lib_symbols")
-        child_lib_pins = _parse_lib_symbols(child_lib_node) if child_lib_node else {}
-        child_page, _ = _build_page(child_data, sheet_name, child_lib_pins)
+        if child_lib_node:
+            child_lib_pins, child_lib_descs = _parse_lib_symbols(child_lib_node)
+        else:
+            child_lib_pins, child_lib_descs = {}, {}
+        child_page, _ = _build_page(
+            child_data, sheet_name, child_lib_pins, child_lib_descs,
+        )
 
         # Hierarchical labels in the child become Ports
         for hlabel in _find_all(child_data[1:], "hierarchical_label"):
@@ -248,21 +266,17 @@ def kicad_to_design(path: Path, name: str = "") -> Design:
         # Sheet pins on the root page become Ports
         for pin_node in _find_all(sheet_node[1:], "pin"):
             pin_name = str(pin_node[1])
-            at_node = _find(pin_node[2:], "at")
-            if at_node:
-                pin_pos = (round(float(at_node[1]), 4), round(float(at_node[2]), 4))
-                # Find the net at this position on the root page
-                matching_net = None
-                for n in root_page.nets:
-                    if n.name == pin_name:
-                        matching_net = n
-                        break
-                if matching_net is None:
-                    matching_net = Net(name=pin_name)
-                    root_page.nets.append(matching_net)
-                root_page.ports.append(
-                    Port(name=pin_name, page=root_page, net=matching_net)
-                )
+            matching_net = None
+            for n in root_page.nets:
+                if n.name == pin_name:
+                    matching_net = n
+                    break
+            if matching_net is None:
+                matching_net = Net(name=pin_name)
+                root_page.nets.append(matching_net)
+            root_page.ports.append(
+                Port(name=pin_name, page=root_page, net=matching_net)
+            )
 
     return merge_pages(name, pages, metadata=design_meta)
 
@@ -286,11 +300,14 @@ def _build_page(
     data: list,
     page_name: str,
     lib_pins: dict[str, list[tuple[str, str, str, float, float]]],
+    lib_descs: dict[str, str] | None = None,
 ) -> tuple[Page, dict[str, str]]:
     """Build a Page from parsed S-expression data.
 
     Returns (page, design_metadata).
     """
+    if lib_descs is None:
+        lib_descs = {}
     page = Page(name=page_name)
     design_meta: dict[str, str] = {}
     nets_by_name: dict[str, Net] = {}
@@ -376,8 +393,6 @@ def _build_page(
         group_names[root] = label_name
 
     # --- Power symbols create globally-named nets ---
-    power_pin_positions: dict[tuple[float, float], str] = {}
-
     for sym_node in _find_all(data[1:], "symbol"):
         ref = _property(sym_node[1:], "Reference")
         if not ref.startswith("#PWR") and not ref.startswith("#FLG"):
@@ -406,7 +421,6 @@ def _build_page(
         sym_pins = lib_pins.get(lib_id, [])
         for _pnum, _pname, _ptype, px, py in sym_pins:
             abs_pos = _transform_pin(px, py, comp_x, comp_y, comp_rot, mirror)
-            power_pin_positions[abs_pos] = value
             _connect_point(uf, abs_pos, wire_segments, wire_points)
             root = uf.find(abs_pos)
             # Power symbols always name their wire group
@@ -445,8 +459,12 @@ def _build_page(
         lib_id_node = _find(sym_node[1:], "lib_id")
         lib_id = _val(lib_id_node) if lib_id_node else ""
         value = _property(sym_node[1:], "Value")
-        description = _property(sym_node[1:], "ki_description")
+        description = lib_descs.get(lib_id, "")
         footprint = _property(sym_node[1:], "Footprint")
+
+        # DNP (Do Not Place) — KiCad 7+
+        dnp_node = _find(sym_node[1:], "dnp")
+        is_dnp = dnp_node is not None and _val(dnp_node) == "yes"
 
         at_node = _find(sym_node[1:], "at")
         comp_x = float(at_node[1]) if at_node else 0.0
@@ -457,10 +475,6 @@ def _build_page(
         mirror_node = _find(sym_node[1:], "mirror")
         if mirror_node:
             mirror = _val(mirror_node)
-
-        # Determine which unit this instance uses
-        unit_node = _find(sym_node[1:], "unit")
-        inst_unit = int(unit_node[1]) if unit_node else 1
 
         comp = Component(
             reference=ref,
@@ -473,6 +487,8 @@ def _build_page(
             comp.metadata["Value"] = value
         if footprint:
             comp.metadata["Footprint"] = footprint
+        if is_dnp:
+            comp.metadata["dni"] = "yes"
 
         # Get pin definitions from lib_symbols
         sym_pins = lib_pins.get(lib_id, [])
