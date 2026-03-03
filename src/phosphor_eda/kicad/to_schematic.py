@@ -97,21 +97,25 @@ _ELECTRICAL_MAP = {
 # ---------------------------------------------------------------------------
 
 
+_SUB_SYMBOL_UNIT_RE = re.compile(r"_(\d+)_(\d+)$")
+
+
 def _parse_lib_symbols(
     lib_syms: list,
 ) -> tuple[
-    dict[str, list[tuple[str, str, str, float, float]]],
+    dict[str, dict[int, list[tuple[str, str, str, float, float]]]],
     dict[str, str],
 ]:
-    """Parse embedded lib_symbols into pin definitions and descriptions.
+    """Parse embedded lib_symbols into per-unit pin definitions and descriptions.
 
     Returns:
         (pins_by_lib_id, descriptions_by_lib_id)
-        pins: {lib_id: [(pin_number, pin_name, electrical_type, x, y), ...]}
+        pins: {lib_id: {unit: [(pin_number, pin_name, electrical_type, x, y), ...]}}
               where x, y are in library coordinates (Y-up).
+              Unit 0 contains shared pins that appear on every placed unit.
         descriptions: {lib_id: description_text}
     """
-    pins_result: dict[str, list[tuple[str, str, str, float, float]]] = {}
+    pins_result: dict[str, dict[int, list[tuple[str, str, str, float, float]]]] = {}
     desc_result: dict[str, str] = {}
     for sym in lib_syms[1:]:
         if _tag(sym) != "symbol":
@@ -120,28 +124,59 @@ def _parse_lib_symbols(
         desc = _property(sym[2:], "ki_description")
         if desc:
             desc_result[lib_id] = desc
-        pins: list[tuple[str, str, str, float, float]] = []
+        units: dict[int, list[tuple[str, str, str, float, float]]] = {}
         # Pins live in sub-symbol units (e.g., "RP2040_0_1", "RP2040_1_1")
+        # Sub-symbol name format: {SymbolName}_{unit}_{variant}
         for child in sym[2:]:
-            if _tag(child) == "symbol":
-                for elem in child[1:]:
-                    if _tag(elem) != "pin":
-                        continue
-                    pin_type = str(elem[1])
-                    pnum = pname = ""
-                    px = py = 0.0
-                    for pe in elem[3:]:
-                        t = _tag(pe)
-                        if t == "number":
-                            pnum = _val(pe)
-                        elif t == "name":
-                            pname = _strip_kicad_markup(_val(pe))
-                        elif t == "at":
-                            px = float(pe[1])
-                            py = float(pe[2])
-                    pins.append((pnum, pname, pin_type, px, py))
-        pins_result[lib_id] = pins
+            if _tag(child) != "symbol":
+                continue
+            sub_name = str(child[1])
+            m = _SUB_SYMBOL_UNIT_RE.search(sub_name)
+            unit_num = int(m.group(1)) if m else 1
+            for elem in child[1:]:
+                if _tag(elem) != "pin":
+                    continue
+                pin_type = str(elem[1])
+                pnum = pname = ""
+                px = py = 0.0
+                for pe in elem[3:]:
+                    t = _tag(pe)
+                    if t == "number":
+                        pnum = _val(pe)
+                    elif t == "name":
+                        pname = _strip_kicad_markup(_val(pe))
+                    elif t == "at":
+                        px = float(pe[1])
+                        py = float(pe[2])
+                units.setdefault(unit_num, []).append(
+                    (pnum, pname, pin_type, px, py),
+                )
+        pins_result[lib_id] = units
     return pins_result, desc_result
+
+
+_LIB_ID_SUFFIX_RE = re.compile(r"_\d+$")
+
+
+def _resolve_lib_pins(
+    lib_id: str,
+    lib_pins: dict[str, dict[int, list[tuple[str, str, str, float, float]]]],
+) -> dict[int, list[tuple[str, str, str, float, float]]]:
+    """Resolve a placed instance's lib_id to its pin definitions.
+
+    KiCad child sheets sometimes embed lib_symbols with different naming:
+    the placed instance uses ``Lib:SymbolName`` but the lib_symbol key may
+    be ``SymbolName_N`` (stripped prefix, appended instance number).
+    """
+    if lib_id in lib_pins:
+        return lib_pins[lib_id]
+    # Strip library prefix and try matching base name
+    base = lib_id.split(":")[-1] if ":" in lib_id else lib_id
+    for key, units in lib_pins.items():
+        key_base = _LIB_ID_SUFFIX_RE.sub("", key)
+        if key_base == base:
+            return units
+    return {}
 
 
 # ---------------------------------------------------------------------------
@@ -223,12 +258,12 @@ def kicad_to_design(path: Path, name: str = "") -> Design:
     pages: list[Page] = []
     design_meta: dict[str, str] = {}
 
-    # Build root page
-    root_page, root_meta = _build_page(data, name, lib_pins, lib_descs)
-    pages.append(root_page)
-    design_meta.update(root_meta)
-
-    # Build child pages
+    # Pre-parse all child sheets' lib_symbols to build a comprehensive
+    # symbol library.  Exact-match keys (with library prefix) should
+    # take precedence over variant keys (stripped prefix, appended _N).
+    child_sheet_data: list[tuple[str, list]] = []
+    all_lib_pins = dict(lib_pins)
+    all_lib_descs = dict(lib_descs)
     for sheet_node in child_sheets:
         sheet_name, sheet_file = _parse_sheet_info(sheet_node)
         child_path = path.parent / sheet_file
@@ -236,18 +271,34 @@ def kicad_to_design(path: Path, name: str = "") -> Design:
             continue
         with open(child_path) as f:
             child_data = sexpdata.loads(f.read())
+        child_sheet_data.append((sheet_name, child_data))
         child_lib_node = _find(child_data[1:], "lib_symbols")
         if child_lib_node:
             child_lib_pins, child_lib_descs = _parse_lib_symbols(child_lib_node)
-        else:
-            child_lib_pins, child_lib_descs = {}, {}
+            # Add child symbols but don't override existing exact-match keys
+            for k, v in child_lib_pins.items():
+                if k not in all_lib_pins:
+                    all_lib_pins[k] = v
+            for k, v in child_lib_descs.items():
+                if k not in all_lib_descs:
+                    all_lib_descs[k] = v
+
+    # Build root page
+    root_page, root_meta = _build_page(data, name, all_lib_pins, all_lib_descs)
+    pages.append(root_page)
+    design_meta.update(root_meta)
+
+    # Build child pages
+    for sheet_node, (sheet_name, child_data) in zip(child_sheets, child_sheet_data):
         child_page, _ = _build_page(
-            child_data, sheet_name, child_lib_pins, child_lib_descs,
+            child_data, sheet_name, all_lib_pins, all_lib_descs,
         )
 
         # Hierarchical labels in the child become Ports
         for hlabel in _find_all(child_data[1:], "hierarchical_label"):
             label_name = _strip_kicad_markup(str(hlabel[1]))
+            if "{" in label_name:
+                continue  # Bus aggregate — skip
             # Find or create the net for this label
             matching_net = None
             for n in child_page.nets:
@@ -266,6 +317,8 @@ def kicad_to_design(path: Path, name: str = "") -> Design:
         # Sheet pins on the root page become Ports
         for pin_node in _find_all(sheet_node[1:], "pin"):
             pin_name = str(pin_node[1])
+            if "{" in pin_name:
+                continue  # Bus aggregate — skip
             matching_net = None
             for n in root_page.nets:
                 if n.name == pin_name:
@@ -299,7 +352,7 @@ def _parse_sheet_info(sheet_node: list) -> tuple[str, str]:
 def _build_page(
     data: list,
     page_name: str,
-    lib_pins: dict[str, list[tuple[str, str, str, float, float]]],
+    lib_pins: dict[str, dict[int, list[tuple[str, str, str, float, float]]]],
     lib_descs: dict[str, str] | None = None,
 ) -> tuple[Page, dict[str, str]]:
     """Build a Page from parsed S-expression data.
@@ -362,6 +415,8 @@ def _build_page(
 
     for label in _find_all(data[1:], "label"):
         label_name = _strip_kicad_markup(str(label[1]))
+        if "{" in label_name:
+            continue  # Bus aggregate label — skip
         at_node = _find(label[2:], "at")
         if not at_node:
             continue
@@ -373,6 +428,8 @@ def _build_page(
     # Global labels work the same way — their names are globally unique
     for glabel in _find_all(data[1:], "global_label"):
         label_name = _strip_kicad_markup(str(glabel[1]))
+        if "{" in label_name:
+            continue  # Bus aggregate label — skip
         at_node = _find(glabel[2:], "at")
         if not at_node:
             continue
@@ -384,6 +441,8 @@ def _build_page(
     # Hierarchical labels also name wire groups on their page
     for hlabel in _find_all(data[1:], "hierarchical_label"):
         label_name = _strip_kicad_markup(str(hlabel[1]))
+        if "{" in label_name:
+            continue  # Bus aggregate label — skip
         at_node = _find(hlabel[2:], "at")
         if not at_node:
             continue
@@ -417,9 +476,10 @@ def _build_page(
         if mirror_node:
             mirror = _val(mirror_node)
 
-        # Get pin positions from lib_symbols
-        sym_pins = lib_pins.get(lib_id, [])
-        for _pnum, _pname, _ptype, px, py in sym_pins:
+        # Get pin positions from lib_symbols (power symbols are single-unit)
+        unit_pins = _resolve_lib_pins(lib_id, lib_pins)
+        all_pwr_pins = [p for pins in unit_pins.values() for p in pins]
+        for _pnum, _pname, _ptype, px, py in all_pwr_pins:
             abs_pos = _transform_pin(px, py, comp_x, comp_y, comp_rot, mirror)
             _connect_point(uf, abs_pos, wire_segments, wire_points)
             root = uf.find(abs_pos)
@@ -490,23 +550,15 @@ def _build_page(
         if is_dnp:
             comp.metadata["dni"] = "yes"
 
-        # Get pin definitions from lib_symbols
-        sym_pins = lib_pins.get(lib_id, [])
-        # Get pin UUIDs from the placed instance to know which pins exist
-        inst_pin_uuids = {}
-        for pin_node in _find_all(sym_node[1:], "pin"):
-            pnum = str(pin_node[1])
-            uuid_node = _find(pin_node[2:], "uuid")
-            if uuid_node:
-                inst_pin_uuids[pnum] = _val(uuid_node)
+        # Get the instance unit number
+        unit_node = _find(sym_node[1:], "unit")
+        inst_unit = int(unit_node[1]) if unit_node else 1
+
+        # Get pin definitions for this unit (+ shared unit 0 pins)
+        unit_pins = _resolve_lib_pins(lib_id, lib_pins)
+        sym_pins = unit_pins.get(inst_unit, []) + unit_pins.get(0, [])
 
         for pnum, pname, ptype, px, py in sym_pins:
-            # Only include pins that belong to this unit (or unit 0 = shared)
-            # Pin unit is encoded in the sub-symbol name: "SymName_U_V"
-            # where U=unit (0=all), V=variant. We track this via the parent
-            # sub-symbol index. For simplicity, include if pin_uuid exists.
-            if inst_pin_uuids and pnum not in inst_pin_uuids:
-                continue
 
             abs_pos = _transform_pin(px, py, comp_x, comp_y, comp_rot, mirror)
 
