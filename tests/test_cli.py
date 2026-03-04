@@ -8,22 +8,40 @@ DSN_FILE = "raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
 PDF_FILE = "raspberry-pi-pico/RPI-PICO-R3-PUBLIC-SCHEMATIC.pdf"
 
 
-def test_cli_parse_dsn(tmp_path):
+def test_cli_convert_dsn(tmp_path):
     runner = CliRunner()
-    out = tmp_path / "test.netlist.txt"
-    result = runner.invoke(main, ["parse-dsn", DSN_FILE, "-o", str(out)])
+    out = tmp_path / "test.txt"
+    result = runner.invoke(main, ["convert", DSN_FILE, "-o", str(out)])
     assert result.exit_code == 0
-    assert "Netlist written" in result.output
+    assert "Written to" in result.output
     assert out.exists()
+    text = out.read_text()
+    assert "DESIGN SUMMARY" in text
 
 
-def test_cli_extract_pdf(tmp_path):
+def test_cli_convert_pdf(tmp_path):
     runner = CliRunner()
     out = tmp_path / "output.txt"
-    result = runner.invoke(main, ["extract-pdf", PDF_FILE, "-o", str(out)])
+    result = runner.invoke(main, ["convert", PDF_FILE, "-o", str(out)])
     assert result.exit_code == 0
-    assert "Extracted" in result.output
+    assert "Written to" in result.output
     assert out.exists()
+
+
+def test_cli_convert_stdout():
+    runner = CliRunner()
+    result = runner.invoke(main, ["convert", PDF_FILE, "-o", "-"])
+    assert result.exit_code == 0
+    assert "PAGE 1" in result.output
+
+
+def test_cli_convert_unsupported(tmp_path):
+    bad = tmp_path / "test.xyz"
+    bad.write_text("hello")
+    runner = CliRunner()
+    result = runner.invoke(main, ["convert", str(bad)])
+    assert result.exit_code != 0
+    assert "Unsupported" in result.output
 
 
 def test_cli_version():
