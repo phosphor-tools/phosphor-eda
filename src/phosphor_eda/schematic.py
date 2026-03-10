@@ -40,6 +40,7 @@ class Net:
 
     name: str
     pins: list[Pin] = field(default_factory=list)
+    aliases: set[str] = field(default_factory=set)
     bus: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)
 
@@ -233,6 +234,12 @@ def _unify_nets(
     if other.bus and not target.bus:
         target.bus = other.bus
     target.metadata.update(other.metadata)
+    # Preserve all names: the absorbed net's name and aliases become
+    # aliases on the surviving net so every name remains searchable.
+    if other.name != target.name:
+        target.aliases.add(other.name)
+    target.aliases |= other.aliases
+    target.aliases.discard(target.name)
     for k, v in list(merged_nets.items()):
         if v is other:
             del merged_nets[k]
@@ -241,11 +248,19 @@ def _unify_nets(
 
 def _resolve_net(merged_nets: dict[str, Net], net: Net) -> Net:
     """Follow merges to find the canonical net object."""
+    # 1. Identity check — is this the canonical object?
     for v in merged_nets.values():
         if v is net:
             return v
-    # Net was already merged into another — find which one has our pins
+    # 2. Pin-based — find which canonical net owns our pins
     for v in merged_nets.values():
         if any(p.net is v for p in net.pins):
+            return v
+    # 3. Name-based — stale net whose key still exists
+    if net.name in merged_nets:
+        return merged_nets[net.name]
+    # 4. Alias-based — net was absorbed and its name became an alias
+    for v in merged_nets.values():
+        if net.name in v.aliases:
             return v
     return net

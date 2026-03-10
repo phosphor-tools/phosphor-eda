@@ -123,7 +123,8 @@ def _format_nets(design: Design) -> list[str]:
         else:
             page_str = ", ".join(net_pages)
 
-        lines.append(f"NET: {net.name} | Pages: {page_str}")
+        alias_str = f" | Also: {', '.join(sorted(net.aliases))}" if net.aliases else ""
+        lines.append(f"NET: {net.name}{alias_str} | Pages: {page_str}")
 
         for key, value in sorted(net.metadata.items()):
             lines.append(f"  [{key}: {value}]")
