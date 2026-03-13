@@ -18,38 +18,58 @@ from ecad_tools.dsn.to_schematic import dsn_to_design
 from ecad_tools.eagle.to_schematic import eagle_to_design
 from ecad_tools.kicad.to_schematic import kicad_to_design
 from ecad_tools.pdf.extractor import convert as pdf_convert
+from ecad_tools.schematic import Design
 from ecad_tools.serialize import serialize_design
 from ecad_tools.xlsx.extractor import convert as xlsx_convert
 
 
-def _convert_altium(path: Path) -> str:
+def _load_altium(path: Path) -> Design:
     raw = parse_altium(path)
-    design = altium_to_design(raw, name=path.stem)
-    return serialize_design(design)
+    return altium_to_design(raw, name=path.stem)
 
 
-def _convert_dsn(path: Path) -> str:
+def _load_dsn(path: Path) -> Design:
     raw = parse_dsn(path)
-    design = dsn_to_design(raw, name=path.stem)
-    return serialize_design(design)
+    return dsn_to_design(raw, name=path.stem)
 
 
-def _convert_eagle(path: Path) -> str:
-    design = eagle_to_design(path, name=path.stem)
-    return serialize_design(design)
+def _load_eagle(path: Path) -> Design:
+    return eagle_to_design(path, name=path.stem)
 
 
-def _convert_kicad(path: Path) -> str:
-    design = kicad_to_design(path, name=path.stem)
-    return serialize_design(design)
+def _load_kicad(path: Path) -> Design:
+    return kicad_to_design(path, name=path.stem)
+
+
+_DESIGN_LOADERS: dict[str, Callable[[Path], Design]] = {
+    ".schdoc": _load_altium,
+    ".prjpcb": _load_altium,
+    ".dsn": _load_dsn,
+    ".kicad_sch": _load_kicad,
+    ".sch": _load_eagle,
+}
+
+SCHEMATIC_EXTENSIONS: frozenset[str] = frozenset(_DESIGN_LOADERS)
+
+
+def load_design(path: Path) -> Design:
+    """Parse a schematic file into a Design (no serialization)."""
+    ext = path.suffix.lower()
+    loader = _DESIGN_LOADERS.get(ext)
+    if loader is None:
+        raise ValueError(
+            f"Unsupported schematic format: '{ext}'. "
+            f"Supported: {', '.join(sorted(SCHEMATIC_EXTENSIONS))}"
+        )
+    return loader(path)
+
+
+def _convert_schematic(path: Path) -> str:
+    return serialize_design(load_design(path))
 
 
 _CONVERTERS: dict[str, Callable[[Path], str]] = {
-    ".schdoc": _convert_altium,
-    ".prjpcb": _convert_altium,
-    ".dsn": _convert_dsn,
-    ".kicad_sch": _convert_kicad,
-    ".sch": _convert_eagle,
+    **{ext: _convert_schematic for ext in _DESIGN_LOADERS},
     ".pdf": pdf_convert,
     ".docx": docx_convert,
     ".xlsx": xlsx_convert,

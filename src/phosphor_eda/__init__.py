@@ -1,6 +1,11 @@
 """ecad-tools: Convert EE documents to LLM-friendly text."""
 
-from ecad_tools.convert import convert, convert_directory
+from ecad_tools.convert import (
+    SCHEMATIC_EXTENSIONS,
+    convert,
+    convert_directory,
+    load_design,
+)
 
-__all__ = ["convert", "convert_directory"]
+__all__ = ["SCHEMATIC_EXTENSIONS", "convert", "convert_directory", "load_design"]
 __version__ = "0.1.0"

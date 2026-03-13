@@ -1,7 +1,17 @@
 """Tests for the schematic text serializer."""
 
+import pytest
+
 from ecad_tools.schematic import Component, Design, Net, Page, Pin
-from ecad_tools.serialize import serialize_design
+from ecad_tools.serialize import (
+    format_component_detail,
+    format_component_table,
+    format_net_detail,
+    format_net_table,
+    format_page_detail,
+    format_page_table,
+    serialize_design,
+)
 
 
 def _simple_design():
@@ -9,11 +19,11 @@ def _simple_design():
     page = Page(name="ADC")
     comp_u7 = Component(
         reference="U7", part="AD7768-1", description="IC - ADC - Single",
-        pages=[page], metadata={"Manufacturer": "Analog Devices", "MPN": "AD7768-1BCPZ"},
+        pages=[page], metadata={"mfr": "Analog Devices", "mfr_pn": "AD7768-1BCPZ"},
     )
     comp_r1 = Component(
         reference="R1", part="10k", description="Resistor",
-        pages=[page], metadata={},
+        pages=[page], metadata={"value": "10k"},
     )
     net_sclk = Net(name="ADC_SCLK")
     net_gnd = Net(name="GND")
@@ -51,7 +61,7 @@ def test_serialize_contains_summary():
 def test_serialize_contains_component_section():
     text = serialize_design(_simple_design())
     assert "COMPONENT: U7 | AD7768-1 | IC - ADC - Single | Pages: ADC" in text
-    assert "Manufacturer: Analog Devices" in text
+    assert "mfr: Analog Devices" in text
     assert "Pin 10" in text
     assert "-> ADC_SCLK" in text
 
@@ -133,3 +143,178 @@ def test_serialize_pin_metadata_inline():
     pin_line = next(l for l in text.splitlines() if "Pin 1" in l)
     assert "electrical=input" in pin_line
     assert "owner_part_id=2" in pin_line
+
+
+# ---- Metadata filtering tests ----
+
+
+def test_passive_metadata_filtered():
+    """Passives should only show value if not already in description."""
+    page = Page(name="P")
+    comp = Component(
+        reference="R5", part="10k", description="Resistor 10k",
+        pages=[page], metadata={"value": "10k", "Manufacturer": "Yageo", "mfr_pn": "XYZ"},
+    )
+    pin = Pin(designator="1", name="", component=comp, net=None, metadata={})
+    comp.pins = [pin]
+    page.components = [comp]
+    design = Design(name="T", pages=[page], nets=[], components=[comp])
+
+    text = serialize_design(design)
+    # value "10k" is already in description "Resistor 10k", so no metadata shown
+    assert "Manufacturer" not in text
+    assert "mfr_pn" not in text
+
+
+def test_passive_value_shown_when_not_in_description():
+    """Passive value is shown when it doesn't appear in the description."""
+    page = Page(name="P")
+    comp = Component(
+        reference="C3", part="100nF", description="Capacitor",
+        pages=[page], metadata={"value": "100nF"},
+    )
+    pin = Pin(designator="1", name="", component=comp, net=None, metadata={})
+    comp.pins = [pin]
+    page.components = [comp]
+    design = Design(name="T", pages=[page], nets=[], components=[comp])
+
+    text = serialize_design(design)
+    assert "value: 100nF" in text
+
+
+def test_ic_metadata_allowlist():
+    """IC metadata should only show allowlisted keys + URLs."""
+    page = Page(name="P")
+    comp = Component(
+        reference="U1", part="LM358", description="Op-Amp",
+        pages=[page], metadata={
+            "mfr": "TI",
+            "mfr_pn": "LM358DR",
+            "Supplier": "Digi-Key",
+            "SupplierPN": "296-1395-1-ND",
+            "datasheet": "https://www.ti.com/lit/ds/symlink/lm358.pdf",
+            "UniqueId": "ABCDEF123",
+        },
+    )
+    pin = Pin(designator="1", name="", component=comp, net=None, metadata={})
+    comp.pins = [pin]
+    page.components = [comp]
+    design = Design(name="T", pages=[page], nets=[], components=[comp])
+
+    text = serialize_design(design)
+    assert "mfr: TI" in text
+    assert "mfr_pn: LM358DR" in text
+    assert "https://www.ti.com" in text
+    assert "Supplier" not in text
+    assert "SupplierPN" not in text
+    assert "UniqueId" not in text
+
+
+# ---- Inline destinations tests ----
+
+
+def test_inline_destinations_signal_net():
+    """Signal net pins should show inline destination refs."""
+    design = _simple_design()
+    text = serialize_design(design)
+    # U7 pin 10 on ADC_SCLK should show [R1.1]
+    u7_sclk_line = next(
+        l for l in text.splitlines()
+        if "Pin 10" in l and "SCLK" in l and "COMPONENT" not in l
+    )
+    assert "[R1.1]" in u7_sclk_line
+
+
+def test_inline_destinations_power_net_excluded():
+    """Power net pins should NOT show inline destination refs."""
+    design = _simple_design()
+    text = serialize_design(design)
+    # U7 pin 7 on GND — no inline refs
+    u7_gnd_line = next(
+        l for l in text.splitlines()
+        if "Pin 7" in l and "DGND" in l
+    )
+    assert "[" not in u7_gnd_line
+
+
+def test_is_power_net_classname():
+    """ClassName=PWR metadata should mark a net as power."""
+    from ecad_tools.serialize import _is_power_net
+
+    net = Net(name="CUSTOM_RAIL", metadata={"ClassName": "PWR"})
+    assert _is_power_net("CUSTOM_RAIL", net)
+    assert not _is_power_net("CUSTOM_RAIL")
+
+
+# ---- Table formatter tests ----
+
+
+def test_format_component_table():
+    design = _simple_design()
+    table = format_component_table(design)
+    assert "REF" in table
+    assert "PART" in table
+    assert "R1" in table
+    assert "U7" in table
+    assert "AD7768-1" in table
+
+
+def test_format_net_table():
+    design = _simple_design()
+    table = format_net_table(design)
+    assert "NET" in table
+    assert "ADC_SCLK" in table
+    assert "GND" in table
+
+
+def test_format_page_table():
+    design = _simple_design()
+    table = format_page_table(design)
+    assert "PAGE" in table
+    assert "ADC" in table
+
+
+# ---- Detail formatter tests ----
+
+
+def test_format_component_detail():
+    design = _simple_design()
+    detail = format_component_detail(design, "U7")
+    assert "COMPONENT: U7" in detail
+    assert "Pin 10" in detail
+    assert "SCLK" in detail
+    assert "[R1.1]" in detail
+
+
+def test_format_component_detail_not_found():
+    design = _simple_design()
+    with pytest.raises(ValueError, match="not found"):
+        format_component_detail(design, "U99")
+
+
+def test_format_net_detail():
+    design = _simple_design()
+    detail = format_net_detail(design, "ADC_SCLK")
+    assert "NET: ADC_SCLK" in detail
+    assert "U7.10" in detail
+    assert "R1.1" in detail
+
+
+def test_format_net_detail_not_found():
+    design = _simple_design()
+    with pytest.raises(ValueError, match="not found"):
+        format_net_detail(design, "NONEXISTENT")
+
+
+def test_format_page_detail():
+    design = _simple_design()
+    detail = format_page_detail(design, "ADC")
+    assert "PAGE: ADC" in detail
+    assert "U7" in detail
+    assert "R1" in detail
+
+
+def test_format_page_detail_not_found():
+    design = _simple_design()
+    with pytest.raises(ValueError, match="not found"):
+        format_page_detail(design, "NONEXISTENT")
