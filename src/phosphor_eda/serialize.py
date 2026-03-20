@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ecad_tools.schematic import Component, Design, Net, Pin
+from ecad_tools.schematic import Component, Design, Net, Page, Pin
 from ecad_tools.validate import Severity, validate_design
 
 _MAJOR_IC_PIN_THRESHOLD = 4
@@ -121,8 +121,6 @@ def _format_summary(design: Design) -> list[str]:
 
 
 def _format_components(design: Design) -> list[str]:
-    net_pin_index = _build_net_pin_index(design)
-
     lines = ["=== COMPONENTS ===", ""]
     for comp in sorted(design.components, key=lambda c: c.reference):
         page_names = ", ".join(p.name for p in comp.pages)
@@ -145,16 +143,7 @@ def _format_components(design: Design) -> list[str]:
                     f"{k}={v}" for k, v in sorted(filtered.items())
                 )
 
-            # Inline destinations
-            dest_str = ""
-            if pin.net is not None and not _is_power_net(pin.net.name, pin.net):
-                all_refs = net_pin_index.get(id(pin.net), [])
-                other_refs = [
-                    f"{r}.{d}" for r, d in all_refs
-                    if not (r == comp.reference and d == pin.designator)
-                ]
-                if other_refs:
-                    dest_str = "  [" + ", ".join(other_refs) + "]"
+            dest_str = _trace_destinations(pin, comp)
 
             if pin.name:
                 lines.append(f"  Pin {pin.designator:<5s}  {pin.name:<15s} -> {net_str}{meta_str}{dest_str}")
@@ -237,6 +226,222 @@ def write_design(design: Design, output_path: Path) -> None:
     output_path.write_text(serialize_design(design))
 
 
+# ---- Filters ----
+
+
+def _net_pages(net: Net) -> set[str]:
+    """Page names a net spans."""
+    return {p.name for pin in net.pins for p in pin.component.pages}
+
+
+def _net_components(net: Net) -> set[str]:
+    """Component references on a net."""
+    return {pin.component.reference for pin in net.pins}
+
+
+def filter_nets(
+    design: Design,
+    *,
+    components: list[str] | None = None,
+    pages: list[str] | None = None,
+    power: bool | None = None,
+    min_pins: int | None = None,
+    multi_page: bool = False,
+    trace: bool = False,
+) -> list[Net]:
+    """Filter nets from a design.  All criteria are AND-composed."""
+    from ecad_tools.trace import is_two_pin_passive, trace_from_net
+
+    result = list(design.nets)
+
+    if power is True:
+        result = [n for n in result if _is_power_net(n.name, n)]
+    elif power is False:
+        result = [n for n in result if not _is_power_net(n.name, n)]
+
+    if pages:
+        page_set = set(pages)
+        result = [n for n in result if _net_pages(n) & page_set]
+
+    if min_pins is not None:
+        result = [n for n in result if len(n.pins) >= min_pins]
+
+    if multi_page:
+        result = [n for n in result if len(_net_pages(n)) > 1]
+
+    if components:
+        comp_set = set(components)
+        if trace:
+            # Expand each net's component reach through 2-pin passives
+            def _reaches(net: Net) -> set[str]:
+                refs = _net_components(net)
+                for tr in trace_from_net(net):
+                    if tr.terminal_pin is not None:
+                        refs.add(tr.terminal_pin.component.reference)
+                return refs
+
+            result = [n for n in result if comp_set <= _reaches(n)]
+        else:
+            result = [n for n in result if comp_set <= _net_components(n)]
+
+    return result
+
+
+def filter_components(
+    design: Design,
+    *,
+    pages: list[str] | None = None,
+    prefixes: list[str] | None = None,
+    passive: bool | None = None,
+    min_pins: int | None = None,
+    net: str | None = None,
+) -> list[Component]:
+    """Filter components from a design.  All criteria are AND-composed."""
+    result = list(design.components)
+
+    if pages:
+        page_set = set(pages)
+        result = [
+            c for c in result
+            if page_set & {p.name for p in c.pages}
+        ]
+
+    if prefixes:
+        prefix_set = set(prefixes)
+        result = [c for c in result if _ref_prefix(c.reference) in prefix_set]
+
+    if passive is True:
+        result = [c for c in result if _ref_prefix(c.reference) in _PASSIVE_PREFIXES]
+    elif passive is False:
+        result = [c for c in result if _ref_prefix(c.reference) not in _PASSIVE_PREFIXES]
+
+    if min_pins is not None:
+        result = [c for c in result if len(c.pins) >= min_pins]
+
+    if net is not None:
+        net_obj = _find_net(design, net)
+        refs_on_net = {pin.component.reference for pin in net_obj.pins}
+        result = [c for c in result if c.reference in refs_on_net]
+
+    return result
+
+
+def filter_pages(
+    design: Design,
+    *,
+    nets: list[str] | None = None,
+    components: list[str] | None = None,
+) -> list[Page]:
+    """Filter pages from a design.  All criteria are AND-composed."""
+    result = list(design.pages)
+
+    if nets:
+        net_set = set(nets)
+        result = [
+            p for p in result
+            if net_set & {n.name for n in p.nets}
+        ]
+
+    if components:
+        comp_set = set(components)
+        result = [
+            p for p in result
+            if comp_set & {c.reference for c in p.components}
+        ]
+
+    return result
+
+
+def _find_net(design: Design, name: str) -> Net:
+    """Find a net by name or alias.  Raises ValueError if not found."""
+    for n in design.nets:
+        if n.name == name:
+            return n
+    for n in design.nets:
+        if name in n.aliases:
+            return n
+    raise ValueError(f"Net '{name}' not found in design.")
+
+
+# ---- Trace-aware inline destinations ----
+
+
+def _trace_destinations(pin: Pin, comp: Component) -> str:
+    """Format inline destinations, tracing through 2-pin passives."""
+    from ecad_tools.trace import is_two_pin_passive, trace_from_net
+
+    if pin.net is None or _is_power_net(pin.net.name, pin.net):
+        return ""
+
+    parts: list[str] = []
+    for p in sorted(pin.net.pins, key=lambda p: (p.component.reference, p.designator)):
+        if p.component is comp:
+            continue
+        if is_two_pin_passive(p.component):
+            continue
+        parts.append(f"{p.component.reference}.{p.designator}")
+
+    # Trace through passives to find active endpoints
+    for tr in trace_from_net(pin.net, origin_comp=comp):
+        if tr.terminal_pin is None:
+            continue
+        waypoints = ", ".join(w.component.reference for w in tr.series_path)
+        dest = f"{tr.terminal_pin.component.reference}.{tr.terminal_pin.designator}"
+        parts.append(f"{waypoints} -> {dest}")
+
+    # Shunt passives on this net
+    shunt_parts: list[str] = []
+    for p in pin.net.pins:
+        if p.component is comp:
+            continue
+        if not is_two_pin_passive(p.component):
+            continue
+        from ecad_tools.trace import _other_pin
+
+        other = _other_pin(p.component, p)
+        if other.net is not None and _is_power_net(other.net.name, other.net):
+            shunt_parts.append(f"{p.component.reference} to {other.net.name}")
+
+    result = ""
+    if parts:
+        result = "  [" + ", ".join(parts) + "]"
+    if shunt_parts:
+        result += "  (" + ", ".join(shunt_parts) + ")"
+    return result
+
+
+# ---- Trace command formatter ----
+
+
+def format_trace(design: Design, ref_a: str, ref_b: str) -> str:
+    """Format signal paths between two components."""
+    from ecad_tools.trace import find_paths
+
+    paths = find_paths(design, ref_a, ref_b)
+    if not paths:
+        return f"No signal paths between {ref_a} and {ref_b}."
+
+    lines: list[str] = []
+    for path in paths:
+        left = f"{path.left_pin.component.reference}.{path.left_pin.designator}"
+        left_name = path.left_pin.name or ""
+        right = f"{path.right_pin.component.reference}.{path.right_pin.designator}"
+        right_name = path.right_pin.name or ""
+
+        if path.series:
+            via = " -- " + " -- ".join(c.reference for c in path.series) + " -- "
+        else:
+            via = " ---------- "
+
+        line = f"{left:<10s} {left_name:<15s}{via}{right:<10s} {right_name}"
+        if path.shunts:
+            shunt_strs = [f"{c.reference} to {n.name}" for c, n in path.shunts]
+            line += f"  ({', '.join(shunt_strs)})"
+        lines.append(line)
+
+    return "\n".join(lines)
+
+
 # ---- List/show formatters for CLI ----
 
 
@@ -276,21 +481,29 @@ def _tabulate(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> str:
     return "\n".join(lines)
 
 
-def format_component_table(design: Design) -> str:
-    """Format a table of all components: REF | PART | DESCRIPTION | PINS."""
+def format_component_table(
+    design: Design,
+    components: list[Component] | None = None,
+) -> str:
+    """Format a table of components: REF | PART | DESCRIPTION | PINS."""
+    source = components if components is not None else design.components
     rows = [
         (c.reference, c.part, c.description, str(len(c.pins)))
-        for c in sorted(design.components, key=lambda c: c.reference)
+        for c in sorted(source, key=lambda c: c.reference)
     ]
     if not rows:
         return "No components found."
     return _tabulate(("REF", "PART", "DESCRIPTION", "PINS"), rows)
 
 
-def format_net_table(design: Design) -> str:
-    """Format a table of all nets: NET | ALIASES | PINS | PAGES."""
+def format_net_table(
+    design: Design,
+    nets: list[Net] | None = None,
+) -> str:
+    """Format a table of nets: NET | ALIASES | PINS | PAGES."""
+    source = nets if nets is not None else design.nets
     rows: list[tuple[str, ...]] = []
-    for net in sorted(design.nets, key=lambda n: n.name):
+    for net in sorted(source, key=lambda n: n.name):
         aliases = ", ".join(sorted(net.aliases)) if net.aliases else ""
         pages = sorted({p.name for pin in net.pins for p in pin.component.pages})
         rows.append((net.name, aliases, str(len(net.pins)), ", ".join(pages)))
@@ -299,11 +512,15 @@ def format_net_table(design: Design) -> str:
     return _tabulate(("NET", "ALIASES", "PINS", "PAGES"), rows)
 
 
-def format_page_table(design: Design) -> str:
-    """Format a table of all pages: PAGE | COMPONENTS | NETS."""
+def format_page_table(
+    design: Design,
+    pages: list[Page] | None = None,
+) -> str:
+    """Format a table of pages: PAGE | COMPONENTS | NETS."""
+    source = pages if pages is not None else design.pages
     rows = [
         (p.name, str(len(p.components)), str(len(p.nets)))
-        for p in design.pages
+        for p in source
     ]
     if not rows:
         return "No pages found."
@@ -320,7 +537,6 @@ def format_component_detail(design: Design, ref: str) -> str:
     if comp is None:
         raise ValueError(f"Component '{ref}' not found in design.")
 
-    net_pin_index = _build_net_pin_index(design)
     page_names = ", ".join(p.name for p in comp.pages)
     lines = [f"COMPONENT: {comp.reference} | {comp.part} | {comp.description} | Pages: {page_names}"]
 
@@ -329,15 +545,7 @@ def format_component_detail(design: Design, ref: str) -> str:
 
     for pin in sorted(comp.pins, key=lambda p: p.designator):
         net_str = _pin_net_str(pin)
-        dest_str = ""
-        if pin.net is not None and not _is_power_net(pin.net.name, pin.net):
-            all_refs = net_pin_index.get(id(pin.net), [])
-            other_refs = [
-                f"{r}.{d}" for r, d in all_refs
-                if not (r == comp.reference and d == pin.designator)
-            ]
-            if other_refs:
-                dest_str = "  [" + ", ".join(other_refs) + "]"
+        dest_str = _trace_destinations(pin, comp)
         if pin.name:
             lines.append(f"  Pin {pin.designator:<5s}  {pin.name:<15s} -> {net_str}{dest_str}")
         else:
