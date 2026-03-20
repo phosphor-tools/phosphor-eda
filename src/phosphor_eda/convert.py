@@ -52,6 +52,59 @@ _DESIGN_LOADERS: dict[str, Callable[[Path], Design]] = {
 SCHEMATIC_EXTENSIONS: frozenset[str] = frozenset(_DESIGN_LOADERS)
 
 
+def find_project_root(path: Path) -> Path | None:
+    """If *path* is a sub-sheet, return the project root that contains it.
+
+    For Altium .SchDoc files: searches the same directory for .PrjPcb files
+    that reference this sheet.
+
+    For KiCad .kicad_sch files: searches sibling .kicad_sch files for
+    ``(sheet ... (property "Sheetfile" "<this_filename>"))`` references.
+
+    Returns None if *path* is already a project root or no parent is found.
+    """
+    ext = path.suffix.lower()
+
+    if ext == ".schdoc":
+        return _find_altium_project(path)
+    if ext == ".kicad_sch":
+        return _find_kicad_root(path)
+    return None
+
+
+def _find_altium_project(schdoc: Path) -> Path | None:
+    """Find a .PrjPcb in the same directory that references *schdoc*."""
+    schdoc_resolved = schdoc.resolve()
+    for prjpcb in schdoc.parent.glob("*.PrjPcb"):
+        project = parse_prjpcb_file(str(prjpcb))
+        for rel_path in project.schematic_paths:
+            if (prjpcb.parent / rel_path).resolve() == schdoc_resolved:
+                return prjpcb
+    # Also check case-insensitive glob (some systems)
+    for prjpcb in schdoc.parent.glob("*.prjpcb"):
+        project = parse_prjpcb_file(str(prjpcb))
+        for rel_path in project.schematic_paths:
+            if (prjpcb.parent / rel_path).resolve() == schdoc_resolved:
+                return prjpcb
+    return None
+
+
+def _find_kicad_root(sch: Path) -> Path | None:
+    """Find a sibling .kicad_sch that references *sch* as a child sheet."""
+    target_name = sch.name
+    for sibling in sch.parent.glob("*.kicad_sch"):
+        if sibling.resolve() == sch.resolve():
+            continue
+        try:
+            text = sibling.read_text()
+        except OSError:
+            continue
+        # Look for (property "Sheetfile" "target_name") in sheet blocks
+        if f'"Sheetfile" "{target_name}"' in text:
+            return sibling
+    return None
+
+
 def load_design(path: Path) -> Design:
     """Parse a schematic file into a Design (no serialization)."""
     ext = path.suffix.lower()

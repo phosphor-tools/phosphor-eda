@@ -208,3 +208,63 @@ def test_cli_trace_not_found():
     ])
     assert result.exit_code != 0
     assert "not found" in result.output
+
+
+# ---- sub-sheet detection tests ----
+
+ALTIUM_PROJECT = "altium-test/TestBoard_X9/TestBoard_X9.PrjPcb"
+ALTIUM_SUBSHEET = "altium-test/TestBoard_X9/ADC.SchDoc"
+KICAD_ROOT = "tests/fixtures/kicad-hierarchy/root.kicad_sch"
+KICAD_CHILD = "tests/fixtures/kicad-hierarchy/child.kicad_sch"
+
+
+@pytest.mark.skipif(
+    not Path(ALTIUM_SUBSHEET).exists(), reason="Altium test data not available",
+)
+def test_cli_rejects_altium_subsheet():
+    runner = CliRunner()
+    result = runner.invoke(main, [
+        "schematic", "list", "components", ALTIUM_SUBSHEET,
+    ])
+    assert result.exit_code != 0
+    assert "sub-sheet" in result.output
+    assert "TestBoard_X9.PrjPcb" in result.output
+
+
+@pytest.mark.skipif(
+    not Path(ALTIUM_SUBSHEET).exists(), reason="Altium test data not available",
+)
+def test_cli_force_single_sheet_altium():
+    runner = CliRunner()
+    result = runner.invoke(main, [
+        "schematic", "--force-single-sheet", "list", "components", ALTIUM_SUBSHEET,
+    ])
+    assert result.exit_code == 0
+    assert "REF" in result.output
+
+
+def test_cli_rejects_kicad_child_sheet():
+    runner = CliRunner()
+    result = runner.invoke(main, [
+        "schematic", "list", "components", KICAD_CHILD,
+    ])
+    assert result.exit_code != 0
+    assert "sub-sheet" in result.output
+    assert "root.kicad_sch" in result.output
+
+
+def test_cli_force_single_sheet_kicad():
+    runner = CliRunner()
+    result = runner.invoke(main, [
+        "schematic", "--force-single-sheet", "list", "components", KICAD_CHILD,
+    ])
+    assert result.exit_code == 0
+
+
+def test_cli_kicad_root_not_rejected():
+    runner = CliRunner()
+    result = runner.invoke(main, [
+        "schematic", "list", "pages", KICAD_ROOT,
+    ])
+    assert result.exit_code == 0
+    assert "PAGE" in result.output
