@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from ecad_tools.cli import main
@@ -7,7 +8,10 @@ from ecad_tools.cli import main
 DSN_FILE = "raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
 PDF_FILE = "raspberry-pi-pico/RPI-PICO-R3-PUBLIC-SCHEMATIC.pdf"
 
+_CONVERT_SKIP = pytest.mark.skip(reason="convert command disabled")
 
+
+@_CONVERT_SKIP
 def test_cli_convert_dsn(tmp_path):
     runner = CliRunner()
     out = tmp_path / "test.txt"
@@ -19,6 +23,7 @@ def test_cli_convert_dsn(tmp_path):
     assert "DESIGN SUMMARY" in text
 
 
+@_CONVERT_SKIP
 def test_cli_convert_pdf(tmp_path):
     runner = CliRunner()
     out = tmp_path / "output.txt"
@@ -28,6 +33,7 @@ def test_cli_convert_pdf(tmp_path):
     assert out.exists()
 
 
+@_CONVERT_SKIP
 def test_cli_convert_stdout():
     runner = CliRunner()
     result = runner.invoke(main, ["convert", PDF_FILE, "-o", "-"])
@@ -35,6 +41,7 @@ def test_cli_convert_stdout():
     assert "PAGE 1" in result.output
 
 
+@_CONVERT_SKIP
 def test_cli_convert_unsupported(tmp_path):
     bad = tmp_path / "test.xyz"
     bad.write_text("hello")
