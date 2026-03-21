@@ -2,8 +2,8 @@
 
 import pytest
 
-from ecad_tools.schematic import Component, Design, Net, Page, Pin
-from ecad_tools.serialize import (
+from phosphor_eda.schematic import Component, Design, Net, Page, Pin
+from phosphor_eda.serialize import (
     filter_components,
     filter_nets,
     filter_pages,
@@ -92,7 +92,7 @@ def test_serialize_grep_friendly():
 
 
 def test_serialize_to_file(tmp_path):
-    from ecad_tools.serialize import write_design
+    from phosphor_eda.serialize import write_design
 
     design = _simple_design()
     out = tmp_path / "test.txt"
@@ -243,7 +243,7 @@ def test_inline_destinations_power_net_excluded():
 
 def test_is_power_net_classname():
     """ClassName=PWR metadata should mark a net as power."""
-    from ecad_tools.serialize import _is_power_net
+    from phosphor_eda.serialize import _is_power_net
 
     net = Net(name="CUSTOM_RAIL", metadata={"ClassName": "PWR"})
     assert _is_power_net("CUSTOM_RAIL", net)

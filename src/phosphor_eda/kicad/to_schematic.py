@@ -13,7 +13,7 @@ from pathlib import Path
 
 import sexpdata
 
-from ecad_tools.schematic import Component, Design, Net, Page, Pin, Port, merge_pages
+from phosphor_eda.schematic import Component, Design, Net, Page, Pin, Port, merge_pages
 
 # KiCad overline: ~{TEXT} means TEXT with overline bar.
 # Bare ~ means "no name" (unnamed pin).

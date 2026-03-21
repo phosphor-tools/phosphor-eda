@@ -10,9 +10,9 @@ Coordinate normalization happens here: fractional fields like
 
 from __future__ import annotations
 
-from ecad_tools.text import strip_overline as strip_overline  # re-export
+from phosphor_eda.text import strip_overline as strip_overline  # re-export
 
-from ecad_tools.altium.records import (
+from phosphor_eda.altium.records import (
     AltiumRecord,
     BlanketRec,
     ComponentRec,

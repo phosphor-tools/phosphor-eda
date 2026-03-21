@@ -1,6 +1,6 @@
 """Netlist construction from parsed OrCAD DSN designs."""
 
-from ecad_tools.dsn.models import NetlistEntry, ParsedDesign
+from phosphor_eda.dsn.models import NetlistEntry, ParsedDesign
 
 
 def build_netlist(design: ParsedDesign) -> dict[str, list[NetlistEntry]]:

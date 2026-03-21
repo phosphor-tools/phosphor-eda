@@ -13,7 +13,7 @@ import bisect
 from collections.abc import Iterable
 from typing import TypeVar
 
-from ecad_tools.altium.records import WireRec
+from phosphor_eda.altium.records import WireRec
 
 T = TypeVar("T")
 

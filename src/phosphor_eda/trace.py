@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ecad_tools.schematic import Component, Design, Net, Pin
-from ecad_tools.serialize import _PASSIVE_PREFIXES, _is_power_net, _ref_prefix
+from phosphor_eda.schematic import Component, Design, Net, Pin
+from phosphor_eda.serialize import _PASSIVE_PREFIXES, _is_power_net, _ref_prefix
 
 
 @dataclass

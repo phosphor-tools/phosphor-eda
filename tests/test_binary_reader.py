@@ -1,6 +1,6 @@
 import struct
 
-from ecad_tools.dsn.binary_reader import BinaryReader, PREAMBLE
+from phosphor_eda.dsn.binary_reader import BinaryReader, PREAMBLE
 
 
 def test_read_uint8():

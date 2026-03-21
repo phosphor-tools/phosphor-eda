@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ecad_tools.validate import Severity, validate_design
+from phosphor_eda.validate import Severity, validate_design
 
 MINIMAL_SCH = Path(
     "reference-designs/kicad-minimal/minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_sch"
@@ -17,7 +17,7 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def design():
-    from ecad_tools.kicad import kicad_to_design
+    from phosphor_eda.kicad import kicad_to_design
 
     return kicad_to_design(MINIMAL_SCH)
 

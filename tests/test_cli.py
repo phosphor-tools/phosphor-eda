@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from ecad_tools.cli import main
+from phosphor_eda.cli import main
 
 DSN_FILE = "raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
 PDF_FILE = "raspberry-pi-pico/RPI-PICO-R3-PUBLIC-SCHEMATIC.pdf"

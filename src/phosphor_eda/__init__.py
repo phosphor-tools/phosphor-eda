@@ -1,6 +1,6 @@
-"""ecad-tools: Convert EE documents to LLM-friendly text."""
+"""phosphor-eda: Convert EE documents to LLM-friendly text."""
 
-from ecad_tools.convert import (
+from phosphor_eda.convert import (
     SCHEMATIC_EXTENSIONS,
     convert,
     convert_directory,

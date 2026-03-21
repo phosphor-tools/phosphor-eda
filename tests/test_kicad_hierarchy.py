@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from ecad_tools.kicad import kicad_to_design
-from ecad_tools.validate import Severity, validate_design
+from phosphor_eda.kicad import kicad_to_design
+from phosphor_eda.validate import Severity, validate_design
 
 HIERARCHY_DIR = Path(__file__).parent / "fixtures" / "kicad-hierarchy"
 ROOT_SCH = HIERARCHY_DIR / "root.kicad_sch"

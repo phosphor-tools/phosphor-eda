@@ -2,8 +2,8 @@
 
 import pytest
 
-from ecad_tools.schematic import Component, Design, Net, Page, Pin
-from ecad_tools.trace import (
+from phosphor_eda.schematic import Component, Design, Net, Page, Pin
+from phosphor_eda.trace import (
     ConnectionPath,
     TraceResult,
     find_paths,

@@ -2,10 +2,10 @@
 
 from pathlib import Path
 
-from ecad_tools.dsn.netlist import build_netlist
-from ecad_tools.dsn.parser import parse_dsn
-from ecad_tools.dsn.to_schematic import dsn_to_design
-from ecad_tools.serialize import write_design
+from phosphor_eda.dsn.netlist import build_netlist
+from phosphor_eda.dsn.parser import parse_dsn
+from phosphor_eda.dsn.to_schematic import dsn_to_design
+from phosphor_eda.serialize import write_design
 
 PICO_W_DSN = Path("raspberry-pi-pico-w/picow_design_files/RPI-PICOW-R2.DSN")
 CMIO_DSN = Path("raspberry-pi-cmio/RPI-CMIO-V3_0-PUBLIC.DSN")

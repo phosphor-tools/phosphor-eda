@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from ecad_tools.schematic import Component, Design, Net, Page, Pin, merge_pages
+from phosphor_eda.schematic import Component, Design, Net, Page, Pin, merge_pages
 
 # ---------------------------------------------------------------------------
 # Pin direction mapping (Eagle direction attr -> canonical electrical type)

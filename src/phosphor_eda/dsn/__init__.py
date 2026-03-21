@@ -1,9 +1,9 @@
 """OrCAD Capture DSN file parser."""
 
-from ecad_tools.dsn.models import ParsedDesign, SchematicPage
-from ecad_tools.dsn.netlist import build_netlist
-from ecad_tools.dsn.parser import parse_dsn
-from ecad_tools.dsn.to_schematic import dsn_to_design
+from phosphor_eda.dsn.models import ParsedDesign, SchematicPage
+from phosphor_eda.dsn.netlist import build_netlist
+from phosphor_eda.dsn.parser import parse_dsn
+from phosphor_eda.dsn.to_schematic import dsn_to_design
 
 __all__ = [
     "ParsedDesign",

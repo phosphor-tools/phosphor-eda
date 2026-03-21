@@ -1,7 +1,7 @@
 """Tests for schematic validation smoke checks."""
 
-from ecad_tools.schematic import Component, Design, Net, Page, Pin, Port
-from ecad_tools.validate import Category, Finding, Severity, validate_design
+from phosphor_eda.schematic import Component, Design, Net, Page, Pin, Port
+from phosphor_eda.validate import Category, Finding, Severity, validate_design
 
 
 def _make_pin(comp: Component, desig: str, name: str, net: Net | None) -> Pin:

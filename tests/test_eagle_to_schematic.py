@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ecad_tools.validate import Severity, validate_design
+from phosphor_eda.validate import Severity, validate_design
 
 BME280_SCH = Path("eagle-test/SparkFun_BME280_Breakout.sch")
 ADAFRUIT_SCH = Path("eagle-test/adafruit_rgblcdshield.sch")
@@ -16,14 +16,14 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def design():
-    from ecad_tools.eagle import eagle_to_design
+    from phosphor_eda.eagle import eagle_to_design
 
     return eagle_to_design(BME280_SCH)
 
 
 @pytest.fixture(scope="module")
 def adafruit_design():
-    from ecad_tools.eagle import eagle_to_design
+    from phosphor_eda.eagle import eagle_to_design
 
     if not ADAFRUIT_SCH.exists():
         pytest.skip("Adafruit Eagle schematic not available")
@@ -171,7 +171,7 @@ def test_adafruit_no_errors(adafruit_design):
 
 
 def test_convert_api():
-    from ecad_tools.convert import convert
+    from phosphor_eda.convert import convert
 
     text = convert(BME280_SCH)
     assert "DESIGN SUMMARY" in text

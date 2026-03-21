@@ -9,8 +9,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from ecad_tools.schematic import Component, Design, Net, Page, Pin
-from ecad_tools.validate import Severity, validate_design
+from phosphor_eda.schematic import Component, Design, Net, Page, Pin
+from phosphor_eda.validate import Severity, validate_design
 
 _MAJOR_IC_PIN_THRESHOLD = 4
 
@@ -250,7 +250,7 @@ def filter_nets(
     trace: bool = False,
 ) -> list[Net]:
     """Filter nets from a design.  All criteria are AND-composed."""
-    from ecad_tools.trace import is_two_pin_passive, trace_from_net
+    from phosphor_eda.trace import is_two_pin_passive, trace_from_net
 
     result = list(design.nets)
 
@@ -368,7 +368,7 @@ def _find_net(design: Design, name: str) -> Net:
 
 def _trace_destinations(pin: Pin, comp: Component) -> str:
     """Format inline destinations, tracing through 2-pin passives."""
-    from ecad_tools.trace import is_two_pin_passive, trace_from_net
+    from phosphor_eda.trace import is_two_pin_passive, trace_from_net
 
     if pin.net is None or _is_power_net(pin.net.name, pin.net):
         return ""
@@ -396,7 +396,7 @@ def _trace_destinations(pin: Pin, comp: Component) -> str:
             continue
         if not is_two_pin_passive(p.component):
             continue
-        from ecad_tools.trace import _other_pin
+        from phosphor_eda.trace import _other_pin
 
         other = _other_pin(p.component, p)
         if other.net is not None and _is_power_net(other.net.name, other.net):
@@ -415,7 +415,7 @@ def _trace_destinations(pin: Pin, comp: Component) -> str:
 
 def format_trace(design: Design, ref_a: str, ref_b: str) -> str:
     """Format signal paths between two components."""
-    from ecad_tools.trace import find_paths
+    from phosphor_eda.trace import find_paths
 
     paths = find_paths(design, ref_a, ref_b)
     if not paths:

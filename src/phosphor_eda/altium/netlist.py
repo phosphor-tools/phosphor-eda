@@ -4,8 +4,8 @@ Builds a netlist by resolving wire connectivity on each sheet, then
 matching pin coordinates to named wire groups.
 """
 
-from ecad_tools.altium.sheet_builder import load_sheet, resolve_nets
-from ecad_tools.models import NetlistEntry, PageNetEntry, ParsedDesign
+from phosphor_eda.altium.sheet_builder import load_sheet, resolve_nets
+from phosphor_eda.models import NetlistEntry, PageNetEntry, ParsedDesign
 
 
 def build_netlist(design: ParsedDesign) -> dict[str, list[NetlistEntry]]:

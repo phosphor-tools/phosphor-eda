@@ -9,18 +9,18 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from ecad_tools.altium.parser import parse_altium
-from ecad_tools.altium.project import parse_prjpcb_file
-from ecad_tools.altium.to_schematic import altium_to_design
-from ecad_tools.docx.extractor import convert as docx_convert
-from ecad_tools.dsn.parser import parse_dsn
-from ecad_tools.dsn.to_schematic import dsn_to_design
-from ecad_tools.eagle.to_schematic import eagle_to_design
-from ecad_tools.kicad.to_schematic import kicad_to_design
-from ecad_tools.pdf.extractor import convert as pdf_convert
-from ecad_tools.schematic import Design
-from ecad_tools.serialize import serialize_design
-from ecad_tools.xlsx.extractor import convert as xlsx_convert
+from phosphor_eda.altium.parser import parse_altium
+from phosphor_eda.altium.project import parse_prjpcb_file
+from phosphor_eda.altium.to_schematic import altium_to_design
+from phosphor_eda.docx.extractor import convert as docx_convert
+from phosphor_eda.dsn.parser import parse_dsn
+from phosphor_eda.dsn.to_schematic import dsn_to_design
+from phosphor_eda.eagle.to_schematic import eagle_to_design
+from phosphor_eda.kicad.to_schematic import kicad_to_design
+from phosphor_eda.pdf.extractor import convert as pdf_convert
+from phosphor_eda.schematic import Design
+from phosphor_eda.serialize import serialize_design
+from phosphor_eda.xlsx.extractor import convert as xlsx_convert
 
 
 def _load_altium(path: Path) -> Design:

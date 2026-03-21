@@ -1,6 +1,6 @@
 """Tests for the schematic domain model."""
 
-from ecad_tools.schematic import Component, Design, Net, Page, Pin, Port
+from phosphor_eda.schematic import Component, Design, Net, Page, Pin, Port
 
 
 def test_pin_defaults():
@@ -67,7 +67,7 @@ def test_net_bus_property():
 
 def test_merge_pages_deduplicates_pins():
     """merge_pages should keep one pin per designator, preferring connected."""
-    from ecad_tools.schematic import merge_pages
+    from phosphor_eda.schematic import merge_pages
 
     net_a = Net(name="SIG")
 

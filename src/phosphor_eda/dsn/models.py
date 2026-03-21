@@ -1,6 +1,6 @@
 """Re-export shared models for backwards compatibility."""
 
-from ecad_tools.models import (
+from phosphor_eda.models import (
     GraphicInst,
     NetIdMapping,
     NetlistEntry,

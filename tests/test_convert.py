@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from ecad_tools.convert import SUPPORTED_EXTENSIONS, convert, convert_directory
+from phosphor_eda.convert import SUPPORTED_EXTENSIONS, convert, convert_directory
 
 DSN_FILE = Path("raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN")
 PDF_FILE = Path("raspberry-pi-pico/RPI-PICO-R3-PUBLIC-SCHEMATIC.pdf")

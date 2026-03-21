@@ -14,13 +14,13 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from ecad_tools.altium.record_factory import (
+from phosphor_eda.altium.record_factory import (
     _compute_entry_coord,
     link_children,
     materialize_records,
 )
-from ecad_tools.altium.record_parser import read_schematic_records
-from ecad_tools.altium.records import (
+from phosphor_eda.altium.record_parser import read_schematic_records
+from phosphor_eda.altium.records import (
     AltiumRecord,
     BlanketRec,
     ComponentRec,
@@ -49,9 +49,9 @@ from ecad_tools.altium.records import (
     UnknownRecord,
     WireRec,
 )
-from ecad_tools.altium.spatial import UnionFind, WireIndex, point_on_segment
-from ecad_tools.models import SchematicPage
-from ecad_tools.schematic import Component, Net, Page, Pin, Port
+from phosphor_eda.altium.spatial import UnionFind, WireIndex, point_on_segment
+from phosphor_eda.models import SchematicPage
+from phosphor_eda.schematic import Component, Net, Page, Pin, Port
 
 # Pin electrical type names (Altium Electrical field values)
 _PIN_ELECTRICAL_NAMES = {

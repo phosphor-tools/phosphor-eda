@@ -7,7 +7,7 @@ works for Altium, OrCAD, or any future input format.
 
 Usage::
 
-    from ecad_tools.validate import validate_design
+    from phosphor_eda.validate import validate_design
 
     findings = validate_design(design)
     for f in findings:
@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from enum import StrEnum, auto
 
-from ecad_tools.schematic import Design
+from phosphor_eda.schematic import Design
 
 # ---------------------------------------------------------------------------
 # Finding data types

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ecad_tools.altium.sheet_builder import (
+from phosphor_eda.altium.sheet_builder import (
     build_page,
     collect_harness_port_nets,
     collect_harness_type_members,
@@ -10,14 +10,14 @@ from ecad_tools.altium.sheet_builder import (
     load_sheet,
     resolve_nets,
 )
-from ecad_tools.models import ParsedDesign as RawDesign
-from ecad_tools.schematic import Design, merge_pages
+from phosphor_eda.models import ParsedDesign as RawDesign
+from phosphor_eda.schematic import Design, merge_pages
 
 
 def altium_to_design(raw: RawDesign, name: str = "") -> Design:
     """Convert a raw Altium ParsedDesign to a schematic Design."""
     # Phase 1: Load all sheets into typed records with spatial indices
-    from ecad_tools.altium.sheet_builder import SheetRecords
+    from phosphor_eda.altium.sheet_builder import SheetRecords
 
     sheets: dict[str, SheetRecords] = {}
     for raw_page in raw.pages:

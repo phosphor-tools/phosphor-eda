@@ -12,12 +12,12 @@ from pathlib import Path
 
 import olefile
 
-from ecad_tools.dsn.binary_reader import (
+from phosphor_eda.dsn.binary_reader import (
     BinaryReader,
     PAGE_SETTINGS_SIZE,
     PREAMBLE,
 )
-from ecad_tools.dsn.models import (
+from phosphor_eda.dsn.models import (
     GraphicInst,
     NetIdMapping,
     PageNetEntry,

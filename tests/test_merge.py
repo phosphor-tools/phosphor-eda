@@ -1,8 +1,8 @@
 """Tests for the schematic merge step."""
 
-from ecad_tools.altium.record_factory import materialize_records, strip_overline
-from ecad_tools.altium.records import ComponentRec, PinRec
-from ecad_tools.schematic import Component, Net, Page, Pin, Port, merge_pages
+from phosphor_eda.altium.record_factory import materialize_records, strip_overline
+from phosphor_eda.altium.records import ComponentRec, PinRec
+from phosphor_eda.schematic import Component, Net, Page, Pin, Port, merge_pages
 
 
 def _make_pin(comp, designator, name, net):
@@ -171,7 +171,7 @@ def test_unify_nets_no_duplicate_pins():
     page.nets = [net_a]
 
     # Manually merge — should not duplicate pin
-    from ecad_tools.schematic import _unify_nets
+    from phosphor_eda.schematic import _unify_nets
     merged_nets = {"SIG": net_a, "SIG_alias": net_b}
     _unify_nets(merged_nets, net_a, net_b)
 

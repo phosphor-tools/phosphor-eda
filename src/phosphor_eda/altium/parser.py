@@ -2,9 +2,9 @@
 
 from pathlib import Path
 
-from ecad_tools.altium.project import parse_prjpcb_file
-from ecad_tools.altium.record_parser import read_schematic_records
-from ecad_tools.models import (
+from phosphor_eda.altium.project import parse_prjpcb_file
+from phosphor_eda.altium.record_parser import read_schematic_records
+from phosphor_eda.models import (
     GraphicInst,
     ParsedDesign,
     PinConnection,

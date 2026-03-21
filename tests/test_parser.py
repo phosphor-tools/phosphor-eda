@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from ecad_tools.dsn.parser import parse_dsn
+from phosphor_eda.dsn.parser import parse_dsn
 
 DSN_FILE = Path("raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN")
 
@@ -42,7 +42,7 @@ def test_parse_dsn_string_list():
 
 
 def test_public_api_imports():
-    from ecad_tools.dsn import ParsedDesign, SchematicPage, build_netlist, dsn_to_design, parse_dsn
+    from phosphor_eda.dsn import ParsedDesign, SchematicPage, build_netlist, dsn_to_design, parse_dsn
 
     assert callable(parse_dsn)
     assert callable(build_netlist)

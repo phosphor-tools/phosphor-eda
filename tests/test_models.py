@@ -1,4 +1,4 @@
-from ecad_tools.dsn.models import ParsedDesign, PlacedInstance, SchematicPage, Wire
+from phosphor_eda.dsn.models import ParsedDesign, PlacedInstance, SchematicPage, Wire
 
 
 def test_parsed_design_defaults():

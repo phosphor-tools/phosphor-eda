@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from ecad_tools.dsn.parser import parse_dsn
-from ecad_tools.dsn.to_schematic import dsn_to_design
+from phosphor_eda.dsn.parser import parse_dsn
+from phosphor_eda.dsn.to_schematic import dsn_to_design
 
 PICOW_DSN = Path("raspberry-pi-pico-w/picow_design_files/RPI-PICOW-R2.DSN")
 
