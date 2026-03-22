@@ -34,5 +34,9 @@ def parse_prjpcb(content: str) -> AltiumProject:
 
 def parse_prjpcb_file(path: str) -> AltiumProject:
     """Read and parse a .PrjPcb file from disk."""
-    with open(path, encoding="utf-8-sig") as f:
-        return parse_prjpcb(f.read())
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            return parse_prjpcb(f.read())
+    except UnicodeDecodeError:
+        with open(path, encoding="latin-1") as f:
+            return parse_prjpcb(f.read())
