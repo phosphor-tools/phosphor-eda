@@ -754,8 +754,8 @@ def _collect_harness_bridge_ports(
     # Map sheet symbol key → child page name from FileNameRec
     child_page_for_symbol: dict[int, str] = {}
     for fn in sheet.file_names:
-        if fn.owner_index >= 0 and fn.text.endswith(".SchDoc"):
-            child_page_for_symbol[fn.owner_index] = fn.text.removesuffix(".SchDoc")
+        if fn.owner_index >= 0 and fn.text.lower().endswith(".schdoc"):
+            child_page_for_symbol[fn.owner_index] = fn.text[: -len(".SchDoc")]
 
     # Find harness-type sheet entries and compute their coordinates
     harness_entries: list[tuple[str, str, str, tuple[int, int]]] = []

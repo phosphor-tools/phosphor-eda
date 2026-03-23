@@ -75,31 +75,28 @@ def find_project_root(path: Path) -> Path | None:
 def _find_altium_project(schdoc: Path) -> Path | None:
     """Find a .PrjPcb in the same directory that references *schdoc*."""
     schdoc_resolved = schdoc.resolve()
-    for prjpcb in schdoc.parent.glob("*.PrjPcb"):
-        project = parse_prjpcb_file(str(prjpcb))
+    for child in schdoc.parent.iterdir():
+        if not child.is_file() or child.suffix.lower() != ".prjpcb":
+            continue
+        project = parse_prjpcb_file(str(child))
         for rel_path in project.schematic_paths:
-            if (prjpcb.parent / rel_path).resolve() == schdoc_resolved:
-                return prjpcb
-    # Also check case-insensitive glob (some systems)
-    for prjpcb in schdoc.parent.glob("*.prjpcb"):
-        project = parse_prjpcb_file(str(prjpcb))
-        for rel_path in project.schematic_paths:
-            if (prjpcb.parent / rel_path).resolve() == schdoc_resolved:
-                return prjpcb
+            if (child.parent / rel_path).resolve() == schdoc_resolved:
+                return child
     return None
 
 
 def _find_kicad_root(sch: Path) -> Path | None:
     """Find a sibling .kicad_sch that references *sch* as a child sheet."""
     target_name = sch.name
-    for sibling in sch.parent.glob("*.kicad_sch"):
+    for sibling in sch.parent.iterdir():
+        if not sibling.is_file() or sibling.suffix.lower() != ".kicad_sch":
+            continue
         if sibling.resolve() == sch.resolve():
             continue
         try:
             text = sibling.read_text()
         except OSError:
             continue
-        # Look for (property "Sheetfile" "target_name") in sheet blocks
         if f'"Sheetfile" "{target_name}"' in text:
             return sibling
     return None
