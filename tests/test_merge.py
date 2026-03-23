@@ -172,7 +172,7 @@ def test_unify_nets_no_duplicate_pins():
 
     # Manually merge — should not duplicate pin
     from phosphor_eda.schematic import _unify_nets
-    merged_nets = {"SIG": net_a, "SIG_alias": net_b}
+    merged_nets = {"sig": net_a, "sig_alias": net_b}
     _unify_nets(merged_nets, net_a, net_b)
 
     pin_ids = [id(p) for p in net_a.pins]
@@ -316,16 +316,16 @@ def test_merge_hierarchical_three_way_bridge():
 def test_component_display_mode_fields_materialized():
     """ComponentRec should capture DisplayMode and DisplayModeCount from raw records."""
     raw = [
-        {"RECORD": "0"},  # header at index 0
+        {"record": "0"},  # header at index 0
         {
-            "RECORD": "1",
-            "Location.X": "100",
-            "Location.Y": "200",
-            "LibReference": "CAP",
-            "PartCount": "2",
-            "CurrentPartId": "1",
-            "DisplayMode": "0",
-            "DisplayModeCount": "2",
+            "record": "1",
+            "location.x": "100",
+            "location.y": "200",
+            "libreference": "CAP",
+            "partcount": "2",
+            "currentpartid": "1",
+            "displaymode": "0",
+            "displaymodecount": "2",
         },
     ]
     records = materialize_records(raw)
@@ -340,8 +340,8 @@ def test_component_display_mode_fields_materialized():
 def test_component_display_mode_defaults():
     """Missing DisplayMode/DisplayModeCount should default to 0/1."""
     raw = [
-        {"RECORD": "0"},
-        {"RECORD": "1", "Location.X": "0", "Location.Y": "0"},
+        {"record": "0"},
+        {"record": "1", "location.x": "0", "location.y": "0"},
     ]
     records = materialize_records(raw)
     comp = records[1]
@@ -353,17 +353,17 @@ def test_component_display_mode_defaults():
 def test_pin_owner_part_display_mode_materialized():
     """PinRec should capture OwnerPartDisplayMode from raw records."""
     raw = [
-        {"RECORD": "0"},
+        {"record": "0"},
         {
-            "RECORD": "2",
-            "Location.X": "10",
-            "Location.Y": "20",
-            "PinLength": "30",
-            "PinConglomerate": "0",
-            "Designator": "1",
-            "OwnerPartId": "1",
-            "OwnerPartDisplayMode": "1",
-            "OwnerIndex": "0",
+            "record": "2",
+            "location.x": "10",
+            "location.y": "20",
+            "pinlength": "30",
+            "pinconglomerate": "0",
+            "designator": "1",
+            "ownerpartid": "1",
+            "ownerpartdisplaymode": "1",
+            "ownerindex": "0",
         },
     ]
     records = materialize_records(raw)
@@ -376,15 +376,15 @@ def test_pin_owner_part_display_mode_materialized():
 def test_pin_owner_part_display_mode_default():
     """Missing OwnerPartDisplayMode should default to 0 (Normal)."""
     raw = [
-        {"RECORD": "0"},
+        {"record": "0"},
         {
-            "RECORD": "2",
-            "Location.X": "0",
-            "Location.Y": "0",
-            "PinLength": "10",
-            "PinConglomerate": "0",
-            "Designator": "A",
-            "OwnerIndex": "0",
+            "record": "2",
+            "location.x": "0",
+            "location.y": "0",
+            "pinlength": "10",
+            "pinconglomerate": "0",
+            "designator": "A",
+            "ownerindex": "0",
         },
     ]
     records = materialize_records(raw)

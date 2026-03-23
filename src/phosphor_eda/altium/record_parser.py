@@ -29,9 +29,9 @@ def parse_record_payload(payload: bytes) -> dict[str, str]:
     for part in raw.split(b"|"):
         if b"=" in part:
             key_bytes, value_bytes = part.split(b"=", 1)
-            # Keys are always ASCII-safe
-            key = key_bytes.decode("ascii", errors="replace")
-            if key.startswith("%UTF8%"):
+            # Keys are always ASCII-safe; lowercase for case-insensitive lookup
+            key = key_bytes.decode("ascii", errors="replace").lower()
+            if key.startswith("%utf8%"):
                 value = value_bytes.decode("utf-8", errors="replace")
             else:
                 value = value_bytes.decode("cp1252", errors="replace")
