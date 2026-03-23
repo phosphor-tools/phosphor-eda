@@ -1,7 +1,7 @@
-"""Unified file conversion API.
+"""Schematic loading and project detection.
 
-Converts EE documents (schematics, PDFs, spreadsheets, etc.) to
-LLM-friendly text, dispatching on file extension.
+Dispatches on file extension to parse schematics from Altium, KiCad,
+OrCAD, and Eagle into a unified Design model.
 """
 
 from __future__ import annotations
@@ -12,15 +12,12 @@ from pathlib import Path
 from phosphor_eda.altium.parser import parse_altium
 from phosphor_eda.altium.project import parse_prjpcb_file
 from phosphor_eda.altium.to_schematic import altium_to_design
-from phosphor_eda.docx.extractor import convert as docx_convert
 from phosphor_eda.dsn.parser import parse_dsn
 from phosphor_eda.dsn.to_schematic import dsn_to_design
 from phosphor_eda.eagle.to_schematic import eagle_to_design
 from phosphor_eda.kicad.to_schematic import kicad_to_design
-from phosphor_eda.pdf.extractor import convert as pdf_convert
 from phosphor_eda.schematic import Design
 from phosphor_eda.serialize import serialize_design
-from phosphor_eda.xlsx.extractor import convert as xlsx_convert
 
 
 def _load_altium(path: Path) -> Design:
@@ -114,61 +111,6 @@ def load_design(path: Path) -> Design:
     return loader(path)
 
 
-def _convert_schematic(path: Path) -> str:
-    return serialize_design(load_design(path))
-
-
-_CONVERTERS: dict[str, Callable[[Path], str]] = {
-    **{ext: _convert_schematic for ext in _DESIGN_LOADERS},
-    ".pdf": pdf_convert,
-    ".docx": docx_convert,
-    ".xlsx": xlsx_convert,
-}
-
-SUPPORTED_EXTENSIONS: frozenset[str] = frozenset(_CONVERTERS)
-
-
 def convert(path: Path) -> str:
-    """Convert a single supported file to LLM-friendly text.
-
-    Raises ValueError for unsupported file types.
-    """
-    ext = path.suffix.lower()
-    converter = _CONVERTERS.get(ext)
-    if converter is None:
-        raise ValueError(
-            f"Unsupported file type: '{ext}'. "
-            f"Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
-        )
-    return converter(path)
-
-
-def convert_directory(directory: Path) -> dict[Path, str]:
-    """Convert all supported files in a directory.
-
-    Deduplicates Altium projects: when a .PrjPcb is found, its referenced
-    .SchDoc files are not converted separately.
-
-    Returns a mapping of input file path to converted text.
-    """
-    # Collect all supported files
-    supported: list[Path] = []
-    for child in sorted(directory.iterdir()):
-        if child.is_file() and child.suffix.lower() in SUPPORTED_EXTENSIONS:
-            supported.append(child)
-
-    # Find .PrjPcb files and mark their referenced .SchDoc as claimed
-    claimed: set[Path] = set()
-    for path in supported:
-        if path.suffix.lower() == ".prjpcb":
-            project = parse_prjpcb_file(str(path))
-            for sch_rel in project.schematic_paths:
-                claimed.add((path.parent / sch_rel).resolve())
-
-    results: dict[Path, str] = {}
-    for path in supported:
-        if path.resolve() in claimed:
-            continue
-        results[path] = convert(path)
-
-    return results
+    """Parse a schematic and serialize to LLM-friendly text."""
+    return serialize_design(load_design(path))
