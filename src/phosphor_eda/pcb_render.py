@@ -30,8 +30,8 @@ VIA_HL = "#ffdd44"
 
 SILK = "#ffffffcc"
 FAB_TEXT = "#ffffffcc"
-COMP_BODY = "#2a4a2a"       # slightly lighter than board, subtle fill
-COMP_BODY_EDGE = "#88aa88"  # visible edge around component body
+COMP_BODY = "#3d3530"       # dark brown/grey — like real component packages
+COMP_BODY_EDGE = "#5a504a"  # lighter edge
 
 HIGHLIGHT_BOX = "#ffff00"
 LABEL_FILL = "#ffff00"
