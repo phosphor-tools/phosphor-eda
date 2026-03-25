@@ -89,7 +89,7 @@ def test_board_outline(board):
     assert len(board.outline_arcs) > 0
     # Outline includes both gr_line and fp_line on Edge.Cuts
     assert len(board.outline_lines) == 10
-    assert len(board.outline_arcs) == 4
+    assert len(board.outline_arcs) == 6  # 4 board corners + 2 USB notch corners
 
 
 def test_board_bbox(board):

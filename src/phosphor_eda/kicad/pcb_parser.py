@@ -399,8 +399,8 @@ def _parse_fp_texts(
     return texts
 
 
-def _parse_footprint(fp_sexpr: list) -> tuple[PcbFootprint, list[PcbLine]]:
-    """Parse a footprint, returning (PcbFootprint, edge_cuts_lines)."""
+def _parse_footprint(fp_sexpr: list) -> tuple[PcbFootprint, list[PcbLine], list[PcbArc]]:
+    """Parse a footprint, returning (PcbFootprint, edge_cuts_lines, edge_cuts_arcs)."""
     lib_name = str(fp_sexpr[1])
 
     layer_node = _find(fp_sexpr, "layer")
@@ -423,6 +423,7 @@ def _parse_footprint(fp_sexpr: list) -> tuple[PcbFootprint, list[PcbLine]]:
     fab_circles = _parse_fp_circles(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS)
     fab_arcs = _parse_fp_arcs(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS)
     edge_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _EDGE_LAYERS)
+    edge_arcs = _parse_fp_arcs(fp_sexpr, fp_x, fp_y, fp_rot, _EDGE_LAYERS)
 
     texts = _parse_fp_texts(fp_sexpr, fp_x, fp_y, fp_rot, ref)
 
@@ -444,7 +445,7 @@ def _parse_footprint(fp_sexpr: list) -> tuple[PcbFootprint, list[PcbLine]]:
         texts=texts,
         bbox=bbox,
     )
-    return fp, edge_lines
+    return fp, edge_lines, edge_arcs
 
 
 # ---------------------------------------------------------------------------
@@ -570,12 +571,14 @@ def parse_kicad_pcb(path: Path) -> PcbBoard:
 
     footprints: list[PcbFootprint] = []
     edge_lines_from_fps: list[PcbLine] = []
+    edge_arcs_from_fps: list[PcbArc] = []
     # KiCad 6+ uses "footprint", KiCad 5 uses "module"
     for tag in ("footprint", "module"):
         for fp_sexpr in _find_all(sexpr, tag):
-            fp, edge_lines = _parse_footprint(fp_sexpr)
+            fp, edge_lines, edge_arcs = _parse_footprint(fp_sexpr)
             footprints.append(fp)
             edge_lines_from_fps.extend(edge_lines)
+            edge_arcs_from_fps.extend(edge_arcs)
 
     segments = [_parse_segment(s) for s in _find_all(sexpr, "segment")]
     vias = [_parse_via(v) for v in _find_all(sexpr, "via")]
@@ -592,6 +595,7 @@ def parse_kicad_pcb(path: Path) -> PcbBoard:
         if arc:
             outline_arcs.append(arc)
     outline_lines.extend(edge_lines_from_fps)
+    outline_arcs.extend(edge_arcs_from_fps)
 
     return PcbBoard(
         name=name,

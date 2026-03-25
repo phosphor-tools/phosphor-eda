@@ -329,51 +329,69 @@ def _build_outline_clip_path(
     if not segments:
         return None
 
-    # Chain segments into order
-    remaining = list(range(len(segments)))
-    first = remaining.pop(0)
-    chain_cmds = [segments[first][2]]
-    start_pt = segments[first][0]
-    cur = segments[first][1]
+    def _reverse_cmd(cmd: str, new_end: tuple[float, float]) -> str:
+        """Reverse a segment command to go to new_end instead."""
+        if cmd.startswith("L"):
+            return f"L {new_end[0]:.4f} {new_end[1]:.4f}"
+        # Arc: flip sweep direction
+        parts = cmd.split()
+        sw = int(parts[5])
+        return f"A {parts[1]} {parts[2]} {parts[3]} {parts[4]} {1 - sw} {new_end[0]:.4f} {new_end[1]:.4f}"
 
-    while remaining:
-        found = False
-        for i, idx in enumerate(remaining):
+    def _find_loop(
+        start: tuple[float, float],
+        cur: tuple[float, float],
+        used: set[int],
+        cmds: list[str],
+    ) -> list[str] | None:
+        """DFS to find the longest closed loop from start."""
+        # Check if we've closed the loop (need at least 3 segments)
+        if len(cmds) >= 3 and abs(cur[0] - start[0]) < EPS and abs(cur[1] - start[1]) < EPS:
+            return list(cmds)
+        best: list[str] | None = None
+        for idx in range(len(segments)):
+            if idx in used:
+                continue
             seg_s, seg_e, cmd = segments[idx]
+            next_pt = None
+            next_cmd = None
             if abs(seg_s[0] - cur[0]) < EPS and abs(seg_s[1] - cur[1]) < EPS:
-                chain_cmds.append(cmd)
-                cur = seg_e
-                remaining.pop(i)
-                found = True
-                break
-            if abs(seg_e[0] - cur[0]) < EPS and abs(seg_e[1] - cur[1]) < EPS:
-                # Reverse: rebuild command with swapped endpoints
-                rev_s, rev_e = seg_e, seg_s
-                # For lines, just change the target
-                if cmd.startswith("L"):
-                    rev_cmd = f"L {rev_e[0]:.4f} {rev_e[1]:.4f}"
-                else:
-                    # For arcs, swap sweep direction
-                    rev_cmd = cmd.replace(" 0 1 ", " 0 TEMP ").replace(" 0 0 ", " 0 1 ").replace(" 0 TEMP ", " 0 0 ")
-                    rev_cmd = cmd  # Actually need to recalc — just use target
-                    # Rebuild with the reversed endpoint
-                    parts = cmd.split()
-                    # A rx ry rot large sweep ex ey
-                    sw = int(parts[5])
-                    rev_cmd = f"A {parts[1]} {parts[2]} {parts[3]} {parts[4]} {1 - sw} {rev_e[0]:.4f} {rev_e[1]:.4f}"
-                chain_cmds.append(rev_cmd)
-                cur = rev_e
-                remaining.pop(i)
-                found = True
-                break
-        if not found:
-            return None
+                next_pt = seg_e
+                next_cmd = cmd
+            elif abs(seg_e[0] - cur[0]) < EPS and abs(seg_e[1] - cur[1]) < EPS:
+                next_pt = seg_s
+                next_cmd = _reverse_cmd(cmd, seg_s)
+            if next_pt is None:
+                continue
+            used.add(idx)
+            cmds.append(next_cmd)
+            result = _find_loop(start, next_pt, used, cmds)
+            if result is not None and (best is None or len(result) > len(best)):
+                best = result
+            cmds.pop()
+            used.discard(idx)
+        return best
 
-    # Check closure
-    if abs(cur[0] - start_pt[0]) > EPS or abs(cur[1] - start_pt[1]) > EPS:
-        return None
+    # Try starting from each segment, find the longest closed loop
+    best_path: str | None = None
+    best_len = 0
+    for si in range(len(segments)):
+        start_pt = segments[si][0]
+        cur_pt = segments[si][1]
+        loop = _find_loop(start_pt, cur_pt, {si}, [segments[si][2]])
+        if loop and len(loop) > best_len:
+            best_len = len(loop)
+            best_path = f"M {start_pt[0]:.4f} {start_pt[1]:.4f} " + " ".join(loop) + " Z"
+        # Also try reversed
+        start_pt = segments[si][1]
+        cur_pt = segments[si][0]
+        rev_cmd = _reverse_cmd(segments[si][2], cur_pt)
+        loop = _find_loop(start_pt, cur_pt, {si}, [rev_cmd])
+        if loop and len(loop) > best_len:
+            best_len = len(loop)
+            best_path = f"M {start_pt[0]:.4f} {start_pt[1]:.4f} " + " ".join(loop) + " Z"
 
-    return f"M {start_pt[0]:.4f} {start_pt[1]:.4f} " + " ".join(chain_cmds) + " Z"
+    return best_path
 
 
 def _pad_on_side(pad_layers: list[str], side: str) -> bool:
