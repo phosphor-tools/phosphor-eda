@@ -436,25 +436,35 @@ def render_pcb_svg(
     # -- Collect ref designator texts to render outside mirror group ----------
     deferred_texts: list[tuple[float, float, str, float, float]] = []
     active_text_layers = active_fab | active_silk
+    active_cu = "F.Cu" if side == "front" else "B.Cu"
     for fp in board.footprints:
-        # Find the best reference text for this footprint
+        if fp.layer != active_cu:
+            continue
+        # Find the best reference text for this footprint.
+        # Prefer visible text on the active layers, but fall back to hidden
+        # ref text so designators always appear (essential for spatial queries).
         best_ref_txt = None
+        fallback_ref_txt = None
         for txt in fp.texts:
-            if txt.hidden or txt.layer not in active_text_layers:
-                continue
-            # Only show reference designators, not values or other text
             if txt.kind == "value":
                 continue
-            if txt.text == fp.reference or txt.kind in ("reference", "user"):
+            is_ref = txt.text == fp.reference or txt.kind in ("reference", "user")
+            if not is_ref:
+                continue
+            if not txt.hidden and txt.layer in active_text_layers:
                 if best_ref_txt is None or txt.font_size < best_ref_txt.font_size:
-                    best_ref_txt = txt  # prefer smaller (user ${REFERENCE}) over large ref
-        if best_ref_txt is not None:
-            # Cap font size relative to board
-            fs = min(best_ref_txt.font_size, 0.8)
+                    best_ref_txt = txt
+            elif txt.kind == "reference" and fallback_ref_txt is None:
+                fallback_ref_txt = txt
+        chosen = best_ref_txt or fallback_ref_txt
+        if chosen is not None:
+            # Cap font size; use a default if 0
+            fs = chosen.font_size if chosen.font_size > 0.1 else 0.5
+            fs = min(fs, 0.8)
             deferred_texts.append((
-                best_ref_txt.x, best_ref_txt.y,
-                fp.reference,  # always use the actual reference, not raw text
-                fs, best_ref_txt.rotation,
+                chosen.x, chosen.y,
+                fp.reference,
+                fs, chosen.rotation,
             ))
 
     # -- Component highlight boxes (inside mirror group) ---------------------
