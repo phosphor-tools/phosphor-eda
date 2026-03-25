@@ -475,21 +475,14 @@ def render_pcb_svg(
     # -- Board outline clip path -------------------------------------------
     clip_d = _build_outline_clip_path(board.outline_lines, board.outline_arcs)
 
-    # Collect mounting hole drill circles for cutouts
+    # Collect all drill holes for cutouts (through-hole pads + vias)
     hole_circles: list[tuple[float, float, float]] = []  # (cx, cy, radius)
     for fp in board.footprints:
-        is_mounting = "mountinghole" in fp.footprint_lib.lower().replace("_", "")
-        if not is_mounting:
-            continue
-        # Use the largest drill in the footprint as the hole
-        best_drill = 0.0
-        best_x, best_y = fp.x, fp.y
         for pad in fp.pads:
-            if pad.drill > best_drill:
-                best_drill = pad.drill
-                best_x, best_y = pad.x, pad.y
-        if best_drill > 0.5:  # skip tiny vias within mounting holes
-            hole_circles.append((best_x, best_y, best_drill / 2))
+            if pad.drill > 0:
+                hole_circles.append((pad.x, pad.y, pad.drill / 2))
+    for via in board.vias:
+        hole_circles.append((via.x, via.y, via.drill / 2))
 
     # Build hole cutout paths (circles as two half-arc SVG commands)
     holes_d = ""
