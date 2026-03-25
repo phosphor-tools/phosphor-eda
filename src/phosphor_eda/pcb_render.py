@@ -29,6 +29,8 @@ VIA_DRILL = "#1a5c2a"
 VIA_HL = "#ffdd44"
 
 SILK = "#ffffffcc"
+FAB = "#ffffffaa"
+FAB_TEXT = "#ffffffcc"
 
 HIGHLIGHT_BOX = "#ffff00"
 LABEL_FILL = "#ffff00"
@@ -91,12 +93,14 @@ class _Svg:
     def text(
         self, x: float, y: float, content: str, font_size: float,
         fill: str, anchor: str = "middle", bold: bool = False,
+        rotation: float = 0.0,
     ) -> None:
         weight = ' font-weight="bold"' if bold else ""
+        rot = f' transform="rotate({rotation:.1f} {x:.4f} {y:.4f})"' if rotation else ""
         self._parts.append(
             f'<text x="{x:.4f}" y="{y:.4f}" font-size="{font_size:.2f}" '
             f'fill="{fill}" text-anchor="{anchor}" '
-            f'dominant-baseline="auto" font-family="sans-serif"{weight}>'
+            f'dominant-baseline="central" font-family="sans-serif"{weight}{rot}>'
             f'{xml_escape(content)}</text>'
         )
 
@@ -301,7 +305,7 @@ def render_pcb_svg(
     for via in board.vias:
         if has_hl and via.net_number in hl_net_nums:
             continue
-        r = via.size / 2
+        r = via.drill / 2 + 0.05  # annular ring just outside drill
         svg.circle(via.x, via.y, r, VIA_NORMAL, opacity=0.7)
         svg.circle(via.x, via.y, via.drill / 2, VIA_DRILL)
 
@@ -318,7 +322,7 @@ def render_pcb_svg(
         for via in board.vias:
             if via.net_number not in hl_net_nums:
                 continue
-            r = via.size / 2
+            r = via.drill / 2 + 0.05
             svg.circle(via.x, via.y, r, VIA_HL)
             svg.circle(via.x, via.y, via.drill / 2, VIA_DRILL)
 
@@ -332,12 +336,30 @@ def render_pcb_svg(
                 color = PAD_FRONT_HL if on_front else PAD_BACK_HL
                 _draw_pad(svg, pad, color, 1.0)
 
+    # -- Fab layer (component bodies) on active side -------------------------
+    active_fab = {"F.Fab"} if side == "front" else {"B.Fab"}
+    for fp in board.footprints:
+        for ln in fp.fab_lines:
+            if ln.layer in active_fab:
+                svg.line(ln.start_x, ln.start_y, ln.end_x, ln.end_y, FAB, max(ln.width, 0.08))
+
     # -- Silkscreen on active side -----------------------------------------
     active_silk = {"F.SilkS", "F.Silkscreen"} if side == "front" else {"B.SilkS", "B.Silkscreen"}
     for fp in board.footprints:
         for ln in fp.silkscreen_lines:
             if ln.layer in active_silk:
                 svg.line(ln.start_x, ln.start_y, ln.end_x, ln.end_y, SILK, max(ln.width, 0.1))
+
+    # -- Collect text labels to render outside mirror group -------------------
+    deferred_texts: list[tuple[float, float, str, float, float]] = []
+    active_text_layers = active_fab | active_silk
+    for fp in board.footprints:
+        for txt in fp.texts:
+            if txt.hidden or txt.layer not in active_text_layers:
+                continue
+            if txt.font_size < 0.1:
+                continue
+            deferred_texts.append((txt.x, txt.y, txt.text, txt.font_size, txt.rotation))
 
     # -- Component highlight boxes (inside mirror group) ---------------------
     hl_labels: list[tuple[float, float, float, float, str]] = []
@@ -361,7 +383,17 @@ def render_pcb_svg(
     if side == "back":
         svg.group_end()
 
-    # -- Labels drawn outside mirror so text reads correctly ----------------
+    # -- Text labels drawn outside mirror so they read correctly -------------
+    for tx, ty, ttext, tsize, trot in deferred_texts:
+        if side == "back":
+            tx = (bx0 + bx1) - tx
+            # Back-side text in KiCad is stored with justify=mirror, meaning
+            # the rotation assumes viewing from the back.  After our X-mirror,
+            # we need to flip the rotation sense: negate and add 180°.
+            trot = 180.0 - trot
+        svg.text(tx, ty, ttext, tsize, fill=FAB_TEXT, rotation=trot)
+
+    # -- Highlight labels drawn outside mirror so they read correctly -------
     for mx0, my0, mx1, my1, ref in hl_labels:
         margin = 0.5
         label_y = my0 - margin - 0.4

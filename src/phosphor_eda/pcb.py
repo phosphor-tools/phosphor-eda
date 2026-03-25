@@ -37,6 +37,19 @@ class PcbArc:
 
 
 @dataclass
+class PcbText:
+    """A text label (reference designator, value, etc.) in absolute coords."""
+
+    text: str
+    x: float
+    y: float
+    rotation: float  # degrees
+    layer: str
+    font_size: float
+    hidden: bool = False
+
+
+@dataclass
 class PcbPad:
     """A pad within a footprint (absolute board coordinates)."""
 
@@ -65,6 +78,8 @@ class PcbFootprint:
     pads: list[PcbPad] = field(default_factory=list)
     silkscreen_lines: list[PcbLine] = field(default_factory=list)
     courtyard_lines: list[PcbLine] = field(default_factory=list)
+    fab_lines: list[PcbLine] = field(default_factory=list)
+    texts: list[PcbText] = field(default_factory=list)
     bbox: tuple[float, float, float, float] | None = None  # min_x, min_y, max_x, max_y
 
 

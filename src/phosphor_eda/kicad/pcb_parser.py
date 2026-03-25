@@ -21,6 +21,7 @@ from phosphor_eda.pcb import (
     PcbNet,
     PcbPad,
     PcbSegment,
+    PcbText,
     PcbVia,
 )
 
@@ -41,10 +42,19 @@ def _float_val(item: list) -> float:
 
 
 def _at(item: list) -> tuple[float, float, float]:
-    """Extract (x, y, rotation) from (at X Y [ROT])."""
+    """Extract (x, y, rotation) from (at X Y [ROT]).
+
+    The rotation field may be absent, or followed by keywords like
+    ``unlocked`` which must be skipped.
+    """
     x = float(item[1])
     y = float(item[2])
-    rot = float(item[3]) if len(item) > 3 else 0.0
+    rot = 0.0
+    if len(item) > 3:
+        try:
+            rot = float(item[3])
+        except (ValueError, TypeError):
+            pass  # e.g. Symbol('unlocked')
     return (x, y, rot)
 
 
@@ -188,6 +198,7 @@ def _parse_fp_lines(
 
 _SILK_LAYERS = {"F.SilkS", "B.SilkS", "F.Silkscreen", "B.Silkscreen"}
 _COURTYARD_LAYERS = {"F.CrtYd", "B.CrtYd"}
+_FAB_LAYERS = {"F.Fab", "B.Fab"}
 _EDGE_LAYERS = {"Edge.Cuts"}
 
 
@@ -211,6 +222,58 @@ def _compute_bbox(
     return (min(xs), min(ys), max(xs), max(ys))
 
 
+def _parse_fp_texts(
+    fp_sexpr: list,
+    fp_x: float,
+    fp_y: float,
+    fp_rot: float,
+    fp_ref: str,
+) -> list[PcbText]:
+    """Parse fp_text elements into PcbText with absolute coords."""
+    texts: list[PcbText] = []
+    for item in _find_all(fp_sexpr, "fp_text"):
+        if len(item) < 3:
+            continue
+        kind_sym = item[1]
+        kind = kind_sym.value() if isinstance(kind_sym, sexpdata.Symbol) else str(kind_sym)
+        raw_text = str(item[2])
+
+        # Resolve ${REFERENCE} placeholder
+        if "${REFERENCE}" in raw_text:
+            raw_text = raw_text.replace("${REFERENCE}", fp_ref)
+
+        # Check hidden flag
+        hidden = any(
+            isinstance(x, sexpdata.Symbol) and x.value() == "hide" for x in item
+        )
+
+        layer_node = _find(item, "layer")
+        layer = _val(layer_node) if layer_node else ""
+
+        at_node = _find(item, "at")
+        local_x, local_y, text_rot = _at(at_node) if at_node else (0.0, 0.0, 0.0)
+
+        # Font size
+        effects = _find(item, "effects")
+        font = _find(effects, "font") if effects else None
+        size_node = _find(font, "size") if font else None
+        font_size = float(size_node[1]) if size_node else 1.0
+
+        abs_x, abs_y = _transform_point(local_x, local_y, fp_x, fp_y, fp_rot)
+        abs_rot = fp_rot + text_rot
+
+        texts.append(PcbText(
+            text=raw_text,
+            x=abs_x,
+            y=abs_y,
+            rotation=abs_rot,
+            layer=layer,
+            font_size=font_size,
+            hidden=hidden,
+        ))
+    return texts
+
+
 def _parse_footprint(fp_sexpr: list) -> tuple[PcbFootprint, list[PcbLine]]:
     """Parse a footprint, returning (PcbFootprint, edge_cuts_lines)."""
     lib_name = str(fp_sexpr[1])
@@ -230,7 +293,10 @@ def _parse_footprint(fp_sexpr: list) -> tuple[PcbFootprint, list[PcbLine]]:
 
     silk_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _SILK_LAYERS)
     court_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _COURTYARD_LAYERS)
+    fab_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS)
     edge_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _EDGE_LAYERS)
+
+    texts = _parse_fp_texts(fp_sexpr, fp_x, fp_y, fp_rot, ref)
 
     bbox = _compute_bbox(pads, court_lines)
 
@@ -244,6 +310,8 @@ def _parse_footprint(fp_sexpr: list) -> tuple[PcbFootprint, list[PcbLine]]:
         pads=pads,
         silkscreen_lines=silk_lines,
         courtyard_lines=court_lines,
+        fab_lines=fab_lines,
+        texts=texts,
         bbox=bbox,
     )
     return fp, edge_lines
