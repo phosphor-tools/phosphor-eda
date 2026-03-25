@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 from xml.sax.saxutils import escape as xml_escape
 
-from phosphor_eda.pcb import PcbArc, PcbBoard, PcbLine
+from phosphor_eda.pcb import PcbArc, PcbBoard, PcbLine, PcbCircle
 
 # ---------------------------------------------------------------------------
 # Colour palette
@@ -206,6 +206,67 @@ def _is_back(layer: str) -> bool:
     return layer.startswith("B.")
 
 
+def _chain_lines_to_polygon(lines: list[PcbLine]) -> list[tuple[float, float]] | None:
+    """Try to chain line segments into a closed polygon.
+
+    Returns a list of (x, y) vertices if the lines form a closed loop,
+    or None if they can't be chained.
+    """
+    if len(lines) < 3:
+        return None
+
+    EPS = 0.05  # tolerance for matching endpoints (mm)
+
+    # Deduplicate lines (some footprints have the same edge drawn twice)
+    seen: set[tuple[float, float, float, float]] = set()
+    deduped: list[PcbLine] = []
+    for ln in lines:
+        # Normalize so (A->B) and (B->A) are treated as the same edge
+        key = (round(ln.start_x, 2), round(ln.start_y, 2),
+               round(ln.end_x, 2), round(ln.end_y, 2))
+        key_rev = (key[2], key[3], key[0], key[1])
+        if key not in seen and key_rev not in seen:
+            seen.add(key)
+            deduped.append(ln)
+    lines = deduped
+
+    if len(lines) < 3:
+        return None
+
+    remaining = list(range(len(lines)))
+    chain = [remaining.pop(0)]
+    # Start from the start point of the first line
+    vertices = [(lines[chain[0]].start_x, lines[chain[0]].start_y)]
+    cx, cy = lines[chain[0]].end_x, lines[chain[0]].end_y
+    vertices.append((cx, cy))
+
+    while remaining:
+        found = False
+        for i, idx in enumerate(remaining):
+            ln = lines[idx]
+            # Check if start matches current point
+            if abs(ln.start_x - cx) < EPS and abs(ln.start_y - cy) < EPS:
+                cx, cy = ln.end_x, ln.end_y
+                vertices.append((cx, cy))
+                remaining.pop(i)
+                found = True
+                break
+            # Check if end matches current point (reversed line)
+            if abs(ln.end_x - cx) < EPS and abs(ln.end_y - cy) < EPS:
+                cx, cy = ln.start_x, ln.start_y
+                vertices.append((cx, cy))
+                remaining.pop(i)
+                found = True
+                break
+        if not found:
+            return None  # Can't chain — disjoint lines
+
+    # Check if the polygon closes
+    if abs(cx - vertices[0][0]) < EPS and abs(cy - vertices[0][1]) < EPS:
+        return vertices[:-1]  # Drop the duplicate closing point
+    return None
+
+
 def _pad_on_side(pad_layers: list[str], side: str) -> bool:
     """Check if a pad is visible on the given side (or on all layers)."""
     for ly in pad_layers:
@@ -337,29 +398,33 @@ def render_pcb_svg(
                 color = PAD_FRONT_HL if on_front else PAD_BACK_HL
                 _draw_pad(svg, pad, color, 1.0)
 
-    # -- Component bodies (filled rectangles from fab layer extents) ----------
+    # -- Component bodies (opaque fab-layer geometry, drawn ON TOP of pads) ---
     active_fab = {"F.Fab"} if side == "front" else {"B.Fab"}
     for fp in board.footprints:
-        fab_on_side = [ln for ln in fp.fab_lines if ln.layer in active_fab]
-        if not fab_on_side:
+        fab_lines_side = [ln for ln in fp.fab_lines if ln.layer in active_fab]
+        fab_circles_side = [c for c in fp.fab_circles if c.layer in active_fab]
+        fab_arcs_side = [a for a in fp.fab_arcs if a.layer in active_fab]
+        if not fab_lines_side and not fab_circles_side and not fab_arcs_side:
             continue
-        # Compute bounding box of the fab lines to get the body outline
-        fxs = []
-        fys = []
-        for ln in fab_on_side:
-            fxs.extend([ln.start_x, ln.end_x])
-            fys.extend([ln.start_y, ln.end_y])
-        for circ in fp.fab_circles:
-            if circ.layer in active_fab:
-                fxs.extend([circ.cx - circ.radius, circ.cx + circ.radius])
-                fys.extend([circ.cy - circ.radius, circ.cy + circ.radius])
-        if not fxs:
-            continue
-        fx0, fy0, fx1, fy1 = min(fxs), min(fys), max(fxs), max(fys)
-        # Filled body rectangle
-        svg.rect(fx0, fy0, fx1 - fx0, fy1 - fy0,
-                 fill=COMP_BODY, stroke=COMP_BODY_EDGE,
-                 stroke_width=0.05, opacity=0.85)
+        # Try to build a filled polygon from the fab lines
+        poly = _chain_lines_to_polygon(fab_lines_side)
+        if poly:
+            pts = " ".join(f"{x:.4f},{y:.4f}" for x, y in poly)
+            svg.raw(
+                f'<polygon points="{pts}" fill="{COMP_BODY}" '
+                f'stroke="{COMP_BODY_EDGE}" stroke-width="0.06" '
+                f'stroke-linejoin="round"/>'
+            )
+        # Draw circles (e.g. pin-1 dots) on top
+        for circ in fab_circles_side:
+            if circ.fill:
+                svg.circle(circ.cx, circ.cy, circ.radius, COMP_BODY_EDGE)
+            else:
+                svg.circle(circ.cx, circ.cy, circ.radius, "none",
+                           stroke=COMP_BODY_EDGE, stroke_width=max(circ.width, 0.08))
+        # Draw arcs on top
+        for arc in fab_arcs_side:
+            svg.raw(_svg_arc_path(arc, COMP_BODY_EDGE, max(arc.width, 0.08)))
 
     # -- Silkscreen on active side -----------------------------------------
     active_silk = {"F.SilkS", "F.Silkscreen"} if side == "front" else {"B.SilkS", "B.Silkscreen"}
