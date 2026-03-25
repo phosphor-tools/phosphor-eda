@@ -475,14 +475,22 @@ def render_pcb_svg(
     # -- Board outline clip path -------------------------------------------
     clip_d = _build_outline_clip_path(board.outline_lines, board.outline_arcs)
 
-    # Collect all drill holes for cutouts (through-hole pads + vias)
+    # Collect drill holes for cutouts.
+    # Through-hole pads always have exposed holes.
+    # Vias only have visible holes if they include mask layers (untented).
     hole_circles: list[tuple[float, float, float]] = []  # (cx, cy, radius)
     for fp in board.footprints:
         for pad in fp.pads:
             if pad.drill > 0:
                 hole_circles.append((pad.x, pad.y, pad.drill / 2))
+    _MASK_LAYERS = {"F.Mask", "B.Mask", "*.Mask"}
     for via in board.vias:
-        hole_circles.append((via.x, via.y, via.drill / 2))
+        via_layer_strs = {
+            ly.value() if hasattr(ly, "value") else str(ly)
+            for ly in via.layers
+        }
+        if via_layer_strs & _MASK_LAYERS:
+            hole_circles.append((via.x, via.y, via.drill / 2))
 
     # Build hole cutout paths (circles as two half-arc SVG commands)
     holes_d = ""
