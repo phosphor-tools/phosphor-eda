@@ -529,16 +529,22 @@ def render_pcb_svg(
     else:
         active_clip = "board-clip"
     svg.raw('</defs>')
-    # Board fill and outline (outside clip group)
+    # Board fill — clipped to drill-clip so holes punch through the green too
+    svg.raw(f'<g clip-path="url(#{active_clip})">')
     if clip_d:
         svg.raw(f'<path d="{clip_d}" fill="{BOARD_FILL}"/>')
-        svg.raw(f'<path d="{clip_d}" fill="none" stroke="{BOARD_EDGE}" stroke-width="0.15"/>')
     else:
         svg.rect(bx0, by0, bx1 - bx0, by1 - by0, fill=BOARD_FILL)
+    svg.group_end()
+    # Board outline stroke (outside clip so edge is fully visible)
+    if clip_d:
+        svg.raw(f'<path d="{clip_d}" fill="none" stroke="{BOARD_EDGE}" stroke-width="0.15"/>')
+    else:
         for ln in board.outline_lines:
             svg.line(ln.start_x, ln.start_y, ln.end_x, ln.end_y, BOARD_EDGE, max(ln.width, 0.15))
         for arc in board.outline_arcs:
             svg.raw(_svg_arc_path(arc, BOARD_EDGE, max(arc.width, 0.15)))
+    # Content group — also clipped
     svg.raw(f'<g clip-path="url(#{active_clip})">')
     has_clip = True
 
