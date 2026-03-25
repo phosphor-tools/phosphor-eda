@@ -293,17 +293,6 @@ def render_pcb_svg(
     for arc in board.outline_arcs:
         svg.raw(_svg_arc_path(arc, BOARD_EDGE, max(arc.width, 0.15)))
 
-    # -- Component body tints (drawn BEFORE pads so pads sit on top) --------
-    active_cu = "F.Cu" if side == "front" else "B.Cu"
-    for fp in board.footprints:
-        if fp.layer != active_cu:
-            continue
-        if fp.bbox:
-            bx, by, bx2, by2 = fp.bbox
-            svg.rect(bx, by, bx2 - bx, by2 - by,
-                     fill=COMP_BODY, stroke=COMP_BODY_EDGE,
-                     stroke_width=0.06, opacity=0.55, rx=0.1)
-
     # -- Pads (non-highlighted) --------------------------------------------
     for fp in board.footprints:
         for pad in fp.pads:
@@ -348,6 +337,61 @@ def render_pcb_svg(
                 color = PAD_FRONT_HL if on_front else PAD_BACK_HL
                 _draw_pad(svg, pad, color, 1.0)
 
+    # -- Component bodies -----------------------------------------------------
+    active_fab = {"F.Fab"} if side == "front" else {"B.Fab"}
+    # Determine which footprints are on the active side
+    active_cu = "F.Cu" if side == "front" else "B.Cu"
+    for fp in board.footprints:
+        fab_lines_on_side = [ln for ln in fp.fab_lines if ln.layer in active_fab]
+        fab_circles_on_side = [c for c in fp.fab_circles if c.layer in active_fab]
+        fab_arcs_on_side = [a for a in fp.fab_arcs if a.layer in active_fab]
+        has_fab = fab_lines_on_side or fab_circles_on_side or fab_arcs_on_side
+
+        if has_fab:
+            # Compute bounding box for a filled background
+            fxs: list[float] = []
+            fys: list[float] = []
+            for ln in fab_lines_on_side:
+                fxs.extend([ln.start_x, ln.end_x])
+                fys.extend([ln.start_y, ln.end_y])
+            for circ in fab_circles_on_side:
+                fxs.extend([circ.cx - circ.radius, circ.cx + circ.radius])
+                fys.extend([circ.cy - circ.radius, circ.cy + circ.radius])
+            for arc in fab_arcs_on_side:
+                fxs.extend([arc.start_x, arc.mid_x, arc.end_x])
+                fys.extend([arc.start_y, arc.mid_y, arc.end_y])
+            if fxs:
+                fx0, fy0, fx1, fy1 = min(fxs), min(fys), max(fxs), max(fys)
+                # Filled body background
+                svg.rect(fx0, fy0, fx1 - fx0, fy1 - fy0,
+                         fill=COMP_BODY, opacity=0.8)
+            # Draw actual fab geometry on top
+            for ln in fab_lines_on_side:
+                svg.line(ln.start_x, ln.start_y, ln.end_x, ln.end_y,
+                         COMP_BODY_EDGE, max(ln.width, 0.1))
+            for circ in fab_circles_on_side:
+                if circ.fill:
+                    svg.circle(circ.cx, circ.cy, circ.radius, COMP_BODY_EDGE)
+                else:
+                    svg.circle(circ.cx, circ.cy, circ.radius, "none",
+                               stroke=COMP_BODY_EDGE, stroke_width=max(circ.width, 0.1))
+            for arc in fab_arcs_on_side:
+                svg.raw(_svg_arc_path(arc, COMP_BODY_EDGE, max(arc.width, 0.1)))
+        elif fp.layer == active_cu and fp.pads:
+            # No fab geometry — infer a body rectangle from pad extents
+            pxs = [p.x for p in fp.pads]
+            pys = [p.y for p in fp.pads]
+            pw = max(p.width for p in fp.pads)
+            ph = max(p.height for p in fp.pads)
+            margin = max(pw, ph) * 0.3
+            px0 = min(pxs) - pw / 2 - margin
+            py0 = min(pys) - ph / 2 - margin
+            px1 = max(pxs) + pw / 2 + margin
+            py1 = max(pys) + ph / 2 + margin
+            svg.rect(px0, py0, px1 - px0, py1 - py0,
+                     fill=COMP_BODY, stroke=COMP_BODY_EDGE,
+                     stroke_width=0.08, opacity=0.7, rx=0.15)
+
     # -- Silkscreen on active side -----------------------------------------
     active_silk = {"F.SilkS", "F.Silkscreen"} if side == "front" else {"B.SilkS", "B.Silkscreen"}
     for fp in board.footprints:
@@ -357,7 +401,6 @@ def render_pcb_svg(
 
     # -- Collect ref designator texts to render outside mirror group ----------
     deferred_texts: list[tuple[float, float, str, float, float]] = []
-    active_fab = {"F.Fab"} if side == "front" else {"B.Fab"}
     active_text_layers = active_fab | active_silk
     for fp in board.footprints:
         # Find the best reference text for this footprint
