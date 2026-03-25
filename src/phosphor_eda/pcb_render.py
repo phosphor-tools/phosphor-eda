@@ -29,8 +29,9 @@ VIA_DRILL = "#1a5c2a"
 VIA_HL = "#ffdd44"
 
 SILK = "#ffffffcc"
-FAB = "#ffffffaa"
 FAB_TEXT = "#ffffffcc"
+COMP_BODY = "#2a4a2a"       # slightly lighter than board, subtle fill
+COMP_BODY_EDGE = "#88aa88"  # visible edge around component body
 
 HIGHLIGHT_BOX = "#ffff00"
 LABEL_FILL = "#ffff00"
@@ -336,22 +337,29 @@ def render_pcb_svg(
                 color = PAD_FRONT_HL if on_front else PAD_BACK_HL
                 _draw_pad(svg, pad, color, 1.0)
 
-    # -- Fab layer (component bodies) on active side -------------------------
+    # -- Component bodies (filled rectangles from fab layer extents) ----------
     active_fab = {"F.Fab"} if side == "front" else {"B.Fab"}
     for fp in board.footprints:
-        for ln in fp.fab_lines:
-            if ln.layer in active_fab:
-                svg.line(ln.start_x, ln.start_y, ln.end_x, ln.end_y, FAB, max(ln.width, 0.1))
+        fab_on_side = [ln for ln in fp.fab_lines if ln.layer in active_fab]
+        if not fab_on_side:
+            continue
+        # Compute bounding box of the fab lines to get the body outline
+        fxs = []
+        fys = []
+        for ln in fab_on_side:
+            fxs.extend([ln.start_x, ln.end_x])
+            fys.extend([ln.start_y, ln.end_y])
         for circ in fp.fab_circles:
             if circ.layer in active_fab:
-                if circ.fill:
-                    svg.circle(circ.cx, circ.cy, circ.radius, FAB, opacity=0.6)
-                else:
-                    svg.raw(
-                        f'<circle cx="{circ.cx:.4f}" cy="{circ.cy:.4f}" '
-                        f'r="{circ.radius:.4f}" fill="none" stroke="{FAB}" '
-                        f'stroke-width="{max(circ.width, 0.1):.4f}" opacity="0.8"/>'
-                    )
+                fxs.extend([circ.cx - circ.radius, circ.cx + circ.radius])
+                fys.extend([circ.cy - circ.radius, circ.cy + circ.radius])
+        if not fxs:
+            continue
+        fx0, fy0, fx1, fy1 = min(fxs), min(fys), max(fxs), max(fys)
+        # Filled body rectangle
+        svg.rect(fx0, fy0, fx1 - fx0, fy1 - fy0,
+                 fill=COMP_BODY, stroke=COMP_BODY_EDGE,
+                 stroke_width=0.05, opacity=0.85)
 
     # -- Silkscreen on active side -----------------------------------------
     active_silk = {"F.SilkS", "F.Silkscreen"} if side == "front" else {"B.SilkS", "B.Silkscreen"}
