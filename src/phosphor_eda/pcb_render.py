@@ -501,33 +501,46 @@ def render_pcb_svg(
             f" A {hr:.4f} {hr:.4f} 0 1 0 {hx - hr:.4f} {hy:.4f} Z"
         )
 
+    # Build nested clip paths:
+    # 1. board-clip: clips to board outline
+    # 2. drill-clip: references board-clip, then subtracts drill holes via even-odd
+    # This way drill holes at the board edge (castellations) are clipped by the
+    # outline first, so they don't cause inversion artifacts.
     has_clip = False
-    if clip_d:
-        full_d = clip_d + holes_d
-        svg.raw('<defs>')
-        svg.raw(f'<clipPath id="board-clip"><path d="{full_d}" clip-rule="evenodd"/></clipPath>')
-        svg.raw('</defs>')
-        svg.raw(f'<path d="{full_d}" fill="{BOARD_FILL}" fill-rule="evenodd"/>')
-        svg.raw(f'<path d="{clip_d}" fill="none" stroke="{BOARD_EDGE}" stroke-width="0.15"/>')
-        svg.raw('<g clip-path="url(#board-clip)">')
-        has_clip = True
-    else:
-        # Fallback: use bounding box as clip rect
-        svg.raw('<defs>')
+    board_clip_d = clip_d or (
+        f"M {bx0:.4f} {by0:.4f} L {bx1:.4f} {by0:.4f} "
+        f"L {bx1:.4f} {by1:.4f} L {bx0:.4f} {by1:.4f} Z"
+    )
+    svg.raw('<defs>')
+    svg.raw(f'<clipPath id="board-clip"><path d="{board_clip_d}"/></clipPath>')
+    if holes_d:
+        # Covering rect + hole circles, even-odd subtracts the holes.
+        # The clip-path on this clipPath chains to board-clip first.
+        cover_d = (
+            f"M {vb_x:.4f} {vb_y:.4f} L {vb_x + vb_w:.4f} {vb_y:.4f} "
+            f"L {vb_x + vb_w:.4f} {vb_y + vb_h:.4f} L {vb_x:.4f} {vb_y + vb_h:.4f} Z"
+        )
         svg.raw(
-            f'<clipPath id="board-clip">'
-            f'<rect x="{bx0:.4f}" y="{by0:.4f}" '
-            f'width="{bx1 - bx0:.4f}" height="{by1 - by0:.4f}"/>'
+            f'<clipPath id="drill-clip" clip-path="url(#board-clip)">'
+            f'<path d="{cover_d}{holes_d}" clip-rule="evenodd"/>'
             f'</clipPath>'
         )
-        svg.raw('</defs>')
+        active_clip = "drill-clip"
+    else:
+        active_clip = "board-clip"
+    svg.raw('</defs>')
+    # Board fill and outline (outside clip group)
+    if clip_d:
+        svg.raw(f'<path d="{clip_d}" fill="{BOARD_FILL}"/>')
+        svg.raw(f'<path d="{clip_d}" fill="none" stroke="{BOARD_EDGE}" stroke-width="0.15"/>')
+    else:
         svg.rect(bx0, by0, bx1 - bx0, by1 - by0, fill=BOARD_FILL)
         for ln in board.outline_lines:
             svg.line(ln.start_x, ln.start_y, ln.end_x, ln.end_y, BOARD_EDGE, max(ln.width, 0.15))
         for arc in board.outline_arcs:
             svg.raw(_svg_arc_path(arc, BOARD_EDGE, max(arc.width, 0.15)))
-        svg.raw('<g clip-path="url(#board-clip)">')
-        has_clip = True
+    svg.raw(f'<g clip-path="url(#{active_clip})">')
+    has_clip = True
 
     # -- Pads (non-highlighted) --------------------------------------------
     for fp in board.footprints:
