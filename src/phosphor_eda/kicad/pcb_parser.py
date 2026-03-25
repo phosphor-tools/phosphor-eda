@@ -499,13 +499,19 @@ def _parse_gr_line(item: list) -> PcbLine | None:
 
 
 def _parse_gr_arc(item: list) -> PcbArc | None:
-    """Parse a (gr_arc ...) if it's on Edge.Cuts."""
+    """Parse a (gr_arc ...) if it's on Edge.Cuts.
+
+    KiCad 6+ uses start/mid/end; KiCad 5 uses start/end/angle where
+    start is the centre and end is one endpoint.
+    """
     layer_node = _find(item, "layer")
     if not layer_node or _val(layer_node) != "Edge.Cuts":
         return None
-    start = _xy(_find(item, "start"))
-    mid = _xy(_find(item, "mid"))
-    end = _xy(_find(item, "end"))
+    mid_node = _find(item, "mid")
+    start_node = _find(item, "start")
+    end_node = _find(item, "end")
+    if not start_node or not end_node:
+        return None
     width_node = _find(item, "width")
     stroke_node = _find(item, "stroke")
     if width_node:
@@ -515,7 +521,33 @@ def _parse_gr_arc(item: list) -> PcbArc | None:
         w = _float_val(sw) if sw else 0.1
     else:
         w = 0.1
-    return PcbArc(start[0], start[1], mid[0], mid[1], end[0], end[1], "Edge.Cuts", w)
+    if mid_node:
+        # KiCad 6+: start/mid/end are three points on the arc
+        start = _xy(start_node)
+        mid = _xy(mid_node)
+        end = _xy(end_node)
+        return PcbArc(start[0], start[1], mid[0], mid[1], end[0], end[1], "Edge.Cuts", w)
+    else:
+        # KiCad 5: start=centre, end=one endpoint, angle=sweep
+        angle_node = _find(item, "angle")
+        if not angle_node:
+            return None
+        cx, cy = _xy(start_node)
+        ex, ey = _xy(end_node)
+        angle_deg = _float_val(angle_node)
+        # Compute the other endpoint and midpoint
+        rad = math.radians(-angle_deg)
+        half_rad = rad / 2
+        dx, dy = ex - cx, ey - cy
+        # Midpoint of the arc
+        cos_h, sin_h = math.cos(half_rad), math.sin(half_rad)
+        mx = cx + dx * cos_h - dy * sin_h
+        my = cy + dx * sin_h + dy * cos_h
+        # Far endpoint
+        cos_f, sin_f = math.cos(rad), math.sin(rad)
+        fx = cx + dx * cos_f - dy * sin_f
+        fy = cy + dx * sin_f + dy * cos_f
+        return PcbArc(ex, ey, mx, my, fx, fy, "Edge.Cuts", w)
 
 
 # ---------------------------------------------------------------------------
@@ -538,10 +570,12 @@ def parse_kicad_pcb(path: Path) -> PcbBoard:
 
     footprints: list[PcbFootprint] = []
     edge_lines_from_fps: list[PcbLine] = []
-    for fp_sexpr in _find_all(sexpr, "footprint"):
-        fp, edge_lines = _parse_footprint(fp_sexpr)
-        footprints.append(fp)
-        edge_lines_from_fps.extend(edge_lines)
+    # KiCad 6+ uses "footprint", KiCad 5 uses "module"
+    for tag in ("footprint", "module"):
+        for fp_sexpr in _find_all(sexpr, tag):
+            fp, edge_lines = _parse_footprint(fp_sexpr)
+            footprints.append(fp)
+            edge_lines_from_fps.extend(edge_lines)
 
     segments = [_parse_segment(s) for s in _find_all(sexpr, "segment")]
     vias = [_parse_via(v) for v in _find_all(sexpr, "via")]
