@@ -267,6 +267,115 @@ def _chain_lines_to_polygon(lines: list[PcbLine]) -> list[tuple[float, float]] |
     return None
 
 
+def _build_outline_clip_path(
+    lines: list[PcbLine], arcs: list[PcbArc],
+) -> str | None:
+    """Build an SVG path `d` attribute from board outline geometry.
+
+    Chains lines and arcs into a closed path suitable for a <clipPath>.
+    Returns None if the outline can't be chained into a closed loop.
+    """
+    if not lines and not arcs:
+        return None
+
+    EPS = 0.05
+
+    # Each segment is (start, end, svg_draw_command)
+    # For lines: draw_cmd is "L ex ey"
+    # For arcs: draw_cmd is the SVG arc command
+    Seg = tuple[tuple[float, float], tuple[float, float], str]
+    segments: list[Seg] = []
+
+    for ln in lines:
+        s = (ln.start_x, ln.start_y)
+        e = (ln.end_x, ln.end_y)
+        segments.append((s, e, f"L {e[0]:.4f} {e[1]:.4f}"))
+
+    for arc in arcs:
+        s = (arc.start_x, arc.start_y)
+        e = (arc.end_x, arc.end_y)
+        cx, cy, r = _circumcircle(
+            arc.start_x, arc.start_y,
+            arc.mid_x, arc.mid_y,
+            arc.end_x, arc.end_y,
+        )
+        if r > 1e5:
+            segments.append((s, e, f"L {e[0]:.4f} {e[1]:.4f}"))
+            continue
+        dx1 = arc.mid_x - arc.start_x
+        dy1 = arc.mid_y - arc.start_y
+        dx2 = arc.end_x - arc.start_x
+        dy2 = arc.end_y - arc.start_y
+        cross = dx1 * dy2 - dy1 * dx2
+        sweep = 1 if cross > 0 else 0
+        angle_start = math.atan2(arc.start_y - cy, arc.start_x - cx)
+        angle_mid = math.atan2(arc.mid_y - cy, arc.mid_x - cx)
+        angle_end = math.atan2(arc.end_y - cy, arc.end_x - cx)
+        def _norm(a: float, ref: float) -> float:
+            d = a - ref
+            while d < -math.pi:
+                d += 2 * math.pi
+            while d > math.pi:
+                d -= 2 * math.pi
+            return d
+        d_mid = _norm(angle_mid, angle_start)
+        d_end = _norm(angle_end, angle_start)
+        large_arc = 1 if abs(d_end) > math.pi else 0
+        if (d_mid > 0) != (d_end > 0):
+            large_arc = 1
+        cmd = f"A {r:.4f} {r:.4f} 0 {large_arc} {sweep} {e[0]:.4f} {e[1]:.4f}"
+        segments.append((s, e, cmd))
+
+    if not segments:
+        return None
+
+    # Chain segments into order
+    remaining = list(range(len(segments)))
+    first = remaining.pop(0)
+    chain_cmds = [segments[first][2]]
+    start_pt = segments[first][0]
+    cur = segments[first][1]
+
+    while remaining:
+        found = False
+        for i, idx in enumerate(remaining):
+            seg_s, seg_e, cmd = segments[idx]
+            if abs(seg_s[0] - cur[0]) < EPS and abs(seg_s[1] - cur[1]) < EPS:
+                chain_cmds.append(cmd)
+                cur = seg_e
+                remaining.pop(i)
+                found = True
+                break
+            if abs(seg_e[0] - cur[0]) < EPS and abs(seg_e[1] - cur[1]) < EPS:
+                # Reverse: rebuild command with swapped endpoints
+                rev_s, rev_e = seg_e, seg_s
+                # For lines, just change the target
+                if cmd.startswith("L"):
+                    rev_cmd = f"L {rev_e[0]:.4f} {rev_e[1]:.4f}"
+                else:
+                    # For arcs, swap sweep direction
+                    rev_cmd = cmd.replace(" 0 1 ", " 0 TEMP ").replace(" 0 0 ", " 0 1 ").replace(" 0 TEMP ", " 0 0 ")
+                    rev_cmd = cmd  # Actually need to recalc — just use target
+                    # Rebuild with the reversed endpoint
+                    parts = cmd.split()
+                    # A rx ry rot large sweep ex ey
+                    sw = int(parts[5])
+                    rev_cmd = f"A {parts[1]} {parts[2]} {parts[3]} {parts[4]} {1 - sw} {rev_e[0]:.4f} {rev_e[1]:.4f}"
+                chain_cmds.append(rev_cmd)
+                cur = rev_e
+                remaining.pop(i)
+                found = True
+                break
+        if not found:
+            return None
+
+    # Check closure
+    if abs(cur[0] - start_pt[0]) > EPS or abs(cur[1] - start_pt[1]) > EPS:
+        return None
+
+    return f"M {start_pt[0]:.4f} {start_pt[1]:.4f} " + " ".join(chain_cmds) + " Z"
+
+
 def _pad_on_side(pad_layers: list[str], side: str) -> bool:
     """Check if a pad is visible on the given side (or on all layers)."""
     for ly in pad_layers:
@@ -345,14 +454,34 @@ def render_pcb_svg(
     if side == "back":
         svg.group_start(transform=f"translate({bx0 + bx1:.4f}, 0) scale(-1, 1)")
 
-    # -- Board fill --------------------------------------------------------
-    svg.rect(bx0, by0, bx1 - bx0, by1 - by0, fill=BOARD_FILL)
-
-    # -- Board outline (Edge.Cuts) -----------------------------------------
-    for ln in board.outline_lines:
-        svg.line(ln.start_x, ln.start_y, ln.end_x, ln.end_y, BOARD_EDGE, max(ln.width, 0.15))
-    for arc in board.outline_arcs:
-        svg.raw(_svg_arc_path(arc, BOARD_EDGE, max(arc.width, 0.15)))
+    # -- Board outline clip path -------------------------------------------
+    clip_d = _build_outline_clip_path(board.outline_lines, board.outline_arcs)
+    has_clip = False
+    if clip_d:
+        svg.raw('<defs>')
+        svg.raw(f'<clipPath id="board-clip"><path d="{clip_d}"/></clipPath>')
+        svg.raw('</defs>')
+        svg.raw(f'<path d="{clip_d}" fill="{BOARD_FILL}"/>')
+        svg.raw(f'<path d="{clip_d}" fill="none" stroke="{BOARD_EDGE}" stroke-width="0.15"/>')
+        svg.raw('<g clip-path="url(#board-clip)">')
+        has_clip = True
+    else:
+        # Fallback: use bounding box as clip rect
+        svg.raw('<defs>')
+        svg.raw(
+            f'<clipPath id="board-clip">'
+            f'<rect x="{bx0:.4f}" y="{by0:.4f}" '
+            f'width="{bx1 - bx0:.4f}" height="{by1 - by0:.4f}"/>'
+            f'</clipPath>'
+        )
+        svg.raw('</defs>')
+        svg.rect(bx0, by0, bx1 - bx0, by1 - by0, fill=BOARD_FILL)
+        for ln in board.outline_lines:
+            svg.line(ln.start_x, ln.start_y, ln.end_x, ln.end_y, BOARD_EDGE, max(ln.width, 0.15))
+        for arc in board.outline_arcs:
+            svg.raw(_svg_arc_path(arc, BOARD_EDGE, max(arc.width, 0.15)))
+        svg.raw('<g clip-path="url(#board-clip)">')
+        has_clip = True
 
     # -- Pads (non-highlighted) --------------------------------------------
     for fp in board.footprints:
@@ -436,38 +565,31 @@ def render_pcb_svg(
     # -- Collect ref designator texts to render outside mirror group ----------
     deferred_texts: list[tuple[float, float, str, float, float]] = []
     active_text_layers = active_fab | active_silk
-    active_cu = "F.Cu" if side == "front" else "B.Cu"
     for fp in board.footprints:
-        if fp.layer != active_cu:
-            continue
-        # Find the best reference text for this footprint.
-        # Prefer visible text on the active layers, but fall back to hidden
-        # ref text so designators always appear (essential for spatial queries).
+        # Find the best reference text for this footprint
         best_ref_txt = None
-        fallback_ref_txt = None
         for txt in fp.texts:
+            if txt.hidden or txt.layer not in active_text_layers:
+                continue
             if txt.kind == "value":
                 continue
-            is_ref = txt.text == fp.reference or txt.kind in ("reference", "user")
-            if not is_ref:
-                continue
-            if not txt.hidden and txt.layer in active_text_layers:
+            if txt.text == fp.reference or txt.kind in ("reference", "user"):
                 if best_ref_txt is None or txt.font_size < best_ref_txt.font_size:
-                    best_ref_txt = txt
-            elif txt.kind == "reference" and fallback_ref_txt is None:
-                fallback_ref_txt = txt
-        chosen = best_ref_txt or fallback_ref_txt
-        if chosen is not None:
-            # Cap font size; use a default if 0
-            fs = chosen.font_size if chosen.font_size > 0.1 else 0.5
-            fs = min(fs, 0.8)
+                    best_ref_txt = txt  # prefer smaller (user ${REFERENCE}) over large ref
+        if best_ref_txt is not None:
+            # Cap font size relative to board
+            fs = min(best_ref_txt.font_size, 0.8)
             deferred_texts.append((
-                chosen.x, chosen.y,
-                fp.reference,
-                fs, chosen.rotation,
+                best_ref_txt.x, best_ref_txt.y,
+                fp.reference,  # always use the actual reference, not raw text
+                fs, best_ref_txt.rotation,
             ))
 
-    # -- Component highlight boxes (inside mirror group) ---------------------
+    # -- Close clip group -----------------------------------------------------
+    if has_clip:
+        svg.raw('</g>')  # close board-clip group
+
+    # -- Component highlight boxes (inside mirror group, outside clip) -------
     hl_labels: list[tuple[float, float, float, float, str]] = []
     if hl_refs:
         for fp in board.footprints:

@@ -536,7 +536,7 @@ def _parse_gr_arc(item: list) -> PcbArc | None:
         ex, ey = _xy(end_node)
         angle_deg = _float_val(angle_node)
         # Compute the other endpoint and midpoint
-        rad = math.radians(-angle_deg)
+        rad = math.radians(angle_deg)
         half_rad = rad / 2
         dx, dy = ex - cx, ey - cy
         # Midpoint of the arc
