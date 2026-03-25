@@ -280,46 +280,6 @@ def _parse_fp_rects_as_lines(
     return lines
 
 
-def _parse_fp_arcs(
-    fp_sexpr: list,
-    fp_x: float,
-    fp_y: float,
-    fp_rot: float,
-    layer_filter: set[str],
-) -> list[PcbArc]:
-    """Parse fp_arc elements matching layer_filter, transform to absolute."""
-    arcs: list[PcbArc] = []
-    for item in _find_all(fp_sexpr, "fp_arc"):
-        layer_node = _find(item, "layer")
-        if not layer_node:
-            continue
-        layer = _val(layer_node)
-        if layer not in layer_filter:
-            continue
-        start_node = _find(item, "start")
-        mid_node = _find(item, "mid")
-        end_node = _find(item, "end")
-        if not start_node or not mid_node or not end_node:
-            continue
-        sx, sy = _xy(start_node)
-        mx, my = _xy(mid_node)
-        ex, ey = _xy(end_node)
-        abs_s = _transform_point(sx, sy, fp_x, fp_y, fp_rot)
-        abs_m = _transform_point(mx, my, fp_x, fp_y, fp_rot)
-        abs_e = _transform_point(ex, ey, fp_x, fp_y, fp_rot)
-        width_node = _find(item, "width")
-        stroke_node = _find(item, "stroke")
-        if width_node:
-            w = _float_val(width_node)
-        elif stroke_node:
-            sw = _find(stroke_node, "width")
-            w = _float_val(sw) if sw else 0.1
-        else:
-            w = 0.1
-        arcs.append(PcbArc(abs_s[0], abs_s[1], abs_m[0], abs_m[1], abs_e[0], abs_e[1], layer, w))
-    return arcs
-
-
 _SILK_LAYERS = {"F.SilkS", "B.SilkS", "F.Silkscreen", "B.Silkscreen"}
 _COURTYARD_LAYERS = {"F.CrtYd", "B.CrtYd"}
 _FAB_LAYERS = {"F.Fab", "B.Fab"}
@@ -421,7 +381,6 @@ def _parse_footprint(fp_sexpr: list) -> tuple[PcbFootprint, list[PcbLine]]:
     fab_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS)
     fab_lines.extend(_parse_fp_rects_as_lines(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS))
     fab_circles = _parse_fp_circles(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS)
-    fab_arcs = _parse_fp_arcs(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS)
     edge_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _EDGE_LAYERS)
 
     texts = _parse_fp_texts(fp_sexpr, fp_x, fp_y, fp_rot, ref)
@@ -440,7 +399,6 @@ def _parse_footprint(fp_sexpr: list) -> tuple[PcbFootprint, list[PcbLine]]:
         courtyard_lines=court_lines,
         fab_lines=fab_lines,
         fab_circles=fab_circles,
-        fab_arcs=fab_arcs,
         texts=texts,
         bbox=bbox,
     )
