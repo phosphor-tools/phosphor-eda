@@ -527,6 +527,13 @@ def render_pcb_svg(
                 color = PAD_FRONT_HL if on_front else PAD_BACK_HL
                 _draw_pad(svg, pad, color, 1.0)
 
+    # -- Silkscreen on active side (behind component bodies) -----------------
+    active_silk = {"F.SilkS", "F.Silkscreen"} if side == "front" else {"B.SilkS", "B.Silkscreen"}
+    for fp in board.footprints:
+        for ln in fp.silkscreen_lines:
+            if ln.layer in active_silk:
+                svg.line(ln.start_x, ln.start_y, ln.end_x, ln.end_y, SILK, max(ln.width, 0.1))
+
     # -- Component bodies (opaque fab-layer geometry, drawn ON TOP of pads) ---
     active_fab = {"F.Fab"} if side == "front" else {"B.Fab"}
     for fp in board.footprints:
@@ -554,13 +561,6 @@ def render_pcb_svg(
         # Draw arcs on top
         for arc in fab_arcs_side:
             svg.raw(_svg_arc_path(arc, COMP_BODY_EDGE, max(arc.width, 0.08)))
-
-    # -- Silkscreen on active side -----------------------------------------
-    active_silk = {"F.SilkS", "F.Silkscreen"} if side == "front" else {"B.SilkS", "B.Silkscreen"}
-    for fp in board.footprints:
-        for ln in fp.silkscreen_lines:
-            if ln.layer in active_silk:
-                svg.line(ln.start_x, ln.start_y, ln.end_x, ln.end_y, SILK, max(ln.width, 0.1))
 
     # -- Collect ref designator texts to render outside mirror group ----------
     deferred_texts: list[tuple[float, float, str, float, float]] = []
