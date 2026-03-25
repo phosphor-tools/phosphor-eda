@@ -350,16 +350,29 @@ def render_pcb_svg(
             if ln.layer in active_silk:
                 svg.line(ln.start_x, ln.start_y, ln.end_x, ln.end_y, SILK, max(ln.width, 0.1))
 
-    # -- Collect text labels to render outside mirror group -------------------
+    # -- Collect ref designator texts to render outside mirror group ----------
     deferred_texts: list[tuple[float, float, str, float, float]] = []
     active_text_layers = active_fab | active_silk
     for fp in board.footprints:
+        # Find the best reference text for this footprint
+        best_ref_txt = None
         for txt in fp.texts:
             if txt.hidden or txt.layer not in active_text_layers:
                 continue
-            if txt.font_size < 0.1:
+            # Only show reference designators, not values or other text
+            if txt.kind == "value":
                 continue
-            deferred_texts.append((txt.x, txt.y, txt.text, txt.font_size, txt.rotation))
+            if txt.text == fp.reference or txt.kind in ("reference", "user"):
+                if best_ref_txt is None or txt.font_size < best_ref_txt.font_size:
+                    best_ref_txt = txt  # prefer smaller (user ${REFERENCE}) over large ref
+        if best_ref_txt is not None:
+            # Cap font size relative to board
+            fs = min(best_ref_txt.font_size, 0.8)
+            deferred_texts.append((
+                best_ref_txt.x, best_ref_txt.y,
+                fp.reference,  # always use the actual reference, not raw text
+                fs, best_ref_txt.rotation,
+            ))
 
     # -- Component highlight boxes (inside mirror group) ---------------------
     hl_labels: list[tuple[float, float, float, float, str]] = []

@@ -46,6 +46,7 @@ class PcbText:
     rotation: float  # degrees
     layer: str
     font_size: float
+    kind: str = ""  # "reference", "value", "user"
     hidden: bool = False
 
 

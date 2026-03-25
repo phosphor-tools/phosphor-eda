@@ -269,6 +269,7 @@ def _parse_fp_texts(
             rotation=abs_rot,
             layer=layer,
             font_size=font_size,
+            kind=kind,
             hidden=hidden,
         ))
     return texts
