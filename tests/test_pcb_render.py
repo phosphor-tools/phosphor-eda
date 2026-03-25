@@ -30,8 +30,8 @@ def test_base_render_no_traces(board):
 
 def test_base_render_has_board_outline(board):
     svg = render_pcb_svg(board)
-    # Board outline uses BOARD_EDGE colour
-    assert "#0d3015" in svg
+    # Board shape is used as clip path
+    assert "board-clip" in svg
 
 
 def test_base_render_has_pads(board):
