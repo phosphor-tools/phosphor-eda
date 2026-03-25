@@ -23,6 +23,18 @@ class PcbLine:
 
 
 @dataclass
+class PcbCircle:
+    """A circle (component body outlines, etc.)."""
+
+    cx: float
+    cy: float
+    radius: float
+    layer: str
+    width: float
+    fill: bool = False
+
+
+@dataclass
 class PcbArc:
     """An arc defined by start, midpoint, and end (board outline, etc.)."""
 
@@ -80,6 +92,7 @@ class PcbFootprint:
     silkscreen_lines: list[PcbLine] = field(default_factory=list)
     courtyard_lines: list[PcbLine] = field(default_factory=list)
     fab_lines: list[PcbLine] = field(default_factory=list)
+    fab_circles: list[PcbCircle] = field(default_factory=list)
     texts: list[PcbText] = field(default_factory=list)
     bbox: tuple[float, float, float, float] | None = None  # min_x, min_y, max_x, max_y
 

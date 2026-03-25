@@ -16,6 +16,7 @@ from phosphor_eda.kicad.to_schematic import _find, _find_all, _property, _tag, _
 from phosphor_eda.pcb import (
     PcbArc,
     PcbBoard,
+    PcbCircle,
     PcbFootprint,
     PcbLine,
     PcbNet,
@@ -196,6 +197,89 @@ def _parse_fp_lines(
     return lines
 
 
+def _parse_fp_circles(
+    fp_sexpr: list,
+    fp_x: float,
+    fp_y: float,
+    fp_rot: float,
+    layer_filter: set[str],
+) -> list[PcbCircle]:
+    """Parse fp_circle elements matching layer_filter, transform to absolute."""
+    circles: list[PcbCircle] = []
+    for item in _find_all(fp_sexpr, "fp_circle"):
+        layer_node = _find(item, "layer")
+        if not layer_node:
+            continue
+        layer = _val(layer_node)
+        if layer not in layer_filter:
+            continue
+        center_node = _find(item, "center")
+        end_node = _find(item, "end")
+        if not center_node or not end_node:
+            continue
+        cx, cy = _xy(center_node)
+        ex, ey = _xy(end_node)
+        radius = math.hypot(ex - cx, ey - cy)
+        abs_c = _transform_point(cx, cy, fp_x, fp_y, fp_rot)
+        width_node = _find(item, "width")
+        stroke_node = _find(item, "stroke")
+        if width_node:
+            w = _float_val(width_node)
+        elif stroke_node:
+            sw = _find(stroke_node, "width")
+            w = _float_val(sw) if sw else 0.1
+        else:
+            w = 0.1
+        fill_node = _find(item, "fill")
+        filled = fill_node is not None and _val(fill_node) == "solid"
+        circles.append(PcbCircle(abs_c[0], abs_c[1], radius, layer, w, filled))
+    return circles
+
+
+def _parse_fp_rects_as_lines(
+    fp_sexpr: list,
+    fp_x: float,
+    fp_y: float,
+    fp_rot: float,
+    layer_filter: set[str],
+) -> list[PcbLine]:
+    """Parse fp_rect elements as four PcbLine segments."""
+    lines: list[PcbLine] = []
+    for item in _find_all(fp_sexpr, "fp_rect"):
+        layer_node = _find(item, "layer")
+        if not layer_node:
+            continue
+        layer = _val(layer_node)
+        if layer not in layer_filter:
+            continue
+        start_node = _find(item, "start")
+        end_node = _find(item, "end")
+        if not start_node or not end_node:
+            continue
+        sx, sy = _xy(start_node)
+        ex, ey = _xy(end_node)
+        width_node = _find(item, "width")
+        stroke_node = _find(item, "stroke")
+        if width_node:
+            w = _float_val(width_node)
+        elif stroke_node:
+            sw = _find(stroke_node, "width")
+            w = _float_val(sw) if sw else 0.1
+        else:
+            w = 0.1
+        # Four corners
+        corners = [(sx, sy), (ex, sy), (ex, ey), (sx, ey)]
+        abs_corners = [_transform_point(cx, cy, fp_x, fp_y, fp_rot) for cx, cy in corners]
+        for i in range(4):
+            j = (i + 1) % 4
+            lines.append(PcbLine(
+                abs_corners[i][0], abs_corners[i][1],
+                abs_corners[j][0], abs_corners[j][1],
+                layer, w,
+            ))
+    return lines
+
+
 _SILK_LAYERS = {"F.SilkS", "B.SilkS", "F.Silkscreen", "B.Silkscreen"}
 _COURTYARD_LAYERS = {"F.CrtYd", "B.CrtYd"}
 _FAB_LAYERS = {"F.Fab", "B.Fab"}
@@ -295,6 +379,8 @@ def _parse_footprint(fp_sexpr: list) -> tuple[PcbFootprint, list[PcbLine]]:
     silk_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _SILK_LAYERS)
     court_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _COURTYARD_LAYERS)
     fab_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS)
+    fab_lines.extend(_parse_fp_rects_as_lines(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS))
+    fab_circles = _parse_fp_circles(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS)
     edge_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _EDGE_LAYERS)
 
     texts = _parse_fp_texts(fp_sexpr, fp_x, fp_y, fp_rot, ref)
@@ -312,6 +398,7 @@ def _parse_footprint(fp_sexpr: list) -> tuple[PcbFootprint, list[PcbLine]]:
         silkscreen_lines=silk_lines,
         courtyard_lines=court_lines,
         fab_lines=fab_lines,
+        fab_circles=fab_circles,
         texts=texts,
         bbox=bbox,
     )

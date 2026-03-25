@@ -341,7 +341,17 @@ def render_pcb_svg(
     for fp in board.footprints:
         for ln in fp.fab_lines:
             if ln.layer in active_fab:
-                svg.line(ln.start_x, ln.start_y, ln.end_x, ln.end_y, FAB, max(ln.width, 0.08))
+                svg.line(ln.start_x, ln.start_y, ln.end_x, ln.end_y, FAB, max(ln.width, 0.1))
+        for circ in fp.fab_circles:
+            if circ.layer in active_fab:
+                if circ.fill:
+                    svg.circle(circ.cx, circ.cy, circ.radius, FAB, opacity=0.6)
+                else:
+                    svg.raw(
+                        f'<circle cx="{circ.cx:.4f}" cy="{circ.cy:.4f}" '
+                        f'r="{circ.radius:.4f}" fill="none" stroke="{FAB}" '
+                        f'stroke-width="{max(circ.width, 0.1):.4f}" opacity="0.8"/>'
+                    )
 
     # -- Silkscreen on active side -----------------------------------------
     active_silk = {"F.SilkS", "F.Silkscreen"} if side == "front" else {"B.SilkS", "B.Silkscreen"}
