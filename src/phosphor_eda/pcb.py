@@ -76,6 +76,7 @@ class PcbPad:
     net_number: int
     net_name: str
     footprint_ref: str
+    drill: float = 0.0  # drill diameter (mm), 0 for SMD pads
 
 
 @dataclass

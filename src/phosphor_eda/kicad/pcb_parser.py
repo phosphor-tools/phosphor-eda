@@ -144,6 +144,17 @@ def _parse_pad(
     net_num = int(net_node[1]) if net_node and len(net_node) > 1 else 0
     net_name = str(net_node[2]) if net_node and len(net_node) > 2 else ""
 
+    drill_node = _find(pad_sexpr, "drill")
+    drill = 0.0
+    if drill_node and len(drill_node) > 1:
+        # (drill 3.2) or (drill oval 0.6 1.2) — take first numeric value
+        for v in drill_node[1:]:
+            try:
+                drill = float(v)
+                break
+            except (ValueError, TypeError):
+                continue
+
     abs_x, abs_y = _transform_point(local_x, local_y, fp_x, fp_y, fp_rot)
 
     return PcbPad(
@@ -157,6 +168,7 @@ def _parse_pad(
         net_number=net_num,
         net_name=net_name,
         footprint_ref=fp_ref,
+        drill=drill,
     )
 
 

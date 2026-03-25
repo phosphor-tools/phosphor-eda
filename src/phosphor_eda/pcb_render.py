@@ -474,12 +474,39 @@ def render_pcb_svg(
 
     # -- Board outline clip path -------------------------------------------
     clip_d = _build_outline_clip_path(board.outline_lines, board.outline_arcs)
+
+    # Collect mounting hole drill circles for cutouts
+    hole_circles: list[tuple[float, float, float]] = []  # (cx, cy, radius)
+    for fp in board.footprints:
+        is_mounting = "mountinghole" in fp.footprint_lib.lower().replace("_", "")
+        if not is_mounting:
+            continue
+        # Use the largest drill in the footprint as the hole
+        best_drill = 0.0
+        best_x, best_y = fp.x, fp.y
+        for pad in fp.pads:
+            if pad.drill > best_drill:
+                best_drill = pad.drill
+                best_x, best_y = pad.x, pad.y
+        if best_drill > 0.5:  # skip tiny vias within mounting holes
+            hole_circles.append((best_x, best_y, best_drill / 2))
+
+    # Build hole cutout paths (circles as two half-arc SVG commands)
+    holes_d = ""
+    for hx, hy, hr in hole_circles:
+        holes_d += (
+            f" M {hx - hr:.4f} {hy:.4f}"
+            f" A {hr:.4f} {hr:.4f} 0 1 0 {hx + hr:.4f} {hy:.4f}"
+            f" A {hr:.4f} {hr:.4f} 0 1 0 {hx - hr:.4f} {hy:.4f} Z"
+        )
+
     has_clip = False
     if clip_d:
+        full_d = clip_d + holes_d
         svg.raw('<defs>')
-        svg.raw(f'<clipPath id="board-clip"><path d="{clip_d}"/></clipPath>')
+        svg.raw(f'<clipPath id="board-clip"><path d="{full_d}" clip-rule="evenodd"/></clipPath>')
         svg.raw('</defs>')
-        svg.raw(f'<path d="{clip_d}" fill="{BOARD_FILL}"/>')
+        svg.raw(f'<path d="{full_d}" fill="{BOARD_FILL}" fill-rule="evenodd"/>')
         svg.raw(f'<path d="{clip_d}" fill="none" stroke="{BOARD_EDGE}" stroke-width="0.15"/>')
         svg.raw('<g clip-path="url(#board-clip)">')
         has_clip = True
