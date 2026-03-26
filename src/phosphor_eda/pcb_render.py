@@ -426,7 +426,6 @@ def _default_theme_css(side: str, copper_layers: list[str]) -> str:
     rules: list[str] = []
     rules.append("/* Board — design mode uses outline only, no solder mask fill */")
     rules.append(f".board-fill {{ fill: none; stroke: {_EDGE_CUTS_COLOR}; stroke-width: 0.15; }}")
-    rules.append(".background { fill: #111111; }")
     rules.append("")
 
     rules.append("/* Copper layers (KiCad default colors) */")
@@ -661,12 +660,6 @@ def render_pcb_svg(
         svg.raw('<style id="highlight">')
         svg.raw(_highlight_css(hl_net_nums, hl_refs))
         svg.raw('</style>')
-
-    # -- Background --------------------------------------------------------
-    svg.raw(
-        f'<rect x="{vb_x:.4f}" y="{vb_y:.4f}" '
-        f'width="{vb_w:.4f}" height="{vb_h:.4f}" class="background"/>'
-    )
 
     # -- Back-side mirror --------------------------------------------------
     if side == "back":
