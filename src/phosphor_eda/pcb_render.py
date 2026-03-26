@@ -481,19 +481,26 @@ def _default_theme_css(side: str, copper_layers: list[str]) -> str:
 def _highlight_css(hl_net_nums: set[int], hl_refs: set[str]) -> str:
     """Return CSS that dims non-highlighted elements and brightens highlighted."""
     rules: list[str] = []
-    rules.append("/* Dim everything */")
-    rules.append("g[data-layer] .trace, g[data-layer] .trace-arc, "
-                 "g[data-layer] .pad, g[data-layer] .zone, "
-                 "g.layer-vias .via, "
-                 "g[data-layer] .silk, "
-                 "g[data-layer] .body, g[data-layer] .body-circle, "
-                 "g[data-layer] .body-circle-filled, g[data-layer] .body-arc, "
-                 ".ref-text "
-                 "{ opacity: 0.15; }")
+    rules.append("/* Dim non-highlighted elements */")
+    rules.append("g[data-layer] .trace, g[data-layer] .trace-arc { opacity: 0.12; }")
+    rules.append("g[data-layer] .pad { opacity: 0.2; }")
+    rules.append("g[data-layer] .zone { opacity: 0.08; }")
+    rules.append("g.layer-vias .via { opacity: 0.15; }")
+    rules.append("g[data-layer] .silk { opacity: 0.3; }")
+    rules.append("g[data-layer] .body, g[data-layer] .body-circle, "
+                 "g[data-layer] .body-circle-filled, g[data-layer] .body-arc "
+                 "{ opacity: 0.3; }")
+    rules.append(".ref-text { opacity: 0.3; }")
     rules.append("")
     rules.append("/* Restore highlighted nets */")
-    for nn in sorted(hl_net_nums):
-        rules.append(f'[data-net-number="{nn}"] {{ opacity: 1 !important; }}')
+    nn_sel = ", ".join(f'[data-net-number="{nn}"]' for nn in sorted(hl_net_nums))
+    if nn_sel:
+        rules.append(f"{nn_sel} {{ opacity: 1 !important; }}")
+        # Keep highlighted zones less dominant so they don't flood the view
+        zone_sel = ", ".join(
+            f'.zone[data-net-number="{nn}"]' for nn in sorted(hl_net_nums)
+        )
+        rules.append(f"{zone_sel} {{ opacity: 0.25 !important; }}")
     return "\n".join(rules)
 
 
