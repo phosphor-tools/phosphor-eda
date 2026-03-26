@@ -378,10 +378,11 @@ def _pad_copper_layer(pad: PcbPad, fp_layer: str) -> str:
     SMD pads are placed in whichever copper layer they specify.
     """
     for ly in pad.layers:
-        if ly.startswith("*."):
+        s = ly.value() if hasattr(ly, "value") else str(ly)
+        if s.startswith("*."):
             return fp_layer
-        if ly.endswith(".Cu"):
-            return ly
+        if s.endswith(".Cu"):
+            return s
     return fp_layer
 
 
@@ -389,71 +390,90 @@ def _pad_copper_layer(pad: PcbPad, fp_layer: str) -> str:
 # CSS theme
 # ---------------------------------------------------------------------------
 
-# Copper layer color palette (hue-shifted for visual distinction)
+# KiCad default layer colors (from builtin_color_themes.h)
 _COPPER_COLORS: dict[str, str] = {
-    "F.Cu": "#ff4444",
-    "B.Cu": "#4488ff",
-    "In1.Cu": "#ffaa00",
-    "In2.Cu": "#44cc44",
-    "In3.Cu": "#cc44cc",
-    "In4.Cu": "#44cccc",
-    "In5.Cu": "#ff8844",
-    "In6.Cu": "#88cc44",
-    "In7.Cu": "#8844ff",
-    "In8.Cu": "#cc8844",
+    "F.Cu": "#c83434",
+    "B.Cu": "#4d7fc4",
+    "In1.Cu": "#7fc87f",
+    "In2.Cu": "#ce7d2c",
+    "In3.Cu": "#4fcbcb",
+    "In4.Cu": "#db628b",
+    "In5.Cu": "#c8c83e",
+    "In6.Cu": "#a18d3e",
+    "In7.Cu": "#3ec8c8",
+    "In8.Cu": "#c83ec8",
 }
+_SILK_COLORS: dict[str, str] = {
+    "F.SilkS": "#f2eda1",
+    "F.Silkscreen": "#f2eda1",
+    "B.SilkS": "#e8b2a7",
+    "B.Silkscreen": "#e8b2a7",
+}
+_FAB_COLORS: dict[str, str] = {
+    "F.Fab": "#afafaf",
+    "B.Fab": "#585d84",
+}
+_EDGE_CUTS_COLOR = "#d0d2cd"
+_VIA_COLOR = "#e3b72e"
 
 
 def _default_theme_css(side: str, copper_layers: list[str]) -> str:
-    """Return the default CSS theme for the SVG."""
+    """Return the default (design mode) CSS theme for the SVG.
+
+    Design mode shows the board as an EDA editor would: dark background,
+    board outline visible, no solder mask fill, distinct colors per layer.
+    """
     rules: list[str] = []
-    rules.append("/* Board */")
-    rules.append(".board-fill { fill: #1a5c2a; }")
+    rules.append("/* Board — design mode uses outline only, no solder mask fill */")
+    rules.append(f".board-fill {{ fill: none; stroke: {_EDGE_CUTS_COLOR}; stroke-width: 0.15; }}")
     rules.append(".background { fill: #111111; }")
     rules.append("")
 
-    rules.append("/* Copper layers */")
+    rules.append("/* Copper layers (KiCad default colors) */")
     for layer in copper_layers:
         cls = _layer_class(layer)
         color = _COPPER_COLORS.get(layer, "#b87333")
         rules.append(f"g.{cls} .trace {{ stroke: {color}; stroke-linecap: round; fill: none; }}")
         rules.append(f"g.{cls} .trace-arc {{ stroke: {color}; stroke-linecap: round; fill: none; }}")
-        rules.append(f"g.{cls} .pad {{ fill: #b87333; }}")
+        rules.append(f"g.{cls} .pad {{ fill: {color}; }}")
         rules.append(f"g.{cls} .zone {{ fill: {color}; opacity: 0.35; }}")
 
     rules.append("")
     rules.append("/* Vias */")
-    rules.append(".via .annular { fill: #c0c0c0; }")
-    rules.append(".via .drill { fill: #1a5c2a; }")
+    rules.append(f".via .annular {{ fill: {_VIA_COLOR}; }}")
+    rules.append(".via .drill { fill: #111111; }")
 
     rules.append("")
     rules.append("/* Silkscreen */")
-    rules.append("g.layer-F-SilkS .silk, g.layer-F-Silkscreen .silk { stroke: #ffffffcc; stroke-linecap: round; fill: none; }")
-    rules.append("g.layer-B-SilkS .silk, g.layer-B-Silkscreen .silk { stroke: #ffffffcc; stroke-linecap: round; fill: none; }")
+    for silk_layer, color in _SILK_COLORS.items():
+        cls = _layer_class(silk_layer)
+        rules.append(f"g.{cls} .silk {{ stroke: {color}; stroke-linecap: round; fill: none; }}")
 
     rules.append("")
     rules.append("/* Fab / component bodies */")
-    rules.append(".body { fill: #3d3530; stroke: #5a504a; stroke-width: 0.06; stroke-linejoin: round; }")
-    rules.append(".body-circle { fill: none; stroke: #5a504a; }")
-    rules.append(".body-circle-filled { fill: #5a504a; }")
-    rules.append(".body-arc { fill: none; stroke: #5a504a; stroke-linecap: round; }")
+    for fab_layer, color in _FAB_COLORS.items():
+        cls = _layer_class(fab_layer)
+        rules.append(f"g.{cls} .body {{ fill: none; stroke: {color}; stroke-width: 0.1; stroke-linejoin: round; }}")
+        rules.append(f"g.{cls} .body-circle {{ fill: none; stroke: {color}; }}")
+        rules.append(f"g.{cls} .body-circle-filled {{ fill: {color}; }}")
+        rules.append(f"g.{cls} .body-arc {{ fill: none; stroke: {color}; stroke-linecap: round; }}")
+        rules.append(f"g.{cls} .ref-text {{ fill: {color}; }}")
 
     rules.append("")
-    rules.append("/* Text */")
-    rules.append(".ref-text { fill: #ffffffcc; }")
+    rules.append("/* Ref text (outside layer groups) */")
+    rules.append(f".ref-text {{ fill: {_FAB_COLORS.get('F.Fab', '#afafaf')}; }}")
 
     rules.append("")
     rules.append("/* Highlights */")
     rules.append(".highlight-box { fill: none; stroke: #ffff00; stroke-width: 0.3; stroke-dasharray: 0.5,0.3; }")
     rules.append(".highlight-label { fill: #ffff00; }")
 
-    # Hide opposite-side layers by default
-    opposite_silk = "B" if side == "front" else "F"
-    opposite_fab = opposite_silk
+    # Design mode: hide fab/assembly layers by default (less clutter)
+    opposite = "B" if side == "front" else "F"
     rules.append("")
-    rules.append("/* Side visibility */")
-    rules.append(f"g.layer-{opposite_silk}-SilkS, g.layer-{opposite_silk}-Silkscreen {{ display: none; }}")
-    rules.append(f"g.layer-{opposite_fab}-Fab {{ display: none; }}")
+    rules.append("/* Side visibility — design mode hides opposite silk + both fab */")
+    rules.append(f"g.layer-{opposite}-SilkS, g.layer-{opposite}-Silkscreen {{ display: none; }}")
+    rules.append("g.layer-F-Fab, g.layer-B-Fab { display: none; }")
 
     return "\n".join(rules)
 
