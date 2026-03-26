@@ -129,3 +129,67 @@ def test_footprint_by_ref_case_insensitive(board):
 
 def test_footprint_by_ref_missing(board):
     assert board.footprint_by_ref("NONEXISTENT") is None
+
+
+# ---------------------------------------------------------------------------
+# Zone / polygon parsing
+# ---------------------------------------------------------------------------
+
+def test_polygon_count(board):
+    """swd_switch has 2 zones with multiple filled_polygon entries."""
+    assert len(board.polygons) > 0
+
+
+def test_polygon_layers(board):
+    """Zone polygons should be on inner copper layers."""
+    layers = {p.layer for p in board.polygons}
+    assert "In1.Cu" in layers
+    assert "In2.Cu" in layers
+
+
+def test_polygon_net(board):
+    """Zone polygons should carry net info from their parent zone."""
+    nets = {(p.net_number, p.net_name) for p in board.polygons}
+    assert (2, "GND") in nets
+    assert (1, "VCC") in nets
+
+
+def test_polygon_has_points(board):
+    """Every polygon should have a non-empty points list."""
+    for p in board.polygons:
+        assert len(p.points) >= 3
+
+
+def test_polygon_total_points(board):
+    """Sanity check: total filled_polygon points should be ~5726."""
+    total = sum(len(p.points) for p in board.polygons)
+    assert 5000 < total < 7000
+
+
+def test_trace_arc_count(board):
+    """swd_switch has no trace arcs."""
+    assert len(board.trace_arcs) == 0
+
+
+# ---------------------------------------------------------------------------
+# OrangeCrab fixture (KiCad 5, complex board)
+# ---------------------------------------------------------------------------
+
+ORANGECRAB_FIXTURE = Path(__file__).parent / "fixtures" / "orangecrab.kicad_pcb"
+
+
+@pytest.fixture(scope="module")
+def orangecrab_board():
+    return parse_kicad_pcb(ORANGECRAB_FIXTURE)
+
+
+def test_orangecrab_polygon_count(orangecrab_board):
+    """OrangeCrab has 40 zones — should produce many polygons."""
+    assert len(orangecrab_board.polygons) > 40
+
+
+def test_orangecrab_polygon_layers(orangecrab_board):
+    """Zone polygons should span multiple copper layers."""
+    layers = {p.layer for p in orangecrab_board.polygons}
+    assert "F.Cu" in layers
+    assert "B.Cu" in layers

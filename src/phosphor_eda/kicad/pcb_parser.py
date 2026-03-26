@@ -21,8 +21,10 @@ from phosphor_eda.pcb import (
     PcbLine,
     PcbNet,
     PcbPad,
+    PcbPolygon,
     PcbSegment,
     PcbText,
+    PcbTraceArc,
     PcbVia,
 )
 
@@ -411,8 +413,10 @@ def _parse_fp_texts(
     return texts
 
 
-def _parse_footprint(fp_sexpr: list) -> tuple[PcbFootprint, list[PcbLine], list[PcbArc]]:
-    """Parse a footprint, returning (PcbFootprint, edge_cuts_lines, edge_cuts_arcs)."""
+def _parse_footprint(
+    fp_sexpr: list,
+) -> tuple[PcbFootprint, list[PcbLine], list[PcbArc], list[PcbPolygon]]:
+    """Parse a footprint, returning (PcbFootprint, edge_cuts_lines, edge_cuts_arcs, fp_polys)."""
     lib_name = str(fp_sexpr[1])
 
     layer_node = _find(fp_sexpr, "layer")
@@ -436,6 +440,9 @@ def _parse_footprint(fp_sexpr: list) -> tuple[PcbFootprint, list[PcbLine], list[
     fab_arcs = _parse_fp_arcs(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS)
     edge_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _EDGE_LAYERS)
     edge_arcs = _parse_fp_arcs(fp_sexpr, fp_x, fp_y, fp_rot, _EDGE_LAYERS)
+    fp_polys = _parse_fp_polys(
+        fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS | _SILK_LAYERS,
+    )
 
     texts = _parse_fp_texts(fp_sexpr, fp_x, fp_y, fp_rot, ref)
 
@@ -457,7 +464,7 @@ def _parse_footprint(fp_sexpr: list) -> tuple[PcbFootprint, list[PcbLine], list[
         texts=texts,
         bbox=bbox,
     )
-    return fp, edge_lines, edge_arcs
+    return fp, edge_lines, edge_arcs, fp_polys
 
 
 # ---------------------------------------------------------------------------
@@ -564,6 +571,106 @@ def _parse_gr_arc(item: list) -> PcbArc | None:
 
 
 # ---------------------------------------------------------------------------
+# Zone / polygon / trace-arc parsing
+# ---------------------------------------------------------------------------
+
+
+def _parse_zone_polygons(zone_sexpr: list) -> list[PcbPolygon]:
+    """Extract filled_polygon entries from a zone as PcbPolygon objects."""
+    net_node = _find(zone_sexpr, "net")
+    net_num = int(net_node[1]) if net_node and len(net_node) > 1 else 0
+    net_name_node = _find(zone_sexpr, "net_name")
+    net_name = _val(net_name_node) if net_name_node else ""
+
+    # Zone-level layer (KiCad 5 filled_polygons inherit this)
+    zone_layer_node = _find(zone_sexpr, "layer")
+    zone_layer = _val(zone_layer_node) if zone_layer_node else ""
+
+    polygons: list[PcbPolygon] = []
+    for fp_node in _find_all(zone_sexpr, "filled_polygon"):
+        # KiCad 6+ has per-filled_polygon layer; KiCad 5 inherits from zone
+        layer_node = _find(fp_node, "layer")
+        layer = _val(layer_node) if layer_node else zone_layer
+        pts_node = _find(fp_node, "pts")
+        if not pts_node:
+            continue
+        points: list[tuple[float, float]] = []
+        for xy_node in _find_all(pts_node, "xy"):
+            points.append((float(xy_node[1]), float(xy_node[2])))
+        if points:
+            polygons.append(PcbPolygon(
+                points=points, layer=layer,
+                net_number=net_num, net_name=net_name,
+            ))
+    return polygons
+
+
+def _parse_gr_poly(item: list) -> PcbPolygon | None:
+    """Parse a (gr_poly ...) as a PcbPolygon."""
+    layer_node = _find(item, "layer")
+    if not layer_node:
+        return None
+    layer = _val(layer_node)
+    pts_node = _find(item, "pts")
+    if not pts_node:
+        return None
+    points: list[tuple[float, float]] = []
+    for xy_node in _find_all(pts_node, "xy"):
+        points.append((float(xy_node[1]), float(xy_node[2])))
+    if not points:
+        return None
+    return PcbPolygon(points=points, layer=layer)
+
+
+def _parse_fp_polys(
+    fp_sexpr: list,
+    fp_x: float,
+    fp_y: float,
+    fp_rot: float,
+    layer_filter: set[str],
+) -> list[PcbPolygon]:
+    """Parse fp_poly elements matching layer_filter, transform to absolute."""
+    polys: list[PcbPolygon] = []
+    for item in _find_all(fp_sexpr, "fp_poly"):
+        layer_node = _find(item, "layer")
+        if not layer_node:
+            continue
+        layer = _val(layer_node)
+        if layer not in layer_filter:
+            continue
+        pts_node = _find(item, "pts")
+        if not pts_node:
+            continue
+        points: list[tuple[float, float]] = []
+        for xy_node in _find_all(pts_node, "xy"):
+            lx, ly = float(xy_node[1]), float(xy_node[2])
+            ax, ay = _transform_point(lx, ly, fp_x, fp_y, fp_rot)
+            points.append((ax, ay))
+        if points:
+            polys.append(PcbPolygon(points=points, layer=layer))
+    return polys
+
+
+def _parse_trace_arc(arc_sexpr: list) -> PcbTraceArc | None:
+    """Parse a top-level (arc ...) copper trace arc."""
+    start_node = _find(arc_sexpr, "start")
+    mid_node = _find(arc_sexpr, "mid")
+    end_node = _find(arc_sexpr, "end")
+    if not start_node or not mid_node or not end_node:
+        return None
+    sx, sy = _xy(start_node)
+    mx, my = _xy(mid_node)
+    ex, ey = _xy(end_node)
+    width_node = _find(arc_sexpr, "width")
+    w = _float_val(width_node) if width_node else 0.1
+    layer_node = _find(arc_sexpr, "layer")
+    layer = _val(layer_node) if layer_node else ""
+    net_node = _find(arc_sexpr, "net")
+    net = int(net_node[1]) if net_node and len(net_node) > 1 else 0
+    return PcbTraceArc(sx, sy, mx, my, ex, ey, w, layer, net)
+
+
+# ---------------------------------------------------------------------------
 # Top-level parser
 # ---------------------------------------------------------------------------
 
@@ -584,16 +691,37 @@ def parse_kicad_pcb(path: Path) -> PcbBoard:
     footprints: list[PcbFootprint] = []
     edge_lines_from_fps: list[PcbLine] = []
     edge_arcs_from_fps: list[PcbArc] = []
+    polygons_from_fps: list[PcbPolygon] = []
     # KiCad 6+ uses "footprint", KiCad 5 uses "module"
     for tag in ("footprint", "module"):
         for fp_sexpr in _find_all(sexpr, tag):
-            fp, edge_lines, edge_arcs = _parse_footprint(fp_sexpr)
+            fp, edge_lines, edge_arcs, fp_polys = _parse_footprint(fp_sexpr)
             footprints.append(fp)
             edge_lines_from_fps.extend(edge_lines)
             edge_arcs_from_fps.extend(edge_arcs)
+            polygons_from_fps.extend(fp_polys)
 
     segments = [_parse_segment(s) for s in _find_all(sexpr, "segment")]
     vias = [_parse_via(v) for v in _find_all(sexpr, "via")]
+
+    # Zones — extract filled_polygon geometry
+    polygons: list[PcbPolygon] = []
+    for zone_sexpr in _find_all(sexpr, "zone"):
+        polygons.extend(_parse_zone_polygons(zone_sexpr))
+    # Top-level graphic polygons
+    for item in _find_all(sexpr, "gr_poly"):
+        p = _parse_gr_poly(item)
+        if p:
+            polygons.append(p)
+    # Footprint polygons (fab/silk)
+    polygons.extend(polygons_from_fps)
+
+    # Trace arcs (curved copper traces)
+    trace_arcs: list[PcbTraceArc] = []
+    for item in _find_all(sexpr, "arc"):
+        ta = _parse_trace_arc(item)
+        if ta:
+            trace_arcs.append(ta)
 
     # Board outline: top-level gr_line/gr_arc on Edge.Cuts + fp-internal ones
     outline_lines: list[PcbLine] = []
@@ -617,4 +745,6 @@ def parse_kicad_pcb(path: Path) -> PcbBoard:
         vias=vias,
         outline_lines=outline_lines,
         outline_arcs=outline_arcs,
+        polygons=polygons,
+        trace_arcs=trace_arcs,
     )

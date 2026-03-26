@@ -63,6 +63,31 @@ class PcbText:
 
 
 @dataclass
+class PcbPolygon:
+    """A closed polygon — zone fill, graphic polygon, or footprint polygon."""
+
+    points: list[tuple[float, float]]
+    layer: str
+    net_number: int = 0
+    net_name: str = ""
+
+
+@dataclass
+class PcbTraceArc:
+    """A curved copper trace arc (arc segment with net)."""
+
+    start_x: float
+    start_y: float
+    mid_x: float
+    mid_y: float
+    end_x: float
+    end_y: float
+    width: float
+    layer: str
+    net_number: int
+
+
+@dataclass
 class PcbPad:
     """A pad within a footprint (absolute board coordinates)."""
 
@@ -143,6 +168,8 @@ class PcbBoard:
     vias: list[PcbVia]
     outline_lines: list[PcbLine]
     outline_arcs: list[PcbArc]
+    polygons: list[PcbPolygon] = field(default_factory=list)
+    trace_arcs: list[PcbTraceArc] = field(default_factory=list)
 
     def footprint_by_ref(self, ref: str) -> PcbFootprint | None:
         """Look up a footprint by reference designator (case-insensitive)."""
