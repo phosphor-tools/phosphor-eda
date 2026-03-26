@@ -501,6 +501,21 @@ def _highlight_css(hl_net_nums: set[int], hl_refs: set[str]) -> str:
             f'.zone[data-net-number="{nn}"]' for nn in sorted(hl_net_nums)
         )
         rules.append(f"{zone_sel} {{ opacity: 0.25 !important; }}")
+        rules.append("")
+        rules.append("/* Restore vibrant copper colors for highlighted traces and pads */")
+        for layer, color in _COPPER_COLORS.items():
+            cls = _layer_class(layer)
+            trace_sel = ", ".join(
+                f"g.{cls} .trace[data-net-number=\"{nn}\"], "
+                f"g.{cls} .trace-arc[data-net-number=\"{nn}\"]"
+                for nn in sorted(hl_net_nums)
+            )
+            rules.append(f"{trace_sel} {{ stroke: {color} !important; }}")
+            pad_sel = ", ".join(
+                f"g.{cls} .pad[data-net-number=\"{nn}\"]"
+                for nn in sorted(hl_net_nums)
+            )
+            rules.append(f"{pad_sel} {{ fill: {color} !important; }}")
     return "\n".join(rules)
 
 
