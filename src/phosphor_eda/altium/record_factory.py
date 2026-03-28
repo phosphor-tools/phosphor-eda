@@ -439,7 +439,7 @@ def materialize_records(raw_records: list[dict[str, str]]) -> list[AltiumRecord]
     return [_materialize_one(i, rec) for i, rec in enumerate(raw_records)]
 
 
-def _compute_entry_coord(
+def compute_entry_coord(
     parent_location: tuple[int, int],
     parent_x_size: int,
     side: int,
@@ -500,7 +500,7 @@ def link_children(
         if isinstance(rec, SheetEntryRec) and rec.owner_index >= 0:
             parent = by_key.get(rec.owner_index)
             if isinstance(parent, SheetSymbolRec):
-                rec.coord = _compute_entry_coord(
+                rec.coord = compute_entry_coord(
                     parent.location,
                     parent.x_size,
                     rec.side,
@@ -511,7 +511,7 @@ def link_children(
         elif isinstance(rec, HarnessEntryRec) and rec.owner_index >= 0:
             parent = by_key.get(rec.owner_index)
             if isinstance(parent, HarnessConnectorRec):
-                rec.coord = _compute_entry_coord(
+                rec.coord = compute_entry_coord(
                     parent.location,
                     parent.x_size,
                     rec.side,

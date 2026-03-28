@@ -56,6 +56,8 @@ class PlacedInstance:
     reference: str = ""
     source_package: str = ""
     pin_connections: list[PinConnection] = field(default_factory=list)
+    # Arbitrary name-value properties from parsed binary data.
+    props: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -67,6 +69,8 @@ class GraphicInst:
     loc_x: int = 0
     loc_y: int = 0
     display_props: list[SymbolDisplayProp] = field(default_factory=list)
+    # Arbitrary name-value properties from parsed binary data.
+    props: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

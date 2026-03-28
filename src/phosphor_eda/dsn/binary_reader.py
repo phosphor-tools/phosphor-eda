@@ -162,7 +162,7 @@ class BinaryReader:
             raise ValueError(f"Short prefix type mismatch: {tid} != {type_id}")
         type_id = tid
 
-        pairs = []
+        pairs: list[tuple[int, int]] = []
         size = self.read_int16()
         if size > 0:
             needed = size * 8

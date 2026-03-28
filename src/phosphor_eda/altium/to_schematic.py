@@ -12,7 +12,7 @@ from phosphor_eda.altium.sheet_builder import (
     load_sheet,
     resolve_nets,
 )
-from phosphor_eda.schematic import Design, merge_pages
+from phosphor_eda.schematic import Design, Page, merge_pages
 
 if TYPE_CHECKING:
     from phosphor_eda.models import ParsedDesign as RawDesign
@@ -52,7 +52,7 @@ def altium_to_design(raw: RawDesign, name: str = "") -> Design:
         )
 
     # Phase 3: Build domain model pages
-    pages = []
+    pages: list[Page] = []
     for raw_page in raw.pages:
         if raw_page.name not in sheets:
             continue

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from phosphor_eda.altium.record_factory import (
-    _compute_entry_coord,
+    compute_entry_coord,
     link_children,
     materialize_records,
 )
@@ -653,7 +653,7 @@ def _parse_harness_groups(
             if not entry.name:
                 continue
             # Compute coord from parent connector
-            coord = _compute_entry_coord(
+            coord = compute_entry_coord(
                 conn.location,
                 conn.x_size,
                 entry.side,
@@ -1098,9 +1098,14 @@ def build_page(
             # PartCount=2 means 1 part (every simple passive); true
             # multi-part components (e.g. dual opamp, MCU sections) have
             # PartCount > 2.
+            comp_rec_for_pins: ComponentRec | None = (
+                comp_record_keys.get(comp_owner_idx)
+                if comp_owner_idx is not None
+                else None
+            )
             is_multipart = (
-                comp_owner_idx is not None
-                and comp_record_keys[comp_owner_idx].part_count > 2
+                comp_rec_for_pins is not None
+                and comp_rec_for_pins.part_count > 2
             )
             for raw_pin in raw_inst.pin_connections:
                 coord = (raw_pin.pin_x, raw_pin.pin_y)
@@ -1121,9 +1126,11 @@ def build_page(
                     if (
                         is_multipart
                         and prec is not None
+                        and comp_rec_for_pins is not None
                         and (
                             prec.owner_part_id != 0
-                            and prec.owner_part_id != comp_rec.current_part_id
+                            and prec.owner_part_id
+                            != comp_rec_for_pins.current_part_id
                         )
                     ):
                         continue

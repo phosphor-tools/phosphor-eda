@@ -277,11 +277,11 @@ def test_inline_destinations_power_net_excluded():
 
 def test_is_power_net_classname():
     """ClassName=PWR metadata should mark a net as power."""
-    from phosphor_eda.serialize import _is_power_net
+    from phosphor_eda.serialize import is_power_net
 
     net = Net(name="CUSTOM_RAIL", metadata={"ClassName": "PWR"})
-    assert _is_power_net("CUSTOM_RAIL", net)
-    assert not _is_power_net("CUSTOM_RAIL")
+    assert is_power_net("CUSTOM_RAIL", net)
+    assert not is_power_net("CUSTOM_RAIL")
 
 
 # ---- Table formatter tests ----
