@@ -18,8 +18,10 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum, auto
+from typing import TYPE_CHECKING
 
-from phosphor_eda.schematic import Design
+if TYPE_CHECKING:
+    from phosphor_eda.schematic import Design
 
 # ---------------------------------------------------------------------------
 # Finding data types
@@ -27,9 +29,9 @@ from phosphor_eda.schematic import Design
 
 
 class Severity(StrEnum):
-    ERROR = auto()    # almost certainly a parser bug
+    ERROR = auto()  # almost certainly a parser bug
     WARNING = auto()  # suspicious, worth investigating
-    INFO = auto()     # notable but may be legitimate
+    INFO = auto()  # notable but may be legitimate
 
 
 class Category(StrEnum):
@@ -69,7 +71,10 @@ class Finding:
         self.pin = pin
 
     def __repr__(self) -> str:
-        parts = [f"severity={self.severity.value!r}", f"category={self.category.value!r}"]
+        parts = [
+            f"severity={self.severity.value!r}",
+            f"category={self.category.value!r}",
+        ]
         if self.component:
             parts.append(f"component={self.component!r}")
         if self.net:
@@ -98,55 +103,70 @@ def _check_nets(design: Design, findings: list[Finding]) -> None:
     for net in design.nets:
         # Empty net name
         if not net.name:
-            findings.append(Finding(
-                Severity.ERROR, Category.EMPTY_NET_NAME,
-                "Net with empty name",
-                net="(empty)",
-            ))
+            findings.append(
+                Finding(
+                    Severity.ERROR,
+                    Category.EMPTY_NET_NAME,
+                    "Net with empty name",
+                    net="(empty)",
+                )
+            )
             continue
 
         # Residual markup in net name
         if _BAD_NAME_RE.search(net.name):
-            findings.append(Finding(
-                Severity.ERROR, Category.NAME_RESIDUAL_MARKUP,
-                f"Net name contains residual markup: {net.name!r}",
-                net=net.name,
-            ))
+            findings.append(
+                Finding(
+                    Severity.ERROR,
+                    Category.NAME_RESIDUAL_MARKUP,
+                    f"Net name contains residual markup: {net.name!r}",
+                    net=net.name,
+                )
+            )
 
         # Empty net (0 pins)
         if len(net.pins) == 0:
-            findings.append(Finding(
-                Severity.ERROR, Category.EMPTY_NET,
-                f"Net '{net.name}' has 0 pins",
-                net=net.name,
-            ))
+            findings.append(
+                Finding(
+                    Severity.ERROR,
+                    Category.EMPTY_NET,
+                    f"Net '{net.name}' has 0 pins",
+                    net=net.name,
+                )
+            )
 
         # Single-pin net (skip if pin is intentionally no-connect)
         elif len(net.pins) == 1:
             pin = net.pins[0]
             if not pin.no_connect:
-                findings.append(Finding(
-                    Severity.WARNING, Category.SINGLE_PIN_NET,
-                    f"Net '{net.name}' has only 1 pin: "
-                    f"{pin.component.reference}.{pin.designator}",
-                    net=net.name,
-                    component=pin.component.reference,
-                    pin=pin.designator,
-                ))
+                findings.append(
+                    Finding(
+                        Severity.WARNING,
+                        Category.SINGLE_PIN_NET,
+                        f"Net '{net.name}' has only 1 pin: "
+                        f"{pin.component.reference}.{pin.designator}",
+                        net=net.name,
+                        component=pin.component.reference,
+                        pin=pin.designator,
+                    )
+                )
 
         # Duplicate component.designator on the same net
         seen: set[tuple[str, str]] = set()
         for pin in net.pins:
             key = (pin.component.reference, pin.designator)
             if key in seen:
-                findings.append(Finding(
-                    Severity.ERROR, Category.DUPLICATE_PIN_ON_NET,
-                    f"Net '{net.name}' has duplicate pin "
-                    f"{pin.component.reference}.{pin.designator}",
-                    net=net.name,
-                    component=pin.component.reference,
-                    pin=pin.designator,
-                ))
+                findings.append(
+                    Finding(
+                        Severity.ERROR,
+                        Category.DUPLICATE_PIN_ON_NET,
+                        f"Net '{net.name}' has duplicate pin "
+                        f"{pin.component.reference}.{pin.designator}",
+                        net=net.name,
+                        component=pin.component.reference,
+                        pin=pin.designator,
+                    )
+                )
             seen.add(key)
 
 
@@ -159,11 +179,14 @@ def _check_components(design: Design, findings: list[Finding]) -> None:
         # outlines legitimately have no pins)
         if n_pins == 0:
             if not comp.metadata.get("dni") and not comp.reference.startswith("."):
-                findings.append(Finding(
-                    Severity.WARNING, Category.COMPONENT_NO_PINS,
-                    f"Component {comp.reference} ({comp.part}) has 0 pins",
-                    component=comp.reference,
-                ))
+                findings.append(
+                    Finding(
+                        Severity.WARNING,
+                        Category.COMPONENT_NO_PINS,
+                        f"Component {comp.reference} ({comp.part}) has 0 pins",
+                        component=comp.reference,
+                    )
+                )
             continue
 
         # Duplicate pin designators within a component
@@ -172,12 +195,15 @@ def _check_components(design: Design, findings: list[Finding]) -> None:
             desig_counts[pin.designator] = desig_counts.get(pin.designator, 0) + 1
         for desig, count in desig_counts.items():
             if count > 1:
-                findings.append(Finding(
-                    Severity.ERROR, Category.DUPLICATE_PIN_DESIGNATOR,
-                    f"Component {comp.reference} has {count}x pin '{desig}'",
-                    component=comp.reference,
-                    pin=desig,
-                ))
+                findings.append(
+                    Finding(
+                        Severity.ERROR,
+                        Category.DUPLICATE_PIN_DESIGNATOR,
+                        f"Component {comp.reference} has {count}x pin '{desig}'",
+                        component=comp.reference,
+                        pin=desig,
+                    )
+                )
 
         # Count connection states
         n_connected = sum(1 for p in comp.pins if p.net is not None)
@@ -186,36 +212,45 @@ def _check_components(design: Design, findings: list[Finding]) -> None:
 
         # All pins unconnected (no net, no no-connect) on non-trivial components
         if n_connected == 0 and n_nc == 0 and n_pins > 1:
-            findings.append(Finding(
-                Severity.WARNING, Category.COMPONENT_ALL_UNCONNECTED,
-                f"Component {comp.reference} ({comp.part}): "
-                f"all {n_pins} pins unconnected",
-                component=comp.reference,
-            ))
+            findings.append(
+                Finding(
+                    Severity.WARNING,
+                    Category.COMPONENT_ALL_UNCONNECTED,
+                    f"Component {comp.reference} ({comp.part}): "
+                    f"all {n_pins} pins unconnected",
+                    component=comp.reference,
+                )
+            )
 
         # High unconnected ratio on major ICs
         elif n_pins > _MAJOR_IC_THRESHOLD and n_unconnected > 0:
             ratio = n_unconnected / n_pins
             if ratio > _HIGH_UNCONNECTED_FRACTION:
-                findings.append(Finding(
-                    Severity.WARNING, Category.HIGH_UNCONNECTED_RATIO,
-                    f"Component {comp.reference} ({comp.part}): "
-                    f"{n_unconnected}/{n_pins} pins "
-                    f"({ratio:.0%}) unconnected",
-                    component=comp.reference,
-                ))
+                findings.append(
+                    Finding(
+                        Severity.WARNING,
+                        Category.HIGH_UNCONNECTED_RATIO,
+                        f"Component {comp.reference} ({comp.part}): "
+                        f"{n_unconnected}/{n_pins} pins "
+                        f"({ratio:.0%}) unconnected",
+                        component=comp.reference,
+                    )
+                )
 
         # Power pins with no net
         for pin in comp.pins:
             elec = pin.metadata.get("electrical")
             if elec == "power" and pin.net is None and not pin.no_connect:
-                findings.append(Finding(
-                    Severity.WARNING, Category.POWER_PIN_UNCONNECTED,
-                    f"{comp.reference}.{pin.designator} ({pin.name}) "
-                    f"is a power pin with no net",
-                    component=comp.reference,
-                    pin=pin.designator,
-                ))
+                findings.append(
+                    Finding(
+                        Severity.WARNING,
+                        Category.POWER_PIN_UNCONNECTED,
+                        f"{comp.reference}.{pin.designator} ({pin.name}) "
+                        f"is a power pin with no net",
+                        component=comp.reference,
+                        pin=pin.designator,
+                    )
+                )
 
 
 def _check_pin_names(design: Design, findings: list[Finding]) -> None:
@@ -223,13 +258,16 @@ def _check_pin_names(design: Design, findings: list[Finding]) -> None:
     for comp in design.components:
         for pin in comp.pins:
             if pin.name and _BAD_NAME_RE.search(pin.name):
-                findings.append(Finding(
-                    Severity.ERROR, Category.NAME_RESIDUAL_MARKUP,
-                    f"Pin name contains residual markup: "
-                    f"{comp.reference}.{pin.designator} = {pin.name!r}",
-                    component=comp.reference,
-                    pin=pin.designator,
-                ))
+                findings.append(
+                    Finding(
+                        Severity.ERROR,
+                        Category.NAME_RESIDUAL_MARKUP,
+                        f"Pin name contains residual markup: "
+                        f"{comp.reference}.{pin.designator} = {pin.name!r}",
+                        component=comp.reference,
+                        pin=pin.designator,
+                    )
+                )
 
 
 def _check_ports(design: Design, findings: list[Finding]) -> None:
@@ -242,12 +280,15 @@ def _check_ports(design: Design, findings: list[Finding]) -> None:
 
     for port_name, pages in port_pages.items():
         if len(pages) < 2:
-            findings.append(Finding(
-                Severity.WARNING, Category.ORPHAN_PORT,
-                f"Port '{port_name}' appears on only 1 page "
-                f"({next(iter(pages))}), no bridging occurred",
-                net=port_name,
-            ))
+            findings.append(
+                Finding(
+                    Severity.WARNING,
+                    Category.ORPHAN_PORT,
+                    f"Port '{port_name}' appears on only 1 page "
+                    f"({next(iter(pages))}), no bridging occurred",
+                    net=port_name,
+                )
+            )
 
 
 # ---------------------------------------------------------------------------

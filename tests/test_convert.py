@@ -1,12 +1,10 @@
 from pathlib import Path
 
 import pytest
-
 from phosphor_eda.convert import (
     SCHEMATIC_EXTENSIONS,
     convert,
     find_project_root,
-    load_design,
 )
 
 DSN_FILE = Path("raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN")
@@ -38,10 +36,7 @@ def test_find_project_root_case_insensitive_prjpcb(tmp_path):
     """find_project_root detects .PRJPCB regardless of case."""
     prjpcb = tmp_path / "Board.PRJPCB"
     prjpcb.write_text(
-        "[Design]\n"
-        "HierarchyMode=1\n"
-        "[Document1]\n"
-        "DocumentPath=Sheet1.SchDoc\n"
+        "[Design]\nHierarchyMode=1\n[Document1]\nDocumentPath=Sheet1.SchDoc\n"
     )
     schdoc = tmp_path / "Sheet1.SchDoc"
     schdoc.write_text("")

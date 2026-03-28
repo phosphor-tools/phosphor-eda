@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import math
 import re
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import sexpdata
 
 from phosphor_eda.schematic import Component, Design, Net, Page, Pin, Port, merge_pages
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # KiCad overline: ~{TEXT} means TEXT with overline bar.
 # Bare ~ means "no name" (unnamed pin).
@@ -64,6 +67,7 @@ def _property(items: list, name: str) -> str:
 # ---------------------------------------------------------------------------
 # Pin electrical type mapping
 # ---------------------------------------------------------------------------
+
 
 def _strip_kicad_markup(name: str) -> str:
     """Strip KiCad text markup from a name.
@@ -289,9 +293,14 @@ def kicad_to_design(path: Path, name: str = "") -> Design:
     design_meta.update(root_meta)
 
     # Build child pages
-    for sheet_node, (sheet_name, child_data) in zip(child_sheets, child_sheet_data):
+    for sheet_node, (sheet_name, child_data) in zip(
+        child_sheets, child_sheet_data, strict=False
+    ):
         child_page, _ = _build_page(
-            child_data, sheet_name, all_lib_pins, all_lib_descs,
+            child_data,
+            sheet_name,
+            all_lib_pins,
+            all_lib_descs,
         )
 
         # Hierarchical labels in the child become Ports
@@ -491,9 +500,7 @@ def _build_page(
     for nc_node in _find_all(data[1:], "no_connect"):
         at_node = _find(nc_node[1:], "at")
         if at_node:
-            nc_positions.add(
-                (round(float(at_node[1]), 4), round(float(at_node[2]), 4))
-            )
+            nc_positions.add((round(float(at_node[1]), 4), round(float(at_node[2]), 4)))
 
     # --- Resolve wire group → net name mapping ---
     def _get_net(pos: tuple[float, float]) -> Net | None:
@@ -559,7 +566,6 @@ def _build_page(
         sym_pins = unit_pins.get(inst_unit, []) + unit_pins.get(0, [])
 
         for pnum, pname, ptype, px, py in sym_pins:
-
             abs_pos = _transform_pin(px, py, comp_x, comp_y, comp_rot, mirror)
 
             # Connect pin to wire network (pin may touch wire midpoint)
@@ -644,7 +650,11 @@ def _connect_point(
     wire_points.add(point)
     # First try exact endpoint match
     for wp in wire_points:
-        if wp != point and abs(wp[0] - point[0]) < 0.01 and abs(wp[1] - point[1]) < 0.01:
+        if (
+            wp != point
+            and abs(wp[0] - point[0]) < 0.01
+            and abs(wp[1] - point[1]) < 0.01
+        ):
             uf.union(point, wp)
             return
     # Then check if point lies on a wire segment

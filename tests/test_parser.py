@@ -42,7 +42,13 @@ def test_parse_dsn_string_list():
 
 
 def test_public_api_imports():
-    from phosphor_eda.dsn import ParsedDesign, SchematicPage, build_netlist, dsn_to_design, parse_dsn
+    from phosphor_eda.dsn import (
+        ParsedDesign,
+        SchematicPage,
+        build_netlist,
+        dsn_to_design,
+        parse_dsn,
+    )
 
     assert callable(parse_dsn)
     assert callable(build_netlist)

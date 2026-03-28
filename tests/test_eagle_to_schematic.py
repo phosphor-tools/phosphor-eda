@@ -3,7 +3,6 @@
 from pathlib import Path
 
 import pytest
-
 from phosphor_eda.validate import Severity, validate_design
 
 BME280_SCH = Path("eagle-test/SparkFun_BME280_Breakout.sch")
@@ -66,8 +65,12 @@ def test_bme280_has_pins(design):
 def test_power_symbols_filtered(design):
     """GND and SUPPLY power symbols should not appear as components."""
     for c in design.components:
-        assert not c.reference.startswith("GND"), f"power symbol {c.reference} in components"
-        assert not c.reference.startswith("SUPPLY"), f"supply symbol {c.reference} in components"
+        assert not c.reference.startswith("GND"), (
+            f"power symbol {c.reference} in components"
+        )
+        assert not c.reference.startswith("SUPPLY"), (
+            f"supply symbol {c.reference} in components"
+        )
 
 
 def test_component_value_metadata(design):

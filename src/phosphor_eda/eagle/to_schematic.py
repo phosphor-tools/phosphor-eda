@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
+from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET
 
 from phosphor_eda.schematic import Component, Design, Net, Page, Pin, merge_pages
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Pin direction mapping (Eagle direction attr -> canonical electrical type)
@@ -297,9 +300,7 @@ def _build_pages(
                     existing_designators.add(designator)
 
                     # Resolve net from pinref
-                    net_name = pinref_map.get(
-                        (part_name, gate_name, pin_def.name)
-                    )
+                    net_name = pinref_map.get((part_name, gate_name, pin_def.name))
                     net: Net | None = None
                     if net_name:
                         if net_name not in nets_by_name:

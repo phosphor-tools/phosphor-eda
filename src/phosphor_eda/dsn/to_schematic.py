@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-from phosphor_eda.models import ParsedDesign as RawDesign
+from typing import TYPE_CHECKING
+
 from phosphor_eda.schematic import Component, Design, Net, Page, Pin, merge_pages
 from phosphor_eda.text import strip_overline
+
+if TYPE_CHECKING:
+    from phosphor_eda.models import ParsedDesign as RawDesign
 
 
 def dsn_to_design(raw: RawDesign, name: str = "") -> Design:

@@ -4,8 +4,17 @@ from phosphor_eda.schematic import Component, Design, Net, Page, Pin, Port
 
 
 def test_pin_defaults():
-    comp = Component(reference="U1", part="MCU", description="", pins=[], pages=[], metadata={})
-    pin = Pin(designator="1", name="VCC", component=comp, net=None, no_connect=False, metadata={})
+    comp = Component(
+        reference="U1", part="MCU", description="", pins=[], pages=[], metadata={}
+    )
+    pin = Pin(
+        designator="1",
+        name="VCC",
+        component=comp,
+        net=None,
+        no_connect=False,
+        metadata={},
+    )
     assert pin.designator == "1"
     assert pin.name == "VCC"
     assert pin.component is comp
@@ -14,19 +23,51 @@ def test_pin_defaults():
 
 
 def test_component_with_pins():
-    comp = Component(reference="U7", part="AD7768-1", description="ADC", pins=[], pages=[], metadata={})
-    pin = Pin(designator="10", name="SCLK", component=comp, net=None, no_connect=False, metadata={})
+    comp = Component(
+        reference="U7",
+        part="AD7768-1",
+        description="ADC",
+        pins=[],
+        pages=[],
+        metadata={},
+    )
+    pin = Pin(
+        designator="10",
+        name="SCLK",
+        component=comp,
+        net=None,
+        no_connect=False,
+        metadata={},
+    )
     comp.pins.append(pin)
     assert len(comp.pins) == 1
     assert comp.pins[0].component is comp
 
 
 def test_net_connects_pins():
-    comp_a = Component(reference="U1", part="MCU", description="", pins=[], pages=[], metadata={})
-    comp_b = Component(reference="U7", part="ADC", description="", pins=[], pages=[], metadata={})
+    comp_a = Component(
+        reference="U1", part="MCU", description="", pins=[], pages=[], metadata={}
+    )
+    comp_b = Component(
+        reference="U7", part="ADC", description="", pins=[], pages=[], metadata={}
+    )
     net = Net(name="ADC_SCLK", pins=[], bus=None, metadata={})
-    pin_a = Pin(designator="L3", name="LPSPI1_SCK", component=comp_a, net=net, no_connect=False, metadata={})
-    pin_b = Pin(designator="10", name="SCLK", component=comp_b, net=net, no_connect=False, metadata={})
+    pin_a = Pin(
+        designator="L3",
+        name="LPSPI1_SCK",
+        component=comp_a,
+        net=net,
+        no_connect=False,
+        metadata={},
+    )
+    pin_b = Pin(
+        designator="10",
+        name="SCLK",
+        component=comp_b,
+        net=net,
+        no_connect=False,
+        metadata={},
+    )
     net.pins.extend([pin_a, pin_b])
     assert len(net.pins) == 2
     assert net.pins[0].component.reference == "U1"
@@ -54,8 +95,17 @@ def test_port_bridges_net():
 
 
 def test_pin_no_connect():
-    comp = Component(reference="U7", part="ADC", description="", pins=[], pages=[], metadata={})
-    pin = Pin(designator="26", name="AIN-", component=comp, net=None, no_connect=True, metadata={})
+    comp = Component(
+        reference="U7", part="ADC", description="", pins=[], pages=[], metadata={}
+    )
+    pin = Pin(
+        designator="26",
+        name="AIN-",
+        component=comp,
+        net=None,
+        no_connect=True,
+        metadata={},
+    )
     assert pin.no_connect is True
     assert pin.net is None
 

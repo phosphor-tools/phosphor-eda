@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from phosphor_eda.altium.sheet_builder import (
     build_page,
     collect_harness_port_nets,
@@ -10,8 +12,10 @@ from phosphor_eda.altium.sheet_builder import (
     load_sheet,
     resolve_nets,
 )
-from phosphor_eda.models import ParsedDesign as RawDesign
 from phosphor_eda.schematic import Design, merge_pages
+
+if TYPE_CHECKING:
+    from phosphor_eda.models import ParsedDesign as RawDesign
 
 
 def altium_to_design(raw: RawDesign, name: str = "") -> Design:
@@ -34,12 +38,17 @@ def altium_to_design(raw: RawDesign, name: str = "") -> Design:
 
     for page_name, sheet in sheets.items():
         harness_entry_coords = compute_harness_entry_coords(sheet)
-        coord_to_net, nc_wires = resolve_nets(sheet, extra_named_coords=harness_entry_coords)
+        coord_to_net, nc_wires = resolve_nets(
+            sheet, extra_named_coords=harness_entry_coords
+        )
         coord_to_nets[page_name] = coord_to_net
         nc_coords_by_page[page_name] = nc_wires
         collect_harness_type_members(sheet, harness_members_by_type)
         collect_harness_port_nets(
-            sheet, coord_to_net, harness_port_nets, page_name,
+            sheet,
+            coord_to_net,
+            harness_port_nets,
+            page_name,
         )
 
     # Phase 3: Build domain model pages
@@ -50,8 +59,10 @@ def altium_to_design(raw: RawDesign, name: str = "") -> Design:
         sheet = sheets[raw_page.name]
         coord_to_net = coord_to_nets[raw_page.name]
         page = build_page(
-            sheet, coord_to_net,
-            harness_port_nets, harness_members_by_type,
+            sheet,
+            coord_to_net,
+            harness_port_nets,
+            harness_members_by_type,
             raw_page=raw_page,
             nc_wire_coords=nc_coords_by_page.get(raw_page.name),
         )
@@ -60,8 +71,13 @@ def altium_to_design(raw: RawDesign, name: str = "") -> Design:
     # Phase 4: Hoist common page metadata to design level
     design_meta: dict[str, str] = {}
     _DESIGN_LEVEL_KEYS = (
-        "Engineer", "Organization", "Address1", "Address2",
-        "Address3", "Address4", "SheetTotal",
+        "Engineer",
+        "Organization",
+        "Address1",
+        "Address2",
+        "Address3",
+        "Address4",
+        "SheetTotal",
     )
     for key in _DESIGN_LEVEL_KEYS:
         for page in pages:

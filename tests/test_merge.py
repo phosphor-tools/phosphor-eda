@@ -54,8 +54,12 @@ def test_merge_components_by_reference():
     page_b = Page(name="IO")
     net_a = Net(name="GND")
     net_b = Net(name="VCC")
-    comp_a = Component(reference="U1", part="MCU", description="Processor", pages=[page_a])
-    comp_b = Component(reference="U1", part="MCU", description="Processor", pages=[page_b])
+    comp_a = Component(
+        reference="U1", part="MCU", description="Processor", pages=[page_a]
+    )
+    comp_b = Component(
+        reference="U1", part="MCU", description="Processor", pages=[page_b]
+    )
     _make_pin(comp_a, "A1", "GND", net_a)
     _make_pin(comp_b, "B1", "VCC", net_b)
     page_a.components = [comp_a]
@@ -172,12 +176,13 @@ def test_unify_nets_no_duplicate_pins():
 
     # Manually merge — should not duplicate pin
     from phosphor_eda.schematic import _unify_nets
+
     merged_nets = {"sig": net_a, "sig_alias": net_b}
     _unify_nets(merged_nets, net_a, net_b)
 
     pin_ids = [id(p) for p in net_a.pins]
     assert len(pin_ids) == len(set(pin_ids)), (
-        f"net_a.pins has duplicate Pin objects after _unify_nets"
+        "net_a.pins has duplicate Pin objects after _unify_nets"
     )
 
 

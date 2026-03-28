@@ -13,9 +13,9 @@ from pathlib import Path
 import olefile
 
 from phosphor_eda.dsn.binary_reader import (
-    BinaryReader,
     PAGE_SETTINGS_SIZE,
     PREAMBLE,
+    BinaryReader,
 )
 from phosphor_eda.dsn.models import (
     GraphicInst,
@@ -26,7 +26,6 @@ from phosphor_eda.dsn.models import (
     PlacedInstance,
     SchematicPage,
 )
-
 
 # --- Structure parsers ---
 
@@ -207,8 +206,16 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
         # Resolve name-value pairs from the string list
         props = {}
         for name_idx, value_idx in pairs:
-            name = string_list[name_idx] if 0 <= name_idx < len(string_list) else f"idx:{name_idx}"
-            value = string_list[value_idx] if 0 <= value_idx < len(string_list) else f"idx:{value_idx}"
+            name = (
+                string_list[name_idx]
+                if 0 <= name_idx < len(string_list)
+                else f"idx:{name_idx}"
+            )
+            value = (
+                string_list[value_idx]
+                if 0 <= value_idx < len(string_list)
+                else f"idx:{value_idx}"
+            )
             props[name] = value
         inst._props = props
 
@@ -281,8 +288,16 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
         # Resolve name-value pairs from global's own prefix
         global_props = {}
         for name_idx, value_idx in pairs:
-            name = string_list[name_idx] if 0 <= name_idx < len(string_list) else f"idx:{name_idx}"
-            value = string_list[value_idx] if 0 <= value_idx < len(string_list) else f"idx:{value_idx}"
+            name = (
+                string_list[name_idx]
+                if 0 <= name_idx < len(string_list)
+                else f"idx:{name_idx}"
+            )
+            value = (
+                string_list[value_idx]
+                if 0 <= value_idx < len(string_list)
+                else f"idx:{value_idx}"
+            )
             global_props[name] = value
 
         try:

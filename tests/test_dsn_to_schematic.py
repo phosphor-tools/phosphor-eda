@@ -3,7 +3,6 @@
 from pathlib import Path
 
 import pytest
-
 from phosphor_eda.dsn.parser import parse_dsn
 from phosphor_eda.dsn.to_schematic import dsn_to_design
 

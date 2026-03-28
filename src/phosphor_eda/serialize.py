@@ -7,10 +7,14 @@ design summary, component-centric view, and net-centric view.
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-from phosphor_eda.schematic import Component, Design, Net, Page, Pin
 from phosphor_eda.validate import Severity, validate_design
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from phosphor_eda.schematic import Component, Design, Net, Page, Pin
 
 _MAJOR_IC_PIN_THRESHOLD = 4
 
@@ -18,14 +22,22 @@ _POWER_NET_RE = re.compile(r"^P?\d+V\d*$")
 
 _PASSIVE_PREFIXES = ("R", "C", "L", "D", "FB", "F", "Y")
 
-_IC_METADATA_ALLOWLIST = frozenset({
-    "mfr", "mfr_pn", "mfr_abbrev", "fp_disp_name",
-    "value", "temp_min", "temp_max",
-})
+_IC_METADATA_ALLOWLIST = frozenset(
+    {
+        "mfr",
+        "mfr_pn",
+        "mfr_abbrev",
+        "fp_disp_name",
+        "value",
+        "temp_min",
+        "temp_max",
+    }
+)
 
 
 def _ref_prefix(reference: str) -> str:
-    """Extract alpha prefix from a reference designator ("R10" -> "R", "FB1" -> "FB")."""
+    """Extract alpha prefix from a reference designator
+    ("R10" -> "R", "FB1" -> "FB")."""
     prefix = ""
     for ch in reference:
         if ch.isalpha():
@@ -65,9 +77,7 @@ def _is_power_net(name: str, net: Net | None = None) -> bool:
         return True
     if _POWER_NET_RE.match(upper):
         return True
-    if net is not None and net.metadata.get("ClassName") == "PWR":
-        return True
-    return False
+    return bool(net is not None and net.metadata.get("ClassName") == "PWR")
 
 
 def _format_summary(design: Design) -> list[str]:
@@ -75,7 +85,9 @@ def _format_summary(design: Design) -> list[str]:
     n_comp = len(design.components)
     n_nets = len(design.nets)
     n_pages = len(design.pages)
-    lines.append(f"Design: {design.name} | {n_pages} pages | {n_comp} components | {n_nets} nets")
+    lines.append(
+        f"Design: {design.name} | {n_pages} pages | {n_comp} components | {n_nets} nets"
+    )
 
     meta_parts = []
     for key in ("Author", "Engineer", "Revision", "Date", "Organization"):
@@ -124,7 +136,10 @@ def _format_components(design: Design) -> list[str]:
     lines = ["=== COMPONENTS ===", ""]
     for comp in sorted(design.components, key=lambda c: c.reference):
         page_names = ", ".join(p.name for p in comp.pages)
-        lines.append(f"COMPONENT: {comp.reference} | {comp.part} | {comp.description} | Pages: {page_names}")
+        lines.append(
+            f"COMPONENT: {comp.reference} | {comp.part}"
+            f" | {comp.description} | Pages: {page_names}"
+        )
 
         for key, value in sorted(_filter_metadata(comp).items()):
             lines.append(f"  {key}: {value}")
@@ -135,7 +150,8 @@ def _format_components(design: Design) -> list[str]:
             # Filter out default/noise metadata values:
             # - electrical=passive is the default for 88%+ of pins
             filtered = {
-                k: v for k, v in pin.metadata.items()
+                k: v
+                for k, v in pin.metadata.items()
                 if not (k == "electrical" and v == "passive")
             }
             if filtered:
@@ -146,9 +162,15 @@ def _format_components(design: Design) -> list[str]:
             dest_str = _trace_destinations(pin, comp)
 
             if pin.name:
-                lines.append(f"  Pin {pin.designator:<5s}  {pin.name:<15s} -> {net_str}{meta_str}{dest_str}")
+                lines.append(
+                    f"  Pin {pin.designator:<5s}  {pin.name:<15s}"
+                    f" -> {net_str}{meta_str}{dest_str}"
+                )
             else:
-                lines.append(f"  Pin {pin.designator:<5s}  {'':<15s} -> {net_str}{meta_str}{dest_str}")
+                lines.append(
+                    f"  Pin {pin.designator:<5s}  {'':<15s}"
+                    f" -> {net_str}{meta_str}{dest_str}"
+                )
 
         lines.append("")
 
@@ -170,7 +192,9 @@ def _format_nets(design: Design) -> list[str]:
         for key, value in sorted(net.metadata.items()):
             lines.append(f"  [{key}: {value}]")
 
-        for pin in sorted(net.pins, key=lambda p: (p.component.reference, p.designator)):
+        for pin in sorted(
+            net.pins, key=lambda p: (p.component.reference, p.designator)
+        ):
             ref_pin = f"{pin.component.reference}.{pin.designator}"
             if pin.name:
                 lines.append(f"  {ref_pin:<10s} {pin.name}")
@@ -250,7 +274,7 @@ def filter_nets(
     trace: bool = False,
 ) -> list[Net]:
     """Filter nets from a design.  All criteria are AND-composed."""
-    from phosphor_eda.trace import is_two_pin_passive, trace_from_net
+    from phosphor_eda.trace import trace_from_net
 
     result = list(design.nets)
 
@@ -301,10 +325,7 @@ def filter_components(
 
     if pages:
         page_set = set(pages)
-        result = [
-            c for c in result
-            if page_set & {p.name for p in c.pages}
-        ]
+        result = [c for c in result if page_set & {p.name for p in c.pages}]
 
     if prefixes:
         prefix_set = set(prefixes)
@@ -313,7 +334,9 @@ def filter_components(
     if passive is True:
         result = [c for c in result if _ref_prefix(c.reference) in _PASSIVE_PREFIXES]
     elif passive is False:
-        result = [c for c in result if _ref_prefix(c.reference) not in _PASSIVE_PREFIXES]
+        result = [
+            c for c in result if _ref_prefix(c.reference) not in _PASSIVE_PREFIXES
+        ]
 
     if min_pins is not None:
         result = [c for c in result if len(c.pins) >= min_pins]
@@ -337,17 +360,11 @@ def filter_pages(
 
     if nets:
         net_set = set(nets)
-        result = [
-            p for p in result
-            if net_set & {n.name for n in p.nets}
-        ]
+        result = [p for p in result if net_set & {n.name for n in p.nets}]
 
     if components:
         comp_set = set(components)
-        result = [
-            p for p in result
-            if comp_set & {c.reference for c in p.components}
-        ]
+        result = [p for p in result if comp_set & {c.reference for c in p.components}]
 
     return result
 
@@ -518,10 +535,7 @@ def format_page_table(
 ) -> str:
     """Format a table of pages: PAGE | COMPONENTS | NETS."""
     source = pages if pages is not None else design.pages
-    rows = [
-        (p.name, str(len(p.components)), str(len(p.nets)))
-        for p in source
-    ]
+    rows = [(p.name, str(len(p.components)), str(len(p.nets))) for p in source]
     if not rows:
         return "No pages found."
     return _tabulate(("PAGE", "COMPONENTS", "NETS"), rows)
@@ -538,7 +552,10 @@ def format_component_detail(design: Design, ref: str) -> str:
         raise ValueError(f"Component '{ref}' not found in design.")
 
     page_names = ", ".join(p.name for p in comp.pages)
-    lines = [f"COMPONENT: {comp.reference} | {comp.part} | {comp.description} | Pages: {page_names}"]
+    lines = [
+        f"COMPONENT: {comp.reference} | {comp.part}"
+        f" | {comp.description} | Pages: {page_names}"
+    ]
 
     for key, value in sorted(comp.metadata.items()):
         lines.append(f"  {key}: {value}")
@@ -547,9 +564,13 @@ def format_component_detail(design: Design, ref: str) -> str:
         net_str = _pin_net_str(pin)
         dest_str = _trace_destinations(pin, comp)
         if pin.name:
-            lines.append(f"  Pin {pin.designator:<5s}  {pin.name:<15s} -> {net_str}{dest_str}")
+            lines.append(
+                f"  Pin {pin.designator:<5s}  {pin.name:<15s} -> {net_str}{dest_str}"
+            )
         else:
-            lines.append(f"  Pin {pin.designator:<5s}  {'':<15s} -> {net_str}{dest_str}")
+            lines.append(
+                f"  Pin {pin.designator:<5s}  {'':<15s} -> {net_str}{dest_str}"
+            )
 
     return "\n".join(lines)
 

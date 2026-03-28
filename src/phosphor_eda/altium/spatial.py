@@ -10,10 +10,12 @@ Provides efficient coordinate-based lookups for typed records:
 from __future__ import annotations
 
 import bisect
-from collections.abc import Iterable
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
-from phosphor_eda.altium.records import WireRec
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from phosphor_eda.altium.records import WireRec
 
 T = TypeVar("T")
 
@@ -49,6 +51,7 @@ class UnionFind(dict[T, T]):
 # ---------------------------------------------------------------------------
 # Segment stored in a WireIndex row/column bucket
 # ---------------------------------------------------------------------------
+
 
 class _Segment:
     """A wire segment projected onto one axis for binary search."""
@@ -97,7 +100,9 @@ class WireIndex:
             segs.sort(key=lambda s: s.lo)
 
     def segments_touching(
-        self, x: int, y: int,
+        self,
+        x: int,
+        y: int,
     ) -> list[tuple[WireRec, int]]:
         """Find all wire segments that contain the point (x, y).
 
@@ -130,7 +135,12 @@ class WireIndex:
 
 
 def point_on_segment(
-    px: int, py: int, x1: int, y1: int, x2: int, y2: int,
+    px: int,
+    py: int,
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
 ) -> bool:
     """Check if point (px,py) lies on the axis-aligned segment (x1,y1)-(x2,y2)."""
     if y1 == y2 == py:

@@ -3,7 +3,6 @@
 from pathlib import Path
 
 import pytest
-
 from phosphor_eda.kicad import kicad_to_design
 from phosphor_eda.validate import Severity, validate_design
 
