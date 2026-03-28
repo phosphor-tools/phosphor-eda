@@ -172,12 +172,13 @@ def test_unify_nets_no_duplicate_pins():
 
     # Manually merge — should not duplicate pin
     from phosphor_eda.schematic import _unify_nets
+
     merged_nets = {"sig": net_a, "sig_alias": net_b}
     _unify_nets(merged_nets, net_a, net_b)
 
     pin_ids = [id(p) for p in net_a.pins]
     assert len(pin_ids) == len(set(pin_ids)), (
-        f"net_a.pins has duplicate Pin objects after _unify_nets"
+        "net_a.pins has duplicate Pin objects after _unify_nets"
     )
 
 

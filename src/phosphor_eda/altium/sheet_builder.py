@@ -10,12 +10,12 @@ Replaces the raw-dict iteration in ``netlist.py`` and the inner loop of
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from phosphor_eda.altium.record_factory import (
-    _compute_entry_coord,
+    compute_entry_coord,
     link_children,
     materialize_records,
 )
@@ -46,12 +46,14 @@ from phosphor_eda.altium.records import (
     SheetSymbolRec,
     SignalHarnessRec,
     TextFrameRec,
-    UnknownRecord,
     WireRec,
 )
 from phosphor_eda.altium.spatial import UnionFind, WireIndex, point_on_segment
 from phosphor_eda.models import SchematicPage
 from phosphor_eda.schematic import Component, Net, Page, Pin, Port
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 # Pin electrical type names (Altium Electrical field values)
 _PIN_ELECTRICAL_NAMES = {
@@ -75,17 +77,31 @@ _IO_TYPE_NAMES = {
 
 # Altium standard sheet sizes (SheetStyle → name)
 _SHEET_STYLE_NAMES = {
-    0: "A4", 1: "A3", 2: "A2", 3: "A1", 4: "A0",
-    5: "A", 6: "B", 7: "C", 8: "D", 9: "E",
-    10: "Letter", 11: "Legal", 12: "Tabloid",
-    13: "OrCAD-A", 14: "OrCAD-B", 15: "OrCAD-C",
-    16: "OrCAD-D", 17: "OrCAD-E",
+    0: "A4",
+    1: "A3",
+    2: "A2",
+    3: "A1",
+    4: "A0",
+    5: "A",
+    6: "B",
+    7: "C",
+    8: "D",
+    9: "E",
+    10: "Letter",
+    11: "Legal",
+    12: "Tabloid",
+    13: "OrCAD-A",
+    14: "OrCAD-B",
+    15: "OrCAD-C",
+    16: "OrCAD-D",
+    17: "OrCAD-E",
 }
 
 
 # ---------------------------------------------------------------------------
 # Port connection-point helper
 # ---------------------------------------------------------------------------
+
 
 def _port_wire_coord(port: PortRec, wire_index: WireIndex) -> tuple[int, int]:
     """Determine the wire-side coordinate for a port.
@@ -103,12 +119,8 @@ def _port_wire_coord(port: PortRec, wire_index: WireIndex) -> tuple[int, int]:
     if touches:
         return loc
 
-    if port.style >= 4:
-        # Vertical port — opposite end is above location
-        alt = (loc[0], loc[1] + port.width)
-    else:
-        # Horizontal port — opposite end is to the right
-        alt = (loc[0] + port.width, loc[1])
+    # Vertical: opposite end above location; horizontal: to the right
+    alt = (loc[0], loc[1] + port.width) if port.style >= 4 else (loc[0] + port.width, loc[1])
 
     touches = wire_index.segments_touching(alt[0], alt[1])
     if touches:
@@ -120,6 +132,7 @@ def _port_wire_coord(port: PortRec, wire_index: WireIndex) -> tuple[int, int]:
 # ---------------------------------------------------------------------------
 # SheetRecords container
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class SheetRecords:
@@ -293,6 +306,7 @@ class SheetRecords:
 # load_sheet
 # ---------------------------------------------------------------------------
 
+
 def load_sheet(schdoc_path: str) -> SheetRecords:
     """Parse a .SchDoc file into typed records with spatial indices."""
     raw_records = read_schematic_records(schdoc_path)
@@ -317,6 +331,7 @@ def load_sheet(schdoc_path: str) -> SheetRecords:
 # resolve_nets — wire connectivity → coord-to-net-name
 # ---------------------------------------------------------------------------
 
+
 def resolve_nets(
     sheet: SheetRecords,
     extra_named_coords: dict[tuple[int, int], str] | None = None,
@@ -337,7 +352,7 @@ def resolve_nets(
 
     for wire in sheet.wires:
         all_wire_points.update(wire.points)
-        for (p1, p2) in wire.segments:
+        for p1, p2 in wire.segments:
             uf.union(p1, p2)
 
     # --- Step 2: T-junction detection ---
@@ -392,7 +407,7 @@ def resolve_nets(
         label_groups.setdefault(label.text, []).append(lp)
 
     # Same-name net labels on the same sheet merge their groups
-    for name, points in label_groups.items():
+    for _name, points in label_groups.items():
         if len(points) > 1:
             for p in points[1:]:
                 uf.union(points[0], p)
@@ -498,6 +513,7 @@ def resolve_nets(
 # Harness helpers
 # ---------------------------------------------------------------------------
 
+
 def _parse_harness_groups(
     sheet: SheetRecords,
 ) -> list[tuple[str, str, list[tuple[str, tuple[int, int]]]]]:
@@ -520,7 +536,10 @@ def _parse_harness_groups(
     # to re-index them relative to the Additional stream.
     additional_records: list[AltiumRecord] = []
     for rec in sheet.records:
-        if isinstance(rec, (HarnessConnectorRec, HarnessEntryRec, HarnessTypeRec, SignalHarnessRec)):
+        if isinstance(
+            rec,
+            (HarnessConnectorRec, HarnessEntryRec, HarnessTypeRec, SignalHarnessRec),
+        ):
             additional_records.append(rec)
 
     for ai, rec in enumerate(additional_records):
@@ -551,12 +570,8 @@ def _parse_harness_groups(
             continue
         entry_side = conn_entries[0].side
         # Compute a representative point on the wire-side edge
-        if entry_side == 0:
-            # Entries on left → wire connects on right edge
-            wire_x = conn.location[0] + conn.x_size
-        else:
-            # Entries on right → wire connects on left edge
-            wire_x = conn.location[0]
+        # Entries on left → wire connects on right edge; otherwise left edge
+        wire_x = conn.location[0] + conn.x_size if entry_side == 0 else conn.location[0]
         # Mid-y of the connector
         wire_y = conn.location[1] - conn.y_size // 2
         wire_pt = (wire_x, wire_y)
@@ -565,8 +580,12 @@ def _parse_harness_groups(
         # Connect to any signal harness segment touching this edge
         for seg in harness_wire_segments:
             if point_on_segment(
-                wire_pt[0], wire_pt[1],
-                seg[0][0], seg[0][1], seg[1][0], seg[1][1],
+                wire_pt[0],
+                wire_pt[1],
+                seg[0][0],
+                seg[0][1],
+                seg[1][0],
+                seg[1][1],
             ):
                 uf.union(wire_pt, seg[0])
                 break
@@ -587,8 +606,12 @@ def _parse_harness_groups(
     for port in harness_ports:
         for seg in harness_wire_segments:
             if point_on_segment(
-                port.location[0], port.location[1],
-                seg[0][0], seg[0][1], seg[1][0], seg[1][1],
+                port.location[0],
+                port.location[1],
+                seg[0][0],
+                seg[0][1],
+                seg[1][0],
+                seg[1][1],
             ):
                 uf.union(port.location, seg[0])
                 break
@@ -617,7 +640,8 @@ def _parse_harness_groups(
         if not harness_type:
             continue
         port_name = port_name_for_connector.get(
-            ai, port_names_by_type.get(harness_type, harness_type),
+            ai,
+            port_names_by_type.get(harness_type, harness_type),
         )
 
         members: list[tuple[str, tuple[int, int]]] = []
@@ -625,8 +649,11 @@ def _parse_harness_groups(
             if not entry.name:
                 continue
             # Compute coord from parent connector
-            coord = _compute_entry_coord(
-                conn.location, conn.x_size, entry.side, entry.distance_from_top,
+            coord = compute_entry_coord(
+                conn.location,
+                conn.x_size,
+                entry.side,
+                entry.distance_from_top,
                 conn.y_size,
             )
             members.append((entry.name, coord))
@@ -682,6 +709,7 @@ def collect_harness_port_nets(
 # build_page — construct domain model from typed records
 # ---------------------------------------------------------------------------
 
+
 def _collect_sheet_entry_ports(
     sheet: SheetRecords,
     page: Page,
@@ -699,7 +727,8 @@ def _collect_sheet_entry_ports(
             port_meta: dict[str, str] = {}
             if entry.io_type:
                 port_meta["io_type"] = _IO_TYPE_NAMES.get(
-                    entry.io_type, str(entry.io_type),
+                    entry.io_type,
+                    str(entry.io_type),
                 )
             if entry.has_overline:
                 port_meta["active_low"] = "true"
@@ -738,7 +767,8 @@ def _collect_harness_bridge_ports(
     harness_port_nets: dict[str, list[tuple[str, dict[str, str]]]],
     harness_members_by_type: dict[str, list[str]],
 ) -> None:
-    """Create bridge ports for harness sheet entries connected by signal harness wires."""
+    """Create bridge ports for harness sheet entries connected by signal harness
+    wires."""
     # Build signal harness wire connectivity
     uf: UnionFind[tuple[int, int]] = UnionFind()
     harness_wire_segments: list[tuple[tuple[int, int], tuple[int, int]]] = []
@@ -770,8 +800,12 @@ def _collect_harness_bridge_ports(
         # Connect to signal harness wire
         for seg in harness_wire_segments:
             if point_on_segment(
-                entry.coord[0], entry.coord[1],
-                seg[0][0], seg[0][1], seg[1][0], seg[1][1],
+                entry.coord[0],
+                entry.coord[1],
+                seg[0][0],
+                seg[0][1],
+                seg[1][0],
+                seg[1][1],
             ):
                 uf.union(entry.coord, seg[0])
                 break
@@ -855,9 +889,8 @@ def _find_footprint(
         if child.record_type == RecordType.IMPLEMENTATION_LIST:
             impl_list_key = child.index - 1
             for impl_child in children.get(impl_list_key, []):
-                if isinstance(impl_child, ImplementationRec):
-                    if impl_child.model_name:
-                        return impl_child.model_name
+                if isinstance(impl_child, ImplementationRec) and impl_child.model_name:
+                    return impl_child.model_name
     return ""
 
 
@@ -1004,10 +1037,13 @@ def build_page(
             comp_owner_idx: int | None = None
             inst_loc = (raw_inst.loc_x, raw_inst.loc_y)
             for idx, ref_text in designator_by_owner.items():
-                if ref_text == raw_inst.reference and idx in comp_record_keys:
-                    if comp_record_keys[idx].location == inst_loc:
-                        comp_owner_idx = idx
-                        break
+                if (
+                    ref_text == raw_inst.reference
+                    and idx in comp_record_keys
+                    and comp_record_keys[idx].location == inst_loc
+                ):
+                    comp_owner_idx = idx
+                    break
             # Fallback: first reference match (single-instance case)
             if comp_owner_idx is None:
                 for idx, ref_text in designator_by_owner.items():
@@ -1056,10 +1092,10 @@ def build_page(
             # PartCount=2 means 1 part (every simple passive); true
             # multi-part components (e.g. dual opamp, MCU sections) have
             # PartCount > 2.
-            is_multipart = (
-                comp_owner_idx is not None
-                and comp_record_keys[comp_owner_idx].part_count > 2
+            comp_rec_for_pins: ComponentRec | None = (
+                comp_record_keys.get(comp_owner_idx) if comp_owner_idx is not None else None
             )
+            is_multipart = comp_rec_for_pins is not None and comp_rec_for_pins.part_count > 2
             for raw_pin in raw_inst.pin_connections:
                 coord = (raw_pin.pin_x, raw_pin.pin_y)
                 net_name = coord_to_net_name.get(coord)
@@ -1076,12 +1112,16 @@ def build_page(
                     # For multi-part components, skip pins belonging to
                     # other parts.  owner_part_id==0 means shared (e.g.
                     # power pins), which we keep on every page.
-                    if is_multipart and prec is not None:
-                        if (
+                    if (
+                        is_multipart
+                        and prec is not None
+                        and comp_rec_for_pins is not None
+                        and (
                             prec.owner_part_id != 0
-                            and prec.owner_part_id != comp_rec.current_part_id
-                        ):
-                            continue
+                            and prec.owner_part_id != comp_rec_for_pins.current_part_id
+                        )
+                    ):
+                        continue
 
                     # If we have no PinRec for a multi-part component and
                     # the pin has no net connection, it's a ghost from
@@ -1092,7 +1132,8 @@ def build_page(
                     if prec is not None:
                         pin_name = prec.name
                         pin_meta["electrical"] = _PIN_ELECTRICAL_NAMES.get(
-                            prec.electrical, str(prec.electrical),
+                            prec.electrical,
+                            str(prec.electrical),
                         )
                         if prec.has_overline:
                             pin_meta["active_low"] = "true"
@@ -1126,7 +1167,8 @@ def build_page(
             port_meta: dict[str, str] = {}
             if port_rec.io_type:
                 port_meta["io_type"] = _IO_TYPE_NAMES.get(
-                    port_rec.io_type, str(port_rec.io_type),
+                    port_rec.io_type,
+                    str(port_rec.io_type),
                 )
             if port_rec.has_overline:
                 port_meta["active_low"] = "true"
@@ -1147,8 +1189,11 @@ def build_page(
 
     # Harness bridge ports on parent pages
     _collect_harness_bridge_ports(
-        sheet, page, nets_by_name,
-        harness_port_nets, harness_members_by_type,
+        sheet,
+        page,
+        nets_by_name,
+        harness_port_nets,
+        harness_members_by_type,
     )
 
     return page

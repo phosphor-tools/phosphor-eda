@@ -1,11 +1,8 @@
 """Tests for signal path tracing through 2-pin passives."""
 
 import pytest
-
 from phosphor_eda.schematic import Component, Design, Net, Page, Pin
 from phosphor_eda.trace import (
-    ConnectionPath,
-    TraceResult,
     find_paths,
     is_two_pin_passive,
     trace_from_net,
@@ -33,7 +30,7 @@ def _trace_design() -> Design:
         U1.1 --[SIG_A]-- R1.1  R1.2 --[SIG_B]-- U2.1    (series R1)
         SIG_A also has R2.1, R2.2 --[P3V3]               (pull-up R2)
         P3V3 has C1.1, C1.2 --[GND]                      (decoupling C1)
-        U1.2 --[SIG_C]-- R3.1  R3.2 --[SIG_D]-- FB1.1  FB1.2 --[SIG_E]-- U3.1  (multi-hop)
+        U1.2 --[SIG_C]-- R3.1  R3.2 --[SIG_D]-- FB1.1  FB1.2 --[SIG_E]-- U3.1
         U1.3 --[GND] (power pin, should be skipped)
     """
     page = Page(name="Main")

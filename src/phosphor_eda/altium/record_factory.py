@@ -10,8 +10,6 @@ Coordinate normalization happens here: fractional fields like
 
 from __future__ import annotations
 
-from phosphor_eda.text import strip_overline as strip_overline  # re-export
-
 from phosphor_eda.altium.records import (
     AltiumRecord,
     BlanketRec,
@@ -42,6 +40,7 @@ from phosphor_eda.altium.records import (
     UnknownRecord,
     WireRec,
 )
+from phosphor_eda.text import strip_overline as strip_overline  # re-export
 
 # DistanceFromTop fractional properties use 1/100000 resolution.
 _FRAC_DENOM = 100_000
@@ -78,7 +77,9 @@ def _parse_points(rec: dict[str, str]) -> list[tuple[int, int]]:
 
 
 def _compute_pin_tip(
-    location: tuple[int, int], pin_length: int, orientation: int,
+    location: tuple[int, int],
+    pin_length: int,
+    orientation: int,
 ) -> tuple[int, int]:
     """Compute pin wire-connection point from body origin + length + direction."""
     ox, oy = location
@@ -101,7 +102,10 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
         rid = int(rid_str)
     except (ValueError, TypeError):
         return UnknownRecord(
-            record_type=RecordType.HEADER, index=i, owner_index=owner, raw=rec,
+            record_type=RecordType.HEADER,
+            index=i,
+            owner_index=owner,
+            raw=rec,
         )
 
     # Try to map to RecordType enum; fall back to UnknownRecord
@@ -109,7 +113,10 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
         rt = RecordType(rid)
     except ValueError:
         return UnknownRecord(
-            record_type=RecordType.HEADER, index=i, owner_index=owner, raw=rec,
+            record_type=RecordType.HEADER,
+            index=i,
+            owner_index=owner,
+            raw=rec,
         )
 
     if rt == RecordType.HEADER:
@@ -119,7 +126,9 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
         loc = (_int(rec, "location.x"), _int(rec, "location.y"))
         desc = rec.get("%utf8%componentdescription") or rec.get("componentdescription", "")
         return ComponentRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             location=loc,
             lib_reference=rec.get("libreference", ""),
             unique_id=rec.get("uniqueid", ""),
@@ -141,7 +150,9 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
         tip = _compute_pin_tip(loc, pin_length, orientation)
         pin_name, pin_ol = strip_overline(rec.get("name", ""))
         return PinRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             location=loc,
             pin_length=pin_length,
             orientation=orientation,
@@ -158,7 +169,9 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
     if rt == RecordType.SHEET_SYMBOL:
         loc = (_int(rec, "location.x"), _int(rec, "location.y"))
         return SheetSymbolRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             location=loc,
             x_size=_int(rec, "xsize"),
             y_size=_int(rec, "ysize"),
@@ -167,7 +180,9 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
     if rt == RecordType.SHEET_ENTRY:
         entry_name, entry_ol = strip_overline(rec.get("name", ""))
         return SheetEntryRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             name=entry_name,
             has_overline=entry_ol,
             side=_int(rec, "side"),
@@ -181,7 +196,9 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
         loc = (_int(rec, "location.x"), _int(rec, "location.y"))
         pp_text, pp_ol = strip_overline(rec.get("text", ""))
         return PowerPortRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             location=loc,
             text=pp_text,
             has_overline=pp_ol,
@@ -194,7 +211,9 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
         loc = (_int(rec, "location.x"), _int(rec, "location.y"))
         port_name, port_ol = strip_overline(rec.get("name", ""))
         return PortRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             location=loc,
             name=port_name,
             has_overline=port_ol,
@@ -209,7 +228,9 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
     if rt == RecordType.NO_ERC:
         loc = (_int(rec, "location.x"), _int(rec, "location.y"))
         return NoConnectRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             location=loc,
         )
 
@@ -217,7 +238,9 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
         loc = (_int(rec, "location.x"), _int(rec, "location.y"))
         nl_text, nl_ol = strip_overline(rec.get("text", ""))
         return NetLabelRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             location=loc,
             text=nl_text,
             has_overline=nl_ol,
@@ -225,27 +248,35 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
 
     if rt == RecordType.WIRE:
         return WireRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             points=_parse_points(rec),
         )
 
     if rt == RecordType.JUNCTION:
         loc = (_int(rec, "location.x"), _int(rec, "location.y"))
         return JunctionRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             location=loc,
         )
 
     if rt == RecordType.FILE_NAME:
         return FileNameRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             text=rec.get("text", ""),
         )
 
     if rt == RecordType.DESIGNATOR:
         desig_text, desig_ol = strip_overline(rec.get("text", ""))
         return DesignatorRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             text=desig_text,
             has_overline=desig_ol,
         )
@@ -254,7 +285,9 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
         loc = (_int(rec, "location.x"), _int(rec, "location.y"))
         lbl_text, lbl_ol = strip_overline(rec.get("text", ""))
         return LabelRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             location=loc,
             text=lbl_text,
             has_overline=lbl_ol,
@@ -265,7 +298,9 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
         loc = (_int(rec, "location.x"), _int(rec, "location.y"))
         corner = (_int(rec, "corner.x"), _int(rec, "corner.y"))
         return TextFrameRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             location=loc,
             corner=corner,
             text=rec.get("text", ""),
@@ -273,7 +308,9 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
 
     if rt == RecordType.SHEET:
         return SheetRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             sheet_style=_int(rec, "sheetstyle"),
             use_custom_sheet=rec.get("usecustomsheet", "").upper() == "T",
             custom_x=_int(rec, "customx"),
@@ -284,7 +321,9 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
     if rt == RecordType.SHEET_NAME:
         sn_text, sn_ol = strip_overline(rec.get("text", ""))
         return SheetNameRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             text=sn_text,
             has_overline=sn_ol,
         )
@@ -293,7 +332,9 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
         param_name, ol_name = strip_overline(rec.get("name", ""))
         param_text, ol_text = strip_overline(rec.get("text", ""))
         return ParameterRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             name=param_name,
             text=param_text,
             has_overline=ol_name or ol_text,
@@ -303,7 +344,9 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
     if rt == RecordType.PARAMETER_SET:
         loc = (_int(rec, "location.x"), _int(rec, "location.y"))
         return ParameterSetRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             location=loc,
             name=rec.get("name", ""),
             style=_int(rec, "style"),
@@ -312,7 +355,9 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
 
     if rt == RecordType.IMPLEMENTATION:
         return ImplementationRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             model_name=rec.get("modelname", ""),
             model_type=rec.get("modeltype", ""),
         )
@@ -321,7 +366,9 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
         loc = (_int(rec, "location.x"), _int(rec, "location.y"))
         corner = (_int(rec, "corner.x"), _int(rec, "corner.y"))
         return BlanketRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             location=loc,
             corner=corner,
         )
@@ -329,7 +376,9 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
     if rt == RecordType.HARNESS_CONNECTOR:
         loc = (_int(rec, "location.x"), _int(rec, "location.y"))
         return HarnessConnectorRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             location=loc,
             x_size=_int(rec, "xsize"),
             y_size=_int(rec, "ysize"),
@@ -341,7 +390,9 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
         harness_owner = _int(rec, "ownerindex", 0)
         he_name, he_ol = strip_overline(rec.get("name", ""))
         return HarnessEntryRec(
-            record_type=rt, index=i, owner_index=harness_owner,
+            record_type=rt,
+            index=i,
+            owner_index=harness_owner,
             name=he_name,
             has_overline=he_ol,
             side=_int(rec, "side"),
@@ -352,19 +403,26 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
     if rt == RecordType.HARNESS_TYPE:
         harness_owner = _int(rec, "ownerindex", 0)
         return HarnessTypeRec(
-            record_type=rt, index=i, owner_index=harness_owner,
+            record_type=rt,
+            index=i,
+            owner_index=harness_owner,
             text=rec.get("text", ""),
         )
 
     if rt == RecordType.SIGNAL_HARNESS:
         return SignalHarnessRec(
-            record_type=rt, index=i, owner_index=owner,
+            record_type=rt,
+            index=i,
+            owner_index=owner,
             points=_parse_points(rec),
         )
 
     # All other record types
     return UnknownRecord(
-        record_type=rt, index=i, owner_index=owner, raw=rec,
+        record_type=rt,
+        index=i,
+        owner_index=owner,
+        raw=rec,
     )
 
 
@@ -379,7 +437,7 @@ def materialize_records(raw_records: list[dict[str, str]]) -> list[AltiumRecord]
     return [_materialize_one(i, rec) for i, rec in enumerate(raw_records)]
 
 
-def _compute_entry_coord(
+def compute_entry_coord(
     parent_location: tuple[int, int],
     parent_x_size: int,
     side: int,
@@ -440,18 +498,22 @@ def link_children(
         if isinstance(rec, SheetEntryRec) and rec.owner_index >= 0:
             parent = by_key.get(rec.owner_index)
             if isinstance(parent, SheetSymbolRec):
-                rec.coord = _compute_entry_coord(
-                    parent.location, parent.x_size,
-                    rec.side, rec.distance_from_top,
+                rec.coord = compute_entry_coord(
+                    parent.location,
+                    parent.x_size,
+                    rec.side,
+                    rec.distance_from_top,
                     parent.y_size,
                 )
 
         elif isinstance(rec, HarnessEntryRec) and rec.owner_index >= 0:
             parent = by_key.get(rec.owner_index)
             if isinstance(parent, HarnessConnectorRec):
-                rec.coord = _compute_entry_coord(
-                    parent.location, parent.x_size,
-                    rec.side, rec.distance_from_top,
+                rec.coord = compute_entry_coord(
+                    parent.location,
+                    parent.x_size,
+                    rec.side,
+                    rec.distance_from_top,
                     parent.y_size,
                 )
 

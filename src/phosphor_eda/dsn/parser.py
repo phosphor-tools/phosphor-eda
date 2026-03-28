@@ -13,9 +13,9 @@ from pathlib import Path
 import olefile
 
 from phosphor_eda.dsn.binary_reader import (
-    BinaryReader,
     PAGE_SETTINGS_SIZE,
     PREAMBLE,
+    BinaryReader,
 )
 from phosphor_eda.dsn.models import (
     GraphicInst,
@@ -26,7 +26,6 @@ from phosphor_eda.dsn.models import (
     PlacedInstance,
     SchematicPage,
 )
-
 
 # --- Structure parsers ---
 
@@ -110,7 +109,7 @@ def parse_library(data: bytes) -> tuple[list[str], list[str]]:
     r.skip(4)  # unknown_2_1
 
     # Part field mapping (8 strings)
-    part_fields = []
+    part_fields: list[str] = []
     for _ in range(8):
         part_fields.append(r.read_string_len_zero())
 
@@ -125,7 +124,7 @@ def parse_library(data: bytes) -> tuple[list[str], list[str]]:
         r.pos -= 4
         str_lst_len = r.read_uint16()
 
-    string_list = []
+    string_list: list[str] = []
     for _ in range(str_lst_len):
         string_list.append(r.read_string_len_zero())
 
@@ -176,7 +175,7 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
     # Map: coordinate (x,y) -> set of net_ids
     wire_net_map: dict[tuple[int, int], set[int]] = {}
     for _ in range(num_wires):
-        type_id, end_offset, pairs = r.read_prefix_chain()
+        _type_id, end_offset, pairs = r.read_prefix_chain()
         r.try_read_preamble()
 
         try:
@@ -199,18 +198,20 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
     # Placed instances — parse body to extract reference designator
     num_instances = r.read_uint16()
     for _ in range(num_instances):
-        type_id, end_offset, pairs = r.read_prefix_chain()
+        _type_id, end_offset, pairs = r.read_prefix_chain()
         r.try_read_preamble()
 
         inst = PlacedInstance()
 
         # Resolve name-value pairs from the string list
-        props = {}
+        props: dict[str, str] = {}
         for name_idx, value_idx in pairs:
             name = string_list[name_idx] if 0 <= name_idx < len(string_list) else f"idx:{name_idx}"
-            value = string_list[value_idx] if 0 <= value_idx < len(string_list) else f"idx:{value_idx}"
+            value = (
+                string_list[value_idx] if 0 <= value_idx < len(string_list) else f"idx:{value_idx}"
+            )
             props[name] = value
-        inst._props = props
+        inst.props = props
 
         # Parse body to get package name, dbId, reference, and pin connections
         try:
@@ -241,7 +242,7 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
             # T0x10 structures = pin instances with net assignments
             num_t0x10 = r.read_uint16()
             for _ in range(num_t0x10):
-                t_type, t_end, t_pairs = r.read_prefix_chain()
+                _t_type, t_end, _t_pairs = r.read_prefix_chain()
                 r.try_read_preamble()
 
                 pin = PinConnection()
@@ -273,16 +274,18 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
     # Globals (power symbols) — extract name, properties, and display props
     num_globals = r.read_uint16()
     for _ in range(num_globals):
-        type_id, end_offset, pairs = r.read_prefix_chain()
+        _type_id, end_offset, pairs = r.read_prefix_chain()
         r.try_read_preamble()
 
         gi = GraphicInst()
 
         # Resolve name-value pairs from global's own prefix
-        global_props = {}
+        global_props: dict[str, str] = {}
         for name_idx, value_idx in pairs:
             name = string_list[name_idx] if 0 <= name_idx < len(string_list) else f"idx:{name_idx}"
-            value = string_list[value_idx] if 0 <= value_idx < len(string_list) else f"idx:{value_idx}"
+            value = (
+                string_list[value_idx] if 0 <= value_idx < len(string_list) else f"idx:{value_idx}"
+            )
             global_props[name] = value
 
         try:
@@ -312,7 +315,7 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
         except (struct.error, IndexError, ValueError) as e:
             print(f"    Warning: Global parse error: {e}")
 
-        gi._props = global_props
+        gi.props = global_props
 
         if end_offset > 0:
             r.pos = end_offset
@@ -331,7 +334,7 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
 def parse_hierarchy(data: bytes) -> list[NetIdMapping]:
     """Parse the Hierarchy stream for net-to-ID mappings."""
     r = BinaryReader(data, "Hierarchy")
-    mappings = []
+    mappings: list[NetIdMapping] = []
 
     r.skip(9)  # unknown_0
     r.read_string_len_zero()  # schematic_name

@@ -9,11 +9,19 @@ from __future__ import annotations
 
 import math
 import re
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import sexpdata
 
 from phosphor_eda.schematic import Component, Design, Net, Page, Pin, Port, merge_pages
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+# S-expression element: sexpdata.loads returns nested lists of symbols,
+# strings, ints, floats, and sub-lists.
+type SExpItem = sexpdata.Symbol | str | int | float | list["SExpItem"]
+type SExpNode = list[SExpItem]
 
 # KiCad overline: ~{TEXT} means TEXT with overline bar.
 # Bare ~ means "no name" (unnamed pin).
@@ -25,27 +33,27 @@ _OVERLINE_RE = re.compile(r"~\{([^}]+)\}")
 # ---------------------------------------------------------------------------
 
 
-def _tag(item: list | object) -> str | None:
+def _tag(item: object) -> str | None:
     """Return the tag name of an S-expression list, or None."""
     if isinstance(item, list) and item and isinstance(item[0], sexpdata.Symbol):
         return item[0].value()
     return None
 
 
-def _find(items: list, tag_name: str) -> list | None:
+def _find(items: SExpNode, tag_name: str) -> SExpNode | None:
     """Find the first child with the given tag."""
     for item in items:
-        if _tag(item) == tag_name:
+        if _tag(item) == tag_name and isinstance(item, list):
             return item
     return None
 
 
-def _find_all(items: list, tag_name: str) -> list[list]:
+def _find_all(items: SExpNode, tag_name: str) -> list[SExpNode]:
     """Find all children with the given tag."""
-    return [item for item in items if _tag(item) == tag_name]
+    return [item for item in items if _tag(item) == tag_name and isinstance(item, list)]
 
 
-def _val(item: list) -> str:
+def _val(item: SExpNode) -> str:
     """Return the string value of item[1]."""
     if len(item) > 1:
         v = item[1]
@@ -53,17 +61,31 @@ def _val(item: list) -> str:
     return ""
 
 
-def _property(items: list, name: str) -> str:
+def _property(items: SExpNode, name: str) -> str:
     """Get a named property value from S-expression children."""
     for item in items:
-        if _tag(item) == "property" and len(item) > 2 and str(item[1]) == name:
+        if (
+            _tag(item) == "property"
+            and isinstance(item, list)
+            and len(item) > 2
+            and str(item[1]) == name
+        ):
             return str(item[2])
     return ""
+
+
+def _num(node: SExpNode, index: int) -> float:
+    """Extract a numeric value from a sexp node at the given index."""
+    v = node[index]
+    if isinstance(v, (int, float)):
+        return float(v)
+    return float(str(v))
 
 
 # ---------------------------------------------------------------------------
 # Pin electrical type mapping
 # ---------------------------------------------------------------------------
+
 
 def _strip_kicad_markup(name: str) -> str:
     """Strip KiCad text markup from a name.
@@ -101,7 +123,7 @@ _SUB_SYMBOL_UNIT_RE = re.compile(r"_(\d+)_(\d+)$")
 
 
 def _parse_lib_symbols(
-    lib_syms: list,
+    lib_syms: SExpNode,
 ) -> tuple[
     dict[str, dict[int, list[tuple[str, str, str, float, float]]]],
     dict[str, str],
@@ -118,7 +140,7 @@ def _parse_lib_symbols(
     pins_result: dict[str, dict[int, list[tuple[str, str, str, float, float]]]] = {}
     desc_result: dict[str, str] = {}
     for sym in lib_syms[1:]:
-        if _tag(sym) != "symbol":
+        if _tag(sym) != "symbol" or not isinstance(sym, list):
             continue
         lib_id = str(sym[1])
         desc = _property(sym[2:], "ki_description")
@@ -128,26 +150,28 @@ def _parse_lib_symbols(
         # Pins live in sub-symbol units (e.g., "RP2040_0_1", "RP2040_1_1")
         # Sub-symbol name format: {SymbolName}_{unit}_{variant}
         for child in sym[2:]:
-            if _tag(child) != "symbol":
+            if _tag(child) != "symbol" or not isinstance(child, list):
                 continue
             sub_name = str(child[1])
             m = _SUB_SYMBOL_UNIT_RE.search(sub_name)
             unit_num = int(m.group(1)) if m else 1
             for elem in child[1:]:
-                if _tag(elem) != "pin":
+                if _tag(elem) != "pin" or not isinstance(elem, list):
                     continue
                 pin_type = str(elem[1])
                 pnum = pname = ""
                 px = py = 0.0
                 for pe in elem[3:]:
+                    if not isinstance(pe, list):
+                        continue
                     t = _tag(pe)
                     if t == "number":
                         pnum = _val(pe)
                     elif t == "name":
                         pname = _strip_kicad_markup(_val(pe))
                     elif t == "at":
-                        px = float(pe[1])
-                        py = float(pe[2])
+                        px = _num(pe, 1)
+                        py = _num(pe, 2)
                 units.setdefault(unit_num, []).append(
                     (pnum, pname, pin_type, px, py),
                 )
@@ -261,7 +285,7 @@ def kicad_to_design(path: Path, name: str = "") -> Design:
     # Pre-parse all child sheets' lib_symbols to build a comprehensive
     # symbol library.  Exact-match keys (with library prefix) should
     # take precedence over variant keys (stripped prefix, appended _N).
-    child_sheet_data: list[tuple[str, list]] = []
+    child_sheet_data: list[tuple[str, SExpNode]] = []
     all_lib_pins = dict(lib_pins)
     all_lib_descs = dict(lib_descs)
     for sheet_node in child_sheets:
@@ -289,9 +313,12 @@ def kicad_to_design(path: Path, name: str = "") -> Design:
     design_meta.update(root_meta)
 
     # Build child pages
-    for sheet_node, (sheet_name, child_data) in zip(child_sheets, child_sheet_data):
+    for sheet_node, (sheet_name, child_data) in zip(child_sheets, child_sheet_data, strict=False):
         child_page, _ = _build_page(
-            child_data, sheet_name, all_lib_pins, all_lib_descs,
+            child_data,
+            sheet_name,
+            all_lib_pins,
+            all_lib_descs,
         )
 
         # Hierarchical labels in the child become Ports
@@ -308,9 +335,7 @@ def kicad_to_design(path: Path, name: str = "") -> Design:
             if matching_net is None:
                 matching_net = Net(name=label_name)
                 child_page.nets.append(matching_net)
-            child_page.ports.append(
-                Port(name=label_name, page=child_page, net=matching_net)
-            )
+            child_page.ports.append(Port(name=label_name, page=child_page, net=matching_net))
 
         pages.append(child_page)
 
@@ -327,19 +352,17 @@ def kicad_to_design(path: Path, name: str = "") -> Design:
             if matching_net is None:
                 matching_net = Net(name=pin_name)
                 root_page.nets.append(matching_net)
-            root_page.ports.append(
-                Port(name=pin_name, page=root_page, net=matching_net)
-            )
+            root_page.ports.append(Port(name=pin_name, page=root_page, net=matching_net))
 
     return merge_pages(name, pages, metadata=design_meta)
 
 
-def _parse_sheet_info(sheet_node: list) -> tuple[str, str]:
+def _parse_sheet_info(sheet_node: SExpNode) -> tuple[str, str]:
     """Extract name and filename from a sheet S-expression node."""
     sheet_name = ""
     sheet_file = ""
     for sub in sheet_node[1:]:
-        if _tag(sub) == "property":
+        if _tag(sub) == "property" and isinstance(sub, list):
             prop_name = str(sub[1])
             prop_val = str(sub[2]) if len(sub) > 2 else ""
             if prop_name == "Sheetname":
@@ -350,7 +373,7 @@ def _parse_sheet_info(sheet_node: list) -> tuple[str, str]:
 
 
 def _build_page(
-    data: list,
+    data: SExpNode,
     page_name: str,
     lib_pins: dict[str, dict[int, list[tuple[str, str, str, float, float]]]],
     lib_descs: dict[str, str] | None = None,
@@ -369,6 +392,8 @@ def _build_page(
     title_block = _find(data[1:], "title_block")
     if title_block:
         for sub in title_block[1:]:
+            if not isinstance(sub, list):
+                continue
             t = _tag(sub)
             if t == "title":
                 page.metadata["PageTitle"] = _val(sub)
@@ -394,9 +419,9 @@ def _build_page(
         pts_node = _find(wire_node[1:], "pts")
         if not pts_node:
             continue
-        points = []
+        points: list[tuple[float, float]] = []
         for xy in _find_all(pts_node[1:], "xy"):
-            points.append((round(float(xy[1]), 4), round(float(xy[2]), 4)))
+            points.append((round(_num(xy, 1), 4), round(_num(xy, 2), 4)))
         for i in range(len(points) - 1):
             uf.union(points[i], points[i + 1])
             wire_segments.append((points[i], points[i + 1]))
@@ -407,7 +432,7 @@ def _build_page(
     for junc in _find_all(data[1:], "junction"):
         at_node = _find(junc[1:], "at")
         if at_node:
-            jp = (round(float(at_node[1]), 4), round(float(at_node[2]), 4))
+            jp = (round(_num(at_node, 1), 4), round(_num(at_node, 2), 4))
             _connect_point(uf, jp, wire_segments, wire_points)
 
     # --- Labels assign net names to wire groups ---
@@ -420,7 +445,7 @@ def _build_page(
         at_node = _find(label[2:], "at")
         if not at_node:
             continue
-        lp = (round(float(at_node[1]), 4), round(float(at_node[2]), 4))
+        lp = (round(_num(at_node, 1), 4), round(_num(at_node, 2), 4))
         _connect_point(uf, lp, wire_segments, wire_points)
         root = uf.find(lp)
         group_names[root] = label_name
@@ -433,7 +458,7 @@ def _build_page(
         at_node = _find(glabel[2:], "at")
         if not at_node:
             continue
-        lp = (round(float(at_node[1]), 4), round(float(at_node[2]), 4))
+        lp = (round(_num(at_node, 1), 4), round(_num(at_node, 2), 4))
         _connect_point(uf, lp, wire_segments, wire_points)
         root = uf.find(lp)
         group_names[root] = label_name
@@ -446,7 +471,7 @@ def _build_page(
         at_node = _find(hlabel[2:], "at")
         if not at_node:
             continue
-        lp = (round(float(at_node[1]), 4), round(float(at_node[2]), 4))
+        lp = (round(_num(at_node, 1), 4), round(_num(at_node, 2), 4))
         _connect_point(uf, lp, wire_segments, wire_points)
         root = uf.find(lp)
         group_names[root] = label_name
@@ -467,9 +492,9 @@ def _build_page(
         at_node = _find(sym_node[1:], "at")
         if not at_node:
             continue
-        comp_x = float(at_node[1])
-        comp_y = float(at_node[2])
-        comp_rot = float(at_node[3]) if len(at_node) > 3 else 0.0
+        comp_x = _num(at_node, 1)
+        comp_y = _num(at_node, 2)
+        comp_rot = _num(at_node, 3) if len(at_node) > 3 else 0.0
 
         mirror = None
         mirror_node = _find(sym_node[1:], "mirror")
@@ -491,9 +516,7 @@ def _build_page(
     for nc_node in _find_all(data[1:], "no_connect"):
         at_node = _find(nc_node[1:], "at")
         if at_node:
-            nc_positions.add(
-                (round(float(at_node[1]), 4), round(float(at_node[2]), 4))
-            )
+            nc_positions.add((round(_num(at_node, 1), 4), round(_num(at_node, 2), 4)))
 
     # --- Resolve wire group → net name mapping ---
     def _get_net(pos: tuple[float, float]) -> Net | None:
@@ -527,9 +550,9 @@ def _build_page(
         is_dnp = dnp_node is not None and _val(dnp_node) == "yes"
 
         at_node = _find(sym_node[1:], "at")
-        comp_x = float(at_node[1]) if at_node else 0.0
-        comp_y = float(at_node[2]) if at_node else 0.0
-        comp_rot = float(at_node[3]) if at_node and len(at_node) > 3 else 0.0
+        comp_x = _num(at_node, 1) if at_node else 0.0
+        comp_y = _num(at_node, 2) if at_node else 0.0
+        comp_rot = _num(at_node, 3) if at_node and len(at_node) > 3 else 0.0
 
         mirror = None
         mirror_node = _find(sym_node[1:], "mirror")
@@ -552,14 +575,13 @@ def _build_page(
 
         # Get the instance unit number
         unit_node = _find(sym_node[1:], "unit")
-        inst_unit = int(unit_node[1]) if unit_node else 1
+        inst_unit = int(_num(unit_node, 1)) if unit_node else 1
 
         # Get pin definitions for this unit (+ shared unit 0 pins)
         unit_pins = _resolve_lib_pins(lib_id, lib_pins)
         sym_pins = unit_pins.get(inst_unit, []) + unit_pins.get(0, [])
 
         for pnum, pname, ptype, px, py in sym_pins:
-
             abs_pos = _transform_pin(px, py, comp_x, comp_y, comp_rot, mirror)
 
             # Connect pin to wire network (pin may touch wire midpoint)

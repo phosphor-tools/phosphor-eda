@@ -152,9 +152,7 @@ class BinaryReader:
 
             end_offset = prefix_offset + 9 + byte_offset
             if end_offset > stream_len:
-                raise ValueError(
-                    f"Prefix end {end_offset} > stream size {stream_len}"
-                )
+                raise ValueError(f"Prefix end {end_offset} > stream size {stream_len}")
             if end_offset > max_end_offset:
                 max_end_offset = end_offset
 
@@ -164,7 +162,7 @@ class BinaryReader:
             raise ValueError(f"Short prefix type mismatch: {tid} != {type_id}")
         type_id = tid
 
-        pairs = []
+        pairs: list[tuple[int, int]] = []
         size = self.read_int16()
         if size > 0:
             needed = size * 8

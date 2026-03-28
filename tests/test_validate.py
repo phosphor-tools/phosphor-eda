@@ -1,7 +1,7 @@
 """Tests for schematic validation smoke checks."""
 
 from phosphor_eda.schematic import Component, Design, Net, Page, Pin, Port
-from phosphor_eda.validate import Category, Finding, Severity, validate_design
+from phosphor_eda.validate import Category, Severity, validate_design
 
 
 def _make_pin(comp: Component, desig: str, name: str, net: Net | None) -> Pin:
@@ -56,9 +56,15 @@ def test_two_pin_net_is_fine():
     _make_pin(c2, "1", "", net)
     design = _simple_design(nets=[net], components=[c1, c2], pages=[page])
     findings = validate_design(design)
-    net_findings = [f for f in findings if f.category in (
-        Category.EMPTY_NET, Category.SINGLE_PIN_NET,
-    )]
+    net_findings = [
+        f
+        for f in findings
+        if f.category
+        in (
+            Category.EMPTY_NET,
+            Category.SINGLE_PIN_NET,
+        )
+    ]
     assert len(net_findings) == 0
 
 
@@ -118,7 +124,10 @@ def test_power_pin_unconnected():
     page = Page(name="A")
     comp = Component(reference="U1", part="IC", description="", pages=[page])
     pin = Pin(
-        designator="1", name="VCC", component=comp, net=None,
+        designator="1",
+        name="VCC",
+        component=comp,
+        net=None,
         metadata={"electrical": "power"},
     )
     comp.pins.append(pin)
@@ -135,7 +144,10 @@ def test_power_pin_connected_is_fine():
     net = Net(name="VCC")
     comp = Component(reference="U1", part="IC", description="", pages=[page])
     pin = Pin(
-        designator="1", name="VCC", component=comp, net=net,
+        designator="1",
+        name="VCC",
+        component=comp,
+        net=net,
         metadata={"electrical": "power"},
     )
     comp.pins.append(pin)
@@ -159,7 +171,11 @@ def test_residual_backslash_in_pin_name():
     net = Net(name="SIG")
     comp = Component(reference="U1", part="IC", description="", pages=[page])
     pin = Pin(
-        designator="1", name="D\\R\\D\\Y\\", component=comp, net=net, metadata={},
+        designator="1",
+        name="D\\R\\D\\Y\\",
+        component=comp,
+        net=net,
+        metadata={},
     )
     comp.pins.append(pin)
     net.pins.append(pin)
@@ -214,12 +230,14 @@ def test_bridged_port_not_orphan():
 
 def test_findings_sorted_errors_first():
     page = Page(name="A")
-    net_empty_name = Net(name="")       # error: empty name
-    net_single = Net(name="LONELY")     # warning: single-pin
+    net_empty_name = Net(name="")  # error: empty name
+    net_single = Net(name="LONELY")  # warning: single-pin
     comp = Component(reference="R1", part="R", description="", pages=[page])
     _make_pin(comp, "1", "", net_single)
     design = _simple_design(
-        nets=[net_empty_name, net_single], components=[comp], pages=[page],
+        nets=[net_empty_name, net_single],
+        components=[comp],
+        pages=[page],
     )
     findings = validate_design(design)
     severities = [f.severity for f in findings]
@@ -237,8 +255,11 @@ def test_component_no_pins_suppressed_for_dni():
     """DNI (Do Not Install) components with 0 pins should not warn."""
     page = Page(name="A")
     comp = Component(
-        reference="FD1", part="Fiducial", description="",
-        pages=[page], metadata={"dni": "true"},
+        reference="FD1",
+        part="Fiducial",
+        description="",
+        pages=[page],
+        metadata={"dni": "true"},
     )
     design = _simple_design(components=[comp], pages=[page])
     findings = validate_design(design)
@@ -249,7 +270,10 @@ def test_component_no_pins_still_warns_without_dni():
     """Non-DNI components with 0 pins should still warn."""
     page = Page(name="A")
     comp = Component(
-        reference="TP1", part="TestPoint", description="", pages=[page],
+        reference="TP1",
+        part="TestPoint",
+        description="",
+        pages=[page],
     )
     design = _simple_design(components=[comp], pages=[page])
     findings = validate_design(design)
@@ -262,8 +286,12 @@ def test_single_pin_net_suppressed_for_no_connect():
     net = Net(name="JTAG_TDI")
     comp = Component(reference="U1", part="MCU", description="", pages=[page])
     pin = Pin(
-        designator="F14", name="TDI", component=comp,
-        net=net, no_connect=True, metadata={},
+        designator="F14",
+        name="TDI",
+        component=comp,
+        net=net,
+        no_connect=True,
+        metadata={},
     )
     comp.pins.append(pin)
     net.pins.append(pin)

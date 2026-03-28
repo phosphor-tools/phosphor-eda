@@ -112,9 +112,7 @@ def merge_pages(
                 # Deduplicate pins by designator — shared pins
                 # (owner_part_id==0) appear on every page, and we only
                 # want one entry per designator in the merged component.
-                existing_pins: dict[str, Pin] = {
-                    p.designator: p for p in target.pins
-                }
+                existing_pins: dict[str, Pin] = {p.designator: p for p in target.pins}
                 for pin in comp.pins:
                     if pin.designator not in existing_pins:
                         pin.component = target
@@ -124,23 +122,21 @@ def merge_pages(
                         existing = existing_pins[pin.designator]
                         # Upgrade if the new pin has a net but the old one
                         # doesn't (or has a no-connect marker).
-                        if existing.net is None and not existing.no_connect and (
-                            pin.net is not None or pin.no_connect
+                        if (
+                            existing.net is None
+                            and not existing.no_connect
+                            and (pin.net is not None or pin.no_connect)
                         ):
                             # Use identity removal — dataclass __eq__
                             # recurses on circular Pin↔Component refs.
-                            target.pins = [
-                                p for p in target.pins if p is not existing
-                            ]
+                            target.pins = [p for p in target.pins if p is not existing]
                             pin.component = target
                             target.pins.append(pin)
                             existing_pins[pin.designator] = pin
                         else:
                             # Discard duplicate — remove from its net
                             if pin.net is not None:
-                                pin.net.pins = [
-                                    p for p in pin.net.pins if p is not pin
-                                ]
+                                pin.net.pins = [p for p in pin.net.pins if p is not pin]
                 if page not in target.pages:
                     target.pages.append(page)
                 target.metadata.update(comp.metadata)
@@ -208,7 +204,9 @@ def merge_pages(
 
 
 def _unify_nets(
-    merged_nets: dict[str, Net], target: Net, other: Net,
+    merged_nets: dict[str, Net],
+    target: Net,
+    other: Net,
 ) -> Net:
     """Merge *other* into *target*, returning the surviving net.
 

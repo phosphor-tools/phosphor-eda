@@ -1,7 +1,6 @@
 """Tests for the schematic text serializer."""
 
 import pytest
-
 from phosphor_eda.schematic import Component, Design, Net, Page, Pin
 from phosphor_eda.serialize import (
     filter_components,
@@ -22,12 +21,18 @@ def _simple_design():
     """Build a minimal design for testing serialization."""
     page = Page(name="ADC")
     comp_u7 = Component(
-        reference="U7", part="AD7768-1", description="IC - ADC - Single",
-        pages=[page], metadata={"mfr": "Analog Devices", "mfr_pn": "AD7768-1BCPZ"},
+        reference="U7",
+        part="AD7768-1",
+        description="IC - ADC - Single",
+        pages=[page],
+        metadata={"mfr": "Analog Devices", "mfr_pn": "AD7768-1BCPZ"},
     )
     comp_r1 = Component(
-        reference="R1", part="10k", description="Resistor",
-        pages=[page], metadata={"value": "10k"},
+        reference="R1",
+        part="10k",
+        description="Resistor",
+        pages=[page],
+        metadata={"value": "10k"},
     )
     net_sclk = Net(name="ADC_SCLK")
     net_gnd = Net(name="GND")
@@ -49,8 +54,11 @@ def _simple_design():
     page.nets = [net_sclk, net_gnd]
 
     return Design(
-        name="TEST", pages=[page], nets=[net_gnd, net_sclk],
-        components=[comp_r1, comp_u7], metadata={"Revision": "1.0"},
+        name="TEST",
+        pages=[page],
+        nets=[net_gnd, net_sclk],
+        components=[comp_r1, comp_u7],
+        metadata={"Revision": "1.0"},
     )
 
 
@@ -86,7 +94,7 @@ def test_serialize_contains_net_section():
 def test_serialize_grep_friendly():
     """Grepping for a net name should hit both component and net sections."""
     text = serialize_design(_simple_design())
-    lines_with_sclk = [l for l in text.splitlines() if "ADC_SCLK" in l]
+    lines_with_sclk = [line for line in text.splitlines() if "ADC_SCLK" in line]
     # Should appear in: component pin line(s) + net header + possibly net pin lines
     assert len(lines_with_sclk) >= 3  # U7 pin, R1 pin, NET header
 
@@ -109,12 +117,18 @@ def test_serialize_suppresses_electrical_passive():
     net = Net(name="SIG")
     # Passive pin — should NOT show electrical metadata
     pin_passive = Pin(
-        designator="1", name="A", component=comp, net=net,
+        designator="1",
+        name="A",
+        component=comp,
+        net=net,
         metadata={"electrical": "passive"},
     )
     # Power pin — SHOULD show electrical metadata
     pin_power = Pin(
-        designator="2", name="VCC", component=comp, net=net,
+        designator="2",
+        name="VCC",
+        component=comp,
+        net=net,
         metadata={"electrical": "power"},
     )
     comp.pins = [pin_passive, pin_power]
@@ -134,7 +148,10 @@ def test_serialize_pin_metadata_inline():
     comp = Component(reference="U1", part="IC", description="", pages=[page])
     net = Net(name="SIG")
     pin = Pin(
-        designator="1", name="CLK", component=comp, net=net,
+        designator="1",
+        name="CLK",
+        component=comp,
+        net=net,
         metadata={"electrical": "input", "owner_part_id": "2"},
     )
     comp.pins = [pin]
@@ -144,7 +161,7 @@ def test_serialize_pin_metadata_inline():
     design = Design(name="T", pages=[page], nets=[net], components=[comp])
 
     text = serialize_design(design)
-    pin_line = next(l for l in text.splitlines() if "Pin 1" in l)
+    pin_line = next(line for line in text.splitlines() if "Pin 1" in line)
     assert "electrical=input" in pin_line
     assert "owner_part_id=2" in pin_line
 
@@ -156,8 +173,11 @@ def test_passive_metadata_filtered():
     """Passives should only show value if not already in description."""
     page = Page(name="P")
     comp = Component(
-        reference="R5", part="10k", description="Resistor 10k",
-        pages=[page], metadata={"value": "10k", "Manufacturer": "Yageo", "mfr_pn": "XYZ"},
+        reference="R5",
+        part="10k",
+        description="Resistor 10k",
+        pages=[page],
+        metadata={"value": "10k", "Manufacturer": "Yageo", "mfr_pn": "XYZ"},
     )
     pin = Pin(designator="1", name="", component=comp, net=None, metadata={})
     comp.pins = [pin]
@@ -174,8 +194,11 @@ def test_passive_value_shown_when_not_in_description():
     """Passive value is shown when it doesn't appear in the description."""
     page = Page(name="P")
     comp = Component(
-        reference="C3", part="100nF", description="Capacitor",
-        pages=[page], metadata={"value": "100nF"},
+        reference="C3",
+        part="100nF",
+        description="Capacitor",
+        pages=[page],
+        metadata={"value": "100nF"},
     )
     pin = Pin(designator="1", name="", component=comp, net=None, metadata={})
     comp.pins = [pin]
@@ -190,8 +213,11 @@ def test_ic_metadata_allowlist():
     """IC metadata should only show allowlisted keys + URLs."""
     page = Page(name="P")
     comp = Component(
-        reference="U1", part="LM358", description="Op-Amp",
-        pages=[page], metadata={
+        reference="U1",
+        part="LM358",
+        description="Op-Amp",
+        pages=[page],
+        metadata={
             "mfr": "TI",
             "mfr_pn": "LM358DR",
             "Supplier": "Digi-Key",
@@ -223,8 +249,9 @@ def test_inline_destinations_signal_net():
     text = serialize_design(design)
     # U7 pin 10 on ADC_SCLK — R1 is a shunt to GND (pull-down)
     u7_sclk_line = next(
-        l for l in text.splitlines()
-        if "Pin 10" in l and "SCLK" in l and "COMPONENT" not in l
+        line
+        for line in text.splitlines()
+        if "Pin 10" in line and "SCLK" in line and "COMPONENT" not in line
     )
     assert "(R1 to GND)" in u7_sclk_line
 
@@ -234,20 +261,17 @@ def test_inline_destinations_power_net_excluded():
     design = _simple_design()
     text = serialize_design(design)
     # U7 pin 7 on GND — no inline refs
-    u7_gnd_line = next(
-        l for l in text.splitlines()
-        if "Pin 7" in l and "DGND" in l
-    )
+    u7_gnd_line = next(line for line in text.splitlines() if "Pin 7" in line and "DGND" in line)
     assert "[" not in u7_gnd_line
 
 
 def test_is_power_net_classname():
     """ClassName=PWR metadata should mark a net as power."""
-    from phosphor_eda.serialize import _is_power_net
+    from phosphor_eda.serialize import is_power_net
 
     net = Net(name="CUSTOM_RAIL", metadata={"ClassName": "PWR"})
-    assert _is_power_net("CUSTOM_RAIL", net)
-    assert not _is_power_net("CUSTOM_RAIL")
+    assert is_power_net("CUSTOM_RAIL", net)
+    assert not is_power_net("CUSTOM_RAIL")
 
 
 # ---- Table formatter tests ----
@@ -334,20 +358,49 @@ def _filterable_design():
     page_spi = Page(name="SPI")
 
     # Components
-    u1 = Component(reference="U1", part="MCU", description="Microcontroller",
-                    pages=[page_spi], metadata={})
-    u2 = Component(reference="U2", part="AD7768", description="ADC",
-                    pages=[page_spi], metadata={})
-    r1 = Component(reference="R1", part="100R", description="Resistor",
-                    pages=[page_spi], metadata={})
-    r2 = Component(reference="R2", part="4k7", description="Resistor",
-                    pages=[page_spi], metadata={})
-    c1 = Component(reference="C1", part="100nF", description="Capacitor",
-                    pages=[page_power], metadata={})
-    tp1 = Component(reference="TP1", part="TestPoint", description="Test Point",
-                     pages=[page_spi], metadata={})
-    vreg = Component(reference="U3", part="LM1117", description="Regulator",
-                      pages=[page_power], metadata={})
+    u1 = Component(
+        reference="U1",
+        part="MCU",
+        description="Microcontroller",
+        pages=[page_spi],
+        metadata={},
+    )
+    u2 = Component(reference="U2", part="AD7768", description="ADC", pages=[page_spi], metadata={})
+    r1 = Component(
+        reference="R1",
+        part="100R",
+        description="Resistor",
+        pages=[page_spi],
+        metadata={},
+    )
+    r2 = Component(
+        reference="R2",
+        part="4k7",
+        description="Resistor",
+        pages=[page_spi],
+        metadata={},
+    )
+    c1 = Component(
+        reference="C1",
+        part="100nF",
+        description="Capacitor",
+        pages=[page_power],
+        metadata={},
+    )
+    tp1 = Component(
+        reference="TP1",
+        part="TestPoint",
+        description="Test Point",
+        pages=[page_spi],
+        metadata={},
+    )
+    vreg = Component(
+        reference="U3",
+        part="LM1117",
+        description="Regulator",
+        pages=[page_power],
+        metadata={},
+    )
 
     # Nets
     spi_clk = Net(name="SPI_CLK")
@@ -424,8 +477,10 @@ def _filterable_design():
     all_comps = [u1, u2, r1, r2, c1, tp1, vreg]
 
     return Design(
-        name="FILTER_TEST", pages=[page_power, page_spi],
-        nets=all_nets, components=all_comps,
+        name="FILTER_TEST",
+        pages=[page_power, page_spi],
+        nets=all_nets,
+        components=all_comps,
     )
 
 

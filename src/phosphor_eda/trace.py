@@ -9,9 +9,12 @@ series components.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-from phosphor_eda.schematic import Component, Design, Net, Pin
-from phosphor_eda.serialize import _PASSIVE_PREFIXES, _is_power_net, _ref_prefix
+from phosphor_eda.serialize import PASSIVE_PREFIXES, is_power_net, ref_prefix
+
+if TYPE_CHECKING:
+    from phosphor_eda.schematic import Component, Design, Net, Pin
 
 
 @dataclass
@@ -48,7 +51,7 @@ class ConnectionPath:
 
 def is_two_pin_passive(comp: Component) -> bool:
     """True if *comp* is a passive with exactly 2 pins."""
-    return len(comp.pins) == 2 and _ref_prefix(comp.reference) in _PASSIVE_PREFIXES
+    return len(comp.pins) == 2 and ref_prefix(comp.reference) in PASSIVE_PREFIXES
 
 
 def trace_from_net(
@@ -78,8 +81,8 @@ def trace_from_net(
             continue
         if not is_two_pin_passive(comp):
             continue
-        other = _other_pin(comp, pin)
-        if other.net is not None and _is_power_net(other.net.name, other.net):
+        other = other_pin(comp, pin)
+        if other.net is not None and is_power_net(other.net.name, other.net):
             net_shunts.append((comp, other.net))
         else:
             series_pins.append(pin)
@@ -108,7 +111,7 @@ def _walk(
     visited: set[int],
 ) -> None:
     """Recursive walk through a chain of 2-pin passives."""
-    exit_pin = _other_pin(passive, entry_pin)
+    exit_pin = other_pin(passive, entry_pin)
     exit_net = exit_pin.net
 
     # Dead end — pin has no net
@@ -120,7 +123,7 @@ def _walk(
         return
 
     # Shunt to power — record but don't follow
-    if _is_power_net(exit_net.name, exit_net):
+    if is_power_net(exit_net.name, exit_net):
         result.shunts.append((passive, exit_net))
         return
 
@@ -148,8 +151,8 @@ def _walk(
 
     # Collect shunts from passives on exit_net whose other side is power
     for p in next_passives:
-        other = _other_pin(p.component, p)
-        if other.net is not None and _is_power_net(other.net.name, other.net):
+        other = other_pin(p.component, p)
+        if other.net is not None and is_power_net(other.net.name, other.net):
             result.shunts.append((p.component, other.net))
 
     if active_pins:
@@ -159,14 +162,21 @@ def _walk(
     elif next_passives:
         # Only more passives — keep walking through series ones (non-shunt)
         series_passives = [
-            p for p in next_passives
+            p
+            for p in next_passives
             if not (
-                (other_net := _other_pin(p.component, p).net) is not None
-                and _is_power_net(other_net.name, other_net)
+                (other_net := other_pin(p.component, p).net) is not None
+                and is_power_net(other_net.name, other_net)
             )
         ]
         if series_passives:
-            _walk(series_passives[0].component, series_passives[0], exit_net, result, visited)
+            _walk(
+                series_passives[0].component,
+                series_passives[0],
+                exit_net,
+                result,
+                visited,
+            )
         else:
             result.terminal_net = exit_net
     else:
@@ -174,7 +184,7 @@ def _walk(
         result.terminal_net = exit_net
 
 
-def _other_pin(comp: Component, pin: Pin) -> Pin:
+def other_pin(comp: Component, pin: Pin) -> Pin:
     """Return the other pin on a 2-pin component."""
     for p in comp.pins:
         if p is not pin:
@@ -196,7 +206,7 @@ def find_paths(design: Design, ref_a: str, ref_b: str) -> list[ConnectionPath]:
     for pin_a in comp_a.pins:
         if pin_a.net is None or pin_a.no_connect:
             continue
-        if _is_power_net(pin_a.net.name, pin_a.net):
+        if is_power_net(pin_a.net.name, pin_a.net):
             continue
 
         # Direct connection — comp_b is on the same net
@@ -206,8 +216,8 @@ def find_paths(design: Design, ref_a: str, ref_b: str) -> list[ConnectionPath]:
                 # Collect shunts on this net
                 for p in pin_a.net.pins:
                     if is_two_pin_passive(p.component):
-                        other = _other_pin(p.component, p)
-                        if other.net is not None and _is_power_net(other.net.name, other.net):
+                        other = other_pin(p.component, p)
+                        if other.net is not None and is_power_net(other.net.name, other.net):
                             path.shunts.append((p.component, other.net))
                 paths.append(path)
 
@@ -217,12 +227,14 @@ def find_paths(design: Design, ref_a: str, ref_b: str) -> list[ConnectionPath]:
                 continue
             if trace_result.terminal_pin.component is not comp_b:
                 continue
-            paths.append(ConnectionPath(
-                left_pin=pin_a,
-                right_pin=trace_result.terminal_pin,
-                series=[w.component for w in trace_result.series_path],
-                shunts=trace_result.shunts,
-            ))
+            paths.append(
+                ConnectionPath(
+                    left_pin=pin_a,
+                    right_pin=trace_result.terminal_pin,
+                    series=[w.component for w in trace_result.series_path],
+                    shunts=trace_result.shunts,
+                )
+            )
 
     return sorted(paths, key=lambda p: p.left_pin.designator)
 

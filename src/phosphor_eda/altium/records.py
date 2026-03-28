@@ -73,6 +73,7 @@ class RecordType(IntEnum):
 # Typed record dataclasses
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class AltiumRecord:
     """Base for all typed Altium records."""

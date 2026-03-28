@@ -6,8 +6,7 @@ OrCAD, and Eagle into a unified Design model.
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from phosphor_eda.altium.parser import parse_altium
 from phosphor_eda.altium.project import parse_prjpcb_file
@@ -16,8 +15,13 @@ from phosphor_eda.dsn.parser import parse_dsn
 from phosphor_eda.dsn.to_schematic import dsn_to_design
 from phosphor_eda.eagle.to_schematic import eagle_to_design
 from phosphor_eda.kicad.to_schematic import kicad_to_design
-from phosphor_eda.schematic import Design
 from phosphor_eda.serialize import serialize_design
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
+
+    from phosphor_eda.schematic import Design
 
 
 def _load_altium(path: Path) -> Design:

@@ -104,7 +104,7 @@ def parse_schematic_sheet(schdoc_path: Path) -> SchematicPage:
                 wire.end_x = _int(rec, "x2")
                 wire.end_y = _int(rec, "y2")
             # Store all points for net resolution
-            points = []
+            points: list[tuple[int, int]] = []
             for idx in range(1, loc_count + 1):
                 x = _int(rec, f"x{idx}")
                 y = _int(rec, f"y{idx}")
