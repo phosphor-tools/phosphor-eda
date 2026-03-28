@@ -1,7 +1,10 @@
+from pathlib import Path
+
 from click.testing import CliRunner
 from phosphor_eda.cli import main
 
-DSN_FILE = "cli/tests/fixtures/dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+DSN_FILE = str(FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN")
 
 
 def test_cli_version():
@@ -216,10 +219,10 @@ def test_cli_trace_not_found():
 
 # ---- sub-sheet detection tests ----
 
-ALTIUM_PROJECT = "cli/tests/fixtures/altium/qfsae-debugger/Debugger.PrjPcb"
-ALTIUM_SUBSHEET = "cli/tests/fixtures/altium/qfsae-debugger/MCU.SchDoc"
-KICAD_ROOT = "cli/tests/fixtures/kicad-hierarchy/root.kicad_sch"
-KICAD_CHILD = "cli/tests/fixtures/kicad-hierarchy/child.kicad_sch"
+ALTIUM_PROJECT = str(FIXTURES / "altium/qfsae-debugger/Debugger.PrjPcb")
+ALTIUM_SUBSHEET = str(FIXTURES / "altium/qfsae-debugger/MCU.SchDoc")
+KICAD_ROOT = str(FIXTURES / "kicad-hierarchy/root.kicad_sch")
+KICAD_CHILD = str(FIXTURES / "kicad-hierarchy/child.kicad_sch")
 
 
 def test_cli_rejects_altium_subsheet():

@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 from phosphor_eda.validate import Severity, validate_design
 
-MINIMAL_SCH = Path("cli/tests/fixtures/kicad-minimal/RP2040_minimal_r2.kicad_sch")
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+MINIMAL_SCH = FIXTURES / "kicad-minimal/RP2040_minimal_r2.kicad_sch"
 
 
 @pytest.fixture(scope="module")

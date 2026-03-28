@@ -2,7 +2,8 @@ from pathlib import Path
 
 from phosphor_eda.dsn.parser import parse_dsn
 
-DSN_FILE = Path("cli/tests/fixtures/dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN")
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+DSN_FILE = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
 
 
 def test_parse_dsn_single_page():

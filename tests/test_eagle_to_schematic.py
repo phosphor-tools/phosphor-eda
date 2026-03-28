@@ -5,8 +5,9 @@ from pathlib import Path
 import pytest
 from phosphor_eda.validate import Severity, validate_design
 
-BME280_SCH = Path("cli/tests/fixtures/eagle/SparkFun_BME280_Breakout.sch")
-ADAFRUIT_SCH = Path("cli/tests/fixtures/eagle/adafruit_rgblcdshield.sch")
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+BME280_SCH = FIXTURES / "eagle/SparkFun_BME280_Breakout.sch"
+ADAFRUIT_SCH = FIXTURES / "eagle/adafruit_rgblcdshield.sch"
 
 
 @pytest.fixture(scope="module")
