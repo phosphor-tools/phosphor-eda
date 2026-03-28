@@ -334,9 +334,7 @@ def filter_components(
     if passive is True:
         result = [c for c in result if ref_prefix(c.reference) in PASSIVE_PREFIXES]
     elif passive is False:
-        result = [
-            c for c in result if ref_prefix(c.reference) not in PASSIVE_PREFIXES
-        ]
+        result = [c for c in result if ref_prefix(c.reference) not in PASSIVE_PREFIXES]
 
     if min_pins is not None:
         result = [c for c in result if len(c.pins) >= min_pins]
@@ -460,8 +458,6 @@ def format_trace(design: Design, ref_a: str, ref_b: str) -> str:
 
 
 # ---- List/show formatters for CLI ----
-
-
 
 
 def _tabulate(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> str:

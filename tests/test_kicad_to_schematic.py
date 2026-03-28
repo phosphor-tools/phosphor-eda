@@ -5,13 +5,7 @@ from pathlib import Path
 import pytest
 from phosphor_eda.validate import Severity, validate_design
 
-MINIMAL_SCH = Path(
-    "reference-designs/kicad-minimal/minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_sch"
-)
-
-pytestmark = pytest.mark.skipif(
-    not MINIMAL_SCH.exists(), reason="KiCad minimal schematic not available"
-)
+MINIMAL_SCH = Path("cli/tests/fixtures/kicad-minimal/RP2040_minimal_r2.kicad_sch")
 
 
 @pytest.fixture(scope="module")

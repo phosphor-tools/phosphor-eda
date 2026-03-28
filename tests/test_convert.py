@@ -7,7 +7,7 @@ from phosphor_eda.convert import (
     find_project_root,
 )
 
-DSN_FILE = Path("raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN")
+DSN_FILE = Path("cli/tests/fixtures/dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN")
 
 
 def test_convert_dsn():

@@ -1,10 +1,7 @@
-from pathlib import Path
-
-import pytest
 from click.testing import CliRunner
 from phosphor_eda.cli import main
 
-DSN_FILE = "raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
+DSN_FILE = "cli/tests/fixtures/dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
 
 
 def test_cli_version():
@@ -219,16 +216,12 @@ def test_cli_trace_not_found():
 
 # ---- sub-sheet detection tests ----
 
-ALTIUM_PROJECT = "altium-test/TestBoard_X9/TestBoard_X9.PrjPcb"
-ALTIUM_SUBSHEET = "altium-test/TestBoard_X9/ADC.SchDoc"
+ALTIUM_PROJECT = "cli/tests/fixtures/altium/qfsae-debugger/Debugger.PrjPcb"
+ALTIUM_SUBSHEET = "cli/tests/fixtures/altium/qfsae-debugger/MCU.SchDoc"
 KICAD_ROOT = "cli/tests/fixtures/kicad-hierarchy/root.kicad_sch"
 KICAD_CHILD = "cli/tests/fixtures/kicad-hierarchy/child.kicad_sch"
 
 
-@pytest.mark.skipif(
-    not Path(ALTIUM_SUBSHEET).exists(),
-    reason="Altium test data not available",
-)
 def test_cli_rejects_altium_subsheet():
     runner = CliRunner()
     result = runner.invoke(
@@ -241,13 +234,9 @@ def test_cli_rejects_altium_subsheet():
     )
     assert result.exit_code != 0
     assert "sub-sheet" in result.output
-    assert "TestBoard_X9.PrjPcb" in result.output
+    assert "Debugger.PrjPcb" in result.output
 
 
-@pytest.mark.skipif(
-    not Path(ALTIUM_SUBSHEET).exists(),
-    reason="Altium test data not available",
-)
 def test_cli_force_single_sheet_altium():
     runner = CliRunner()
     result = runner.invoke(

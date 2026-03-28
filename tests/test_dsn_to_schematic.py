@@ -2,15 +2,10 @@
 
 from pathlib import Path
 
-import pytest
 from phosphor_eda.dsn.parser import parse_dsn
 from phosphor_eda.dsn.to_schematic import dsn_to_design
 
-PICOW_DSN = Path("raspberry-pi-pico-w/picow_design_files/RPI-PICOW-R2.DSN")
-
-pytestmark = pytest.mark.skipif(
-    not PICOW_DSN.exists(), reason="Pi Pico W DSN not available"
-)
+PICOW_DSN = Path("cli/tests/fixtures/dsn/raspberry-pi-pico-w/RPI-PICOW-R2.DSN")
 
 
 def test_dsn_to_design_has_pages():

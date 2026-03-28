@@ -1104,8 +1104,7 @@ def build_page(
                 else None
             )
             is_multipart = (
-                comp_rec_for_pins is not None
-                and comp_rec_for_pins.part_count > 2
+                comp_rec_for_pins is not None and comp_rec_for_pins.part_count > 2
             )
             for raw_pin in raw_inst.pin_connections:
                 coord = (raw_pin.pin_x, raw_pin.pin_y)
@@ -1129,8 +1128,7 @@ def build_page(
                         and comp_rec_for_pins is not None
                         and (
                             prec.owner_part_id != 0
-                            and prec.owner_part_id
-                            != comp_rec_for_pins.current_part_id
+                            and prec.owner_part_id != comp_rec_for_pins.current_part_id
                         )
                     ):
                         continue

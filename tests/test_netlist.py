@@ -5,7 +5,7 @@ from phosphor_eda.dsn.parser import parse_dsn
 from phosphor_eda.dsn.to_schematic import dsn_to_design
 from phosphor_eda.serialize import write_design
 
-DSN_FILE = Path("raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN")
+DSN_FILE = Path("cli/tests/fixtures/dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN")
 
 
 def test_build_netlist_has_known_nets():

@@ -5,12 +5,8 @@ from pathlib import Path
 import pytest
 from phosphor_eda.validate import Severity, validate_design
 
-BME280_SCH = Path("eagle-test/SparkFun_BME280_Breakout.sch")
-ADAFRUIT_SCH = Path("eagle-test/adafruit_rgblcdshield.sch")
-
-pytestmark = pytest.mark.skipif(
-    not BME280_SCH.exists(), reason="Eagle test schematics not available"
-)
+BME280_SCH = Path("cli/tests/fixtures/eagle/SparkFun_BME280_Breakout.sch")
+ADAFRUIT_SCH = Path("cli/tests/fixtures/eagle/adafruit_rgblcdshield.sch")
 
 
 @pytest.fixture(scope="module")
@@ -24,8 +20,6 @@ def design():
 def adafruit_design():
     from phosphor_eda.eagle import eagle_to_design
 
-    if not ADAFRUIT_SCH.exists():
-        pytest.skip("Adafruit Eagle schematic not available")
     return eagle_to_design(ADAFRUIT_SCH)
 
 
