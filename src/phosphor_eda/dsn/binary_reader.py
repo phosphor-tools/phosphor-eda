@@ -168,8 +168,7 @@ class BinaryReader:
             needed = size * 8
             if self.pos + needed > stream_len:
                 raise ValueError(
-                    f"Name-value pairs need {needed} bytes, "
-                    f"only {stream_len - self.pos} left"
+                    f"Name-value pairs need {needed} bytes, only {stream_len - self.pos} left"
                 )
             for _ in range(size):
                 name_idx = self.read_uint32()

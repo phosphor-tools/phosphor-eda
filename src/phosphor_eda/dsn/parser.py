@@ -206,15 +206,9 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
         # Resolve name-value pairs from the string list
         props: dict[str, str] = {}
         for name_idx, value_idx in pairs:
-            name = (
-                string_list[name_idx]
-                if 0 <= name_idx < len(string_list)
-                else f"idx:{name_idx}"
-            )
+            name = string_list[name_idx] if 0 <= name_idx < len(string_list) else f"idx:{name_idx}"
             value = (
-                string_list[value_idx]
-                if 0 <= value_idx < len(string_list)
-                else f"idx:{value_idx}"
+                string_list[value_idx] if 0 <= value_idx < len(string_list) else f"idx:{value_idx}"
             )
             props[name] = value
         inst.props = props
@@ -288,15 +282,9 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
         # Resolve name-value pairs from global's own prefix
         global_props: dict[str, str] = {}
         for name_idx, value_idx in pairs:
-            name = (
-                string_list[name_idx]
-                if 0 <= name_idx < len(string_list)
-                else f"idx:{name_idx}"
-            )
+            name = string_list[name_idx] if 0 <= name_idx < len(string_list) else f"idx:{name_idx}"
             value = (
-                string_list[value_idx]
-                if 0 <= value_idx < len(string_list)
-                else f"idx:{value_idx}"
+                string_list[value_idx] if 0 <= value_idx < len(string_list) else f"idx:{value_idx}"
             )
             global_props[name] = value
 

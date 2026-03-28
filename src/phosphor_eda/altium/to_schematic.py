@@ -38,9 +38,7 @@ def altium_to_design(raw: RawDesign, name: str = "") -> Design:
 
     for page_name, sheet in sheets.items():
         harness_entry_coords = compute_harness_entry_coords(sheet)
-        coord_to_net, nc_wires = resolve_nets(
-            sheet, extra_named_coords=harness_entry_coords
-        )
+        coord_to_net, nc_wires = resolve_nets(sheet, extra_named_coords=harness_entry_coords)
         coord_to_nets[page_name] = coord_to_net
         nc_coords_by_page[page_name] = nc_wires
         collect_harness_type_members(sheet, harness_members_by_type)

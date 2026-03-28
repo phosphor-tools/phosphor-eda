@@ -216,8 +216,7 @@ def _check_components(design: Design, findings: list[Finding]) -> None:
                 Finding(
                     Severity.WARNING,
                     Category.COMPONENT_ALL_UNCONNECTED,
-                    f"Component {comp.reference} ({comp.part}): "
-                    f"all {n_pins} pins unconnected",
+                    f"Component {comp.reference} ({comp.part}): all {n_pins} pins unconnected",
                     component=comp.reference,
                 )
             )

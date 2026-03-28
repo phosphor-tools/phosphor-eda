@@ -37,21 +37,13 @@ def _simple_design():
     net_sclk = Net(name="ADC_SCLK")
     net_gnd = Net(name="GND")
 
-    pin_u7_10 = Pin(
-        designator="10", name="SCLK", component=comp_u7, net=net_sclk, metadata={}
-    )
-    pin_u7_7 = Pin(
-        designator="7", name="DGND", component=comp_u7, net=net_gnd, metadata={}
-    )
-    pin_u7_nc = Pin(
-        designator="26", name="AIN-", component=comp_u7, no_connect=True, metadata={}
-    )
+    pin_u7_10 = Pin(designator="10", name="SCLK", component=comp_u7, net=net_sclk, metadata={})
+    pin_u7_7 = Pin(designator="7", name="DGND", component=comp_u7, net=net_gnd, metadata={})
+    pin_u7_nc = Pin(designator="26", name="AIN-", component=comp_u7, no_connect=True, metadata={})
     pin_u7_uc = Pin(designator="28", name="VCM", component=comp_u7, metadata={})
     comp_u7.pins = [pin_u7_10, pin_u7_7, pin_u7_nc, pin_u7_uc]
 
-    pin_r1_1 = Pin(
-        designator="1", name="", component=comp_r1, net=net_sclk, metadata={}
-    )
+    pin_r1_1 = Pin(designator="1", name="", component=comp_r1, net=net_sclk, metadata={})
     pin_r1_2 = Pin(designator="2", name="", component=comp_r1, net=net_gnd, metadata={})
     comp_r1.pins = [pin_r1_1, pin_r1_2]
 
@@ -269,9 +261,7 @@ def test_inline_destinations_power_net_excluded():
     design = _simple_design()
     text = serialize_design(design)
     # U7 pin 7 on GND — no inline refs
-    u7_gnd_line = next(
-        line for line in text.splitlines() if "Pin 7" in line and "DGND" in line
-    )
+    u7_gnd_line = next(line for line in text.splitlines() if "Pin 7" in line and "DGND" in line)
     assert "[" not in u7_gnd_line
 
 
@@ -375,9 +365,7 @@ def _filterable_design():
         pages=[page_spi],
         metadata={},
     )
-    u2 = Component(
-        reference="U2", part="AD7768", description="ADC", pages=[page_spi], metadata={}
-    )
+    u2 = Component(reference="U2", part="AD7768", description="ADC", pages=[page_spi], metadata={})
     r1 = Component(
         reference="R1",
         part="100R",

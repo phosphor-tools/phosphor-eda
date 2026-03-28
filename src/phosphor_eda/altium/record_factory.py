@@ -124,9 +124,7 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
 
     if rt == RecordType.COMPONENT:
         loc = (_int(rec, "location.x"), _int(rec, "location.y"))
-        desc = rec.get("%utf8%componentdescription") or rec.get(
-            "componentdescription", ""
-        )
+        desc = rec.get("%utf8%componentdescription") or rec.get("componentdescription", "")
         return ComponentRec(
             record_type=rt,
             index=i,

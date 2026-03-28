@@ -4,9 +4,7 @@ from phosphor_eda.schematic import Component, Design, Net, Page, Pin, Port
 
 
 def test_pin_defaults():
-    comp = Component(
-        reference="U1", part="MCU", description="", pins=[], pages=[], metadata={}
-    )
+    comp = Component(reference="U1", part="MCU", description="", pins=[], pages=[], metadata={})
     pin = Pin(
         designator="1",
         name="VCC",
@@ -45,12 +43,8 @@ def test_component_with_pins():
 
 
 def test_net_connects_pins():
-    comp_a = Component(
-        reference="U1", part="MCU", description="", pins=[], pages=[], metadata={}
-    )
-    comp_b = Component(
-        reference="U7", part="ADC", description="", pins=[], pages=[], metadata={}
-    )
+    comp_a = Component(reference="U1", part="MCU", description="", pins=[], pages=[], metadata={})
+    comp_b = Component(reference="U7", part="ADC", description="", pins=[], pages=[], metadata={})
     net = Net(name="ADC_SCLK", pins=[], bus=None, metadata={})
     pin_a = Pin(
         designator="L3",
@@ -95,9 +89,7 @@ def test_port_bridges_net():
 
 
 def test_pin_no_connect():
-    comp = Component(
-        reference="U7", part="ADC", description="", pins=[], pages=[], metadata={}
-    )
+    comp = Component(reference="U7", part="ADC", description="", pins=[], pages=[], metadata={})
     pin = Pin(
         designator="26",
         name="AIN-",

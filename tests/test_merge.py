@@ -54,12 +54,8 @@ def test_merge_components_by_reference():
     page_b = Page(name="IO")
     net_a = Net(name="GND")
     net_b = Net(name="VCC")
-    comp_a = Component(
-        reference="U1", part="MCU", description="Processor", pages=[page_a]
-    )
-    comp_b = Component(
-        reference="U1", part="MCU", description="Processor", pages=[page_b]
-    )
+    comp_a = Component(reference="U1", part="MCU", description="Processor", pages=[page_a])
+    comp_b = Component(reference="U1", part="MCU", description="Processor", pages=[page_b])
     _make_pin(comp_a, "A1", "GND", net_a)
     _make_pin(comp_b, "B1", "VCC", net_b)
     page_a.components = [comp_a]

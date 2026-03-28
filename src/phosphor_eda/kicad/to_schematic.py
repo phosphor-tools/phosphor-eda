@@ -313,9 +313,7 @@ def kicad_to_design(path: Path, name: str = "") -> Design:
     design_meta.update(root_meta)
 
     # Build child pages
-    for sheet_node, (sheet_name, child_data) in zip(
-        child_sheets, child_sheet_data, strict=False
-    ):
+    for sheet_node, (sheet_name, child_data) in zip(child_sheets, child_sheet_data, strict=False):
         child_page, _ = _build_page(
             child_data,
             sheet_name,
@@ -337,9 +335,7 @@ def kicad_to_design(path: Path, name: str = "") -> Design:
             if matching_net is None:
                 matching_net = Net(name=label_name)
                 child_page.nets.append(matching_net)
-            child_page.ports.append(
-                Port(name=label_name, page=child_page, net=matching_net)
-            )
+            child_page.ports.append(Port(name=label_name, page=child_page, net=matching_net))
 
         pages.append(child_page)
 
@@ -356,9 +352,7 @@ def kicad_to_design(path: Path, name: str = "") -> Design:
             if matching_net is None:
                 matching_net = Net(name=pin_name)
                 root_page.nets.append(matching_net)
-            root_page.ports.append(
-                Port(name=pin_name, page=root_page, net=matching_net)
-            )
+            root_page.ports.append(Port(name=pin_name, page=root_page, net=matching_net))
 
     return merge_pages(name, pages, metadata=design_meta)
 
@@ -672,11 +666,7 @@ def _connect_point(
     wire_points.add(point)
     # First try exact endpoint match
     for wp in wire_points:
-        if (
-            wp != point
-            and abs(wp[0] - point[0]) < 0.01
-            and abs(wp[1] - point[1]) < 0.01
-        ):
+        if wp != point and abs(wp[0] - point[0]) < 0.01 and abs(wp[1] - point[1]) < 0.01:
             uf.union(point, wp)
             return
     # Then check if point lies on a wire segment

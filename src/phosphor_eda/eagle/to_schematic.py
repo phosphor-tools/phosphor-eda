@@ -289,9 +289,7 @@ def _build_pages(
 
                 for pin_def in lib_data.symbols.get(symbol_name, []):
                     # Physical pin designator from connects mapping
-                    pad = ds_info.connects.get(
-                        (part_info.device, gate_name, pin_def.name), ""
-                    )
+                    pad = ds_info.connects.get((part_info.device, gate_name, pin_def.name), "")
                     designator = pad or pin_def.name
 
                     # Skip duplicate designators (shared pins across gates)

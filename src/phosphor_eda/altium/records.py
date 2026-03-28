@@ -122,9 +122,7 @@ class PinRec(AltiumRecord):
     has_overline: bool = False  # True if name had overline markup (active-low)
     tip: tuple[int, int] = (0, 0)
     unique_id: str = ""
-    electrical: int = (
-        0  # 0=input, 1=IO, 2=output, 3=OC, 4=passive, 5=HiZ, 6=OE, 7=power
-    )
+    electrical: int = 0  # 0=input, 1=IO, 2=output, 3=OC, 4=passive, 5=HiZ, 6=OE, 7=power
     owner_part_id: int = 0  # multi-part component part number
     owner_part_display_mode: int = 0  # display mode variant (0=Normal, 1+=alternates)
 
@@ -218,9 +216,7 @@ class WireRec(AltiumRecord):
 
     @property
     def segments(self) -> list[tuple[tuple[int, int], tuple[int, int]]]:
-        return [
-            (self.points[i], self.points[i + 1]) for i in range(len(self.points) - 1)
-        ]
+        return [(self.points[i], self.points[i + 1]) for i in range(len(self.points) - 1)]
 
 
 @dataclass
@@ -361,9 +357,7 @@ class SignalHarnessRec(AltiumRecord):
 
     @property
     def segments(self) -> list[tuple[tuple[int, int], tuple[int, int]]]:
-        return [
-            (self.points[i], self.points[i + 1]) for i in range(len(self.points) - 1)
-        ]
+        return [(self.points[i], self.points[i + 1]) for i in range(len(self.points) - 1)]
 
 
 @dataclass

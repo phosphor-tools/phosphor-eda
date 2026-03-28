@@ -217,9 +217,7 @@ def find_paths(design: Design, ref_a: str, ref_b: str) -> list[ConnectionPath]:
                 for p in pin_a.net.pins:
                     if is_two_pin_passive(p.component):
                         other = other_pin(p.component, p)
-                        if other.net is not None and is_power_net(
-                            other.net.name, other.net
-                        ):
+                        if other.net is not None and is_power_net(other.net.name, other.net):
                             path.shunts.append((p.component, other.net))
                 paths.append(path)
 

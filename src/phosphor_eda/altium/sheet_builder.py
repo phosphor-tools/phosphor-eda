@@ -119,12 +119,8 @@ def _port_wire_coord(port: PortRec, wire_index: WireIndex) -> tuple[int, int]:
     if touches:
         return loc
 
-    if port.style >= 4:
-        # Vertical port — opposite end is above location
-        alt = (loc[0], loc[1] + port.width)
-    else:
-        # Horizontal port — opposite end is to the right
-        alt = (loc[0] + port.width, loc[1])
+    # Vertical: opposite end above location; horizontal: to the right
+    alt = (loc[0], loc[1] + port.width) if port.style >= 4 else (loc[0] + port.width, loc[1])
 
     touches = wire_index.segments_touching(alt[0], alt[1])
     if touches:
@@ -814,9 +810,7 @@ def _collect_harness_bridge_ports(
                 uf.union(entry.coord, seg[0])
                 break
 
-        harness_entries.append(
-            (entry.name, entry.harness_type, child_page, entry.coord)
-        )
+        harness_entries.append((entry.name, entry.harness_type, child_page, entry.coord))
 
     # Group connected entries
     groups: dict[tuple[int, int], list[tuple[str, str, str]]] = {}
@@ -1099,13 +1093,9 @@ def build_page(
             # multi-part components (e.g. dual opamp, MCU sections) have
             # PartCount > 2.
             comp_rec_for_pins: ComponentRec | None = (
-                comp_record_keys.get(comp_owner_idx)
-                if comp_owner_idx is not None
-                else None
+                comp_record_keys.get(comp_owner_idx) if comp_owner_idx is not None else None
             )
-            is_multipart = (
-                comp_rec_for_pins is not None and comp_rec_for_pins.part_count > 2
-            )
+            is_multipart = comp_rec_for_pins is not None and comp_rec_for_pins.part_count > 2
             for raw_pin in raw_inst.pin_connections:
                 coord = (raw_pin.pin_x, raw_pin.pin_y)
                 net_name = coord_to_net_name.get(coord)

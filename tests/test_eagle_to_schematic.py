@@ -60,12 +60,8 @@ def test_bme280_has_pins(design):
 def test_power_symbols_filtered(design):
     """GND and SUPPLY power symbols should not appear as components."""
     for c in design.components:
-        assert not c.reference.startswith("GND"), (
-            f"power symbol {c.reference} in components"
-        )
-        assert not c.reference.startswith("SUPPLY"), (
-            f"supply symbol {c.reference} in components"
-        )
+        assert not c.reference.startswith("GND"), f"power symbol {c.reference} in components"
+        assert not c.reference.startswith("SUPPLY"), f"supply symbol {c.reference} in components"
 
 
 def test_component_value_metadata(design):

@@ -44,9 +44,7 @@ def test_design_has_components(design):
 def test_power_symbols_not_in_components(design):
     """Power symbols (#PWR, #FLG) should be filtered out."""
     for c in design.components:
-        assert not c.reference.startswith("#"), (
-            f"power symbol {c.reference} in components"
-        )
+        assert not c.reference.startswith("#"), f"power symbol {c.reference} in components"
 
 
 def test_rp2040_has_pins(design):

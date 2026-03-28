@@ -85,9 +85,7 @@ def _format_summary(design: Design) -> list[str]:
     n_comp = len(design.components)
     n_nets = len(design.nets)
     n_pages = len(design.pages)
-    lines.append(
-        f"Design: {design.name} | {n_pages} pages | {n_comp} components | {n_nets} nets"
-    )
+    lines.append(f"Design: {design.name} | {n_pages} pages | {n_comp} components | {n_nets} nets")
 
     meta_parts: list[str] = []
     for key in ("Author", "Engineer", "Revision", "Date", "Organization"):
@@ -137,8 +135,7 @@ def _format_components(design: Design) -> list[str]:
     for comp in sorted(design.components, key=lambda c: c.reference):
         page_names = ", ".join(p.name for p in comp.pages)
         lines.append(
-            f"COMPONENT: {comp.reference} | {comp.part}"
-            f" | {comp.description} | Pages: {page_names}"
+            f"COMPONENT: {comp.reference} | {comp.part} | {comp.description} | Pages: {page_names}"
         )
 
         for key, value in sorted(_filter_metadata(comp).items()):
@@ -150,26 +147,20 @@ def _format_components(design: Design) -> list[str]:
             # Filter out default/noise metadata values:
             # - electrical=passive is the default for 88%+ of pins
             filtered = {
-                k: v
-                for k, v in pin.metadata.items()
-                if not (k == "electrical" and v == "passive")
+                k: v for k, v in pin.metadata.items() if not (k == "electrical" and v == "passive")
             }
             if filtered:
-                meta_str = "  " + "  ".join(
-                    f"{k}={v}" for k, v in sorted(filtered.items())
-                )
+                meta_str = "  " + "  ".join(f"{k}={v}" for k, v in sorted(filtered.items()))
 
             dest_str = _trace_destinations(pin, comp)
 
             if pin.name:
                 lines.append(
-                    f"  Pin {pin.designator:<5s}  {pin.name:<15s}"
-                    f" -> {net_str}{meta_str}{dest_str}"
+                    f"  Pin {pin.designator:<5s}  {pin.name:<15s} -> {net_str}{meta_str}{dest_str}"
                 )
             else:
                 lines.append(
-                    f"  Pin {pin.designator:<5s}  {'':<15s}"
-                    f" -> {net_str}{meta_str}{dest_str}"
+                    f"  Pin {pin.designator:<5s}  {'':<15s} -> {net_str}{meta_str}{dest_str}"
                 )
 
         lines.append("")
@@ -192,9 +183,7 @@ def _format_nets(design: Design) -> list[str]:
         for key, value in sorted(net.metadata.items()):
             lines.append(f"  [{key}: {value}]")
 
-        for pin in sorted(
-            net.pins, key=lambda p: (p.component.reference, p.designator)
-        ):
+        for pin in sorted(net.pins, key=lambda p: (p.component.reference, p.designator)):
             ref_pin = f"{pin.component.reference}.{pin.designator}"
             if pin.name:
                 lines.append(f"  {ref_pin:<10s} {pin.name}")
@@ -530,8 +519,7 @@ def format_component_detail(design: Design, ref: str) -> str:
 
     page_names = ", ".join(p.name for p in comp.pages)
     lines = [
-        f"COMPONENT: {comp.reference} | {comp.part}"
-        f" | {comp.description} | Pages: {page_names}"
+        f"COMPONENT: {comp.reference} | {comp.part} | {comp.description} | Pages: {page_names}"
     ]
 
     for key, value in sorted(comp.metadata.items()):
@@ -541,13 +529,9 @@ def format_component_detail(design: Design, ref: str) -> str:
         net_str = _pin_net_str(pin)
         dest_str = _trace_destinations(pin, comp)
         if pin.name:
-            lines.append(
-                f"  Pin {pin.designator:<5s}  {pin.name:<15s} -> {net_str}{dest_str}"
-            )
+            lines.append(f"  Pin {pin.designator:<5s}  {pin.name:<15s} -> {net_str}{dest_str}")
         else:
-            lines.append(
-                f"  Pin {pin.designator:<5s}  {'':<15s} -> {net_str}{dest_str}"
-            )
+            lines.append(f"  Pin {pin.designator:<5s}  {'':<15s} -> {net_str}{dest_str}")
 
     return "\n".join(lines)
 
