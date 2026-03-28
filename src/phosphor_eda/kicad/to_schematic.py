@@ -664,13 +664,11 @@ def _connect_point(
     Checks both exact endpoint match and whether the point lies on a segment.
     """
     wire_points.add(point)
-    # First try exact endpoint match
+    # Connect to all matching endpoints (a junction may touch multiple wires)
     for wp in wire_points:
         if wp != point and abs(wp[0] - point[0]) < 0.01 and abs(wp[1] - point[1]) < 0.01:
             uf.union(point, wp)
-            return
-    # Then check if point lies on a wire segment
+    # Also connect if point lies on any wire segment
     for seg_start, seg_end in wire_segments:
         if _point_on_segment(point, seg_start, seg_end):
             uf.union(point, seg_start)
-            return
