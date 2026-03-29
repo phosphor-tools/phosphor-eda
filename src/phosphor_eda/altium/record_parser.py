@@ -47,6 +47,8 @@ def read_records(data: bytes) -> list[dict[str, str]]:
         payload_len = int.from_bytes(data[pos : pos + 2], "little")
         # data[pos+2] is always 0x00
         # data[pos+3] is record type
+        if pos + 4 + payload_len > len(data):
+            break  # Malformed trailing record
         rec_type = data[pos + 3]
         payload = data[pos + 4 : pos + 4 + payload_len]
         if rec_type == 0 and payload:
