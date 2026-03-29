@@ -433,7 +433,7 @@ def _build_page(
         at_node = _find(junc[1:], "at")
         if at_node:
             jp = (round(_num(at_node, 1), 4), round(_num(at_node, 2), 4))
-            _connect_point(uf, jp, wire_segments, wire_points)
+            _connect_point(uf, jp, wire_segments, wire_points, merge_all=True)
 
     # --- Labels assign net names to wire groups ---
     group_names: dict[tuple[float, float], str] = {}
@@ -658,17 +658,26 @@ def _connect_point(
     point: tuple[float, float],
     wire_segments: list[tuple[tuple[float, float], tuple[float, float]]],
     wire_points: set[tuple[float, float]],
+    *,
+    merge_all: bool = False,
 ) -> None:
     """Connect a point to the wire network.
 
     Checks both exact endpoint match and whether the point lies on a segment.
+    When merge_all is True (junctions), unions with every touching wire so
+    crossing nets are merged.  Otherwise stops after the first match to
+    avoid accidentally shorting independent nets at a bare crossover.
     """
     wire_points.add(point)
-    # Connect to all matching endpoints (a junction may touch multiple wires)
+    # Exact endpoint match
     for wp in wire_points:
         if wp != point and abs(wp[0] - point[0]) < 0.01 and abs(wp[1] - point[1]) < 0.01:
             uf.union(point, wp)
-    # Also connect if point lies on any wire segment
+            if not merge_all:
+                return
+    # Check if point lies on a wire segment
     for seg_start, seg_end in wire_segments:
         if _point_on_segment(point, seg_start, seg_end):
             uf.union(point, seg_start)
+            if not merge_all:
+                return
