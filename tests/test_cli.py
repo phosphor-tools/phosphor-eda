@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from click.testing import CliRunner
+
 from phosphor_eda.cli import main
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"

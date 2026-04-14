@@ -1,6 +1,7 @@
 """Tests for the schematic text serializer."""
 
 import pytest
+
 from phosphor_eda.schematic import Component, Design, Net, Page, Pin
 from phosphor_eda.serialize import (
     filter_components,
