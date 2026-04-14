@@ -6,6 +6,7 @@ OrCAD, and Eagle into a unified Design model.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from phosphor_eda.altium.parser import parse_altium
@@ -22,6 +23,9 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from phosphor_eda.schematic import Design
+
+# Matches "Sheetfile" "<value>" in KiCad S-expression text.
+_SHEETFILE_RE = re.compile(r'"Sheetfile"\s+"([^"]+)"')
 
 
 def _load_altium(path: Path) -> Design:
@@ -74,32 +78,59 @@ def find_project_root(path: Path) -> Path | None:
 
 
 def _find_altium_project(schdoc: Path) -> Path | None:
-    """Find a .PrjPcb in the same directory that references *schdoc*."""
+    """Find a .PrjPcb that references *schdoc*.
+
+    Searches the schdoc's own directory first, then walks up parent
+    directories (up to 5 levels) to handle projects whose DocumentPath
+    values place schematics in subdirectories.
+    """
     schdoc_resolved = schdoc.resolve()
-    for child in schdoc.parent.iterdir():
-        if not child.is_file() or child.suffix.lower() != ".prjpcb":
-            continue
-        project = parse_prjpcb_file(str(child))
-        for rel_path in project.schematic_paths:
-            if (child.parent / rel_path).resolve() == schdoc_resolved:
-                return child
+    search_dir = schdoc.parent.resolve()
+    for _ in range(5):
+        for child in search_dir.iterdir():
+            if not child.is_file() or child.suffix.lower() != ".prjpcb":
+                continue
+            project = parse_prjpcb_file(str(child))
+            for rel_path in project.schematic_paths:
+                if (child.parent / rel_path.replace("\\", "/")).resolve() == schdoc_resolved:
+                    return child
+        parent = search_dir.parent
+        if parent == search_dir:
+            break  # filesystem root
+        search_dir = parent
     return None
 
 
 def _find_kicad_root(sch: Path) -> Path | None:
-    """Find a sibling .kicad_sch that references *sch* as a child sheet."""
-    target_name = sch.name
-    for sibling in sch.parent.iterdir():
-        if not sibling.is_file() or sibling.suffix.lower() != ".kicad_sch":
-            continue
-        if sibling.resolve() == sch.resolve():
-            continue
-        try:
-            text = sibling.read_text()
-        except OSError:
-            continue
-        if f'"Sheetfile" "{target_name}"' in text:
-            return sibling
+    """Find a .kicad_sch that references *sch* as a child sheet.
+
+    Handles Sheetfile values that may use Windows backslash separators or
+    include subdirectory prefixes (e.g. ``"sheets\\child.kicad_sch"``).
+    Searches the child's own directory first, then walks up parent
+    directories (up to 5 levels).
+    """
+    sch_resolved = sch.resolve()
+    search_dir = sch.parent.resolve()
+    for _ in range(5):
+        for sibling in search_dir.iterdir():
+            if not sibling.is_file() or sibling.suffix.lower() != ".kicad_sch":
+                continue
+            if sibling.resolve() == sch_resolved:
+                continue
+            try:
+                text = sibling.read_text()
+            except OSError:
+                continue
+            # Extract all Sheetfile values and resolve them relative to the
+            # sibling's directory, normalizing Windows backslashes.
+            for match in _SHEETFILE_RE.finditer(text):
+                sheet_ref = match.group(1).replace("\\", "/")
+                if (sibling.parent / sheet_ref).resolve() == sch_resolved:
+                    return sibling
+        parent = search_dir.parent
+        if parent == search_dir:
+            break  # filesystem root
+        search_dir = parent
     return None
 
 

@@ -1,5 +1,6 @@
 """Parse Altium .SchDoc files into SchematicPage objects."""
 
+import sys
 from pathlib import Path
 
 from phosphor_eda.altium.project import parse_prjpcb_file
@@ -186,10 +187,17 @@ def parse_altium(path: Path) -> ParsedDesign:
         project = parse_prjpcb_file(str(path))
         project_dir = path.parent
         for rel_path in project.schematic_paths:
-            schdoc = project_dir / rel_path
+            # Altium stores paths with Windows backslashes; normalize so
+            # pathlib treats separators correctly on all platforms.
+            schdoc = project_dir / rel_path.replace("\\", "/")
             if schdoc.exists():
                 page = parse_schematic_sheet(schdoc)
                 design.pages.append(page)
+            else:
+                print(
+                    f"Warning: schematic sheet not found: {rel_path} (resolved to {schdoc})",
+                    file=sys.stderr,
+                )
     else:
         page = parse_schematic_sheet(path)
         design.pages.append(page)
