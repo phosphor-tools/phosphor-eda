@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import re
+import sys
 from typing import TYPE_CHECKING
 
 import sexpdata
@@ -290,8 +291,14 @@ def kicad_to_design(path: Path, name: str = "") -> Design:
     all_lib_descs = dict(lib_descs)
     for sheet_node in child_sheets:
         sheet_name, sheet_file = _parse_sheet_info(sheet_node)
-        child_path = path.parent / sheet_file
+        # KiCad files created on Windows may use backslash separators;
+        # normalize so pathlib resolves them correctly on all platforms.
+        child_path = path.parent / sheet_file.replace("\\", "/")
         if not child_path.exists():
+            print(
+                f"Warning: child sheet not found: {sheet_file} (resolved to {child_path})",
+                file=sys.stderr,
+            )
             continue
         with open(child_path) as f:
             child_data = sexpdata.loads(f.read())
