@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+
 from phosphor_eda.convert import (
     SCHEMATIC_EXTENSIONS,
     convert,

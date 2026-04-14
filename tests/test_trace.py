@@ -1,6 +1,7 @@
 """Tests for signal path tracing through 2-pin passives."""
 
 import pytest
+
 from phosphor_eda.schematic import Component, Design, Net, Page, Pin
 from phosphor_eda.trace import (
     find_paths,

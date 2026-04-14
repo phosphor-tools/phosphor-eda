@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+
 from phosphor_eda.validate import Severity, validate_design
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
