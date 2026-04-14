@@ -9,6 +9,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+
 from phosphor_eda.altium.parser import parse_altium
 from phosphor_eda.altium.project import parse_prjpcb
 from phosphor_eda.convert import find_project_root
