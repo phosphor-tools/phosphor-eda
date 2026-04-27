@@ -589,6 +589,14 @@ def format_page_detail(design: Design, page_name: str) -> str:
         for comp in sorted(page.components, key=lambda c: c.reference):
             lines.append(f"  {comp.reference:8s} {comp.part:20s} {comp.description}")
 
+    if page.annotations:
+        lines.append("")
+        lines.append("Notes:")
+        for annotation in page.annotations:
+            for line in annotation.splitlines():
+                lines.append(f"  {line}")
+            lines.append("")
+
     if page.nets:
         lines.append("")
         lines.append("Nets:")

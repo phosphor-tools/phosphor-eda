@@ -65,6 +65,10 @@ class Page:
     ports: list[Port] = field(default_factory=list)
     nets: list[Net] = field(default_factory=list)
     metadata: dict[str, str] = field(default_factory=dict)
+    annotations: list[str] = field(default_factory=list)
+    """Free-text annotations placed on the schematic sheet — revision notes,
+    design rationale, change history, configuration documentation. Each entry
+    is one text block as placed by the designer."""
 
 
 @dataclass
