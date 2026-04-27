@@ -236,7 +236,7 @@ def serialize_design(design: Design) -> str:
 
 def write_design(design: Design, output_path: Path) -> None:
     """Write a Design to a text file."""
-    output_path.write_text(serialize_design(design))
+    output_path.write_text(serialize_design(design), encoding="utf-8")
 
 
 # ---- Filters ----
