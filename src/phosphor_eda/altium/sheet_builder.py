@@ -959,6 +959,13 @@ def build_page(
         if param.name and param.text and param.text != "*":
             page.metadata[param.name] = param.text
 
+    # --- Text annotations from RECORD=28 text frames ---
+    # Text frames carry revision notes, design rationale, and change history.
+    for frame in sheet.text_frames:
+        text = frame.text.replace("~1", "\n").strip()
+        if text:
+            page.annotations.append(text)
+
     # Build Net objects
     nets_by_name: dict[str, Net] = {}
     for nname in sorted(set(coord_to_net_name.values())):
