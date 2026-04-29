@@ -189,7 +189,7 @@ def _int_to_mm(val: int) -> float:
 
 def _parse_mil(s: str) -> float:
     """Parse a mil-string like ``'1153.8945mil'`` and return mm."""
-    return float(s.rstrip("mil")) * _MIL_TO_MM
+    return float(s.removesuffix("mil")) * _MIL_TO_MM
 
 
 def _parse_rotation(s: str) -> float:
