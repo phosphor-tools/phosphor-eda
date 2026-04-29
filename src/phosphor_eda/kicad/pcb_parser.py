@@ -21,6 +21,7 @@ from phosphor_eda.pcb import (
     PcbFootprint,
     PcbLayer,
     PcbLine,
+    PcbModel3D,
     PcbNet,
     PcbPad,
     PcbPolygon,
@@ -477,6 +478,47 @@ def _parse_fp_texts(
     return texts
 
 
+def _parse_fp_models(fp_sexpr: SExpNode) -> list[PcbModel3D]:
+    """Parse all (model ...) entries from a footprint s-expression."""
+    models: list[PcbModel3D] = []
+    for node in sexp.find_all(fp_sexpr, "model"):
+        if len(node) < 2:
+            continue
+        raw_path = node[1]
+        source = raw_path.value() if isinstance(raw_path, sexpdata.Symbol) else str(raw_path)
+
+        # KiCad 6+ uses (offset (xyz ...)), KiCad 5 uses (at (xyz ...))
+        offset_node = sexp.find(node, "offset") or sexp.find(node, "at")
+        scale_node = sexp.find(node, "scale")
+        rotate_node = sexp.find(node, "rotate")
+
+        def _xyz(parent: SExpNode | None) -> tuple[float, float, float]:
+            if not parent:
+                return (0.0, 0.0, 0.0)
+            xyz = sexp.find(parent, "xyz")
+            if not xyz or len(xyz) < 4:
+                return (0.0, 0.0, 0.0)
+            return (sexp.num(xyz, 1), sexp.num(xyz, 2), sexp.num(xyz, 3))
+
+        offset = _xyz(offset_node)
+        scale = _xyz(scale_node)
+        rotation = _xyz(rotate_node)
+
+        # Default scale to (1, 1, 1) if all zeros (missing node)
+        if scale == (0.0, 0.0, 0.0) and not scale_node:
+            scale = (1.0, 1.0, 1.0)
+
+        models.append(
+            PcbModel3D(
+                source=source,
+                offset=offset,
+                rotation=rotation,
+                scale=scale,
+            )
+        )
+    return models
+
+
 def _parse_footprint(
     fp_sexpr: SExpNode,
 ) -> tuple[PcbFootprint, list[PcbLine], list[PcbArc], list[PcbPolygon]]:
@@ -511,6 +553,8 @@ def _parse_footprint(
 
     texts = _parse_fp_texts(fp_sexpr, fp_x, fp_y, fp_rot, ref)
 
+    models = _parse_fp_models(fp_sexpr)
+
     bbox = _compute_bbox(pads, court_lines)
 
     fp = PcbFootprint(
@@ -527,6 +571,7 @@ def _parse_footprint(
         fab_circles=fab_circles,
         fab_arcs=fab_arcs,
         texts=texts,
+        models_3d=models,
         bbox=bbox,
     )
     return fp, edge_lines, edge_arcs, fp_polys

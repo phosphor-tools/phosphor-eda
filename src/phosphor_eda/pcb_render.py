@@ -9,6 +9,7 @@ No external dependencies — SVG is built via string formatting.
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections import defaultdict
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
         PcbArc,
         PcbBoard,
         PcbCircle,
+        PcbFootprint,
         PcbLine,
         PcbPad,
         PcbPolygon,
@@ -39,7 +41,7 @@ def _fmt_attrs(attrs: dict[str, str] | None) -> str:
     """Format a dict of attributes into an SVG attribute string."""
     if not attrs:
         return ""
-    return " " + " ".join(f'{k}="{v}"' for k, v in attrs.items())
+    return " " + " ".join(f'{k}="{xml_escape(v, {chr(34): "&quot;"})}"' for k, v in attrs.items())
 
 
 class _Svg:
@@ -775,6 +777,27 @@ def _draw_pad(svg: _Svg, pad: PcbPad, attrs: dict[str, str]) -> None:
         svg.rect(pad.x - hw, pad.y - hh, pad.width, pad.height, attrs=attrs)
 
 
+def _body_group_attrs(fp: PcbFootprint) -> dict[str, str]:
+    """Build attributes for a component body <g>, including model metadata."""
+    attrs: dict[str, str] = {"data-type": "body", "data-component": fp.reference}
+    cached_models = [m for m in fp.models_3d if m.cache_key]
+    if cached_models:
+        models_json = json.dumps(
+            [
+                {
+                    "key": m.cache_key,
+                    "offset": list(m.offset),
+                    "rotation": list(m.rotation),
+                    "scale": list(m.scale),
+                }
+                for m in cached_models
+            ],
+            separators=(",", ":"),
+        )
+        attrs["data-models"] = models_json
+    return attrs
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -1064,23 +1087,30 @@ def render_pcb_svg(
     # -- Fab layer groups (component bodies) -------------------------------
     # Paint order: back fab first, then front fab (same as copper).
     fab_ordered = sorted(fab_layer_defs, key=lambda lyr: 0 if lyr.side == "back" else 1)
+
+    # Track which footprints have been emitted in a body group so we can
+    # emit model-only groups for footprints with 3D models but no fab geometry.
+    emitted_refs: set[str] = set()
+
     for fab_def in fab_ordered:
         fab_layer = fab_def.name
-        fab_content: list[tuple[str, list[PcbLine], list[PcbCircle], list[PcbArc]]] = []
+        fab_content: list[tuple[PcbFootprint, list[PcbLine], list[PcbCircle], list[PcbArc]]] = []
         for fp in board.footprints:
             fab_lines = [ln for ln in fp.fab_lines if ln.layer == fab_layer]
             fab_circles = [c for c in fp.fab_circles if c.layer == fab_layer]
             fab_arcs = [a for a in fp.fab_arcs if a.layer == fab_layer]
             if fab_lines or fab_circles or fab_arcs:
-                fab_content.append((fp.reference, fab_lines, fab_circles, fab_arcs))
+                fab_content.append((fp, fab_lines, fab_circles, fab_arcs))
 
         if not fab_content:
             continue
 
         cls = _layer_class(fab_layer)
         svg.group_start(attrs={"data-layer": fab_layer, "class": cls})
-        for ref, fab_lines, fab_circles, fab_arcs in fab_content:
-            svg.group_start(attrs={"data-type": "body", "data-component": ref})
+        for fp, fab_lines, fab_circles, fab_arcs in fab_content:
+            body_attrs = _body_group_attrs(fp)
+            svg.group_start(attrs=body_attrs)
+            emitted_refs.add(fp.reference)
             # Try to build filled polygon from fab lines
             poly = _chain_lines_to_polygon(fab_lines)
             if poly:
@@ -1112,6 +1142,20 @@ def render_pcb_svg(
                 svg.raw(
                     f'<path d="{d}" stroke-width="{max(arc.width, 0.08):.4f}" class="body-arc"/>'
                 )
+            svg.group_end()
+        svg.group_end()
+
+    # Emit empty body groups for footprints that have 3D models but no fab
+    # geometry. The renderer needs these to place 3D models.
+    model_only_fps = [
+        fp
+        for fp in board.footprints
+        if fp.reference not in emitted_refs and any(m.cache_key for m in fp.models_3d)
+    ]
+    if model_only_fps:
+        svg.group_start(attrs={"data-layer": "models", "class": "models"})
+        for fp in model_only_fps:
+            svg.group_start(attrs=_body_group_attrs(fp))
             svg.group_end()
         svg.group_end()
 

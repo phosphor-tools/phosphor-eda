@@ -26,6 +26,7 @@ from phosphor_eda.pcb import (
     PcbFootprint,
     PcbLayer,
     PcbLine,
+    PcbModel3D,
     PcbNet,
     PcbPad,
     PcbPolygon,
@@ -988,6 +989,56 @@ def _parse_board_outline(
     return outline_lines, outline_arcs
 
 
+def _parse_component_bodies(data: bytes) -> dict[int, list[PcbModel3D]]:
+    """Parse ComponentBodies6/Data → {component_index: [PcbModel3D, ...]}.
+
+    Text records with pipe-delimited properties. Key properties:
+    - ``MODELID``: OLE stream ID for the embedded STEP data
+    - ``COMPONENT``: component index (int, 65535 = board-level body)
+    - ``MODEL.2D.X``, ``MODEL.2D.Y``: 2D position in mil
+    - ``MODEL.3D.ROTX/Y/Z``: rotation in degrees
+    - ``MODEL.3D.DZ``: Z offset in mil
+    """
+    records = _read_text_records(data)
+    result: dict[int, list[PcbModel3D]] = {}
+
+    for rec in records:
+        model_id = rec.get("modelid", "")
+        if not model_id:
+            continue
+
+        comp_str = rec.get("component", "")
+        if not comp_str:
+            continue
+        comp_idx = int(comp_str)
+        if comp_idx == _COMPONENT_NONE:
+            continue
+
+        # 2D position (mil → mm)
+        x_str = rec.get("model.2d.x", "0mil")
+        y_str = rec.get("model.2d.y", "0mil")
+        offset_x = _parse_mil(x_str)
+        offset_y = -_parse_mil(y_str)
+
+        # Z offset (mil → mm)
+        dz_str = rec.get("model.3d.dz", "0mil")
+        offset_z = _parse_mil(dz_str)
+
+        # Rotation (degrees, may be scientific notation)
+        rot_x = float(rec.get("model.3d.rotx", "0"))
+        rot_y = float(rec.get("model.3d.roty", "0"))
+        rot_z = float(rec.get("model.3d.rotz", "0"))
+
+        model = PcbModel3D(
+            source=model_id,
+            offset=(offset_x, offset_y, offset_z),
+            rotation=(rot_x, rot_y, rot_z),
+        )
+        result.setdefault(comp_idx, []).append(model)
+
+    return result
+
+
 def _compute_bbox(
     fp: PcbFootprint,
 ) -> tuple[float, float, float, float] | None:
@@ -1027,6 +1078,7 @@ def parse_altium_pcb(path: Path) -> PcbBoard:
         fills_data = _read_stream(ole, "Fills6/Data")
         regions_data = _read_stream(ole, "Regions6/Data")
         sb_regions_data = _read_stream(ole, "ShapeBasedRegions6/Data")
+        comp_bodies_data = _read_stream(ole, "ComponentBodies6/Data")
         board_data = _read_stream(ole, "Board6/Data")
     finally:
         ole.close()
@@ -1052,6 +1104,7 @@ def parse_altium_pcb(path: Path) -> PcbBoard:
     fills = _parse_fills(fills_data, layer_map)
     regions = _parse_regions(regions_data, nets, layer_map)
     sb_board_polys, sb_comp_polys = _parse_shape_based_regions(sb_regions_data, nets, layer_map)
+    comp_models = _parse_component_bodies(comp_bodies_data)
 
     # Board outline
     outline_lines, outline_arcs = _parse_board_outline(tracks_data, arcs_data, layer_map)
@@ -1096,6 +1149,10 @@ def parse_altium_pcb(path: Path) -> PcbBoard:
                     fp.silkscreen_polygons.append(poly)
                 elif poly.layer in fab_names:
                     fp.fab_polygons.append(poly)
+
+    for comp_idx, models in comp_models.items():
+        if comp_idx < len(footprints):
+            footprints[comp_idx].models_3d.extend(models)
 
     # Compute footprint bounding boxes
     for fp in footprints:
