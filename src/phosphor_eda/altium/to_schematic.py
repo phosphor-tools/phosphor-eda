@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from typing import TYPE_CHECKING
 
+from phosphor_eda.altium.errors import ParseContext
 from phosphor_eda.altium.project import parse_prjpcb_file
 from phosphor_eda.altium.sheet_builder import (
     SheetRecords,
@@ -21,13 +22,18 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def load_project_sheets(path: Path) -> dict[str, SheetRecords]:
+def load_project_sheets(
+    path: Path,
+    ctx: ParseContext | None = None,
+) -> dict[str, SheetRecords]:
     """Load all schematic sheets from a .PrjPcb project or single .SchDoc.
 
     Returns an ordered dict mapping sheet name → SheetRecords.  For
     ``.PrjPcb`` files, sheets are loaded in project file order.  Missing
     sheets print a warning to stderr and are skipped.
     """
+    if ctx is None:
+        ctx = ParseContext()
     sheets: dict[str, SheetRecords] = {}
 
     if path.suffix.lower() == ".prjpcb":
@@ -38,15 +44,19 @@ def load_project_sheets(path: Path) -> dict[str, SheetRecords]:
             # pathlib treats separators correctly on all platforms.
             schdoc = project_dir / rel_path.replace("\\", "/")
             if schdoc.exists():
-                sheet = load_sheet(str(schdoc))
+                sheet = load_sheet(str(schdoc), ctx=ctx)
                 sheets[sheet.name] = sheet
             else:
+                ctx.warn(
+                    "missing_sheet",
+                    f"Schematic sheet not found: {rel_path} (resolved to {schdoc})",
+                )
                 print(
                     f"Warning: schematic sheet not found: {rel_path} (resolved to {schdoc})",
                     file=sys.stderr,
                 )
     else:
-        sheet = load_sheet(str(path))
+        sheet = load_sheet(str(path), ctx=ctx)
         sheets[sheet.name] = sheet
 
     return sheets
@@ -59,8 +69,10 @@ def altium_to_design(path: Path, name: str = "") -> Design:
     handles project file dispatch, sheet loading, net resolution, harness
     scanning, and domain model construction.
     """
+    ctx = ParseContext()
+
     # Phase 1: Load all sheets into typed records with spatial indices
-    sheets = load_project_sheets(path)
+    sheets = load_project_sheets(path, ctx=ctx)
 
     # Phase 2: Pre-scan harness info across all pages
     harness_port_nets: dict[str, list[tuple[str, dict[str, str]]]] = {}
@@ -110,5 +122,9 @@ def altium_to_design(path: Path, name: str = "") -> Design:
             if key in page.metadata:
                 design_meta[key] = page.metadata[key]
                 break
+
+    # Surface parse issues count in design metadata
+    if ctx.issues:
+        design_meta["parse_issue_count"] = str(len(ctx.issues))
 
     return merge_pages(name or path.stem, pages, metadata=design_meta)

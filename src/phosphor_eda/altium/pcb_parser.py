@@ -975,9 +975,13 @@ def _read_stream(ole: olefile.OleFileIO, name: str) -> bytes:
     return b""
 
 
-def parse_altium_pcb(path: Path) -> PcbBoard:
+def parse_altium_pcb(
+    path: Path,
+    ctx: ParseContext | None = None,
+) -> PcbBoard:
     """Parse an Altium .PcbDoc file into the PCB domain model."""
-    ctx = ParseContext()
+    if ctx is None:
+        ctx = ParseContext()
     ole = olefile.OleFileIO(str(path))
     try:
         # Read all streams

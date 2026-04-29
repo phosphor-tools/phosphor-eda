@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from phosphor_eda.altium.errors import ParseContext
 from phosphor_eda.altium.record_factory import (
     compute_entry_coord,
     link_children,
@@ -306,10 +307,15 @@ class SheetRecords:
 # ---------------------------------------------------------------------------
 
 
-def load_sheet(schdoc_path: str) -> SheetRecords:
+def load_sheet(
+    schdoc_path: str,
+    ctx: ParseContext | None = None,
+) -> SheetRecords:
     """Parse a .SchDoc file into typed records with spatial indices."""
+    if ctx is None:
+        ctx = ParseContext()
     raw_records = read_schematic_records(schdoc_path)
-    records = materialize_records(raw_records)
+    records = materialize_records(raw_records, ctx=ctx)
     children = link_children(records)
 
     wire_recs = [r for r in records if isinstance(r, WireRec)]
