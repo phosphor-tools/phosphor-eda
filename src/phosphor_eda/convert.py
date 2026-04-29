@@ -9,7 +9,6 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from phosphor_eda.altium.parser import parse_altium
 from phosphor_eda.altium.project import parse_prjpcb_file
 from phosphor_eda.altium.to_schematic import altium_to_design
 from phosphor_eda.dsn.parser import parse_dsn
@@ -29,8 +28,7 @@ _SHEETFILE_RE = re.compile(r'"Sheetfile"\s+"([^"]+)"')
 
 
 def _load_altium(path: Path) -> Design:
-    raw = parse_altium(path)
-    return altium_to_design(raw, name=path.stem)
+    return altium_to_design(path, name=path.stem)
 
 
 def _load_dsn(path: Path) -> Design:

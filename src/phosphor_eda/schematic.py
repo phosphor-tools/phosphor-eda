@@ -10,7 +10,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 
-@dataclass
+@dataclass(repr=False)
 class Pin:
     """A component pin. References its parent component and connected net."""
 
@@ -21,8 +21,12 @@ class Pin:
     no_connect: bool = False
     metadata: dict[str, str] = field(default_factory=dict)
 
+    def __repr__(self) -> str:
+        net_name = self.net.name if self.net else None
+        return f"Pin({self.designator!r}, component={self.component.reference!r}, net={net_name!r})"
 
-@dataclass
+
+@dataclass(repr=False)
 class Component:
     """A placed component (IC, resistor, connector, etc.)."""
 
@@ -33,8 +37,11 @@ class Component:
     pages: list[Page] = field(default_factory=list)
     metadata: dict[str, str] = field(default_factory=dict)
 
+    def __repr__(self) -> str:
+        return f"Component({self.reference!r}, part={self.part!r}, pins={len(self.pins)})"
 
-@dataclass
+
+@dataclass(repr=False)
 class Net:
     """A named electrical connection between pins."""
 
@@ -44,8 +51,11 @@ class Net:
     bus: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)
 
+    def __repr__(self) -> str:
+        return f"Net({self.name!r}, pins={len(self.pins)})"
 
-@dataclass
+
+@dataclass(repr=False)
 class Port:
     """A cross-page connection point. Bridges a net to another page."""
 
@@ -54,6 +64,9 @@ class Port:
     net: Net
     harness: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)
+
+    def __repr__(self) -> str:
+        return f"Port({self.name!r}, page={self.page.name!r}, net={self.net.name!r})"
 
 
 @dataclass

@@ -49,7 +49,6 @@ from phosphor_eda.altium.records import (
     WireRec,
 )
 from phosphor_eda.altium.spatial import UnionFind, WireIndex, point_on_segment
-from phosphor_eda.models import SchematicPage
 from phosphor_eda.schematic import Component, Net, Page, Pin, Port
 
 if TYPE_CHECKING:
@@ -932,15 +931,9 @@ def build_page(
     coord_to_net_name: dict[tuple[int, int], str],
     harness_port_nets: dict[str, list[tuple[str, dict[str, str]]]],
     harness_members_by_type: dict[str, list[str]],
-    raw_page: object | None = None,
     nc_wire_coords: set[tuple[int, int]] | None = None,
 ) -> Page:
-    """Build a domain model Page from a sheet's typed records.
-
-    ``raw_page`` is the legacy ``SchematicPage`` from ``models.py``, needed
-    during the transition to get PlacedInstance data. Once the migration is
-    complete, this parameter can be removed.
-    """
+    """Build a domain model Page from a sheet's typed records."""
     page = Page(name=sheet.name)
 
     # --- Page metadata from RECORD=31 (sheet properties) ---
@@ -1024,143 +1017,104 @@ def build_page(
         if param.owner_index >= 0 and param.name and param.text and param.text != "*":
             params_by_owner.setdefault(param.owner_index, {})[param.name] = param.text
 
-    # Build Component and Pin objects
-    # We need PlacedInstance data from raw_page for pin coordinates
-    if raw_page is not None:
-        assert isinstance(raw_page, SchematicPage)
+    # Group pin records by owner index for efficient per-component lookup
+    pins_by_owner: dict[int, list[PinRec]] = {}
+    for key, prec in pin_rec_by_key.items():
+        pins_by_owner.setdefault(key[0], []).append(prec)
 
-        for raw_inst in raw_page.instances:
-            comp = Component(
-                reference=raw_inst.reference,
-                part=raw_inst.package_name,
-                description="",
-                pages=[page],
-            )
+    # Build Component and Pin objects directly from typed records
+    for comp_owner_idx in sorted(comp_record_keys):
+        comp_rec = comp_record_keys[comp_owner_idx]
+        reference = designator_by_owner.get(comp_owner_idx, "")
+        if not reference:
+            continue
 
-            # Find OwnerIndex for this component.
-            # For multi-part components on the same page, match by
-            # location so each PlacedInstance pairs with the correct
-            # ComponentRec (and its current_part_id).
-            comp_owner_idx: int | None = None
-            inst_loc = (raw_inst.loc_x, raw_inst.loc_y)
-            for idx, ref_text in designator_by_owner.items():
-                if (
-                    ref_text == raw_inst.reference
-                    and idx in comp_record_keys
-                    and comp_record_keys[idx].location == inst_loc
-                ):
-                    comp_owner_idx = idx
-                    break
-            # Fallback: first reference match (single-instance case)
-            if comp_owner_idx is None:
-                for idx, ref_text in designator_by_owner.items():
-                    if ref_text == raw_inst.reference and idx in comp_record_keys:
-                        comp_owner_idx = idx
-                        break
+        comp = Component(
+            reference=reference,
+            part=comp_rec.lib_reference,
+            description="",
+            pages=[page],
+        )
 
-            # Apply parameters as metadata
-            if comp_owner_idx is not None and comp_owner_idx in params_by_owner:
-                comp.metadata.update(params_by_owner[comp_owner_idx])
+        # Apply parameters as metadata
+        if comp_owner_idx in params_by_owner:
+            comp.metadata.update(params_by_owner[comp_owner_idx])
 
-            if "Description" in comp.metadata:
-                comp.description = comp.metadata.pop("Description")
+        if "Description" in comp.metadata:
+            comp.description = comp.metadata.pop("Description")
 
-            # Enrich from ComponentRec fields
-            if comp_owner_idx is not None:
-                comp_rec = comp_record_keys[comp_owner_idx]
+        # Description from ComponentRec (fallback if not from parameter)
+        if not comp.description and comp_rec.description:
+            comp.description = comp_rec.description
 
-                # Description from ComponentRec (fallback if not from parameter)
-                if not comp.description and comp_rec.description:
-                    comp.description = comp_rec.description
+        if comp_rec.unique_id:
+            comp.metadata["UniqueId"] = comp_rec.unique_id
+        if comp_rec.database_table:
+            comp.metadata["DatabaseTable"] = comp_rec.database_table
+        if comp_rec.design_item_id:
+            comp.metadata["DesignItemId"] = comp_rec.design_item_id
+        if comp_rec.part_count > 2:
+            comp.metadata["PartCount"] = str(comp_rec.part_count)
+            comp.metadata["CurrentPartId"] = str(comp_rec.current_part_id)
+        if comp_rec.display_mode_count > 1:
+            comp.metadata["DisplayModeCount"] = str(comp_rec.display_mode_count)
+            comp.metadata["DisplayMode"] = str(comp_rec.display_mode)
+        if comp_rec.orientation:
+            comp.metadata["Orientation"] = str(comp_rec.orientation)
+        if comp_rec.is_mirrored:
+            comp.metadata["IsMirrored"] = "True"
 
-                if comp_rec.unique_id:
-                    comp.metadata["UniqueId"] = comp_rec.unique_id
-                if comp_rec.database_table:
-                    comp.metadata["DatabaseTable"] = comp_rec.database_table
-                if comp_rec.design_item_id:
-                    comp.metadata["DesignItemId"] = comp_rec.design_item_id
-                if comp_rec.part_count > 2:
-                    comp.metadata["PartCount"] = str(comp_rec.part_count)
-                    comp.metadata["CurrentPartId"] = str(comp_rec.current_part_id)
-                if comp_rec.display_mode_count > 1:
-                    comp.metadata["DisplayModeCount"] = str(comp_rec.display_mode_count)
-                    comp.metadata["DisplayMode"] = str(comp_rec.display_mode)
-                if comp_rec.orientation:
-                    comp.metadata["Orientation"] = str(comp_rec.orientation)
-                if comp_rec.is_mirrored:
-                    comp.metadata["IsMirrored"] = "True"
+        # Footprint via Implementation chain
+        footprint = _find_footprint(comp_owner_idx, sheet.children)
+        if footprint:
+            comp.metadata["Footprint"] = footprint
 
-                # Footprint via Implementation chain
-                footprint = _find_footprint(comp_owner_idx, sheet.children)
-                if footprint:
-                    comp.metadata["Footprint"] = footprint
+        # Altium's PartCount is always actual_electrical_parts + 1.
+        # PartCount=2 means 1 part (every simple passive); true
+        # multi-part components (e.g. dual opamp, MCU sections) have
+        # PartCount > 2.
+        is_multipart = comp_rec.part_count > 2
 
-            # Altium's PartCount is always actual_electrical_parts + 1.
-            # PartCount=2 means 1 part (every simple passive); true
-            # multi-part components (e.g. dual opamp, MCU sections) have
-            # PartCount > 2.
-            comp_rec_for_pins: ComponentRec | None = (
-                comp_record_keys.get(comp_owner_idx) if comp_owner_idx is not None else None
-            )
-            is_multipart = comp_rec_for_pins is not None and comp_rec_for_pins.part_count > 2
-            for raw_pin in raw_inst.pin_connections:
-                coord = (raw_pin.pin_x, raw_pin.pin_y)
-                net_name = coord_to_net_name.get(coord)
-                net = nets_by_name.get(net_name) if net_name else None
-                is_nc = coord in nc_coords
+        for prec in pins_by_owner.get(comp_owner_idx, []):
+            # For multi-part components, skip pins belonging to
+            # other parts.  owner_part_id==0 means shared (e.g.
+            # power pins), which we keep on every part.
+            if (
+                is_multipart
+                and prec.owner_part_id != 0
+                and prec.owner_part_id != comp_rec.current_part_id
+            ):
+                continue
 
-                pin_name = ""
-                pin_meta: dict[str, str] = {}
-                prec: PinRec | None = None
-                if comp_owner_idx is not None:
-                    pin_key = (comp_owner_idx, raw_pin.pin_number)
-                    prec = pin_rec_by_key.get(pin_key)
+            coord = prec.tip
+            net_name = coord_to_net_name.get(coord)
+            net = nets_by_name.get(net_name) if net_name else None
+            is_nc = coord in nc_coords
 
-                    # For multi-part components, skip pins belonging to
-                    # other parts.  owner_part_id==0 means shared (e.g.
-                    # power pins), which we keep on every page.
-                    if (
-                        is_multipart
-                        and prec is not None
-                        and comp_rec_for_pins is not None
-                        and (
-                            prec.owner_part_id != 0
-                            and prec.owner_part_id != comp_rec_for_pins.current_part_id
-                        )
-                    ):
-                        continue
-
-                    # If we have no PinRec for a multi-part component and
-                    # the pin has no net connection, it's a ghost from
-                    # another part's pin set — skip it.
-                    if is_multipart and prec is None and net is None and not is_nc:
-                        continue
-
-                    if prec is not None:
-                        pin_name = prec.name
-                        if prec.electrical is not None:
-                            pin_meta["electrical"] = _PIN_ELECTRICAL_NAMES.get(
-                                prec.electrical,
-                                str(prec.electrical),
-                            )
-                        if prec.has_overline:
-                            pin_meta["active_low"] = "true"
-                        if is_multipart and prec.owner_part_id:
-                            pin_meta["owner_part_id"] = str(prec.owner_part_id)
-
-                pin = Pin(
-                    designator=raw_pin.pin_number,
-                    name=pin_name,
-                    component=comp,
-                    net=net,
-                    no_connect=is_nc,
-                    metadata=pin_meta,
+            pin_meta: dict[str, str] = {}
+            if prec.electrical is not None:
+                pin_meta["electrical"] = _PIN_ELECTRICAL_NAMES.get(
+                    prec.electrical,
+                    str(prec.electrical),
                 )
-                comp.pins.append(pin)
-                if net is not None:
-                    net.pins.append(pin)
+            if prec.has_overline:
+                pin_meta["active_low"] = "true"
+            if is_multipart and prec.owner_part_id:
+                pin_meta["owner_part_id"] = str(prec.owner_part_id)
 
-            page.components.append(comp)
+            pin = Pin(
+                designator=prec.designator,
+                name=prec.name,
+                component=comp,
+                net=net,
+                no_connect=is_nc,
+                metadata=pin_meta,
+            )
+            comp.pins.append(pin)
+            if net is not None:
+                net.pins.append(pin)
+
+        page.components.append(comp)
 
     # --- Net metadata from ParameterSets (RECORD=43) ---
     _resolve_net_metadata(sheet, coord_to_net_name, nets_by_name)
