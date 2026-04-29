@@ -13,11 +13,24 @@ All output coordinates are in millimetres with Y increasing downward.
 from __future__ import annotations
 
 import math
-import struct
 from typing import TYPE_CHECKING
 
 import olefile
 
+from phosphor_eda.altium._helpers import u32
+from phosphor_eda.altium.errors import ParseContext
+from phosphor_eda.altium.pcb_records import (
+    COMPONENT_NONE,
+    NET_UNCONNECTED,
+    ArcRecord,
+    FillRecord,
+    PadRecord,
+    RegionRecord,
+    ShapeBasedRegionRecord,
+    TextRecord,
+    TrackRecord,
+    ViaRecord,
+)
 from phosphor_eda.altium.record_parser import parse_record_payload
 from phosphor_eda.pcb import (
     LayerFunction,
@@ -39,32 +52,6 @@ from phosphor_eda.pcb import (
 if TYPE_CHECKING:
     from pathlib import Path
 
-# ---------------------------------------------------------------------------
-# Typed struct helpers — struct.unpack_from returns tuple[Any, ...] in
-# typeshed, so these thin wrappers keep basedpyright happy.
-# ---------------------------------------------------------------------------
-
-
-def _u16(data: bytes | memoryview, offset: int) -> int:
-    """Read uint16 (little-endian) from *data* at *offset*."""
-    return int.from_bytes(data[offset : offset + 2], "little", signed=False)
-
-
-def _i32(data: bytes | memoryview, offset: int) -> int:
-    """Read int32 (little-endian) from *data* at *offset*."""
-    return int.from_bytes(data[offset : offset + 4], "little", signed=True)
-
-
-def _u32(data: bytes | memoryview, offset: int) -> int:
-    """Read uint32 (little-endian) from *data* at *offset*."""
-    return int.from_bytes(data[offset : offset + 4], "little", signed=False)
-
-
-def _f64(data: bytes | memoryview, offset: int) -> float:
-    """Read float64 (little-endian) from *data* at *offset*."""
-    (val,) = struct.unpack_from("<d", data, offset)  # pyright: ignore[reportAny]
-    return float(val)  # pyright: ignore[reportAny]
-
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -76,8 +63,8 @@ _INT_TO_MM = 0.00000254
 # 1 mil = 0.001 inch = 0.0254 mm
 _MIL_TO_MM = 0.0254
 
-_NET_UNCONNECTED = 0xFFFF
-_COMPONENT_NONE = 0xFFFF
+_NET_UNCONNECTED = NET_UNCONNECTED
+_COMPONENT_NONE = COMPONENT_NONE
 
 # Static Altium layer info: (native_name, function, side).
 # Mechanical layers (57-72) are defaults overridden by Board6 MECHKIND.
@@ -150,7 +137,7 @@ def _read_text_records(data: bytes) -> list[dict[str, str]]:
     records: list[dict[str, str]] = []
     pos = 0
     while pos + 4 <= len(data):
-        length = _u32(data, pos)
+        length = u32(data, pos)
         pos += 4
         if length == 0 or pos + length > len(data):
             break
@@ -168,7 +155,7 @@ def _read_binary_records(data: bytes) -> list[tuple[int, bytes]]:
     pos = 0
     while pos + 5 <= len(data):
         rec_type = data[pos]
-        rec_len = _u32(data, pos + 1)
+        rec_len = u32(data, pos + 1)
         pos += 5
         if pos + rec_len > len(data):
             break
@@ -343,7 +330,7 @@ def _parse_components(data: bytes, layer_map: dict[int, PcbLayer]) -> list[PcbFo
 
 
 def _parse_tracks(
-    data: bytes, layer_map: dict[int, PcbLayer]
+    data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext
 ) -> tuple[list[PcbSegment], dict[int, list[PcbLine]]]:
     """Parse Tracks6/Data → board-level segments + per-component lines.
 
@@ -355,24 +342,24 @@ def _parse_tracks(
     comp_lines: dict[int, list[PcbLine]] = {}
 
     for rec_type, body in records:
-        if rec_type != 4 or len(body) < 33:
+        if rec_type != 4:
+            continue
+        track = TrackRecord.from_bytes(body, ctx)
+        if track is None:
             continue
 
-        layer_num = body[0]
-        net_raw = _u16(body, 3)
-        comp_idx = _u16(body, 7)
-        x1 = _int_to_mm(_i32(body, 13))
-        y1 = -_int_to_mm(_i32(body, 17))
-        x2 = _int_to_mm(_i32(body, 21))
-        y2 = -_int_to_mm(_i32(body, 25))
-        width = _int_to_mm(_i32(body, 29))
-
-        layer = _layer_name(layer_num, layer_map)
+        layer = _layer_name(track.layer, layer_map)
         if not layer:
             continue
 
-        if comp_idx == _COMPONENT_NONE:
-            if layer_num in _COPPER_LAYERS:
+        x1 = _int_to_mm(track.start[0])
+        y1 = -_int_to_mm(track.start[1])
+        x2 = _int_to_mm(track.end[0])
+        y2 = -_int_to_mm(track.end[1])
+        width = _int_to_mm(track.width)
+
+        if track.component == _COMPONENT_NONE:
+            if track.layer in _COPPER_LAYERS:
                 segments.append(
                     PcbSegment(
                         start_x=x1,
@@ -381,11 +368,11 @@ def _parse_tracks(
                         end_y=y2,
                         width=width,
                         layer=layer,
-                        net_number=_net_number(net_raw),
+                        net_number=_net_number(track.net),
                     )
                 )
         else:
-            comp_lines.setdefault(comp_idx, []).append(
+            comp_lines.setdefault(track.component, []).append(
                 PcbLine(
                     start_x=x1,
                     start_y=y1,
@@ -399,36 +386,31 @@ def _parse_tracks(
     return segments, comp_lines
 
 
-def _parse_vias(data: bytes, layer_map: dict[int, PcbLayer]) -> list[PcbVia]:
+def _parse_vias(data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext) -> list[PcbVia]:
     """Parse Vias6/Data → list of PcbVia."""
     records = _read_binary_records(data)
     vias: list[PcbVia] = []
 
     for rec_type, body in records:
-        if rec_type != 3 or len(body) < 31:
+        if rec_type != 3:
+            continue
+        via = ViaRecord.from_bytes(body, ctx)
+        if via is None:
             continue
 
-        net_raw = _u16(body, 3)
-        x = _int_to_mm(_i32(body, 13))
-        y = -_int_to_mm(_i32(body, 17))
-        diameter = _int_to_mm(_i32(body, 21))
-        hole = _int_to_mm(_i32(body, 25))
-        start_layer = body[29]
-        end_layer = body[30]
-
-        layers = [_layer_name(start_layer, layer_map), _layer_name(end_layer, layer_map)]
+        layers = [_layer_name(via.start_layer, layer_map), _layer_name(via.end_layer, layer_map)]
         layers = [ly for ly in layers if ly]
         if not layers:
             continue
 
         vias.append(
             PcbVia(
-                x=x,
-                y=y,
-                size=diameter,
-                drill=hole,
+                x=_int_to_mm(via.position[0]),
+                y=-_int_to_mm(via.position[1]),
+                size=_int_to_mm(via.diameter),
+                drill=_int_to_mm(via.hole_size),
                 layers=layers,
-                net_number=_net_number(net_raw),
+                net_number=_net_number(via.net),
             )
         )
 
@@ -436,7 +418,7 @@ def _parse_vias(data: bytes, layer_map: dict[int, PcbLayer]) -> list[PcbVia]:
 
 
 def _parse_arcs(
-    data: bytes, layer_map: dict[int, PcbLayer]
+    data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext
 ) -> tuple[list[PcbTraceArc], dict[int, list[PcbArc]]]:
     """Parse Arcs6/Data → board-level trace arcs + per-component arcs.
 
@@ -448,27 +430,27 @@ def _parse_arcs(
     comp_arcs: dict[int, list[PcbArc]] = {}
 
     for rec_type, body in records:
-        if rec_type != 1 or len(body) < 45:
+        if rec_type != 1:
+            continue
+        arc = ArcRecord.from_bytes(body, ctx)
+        if arc is None:
             continue
 
-        layer_num = body[0]
-        net_raw = _u16(body, 3)
-        comp_idx = _u16(body, 7)
-        cx = _int_to_mm(_i32(body, 13))
-        cy = -_int_to_mm(_i32(body, 17))
-        radius = _int_to_mm(_u32(body, 21))
-        start_angle = _f64(body, 25)
-        end_angle = _f64(body, 33)
-        width = _int_to_mm(_u32(body, 41))
-
-        layer = _layer_name(layer_num, layer_map)
+        layer = _layer_name(arc.layer, layer_map)
         if not layer:
             continue
 
-        # Y is already negated in cy; negate angles to flip arc direction.
-        sx, sy, mx, my, ex, ey = _arc_to_three_point(cx, cy, radius, -start_angle, -end_angle)
+        cx = _int_to_mm(arc.center[0])
+        cy = -_int_to_mm(arc.center[1])
+        radius = _int_to_mm(arc.radius)
+        width = _int_to_mm(arc.width)
 
-        if comp_idx == _COMPONENT_NONE and layer_num in _COPPER_LAYERS:
+        # Y is already negated in cy; negate angles to flip arc direction.
+        sx, sy, mx, my, ex, ey = _arc_to_three_point(
+            cx, cy, radius, -arc.start_angle, -arc.end_angle
+        )
+
+        if arc.component == _COMPONENT_NONE and arc.layer in _COPPER_LAYERS:
             trace_arcs.append(
                 PcbTraceArc(
                     start_x=sx,
@@ -479,11 +461,11 @@ def _parse_arcs(
                     end_y=ey,
                     width=width,
                     layer=layer,
-                    net_number=_net_number(net_raw),
+                    net_number=_net_number(arc.net),
                 )
             )
-        elif comp_idx != _COMPONENT_NONE:
-            comp_arcs.setdefault(comp_idx, []).append(
+        elif arc.component != _COMPONENT_NONE:
+            comp_arcs.setdefault(arc.component, []).append(
                 PcbArc(
                     start_x=sx,
                     start_y=sy,
@@ -500,99 +482,67 @@ def _parse_arcs(
 
 
 def _parse_pads(
-    data: bytes, nets: dict[int, PcbNet], layer_map: dict[int, PcbLayer]
+    data: bytes, nets: dict[int, PcbNet], layer_map: dict[int, PcbLayer], ctx: ParseContext
 ) -> list[tuple[int, PcbPad]]:
     """Parse Pads6/Data → list of (component_index, PcbPad).
 
     Each pad record has 6 subrecords: name, skip, skip, skip, geometry,
-    per-layer-overrides.
+    per-layer-overrides. PadRecord.from_bytes handles the subrecord chain.
     """
-    pos = 0
     pads: list[tuple[int, PcbPad]] = []
+    pos = 0
 
     while pos < len(data):
         if data[pos] != 2:
             break
-        pos += 1
+        # Find end of this pad record by parsing subrecord chain
+        rec_data = data[pos:]
+        pad = PadRecord.from_bytes(rec_data, ctx)
 
-        # Sub1: pad name (Pascal string)
-        if pos + 4 > len(data):
-            break
-        sub1_len = _u32(data, pos)
-        pos += 4
-        pad_name = ""
-        if sub1_len > 0:
-            name_len = data[pos]
-            pad_name = data[pos + 1 : pos + 1 + name_len].decode("cp1252", errors="replace")
-        pos += sub1_len
-
-        # Sub2–Sub4: skip
-        for _ in range(3):
+        # Advance past this record regardless of parse success.
+        # Re-parse subrecord lengths to advance the position.
+        pos += 1  # type byte
+        for _ in range(4):  # sub1-sub4
             if pos + 4 > len(data):
                 break
-            sl = _u32(data, pos)
+            sl = u32(data, pos)
+            pos += 4 + sl
+        for _ in range(2):  # sub5-sub6
+            if pos + 4 > len(data):
+                break
+            sl = u32(data, pos)
             pos += 4 + sl
 
-        # Sub5: main pad geometry
-        if pos + 4 > len(data):
-            break
-        sub5_len = _u32(data, pos)
-        pos += 4
-        sub5 = data[pos : pos + sub5_len]
-        pos += sub5_len
-
-        # Sub6: per-layer overrides
-        if pos + 4 > len(data):
-            break
-        sub6_len = _u32(data, pos)
-        pos += 4
-        sub6 = data[pos : pos + sub6_len] if sub6_len > 0 else b""
-        pos += sub6_len
-
-        if sub5_len < 61:
+        if pad is None:
             continue
 
-        layer_num = sub5[0]
-        net_raw = _u16(sub5, 3)
-        comp_idx = _u16(sub5, 7)
-        px = _int_to_mm(_i32(sub5, 13))
-        py = -_int_to_mm(_i32(sub5, 17))
-        top_sx = _int_to_mm(_i32(sub5, 21))
-        top_sy = _int_to_mm(_i32(sub5, 25))
-        holesize = _int_to_mm(_u32(sub5, 45))
-        shape_byte = sub5[49] if sub5_len > 49 else 1
-        # Determine shape
-        shape = _PAD_SHAPES.get(shape_byte, "rect")
-        # Check sub6 shape_alt for roundrect
-        if sub6 and len(sub6) > 551:
-            # shape_alt array starts at offset 519, 32 entries of u8
-            # Check top layer (index 0) shape_alt
-            shape_alt = sub6[519]
-            if shape_alt == _PAD_SHAPE_ALT_ROUNDRECT:
-                shape = "roundrect"
+        # Determine shape string
+        shape = _PAD_SHAPES.get(pad.shape, "rect")
+        if pad.shape_alt == _PAD_SHAPE_ALT_ROUNDRECT:
+            shape = "roundrect"
 
         # Determine layers (multi-layer pad = layer 74 = through-hole)
-        layers = [_layer_name(layer_num, layer_map)] if layer_num in _COPPER_LAYERS else ["*.Cu"]
+        layers = [_layer_name(pad.layer, layer_map)] if pad.layer in _COPPER_LAYERS else ["*.Cu"]
 
-        net_num = _net_number(net_raw)
+        net_num = _net_number(pad.net)
         net_obj = nets.get(net_num)
         net_name = net_obj.name if net_obj else ""
 
         pads.append(
             (
-                comp_idx,
+                pad.component,
                 PcbPad(
-                    number=pad_name,
-                    x=px,
-                    y=py,
-                    width=top_sx,
-                    height=top_sy,
+                    number=pad.name,
+                    x=_int_to_mm(pad.position[0]),
+                    y=-_int_to_mm(pad.position[1]),
+                    width=_int_to_mm(pad.top_size[0]),
+                    height=_int_to_mm(pad.top_size[1]),
                     shape=shape,
                     layers=layers,
                     net_number=net_num,
                     net_name=net_name,
-                    footprint_ref="",  # Set during footprint assembly
-                    drill=holesize,
+                    footprint_ref="",
+                    drill=_int_to_mm(pad.hole_size),
                 ),
             )
         )
@@ -600,74 +550,55 @@ def _parse_pads(
     return pads
 
 
-def _parse_texts(data: bytes, layer_map: dict[int, PcbLayer]) -> list[tuple[int, PcbText]]:
+def _parse_texts(
+    data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext
+) -> list[tuple[int, PcbText]]:
     """Parse Texts6/Data → list of (component_index, PcbText).
 
     Each text record has 2 subrecords: binary properties + Pascal string.
+    TextRecord.from_bytes handles both subrecords.
     """
-    pos = 0
     texts: list[tuple[int, PcbText]] = []
+    pos = 0
 
     while pos < len(data):
         if data[pos] != 5:
             break
-        pos += 1
 
-        # Sub1: binary properties
-        if pos + 4 > len(data):
-            break
-        sub1_len = _u32(data, pos)
-        pos += 4
-        sub1 = data[pos : pos + sub1_len]
-        pos += sub1_len
+        rec_data = data[pos:]
+        text_rec = TextRecord.from_bytes(rec_data, ctx)
 
-        # Sub2: text content (Pascal string)
-        if pos + 4 > len(data):
-            break
-        sub2_len = _u32(data, pos)
-        pos += 4
-        sub2 = data[pos : pos + sub2_len]
-        pos += sub2_len
+        # Advance past this record by re-parsing subrecord lengths
+        pos += 1  # type byte
+        for _ in range(2):  # sub1, sub2
+            if pos + 4 > len(data):
+                break
+            sl = u32(data, pos)
+            pos += 4 + sl
 
-        if sub1_len < 40:
+        if text_rec is None:
             continue
 
-        layer_num = sub1[0]
-        comp_idx = _u16(sub1, 7)
-        tx = _int_to_mm(_i32(sub1, 13))
-        ty = -_int_to_mm(_i32(sub1, 17))
-        height = _int_to_mm(_u32(sub1, 21))
-        rotation = _f64(sub1, 27)
-
-        is_comment = sub1[40] if sub1_len > 40 else 0
-        is_designator = sub1[41] if sub1_len > 41 else 0
-
-        # Text content from sub2 Pascal string
-        text_content = ""
-        if sub2_len > 0:
-            str_len = sub2[0]
-            text_content = sub2[1 : 1 + str_len].decode("cp1252", errors="replace")
-
-        layer = _layer_name(layer_num, layer_map)
+        layer = _layer_name(text_rec.layer, layer_map)
         if not layer:
             continue
 
         kind = ""
-        if is_designator:
+        if text_rec.is_designator:
             kind = "reference"
-        elif is_comment:
+        elif text_rec.is_comment:
             kind = "value"
 
         texts.append(
             (
-                comp_idx,
+                text_rec.component,
                 PcbText(
-                    text=text_content,
-                    x=tx,
-                    y=ty,
-                    rotation=rotation,
+                    text=text_rec.text,
+                    x=_int_to_mm(text_rec.position[0]),
+                    y=-_int_to_mm(text_rec.position[1]),
+                    rotation=text_rec.rotation,
                     layer=layer,
-                    font_size=height,
+                    font_size=_int_to_mm(text_rec.height),
                     kind=kind,
                 ),
             )
@@ -676,44 +607,42 @@ def _parse_texts(data: bytes, layer_map: dict[int, PcbLayer]) -> list[tuple[int,
     return texts
 
 
-def _parse_fills(data: bytes, layer_map: dict[int, PcbLayer]) -> list[PcbPolygon]:
+def _parse_fills(
+    data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext
+) -> list[PcbPolygon]:
     """Parse Fills6/Data → list of PcbPolygon (rectangular copper fills)."""
     records = _read_binary_records(data)
     fills: list[PcbPolygon] = []
 
     for rec_type, body in records:
-        if rec_type != 6 or len(body) < 37:
+        if rec_type != 6:
+            continue
+        fill = FillRecord.from_bytes(body, ctx)
+        if fill is None or fill.layer not in _COPPER_LAYERS:
             continue
 
-        layer_num = body[0]
-        if layer_num not in _COPPER_LAYERS:
-            continue
-
-        net_raw = _u16(body, 3)
-        x1 = _int_to_mm(_i32(body, 13))
-        y1 = -_int_to_mm(_i32(body, 17))
-        x2 = _int_to_mm(_i32(body, 21))
-        y2 = -_int_to_mm(_i32(body, 25))
-        rotation = _f64(body, 29)
+        x1 = _int_to_mm(fill.pos1[0])
+        y1 = -_int_to_mm(fill.pos1[1])
+        x2 = _int_to_mm(fill.pos2[0])
+        y2 = -_int_to_mm(fill.pos2[1])
 
         # Build 4-corner rectangle, apply rotation around center
         cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
         hw, hh = (x2 - x1) / 2, (y2 - y1) / 2
-        corners = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
+        corners: list[tuple[float, float]] = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
 
-        if rotation != 0:
-            rad = math.radians(rotation)
+        if fill.rotation != 0:
+            rad = math.radians(fill.rotation)
             cos_r, sin_r = math.cos(rad), math.sin(rad)
             corners = [(dx * cos_r - dy * sin_r, dx * sin_r + dy * cos_r) for dx, dy in corners]
 
         points = [(cx + dx, cy + dy) for dx, dy in corners]
-        net_num = _net_number(net_raw)
 
         fills.append(
             PcbPolygon(
                 points=points,
-                layer=_layer_name(layer_num, layer_map),
-                net_number=net_num,
+                layer=_layer_name(fill.layer, layer_map),
+                net_number=_net_number(fill.net),
             )
         )
 
@@ -721,7 +650,7 @@ def _parse_fills(data: bytes, layer_map: dict[int, PcbLayer]) -> list[PcbPolygon
 
 
 def _parse_regions(
-    data: bytes, nets: dict[int, PcbNet], layer_map: dict[int, PcbLayer]
+    data: bytes, nets: dict[int, PcbNet], layer_map: dict[int, PcbLayer], ctx: ParseContext
 ) -> list[PcbPolygon]:
     """Parse Regions6/Data → list of PcbPolygon.
 
@@ -734,59 +663,27 @@ def _parse_regions(
     polygons: list[PcbPolygon] = []
 
     for rec_type, body in records:
-        if rec_type != 11 or len(body) < 22:
+        if rec_type != 11:
             continue
-
-        layer_num = body[0]
-        net_raw = _u16(body, 3)
-        holecount = _u16(body, 14)
-
-        # Property string
-        prop_len = _u32(body, 18)
-        prop_end = 22 + prop_len
-        if prop_end > len(body):
+        region = RegionRecord.from_bytes(body, ctx)
+        if region is None:
             continue
-
-        prop_str = body[22:prop_end]
-        props = parse_record_payload(prop_str)
 
         # Determine layer from V7 property or fallback to byte
-        v7_layer = props.get("v7_layer", "").upper()
+        v7_layer = region.properties.get("v7_layer", "").upper()
         resolved_num = (
-            _V7_NAME_TO_NUM[v7_layer] if v7_layer and v7_layer in _V7_NAME_TO_NUM else layer_num
+            _V7_NAME_TO_NUM[v7_layer] if v7_layer and v7_layer in _V7_NAME_TO_NUM else region.layer
         )
 
         layer = _layer_name(resolved_num, layer_map)
         if not layer:
             continue
 
-        # Read outline vertices (f64 pairs)
-        vpos = prop_end
-        if vpos + 4 > len(body):
-            continue
-        vertex_count = _u32(body, vpos)
-        vpos += 4
-
-        points: list[tuple[float, float]] = []
-        for _ in range(vertex_count):
-            if vpos + 16 > len(body):
-                break
-            vx = _f64(body, vpos)
-            vy = _f64(body, vpos + 8)
-            points.append((_int_to_mm(int(vx)), -_int_to_mm(int(vy))))
-            vpos += 16
-
+        points = [(_int_to_mm(int(vx)), -_int_to_mm(int(vy))) for vx, vy in region.vertices]
         if len(points) < 3:
             continue
 
-        # Skip hole vertices
-        for _ in range(holecount):
-            if vpos + 4 > len(body):
-                break
-            hole_vc = _u32(body, vpos)
-            vpos += 4 + hole_vc * 16
-
-        net_num = _net_number(net_raw) if resolved_num in _COPPER_LAYERS else 0
+        net_num = _net_number(region.net) if resolved_num in _COPPER_LAYERS else 0
         net_obj = nets.get(net_num)
         net_name = net_obj.name if net_obj else ""
 
@@ -802,16 +699,11 @@ def _parse_regions(
     return polygons
 
 
-# Bytes per extended vertex in ShapeBasedRegions6:
-# 1 (isRound) + 4 (x) + 4 (y) + 4 (cx) + 4 (cy) + 4 (radius)
-# + 8 (angle1) + 8 (angle2) = 37
-_EXTENDED_VERTEX_SIZE = 37
-
-
 def _parse_shape_based_regions(
     data: bytes,
     nets: dict[int, PcbNet],
     layer_map: dict[int, PcbLayer],
+    ctx: ParseContext,
 ) -> tuple[list[PcbPolygon], dict[int, list[PcbPolygon]]]:
     """Parse ShapeBasedRegions6/Data → board polygons + per-component polygons.
 
@@ -824,62 +716,30 @@ def _parse_shape_based_regions(
     comp_polygons: dict[int, list[PcbPolygon]] = {}
 
     for rec_type, body in records:
-        if rec_type != 11 or len(body) < 22:
+        if rec_type != 11:
             continue
-
-        layer_num = body[0]
-        net_raw = _u16(body, 3)
-        comp_idx = _u16(body, 7)
-        holecount = _u16(body, 14)
-
-        # Property string
-        prop_len = _u32(body, 18)
-        prop_end = 22 + prop_len
-        if prop_end > len(body):
+        region = ShapeBasedRegionRecord.from_bytes(body, ctx)
+        if region is None:
             continue
-
-        props = parse_record_payload(body[22:prop_end])
 
         # Determine layer from V7 property or fallback to byte
-        v7_layer = props.get("v7_layer", "").upper()
+        v7_layer = region.properties.get("v7_layer", "").upper()
         resolved_num = (
-            _V7_NAME_TO_NUM[v7_layer] if v7_layer and v7_layer in _V7_NAME_TO_NUM else layer_num
+            _V7_NAME_TO_NUM[v7_layer] if v7_layer and v7_layer in _V7_NAME_TO_NUM else region.layer
         )
 
         layer = _layer_name(resolved_num, layer_map)
         if not layer:
             continue
 
-        # Read extended vertices.  Count is stored as N but there are N+1
-        # vertices (closing vertex repeats the first point).
-        vpos = prop_end
-        if vpos + 4 > len(body):
-            continue
-        stored_count = _u32(body, vpos)
-        vertex_count = stored_count + 1  # includes closing vertex
-        vpos += 4
-
-        points: list[tuple[float, float]] = []
-        for _ in range(vertex_count):
-            if vpos + _EXTENDED_VERTEX_SIZE > len(body):
-                break
-            # byte 0: isRound (ignored for now — arcs linearised to endpoint)
-            vx = _i32(body, vpos + 1)
-            vy = _i32(body, vpos + 5)
-            points.append((_int_to_mm(vx), -_int_to_mm(vy)))
-            vpos += _EXTENDED_VERTEX_SIZE
-
+        # Convert extended vertices to mm points (arc data ignored for now)
+        points: list[tuple[float, float]] = [
+            (_int_to_mm(v.x), -_int_to_mm(v.y)) for v in region.vertices
+        ]
         if len(points) < 3:
             continue
 
-        # Skip hole vertices (simple f64 pairs, same as Regions6)
-        for _ in range(holecount):
-            if vpos + 4 > len(body):
-                break
-            hole_vc = _u32(body, vpos)
-            vpos += 4 + hole_vc * 16
-
-        net_num = _net_number(net_raw) if resolved_num in _COPPER_LAYERS else 0
+        net_num = _net_number(region.net) if resolved_num in _COPPER_LAYERS else 0
         net_obj = nets.get(net_num)
         net_name = net_obj.name if net_obj else ""
 
@@ -890,16 +750,19 @@ def _parse_shape_based_regions(
             net_name=net_name,
         )
 
-        if comp_idx == _COMPONENT_NONE:
+        if region.component == _COMPONENT_NONE:
             board_polygons.append(poly)
         else:
-            comp_polygons.setdefault(comp_idx, []).append(poly)
+            comp_polygons.setdefault(region.component, []).append(poly)
 
     return board_polygons, comp_polygons
 
 
 def _parse_board_outline(
-    tracks_data: bytes, arcs_data: bytes, layer_map: dict[int, PcbLayer]
+    tracks_data: bytes,
+    arcs_data: bytes,
+    layer_map: dict[int, PcbLayer],
+    ctx: ParseContext,
 ) -> tuple[list[PcbLine], list[PcbArc]]:
     """Extract board outline from tracks and arcs on Mechanical 1 (layer 57).
 
@@ -931,48 +794,42 @@ def _parse_board_outline(
         edge_name = _layer_name(target_layer, layer_map) or "Edge"
 
         for rec_type, body in _read_binary_records(tracks_data):
-            if rec_type != 4 or len(body) < 33:
+            if rec_type != 4:
                 continue
-            if body[0] != target_layer:
+            track = TrackRecord.from_bytes(body, ctx)
+            if track is None or track.layer != target_layer:
                 continue
-            comp_idx = _u16(body, 7)
-            if comp_idx != _COMPONENT_NONE:
+            if track.component != _COMPONENT_NONE:
                 continue
-
-            x1 = _int_to_mm(_i32(body, 13))
-            y1 = -_int_to_mm(_i32(body, 17))
-            x2 = _int_to_mm(_i32(body, 21))
-            y2 = -_int_to_mm(_i32(body, 25))
-            width = _int_to_mm(_i32(body, 29))
 
             outline_lines.append(
                 PcbLine(
-                    start_x=x1,
-                    start_y=y1,
-                    end_x=x2,
-                    end_y=y2,
+                    start_x=_int_to_mm(track.start[0]),
+                    start_y=-_int_to_mm(track.start[1]),
+                    end_x=_int_to_mm(track.end[0]),
+                    end_y=-_int_to_mm(track.end[1]),
                     layer=edge_name,
-                    width=width,
+                    width=_int_to_mm(track.width),
                 )
             )
 
         for rec_type, body in _read_binary_records(arcs_data):
-            if rec_type != 1 or len(body) < 45:
+            if rec_type != 1:
                 continue
-            if body[0] != target_layer:
+            arc = ArcRecord.from_bytes(body, ctx)
+            if arc is None or arc.layer != target_layer:
                 continue
-            comp_idx = _u16(body, 7)
-            if comp_idx != _COMPONENT_NONE:
+            if arc.component != _COMPONENT_NONE:
                 continue
 
-            cx = _int_to_mm(_i32(body, 13))
-            cy = -_int_to_mm(_i32(body, 17))
-            radius = _int_to_mm(_u32(body, 21))
-            start_angle = _f64(body, 25)
-            end_angle = _f64(body, 33)
-            width = _int_to_mm(_u32(body, 41))
+            cx = _int_to_mm(arc.center[0])
+            cy = -_int_to_mm(arc.center[1])
+            radius = _int_to_mm(arc.radius)
+            width = _int_to_mm(arc.width)
 
-            sx, sy, mx, my, ex, ey = _arc_to_three_point(cx, cy, radius, -start_angle, -end_angle)
+            sx, sy, mx, my, ex, ey = _arc_to_three_point(
+                cx, cy, radius, -arc.start_angle, -arc.end_angle
+            )
             outline_arcs.append(
                 PcbArc(
                     start_x=sx,
@@ -1065,6 +922,7 @@ def _read_stream(ole: olefile.OleFileIO, name: str) -> bytes:
 
 def parse_altium_pcb(path: Path) -> PcbBoard:
     """Parse an Altium .PcbDoc file into the PCB domain model."""
+    ctx = ParseContext()
     ole = olefile.OleFileIO(str(path))
     try:
         # Read all streams
@@ -1096,18 +954,20 @@ def parse_altium_pcb(path: Path) -> PcbBoard:
     footprints = _parse_components(comp_data, layer_map)
 
     # Parse binary streams
-    segments, comp_lines = _parse_tracks(tracks_data, layer_map)
-    vias = _parse_vias(vias_data, layer_map)
-    trace_arcs, comp_arcs = _parse_arcs(arcs_data, layer_map)
-    raw_pads = _parse_pads(pads_data, nets, layer_map)
-    raw_texts = _parse_texts(texts_data, layer_map)
-    fills = _parse_fills(fills_data, layer_map)
-    regions = _parse_regions(regions_data, nets, layer_map)
-    sb_board_polys, sb_comp_polys = _parse_shape_based_regions(sb_regions_data, nets, layer_map)
+    segments, comp_lines = _parse_tracks(tracks_data, layer_map, ctx)
+    vias = _parse_vias(vias_data, layer_map, ctx)
+    trace_arcs, comp_arcs = _parse_arcs(arcs_data, layer_map, ctx)
+    raw_pads = _parse_pads(pads_data, nets, layer_map, ctx)
+    raw_texts = _parse_texts(texts_data, layer_map, ctx)
+    fills = _parse_fills(fills_data, layer_map, ctx)
+    regions = _parse_regions(regions_data, nets, layer_map, ctx)
+    sb_board_polys, sb_comp_polys = _parse_shape_based_regions(
+        sb_regions_data, nets, layer_map, ctx
+    )
     comp_models = _parse_component_bodies(comp_bodies_data)
 
     # Board outline
-    outline_lines, outline_arcs = _parse_board_outline(tracks_data, arcs_data, layer_map)
+    outline_lines, outline_arcs = _parse_board_outline(tracks_data, arcs_data, layer_map, ctx)
 
     # Assemble footprints: assign pads, texts, lines, arcs by component index.
     # Build name→function lookup for categorising component geometry.
