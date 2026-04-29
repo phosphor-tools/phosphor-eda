@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import TypeVar
+from typing import TypeVar, overload
 
 
 class ParseSeverity(IntEnum):
@@ -72,6 +72,27 @@ class ParseContext:
                 record_index=record_index,
             )
         )
+
+    @overload
+    def require_enum(
+        self,
+        value: int,
+        enum_cls: type[E],
+        field_name: str,
+        record_index: int | None = None,
+        *,
+        default: E,
+    ) -> E: ...
+
+    @overload
+    def require_enum(
+        self,
+        value: int,
+        enum_cls: type[E],
+        field_name: str,
+        record_index: int | None = None,
+        default: None = None,
+    ) -> E | None: ...
 
     def require_enum(
         self,

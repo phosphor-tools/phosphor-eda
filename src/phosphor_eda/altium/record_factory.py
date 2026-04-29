@@ -1,106 +1,137 @@
 """Materialize raw Altium record dicts into typed dataclasses.
 
 The factory reads each raw ``dict[str, str]`` produced by ``record_parser``
-and dispatches on the ``RECORD`` field to build the appropriate typed
-dataclass from ``records.py``.
-
-Coordinate normalization happens here: fractional fields like
-``DistanceFromTop_Frac1`` are folded into standard Altium units.
+and dispatches on the ``RECORD`` field via a lookup table to build the
+appropriate typed dataclass from ``records.py``.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
+from phosphor_eda.altium._helpers import prop_int
+from phosphor_eda.altium.errors import ParseContext
 from phosphor_eda.altium.records import (
     AltiumRecord,
+    ArcRec,
+    BezierRec,
     BlanketRec,
+    BusEntryRec,
+    BusRec,
+    CompileMaskRec,
     ComponentRec,
     DesignatorRec,
+    EllipseRec,
+    EllipticalArcRec,
     FileNameRec,
     HarnessConnectorRec,
     HarnessEntryRec,
     HarnessTypeRec,
     HeaderRec,
+    HyperlinkRec,
+    IeeeSymbolRec,
+    ImageRec,
+    ImplementationListRec,
     ImplementationRec,
+    ImplParamsRec,
     JunctionRec,
     LabelRec,
+    LineRec,
+    MapDefinerListRec,
+    MapDefinerRec,
     NetLabelRec,
     NoConnectRec,
+    NoteRec,
     ParameterRec,
     ParameterSetRec,
+    PieChartRec,
     PinRec,
+    PolygonRec,
+    PolylineRec,
     PortRec,
     PowerPortRec,
     RecordType,
+    RectangleRec,
+    RoundRectangleRec,
     SheetEntryRec,
     SheetNameRec,
     SheetRec,
     SheetSymbolRec,
     SignalHarnessRec,
+    TemplateRec,
     TextFrameRec,
     UnknownRecord,
     WireRec,
 )
-from phosphor_eda.text import strip_overline as strip_overline  # re-export
 
-# DistanceFromTop fractional properties use 1/100000 resolution.
-_FRAC_DENOM = 100_000
+# Factory callable: (index, props, ctx) → typed record.
+_RecordFactory = Callable[[int, dict[str, str], ParseContext], AltiumRecord]
+
+# RecordType → factory that parses a raw property dict.
+_DISPATCH: dict[RecordType, _RecordFactory] = {
+    RecordType.HEADER: HeaderRec.from_properties,
+    RecordType.COMPONENT: ComponentRec.from_properties,
+    RecordType.PIN: PinRec.from_properties,
+    RecordType.IEEE_SYMBOL: IeeeSymbolRec.from_properties,
+    RecordType.LABEL: LabelRec.from_properties,
+    RecordType.BEZIER: BezierRec.from_properties,
+    RecordType.POLYLINE: PolylineRec.from_properties,
+    RecordType.POLYGON: PolygonRec.from_properties,
+    RecordType.ELLIPSE: EllipseRec.from_properties,
+    RecordType.PIECHART: PieChartRec.from_properties,
+    RecordType.ROUND_RECTANGLE: RoundRectangleRec.from_properties,
+    RecordType.ELLIPTICAL_ARC: EllipticalArcRec.from_properties,
+    RecordType.ARC: ArcRec.from_properties,
+    RecordType.LINE: LineRec.from_properties,
+    RecordType.RECTANGLE: RectangleRec.from_properties,
+    RecordType.SHEET_SYMBOL: SheetSymbolRec.from_properties,
+    RecordType.SHEET_ENTRY: SheetEntryRec.from_properties,
+    RecordType.POWER_PORT: PowerPortRec.from_properties,
+    RecordType.PORT: PortRec.from_properties,
+    RecordType.NO_ERC: NoConnectRec.from_properties,
+    RecordType.NET_LABEL: NetLabelRec.from_properties,
+    RecordType.BUS: BusRec.from_properties,
+    RecordType.WIRE: WireRec.from_properties,
+    RecordType.TEXT_FRAME: TextFrameRec.from_properties,
+    RecordType.JUNCTION: JunctionRec.from_properties,
+    RecordType.IMAGE: ImageRec.from_properties,
+    RecordType.SHEET: SheetRec.from_properties,
+    RecordType.SHEET_NAME: SheetNameRec.from_properties,
+    RecordType.FILE_NAME: FileNameRec.from_properties,
+    RecordType.DESIGNATOR: DesignatorRec.from_properties,
+    RecordType.BUS_ENTRY: BusEntryRec.from_properties,
+    RecordType.TEMPLATE: TemplateRec.from_properties,
+    RecordType.PARAMETER: ParameterRec.from_properties,
+    RecordType.PARAMETER_SET: ParameterSetRec.from_properties,
+    RecordType.IMPLEMENTATION_LIST: ImplementationListRec.from_properties,
+    RecordType.IMPLEMENTATION: ImplementationRec.from_properties,
+    RecordType.MAP_DEFINER_LIST: MapDefinerListRec.from_properties,
+    RecordType.MAP_DEFINER: MapDefinerRec.from_properties,
+    RecordType.IMPL_PARAMS: ImplParamsRec.from_properties,
+    RecordType.NOTE: NoteRec.from_properties,
+    RecordType.COMPILE_MASK: CompileMaskRec.from_properties,
+    RecordType.HARNESS_CONNECTOR: HarnessConnectorRec.from_properties,
+    RecordType.HARNESS_ENTRY: HarnessEntryRec.from_properties,
+    RecordType.HARNESS_TYPE: HarnessTypeRec.from_properties,
+    RecordType.SIGNAL_HARNESS: SignalHarnessRec.from_properties,
+    RecordType.BLANKET: BlanketRec.from_properties,
+    RecordType.HYPERLINK: HyperlinkRec.from_properties,
+}
 
 
-def _int(props: dict[str, str], key: str, default: int = 0) -> int:
-    val = props.get(key, "")
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        return default
-
-
-def _distance_from_top(rec: dict[str, str]) -> int:
-    """Compute DistanceFromTop in standard Altium units.
-
-    DistanceFromTop is stored in x10 encoding (mils).
-    The _Frac1 suffix adds sub-unit precision at 1/100000 resolution.
-    """
-    dist = _int(rec, "distancefromtop")
-    frac = _int(rec, "distancefromtop_frac1")
-    return round(dist * 10 + frac / _FRAC_DENOM)
-
-
-def _parse_points(rec: dict[str, str]) -> list[tuple[int, int]]:
-    """Parse LocationCount / X1,Y1 / X2,Y2 / ... into a list of points."""
-    loc_count = _int(rec, "locationcount", 2)
-    points: list[tuple[int, int]] = []
-    for i in range(1, loc_count + 1):
-        x = _int(rec, f"x{i}")
-        y = _int(rec, f"y{i}")
-        points.append((x, y))
-    return points
-
-
-def _compute_pin_tip(
-    location: tuple[int, int],
-    pin_length: int,
-    orientation: int,
-) -> tuple[int, int]:
-    """Compute pin wire-connection point from body origin + length + direction."""
-    ox, oy = location
-    if orientation == 0:  # right
-        return (ox + pin_length, oy)
-    elif orientation == 1:  # up
-        return (ox, oy + pin_length)
-    elif orientation == 2:  # left
-        return (ox - pin_length, oy)
-    else:  # down
-        return (ox, oy - pin_length)
-
-
-def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
+def _materialize_one(i: int, rec: dict[str, str], ctx: ParseContext) -> AltiumRecord:
     """Convert a single raw record dict into a typed dataclass."""
     rid_str = rec.get("record", "")
-    owner = _int(rec, "ownerindex", -1)
+    owner = prop_int(rec, "ownerindex", -1)
 
     try:
         rid = int(rid_str)
     except (ValueError, TypeError):
+        ctx.warn(
+            "invalid_record",
+            f"Non-integer RECORD field: {rid_str!r}",
+            record_index=i,
+        )
         return UnknownRecord(
             record_type=RecordType.HEADER,
             index=i,
@@ -108,10 +139,14 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
             raw=rec,
         )
 
-    # Try to map to RecordType enum; fall back to UnknownRecord
     try:
         rt = RecordType(rid)
     except ValueError:
+        ctx.warn(
+            "unknown_record",
+            f"Unknown record type: {rid}",
+            record_index=i,
+        )
         return UnknownRecord(
             record_type=RecordType.HEADER,
             index=i,
@@ -119,314 +154,22 @@ def _materialize_one(i: int, rec: dict[str, str]) -> AltiumRecord:
             raw=rec,
         )
 
-    if rt == RecordType.HEADER:
-        return HeaderRec(record_type=rt, index=i, owner_index=owner)
-
-    if rt == RecordType.COMPONENT:
-        loc = (_int(rec, "location.x"), _int(rec, "location.y"))
-        desc = rec.get("%utf8%componentdescription") or rec.get("componentdescription", "")
-        return ComponentRec(
+    factory = _DISPATCH.get(rt)
+    if factory is None:
+        return UnknownRecord(
             record_type=rt,
             index=i,
             owner_index=owner,
-            location=loc,
-            lib_reference=rec.get("libreference", ""),
-            unique_id=rec.get("uniqueid", ""),
-            description=desc,
-            database_table=rec.get("databasetablename", ""),
-            design_item_id=rec.get("designitemid", ""),
-            current_part_id=_int(rec, "currentpartid", 1),
-            part_count=_int(rec, "partcount", 1),
-            display_mode=_int(rec, "displaymode"),
-            display_mode_count=_int(rec, "displaymodecount", 1),
-            orientation=_int(rec, "orientation"),
-            is_mirrored=rec.get("ismirrored", "").upper() == "T",
+            raw=rec,
         )
 
-    if rt == RecordType.PIN:
-        loc = (_int(rec, "location.x"), _int(rec, "location.y"))
-        pin_length = _int(rec, "pinlength")
-        orientation = _int(rec, "pinconglomerate") & 0x03
-        tip = _compute_pin_tip(loc, pin_length, orientation)
-        pin_name, pin_ol = strip_overline(rec.get("name", ""))
-        return PinRec(
-            record_type=rt,
-            index=i,
-            owner_index=owner,
-            location=loc,
-            pin_length=pin_length,
-            orientation=orientation,
-            designator=rec.get("designator", ""),
-            name=pin_name,
-            has_overline=pin_ol,
-            tip=tip,
-            unique_id=rec.get("uniqueid", ""),
-            electrical=_int(rec, "electrical"),
-            owner_part_id=_int(rec, "ownerpartid"),
-            owner_part_display_mode=_int(rec, "ownerpartdisplaymode"),
-        )
-
-    if rt == RecordType.SHEET_SYMBOL:
-        loc = (_int(rec, "location.x"), _int(rec, "location.y"))
-        return SheetSymbolRec(
-            record_type=rt,
-            index=i,
-            owner_index=owner,
-            location=loc,
-            x_size=_int(rec, "xsize"),
-            y_size=_int(rec, "ysize"),
-        )
-
-    if rt == RecordType.SHEET_ENTRY:
-        entry_name, entry_ol = strip_overline(rec.get("name", ""))
-        return SheetEntryRec(
-            record_type=rt,
-            index=i,
-            owner_index=owner,
-            name=entry_name,
-            has_overline=entry_ol,
-            side=_int(rec, "side"),
-            distance_from_top=_distance_from_top(rec),
-            harness_type=rec.get("harnesstype", ""),
-            io_type=_int(rec, "iotype"),
-            # coord is computed later during link_children
-        )
-
-    if rt == RecordType.POWER_PORT:
-        loc = (_int(rec, "location.x"), _int(rec, "location.y"))
-        pp_text, pp_ol = strip_overline(rec.get("text", ""))
-        return PowerPortRec(
-            record_type=rt,
-            index=i,
-            owner_index=owner,
-            location=loc,
-            text=pp_text,
-            has_overline=pp_ol,
-            style=_int(rec, "style"),
-            orientation=_int(rec, "orientation"),
-            show_net_name=rec.get("shownetname", "").upper() != "F",
-        )
-
-    if rt == RecordType.PORT:
-        loc = (_int(rec, "location.x"), _int(rec, "location.y"))
-        port_name, port_ol = strip_overline(rec.get("name", ""))
-        return PortRec(
-            record_type=rt,
-            index=i,
-            owner_index=owner,
-            location=loc,
-            name=port_name,
-            has_overline=port_ol,
-            harness_type=rec.get("harnesstype", ""),
-            io_type=_int(rec, "iotype"),
-            style=_int(rec, "style"),
-            alignment=_int(rec, "alignment"),
-            width=_int(rec, "width"),
-            height=_int(rec, "height"),
-        )
-
-    if rt == RecordType.NO_ERC:
-        loc = (_int(rec, "location.x"), _int(rec, "location.y"))
-        return NoConnectRec(
-            record_type=rt,
-            index=i,
-            owner_index=owner,
-            location=loc,
-        )
-
-    if rt == RecordType.NET_LABEL:
-        loc = (_int(rec, "location.x"), _int(rec, "location.y"))
-        nl_text, nl_ol = strip_overline(rec.get("text", ""))
-        return NetLabelRec(
-            record_type=rt,
-            index=i,
-            owner_index=owner,
-            location=loc,
-            text=nl_text,
-            has_overline=nl_ol,
-        )
-
-    if rt == RecordType.WIRE:
-        return WireRec(
-            record_type=rt,
-            index=i,
-            owner_index=owner,
-            points=_parse_points(rec),
-        )
-
-    if rt == RecordType.JUNCTION:
-        loc = (_int(rec, "location.x"), _int(rec, "location.y"))
-        return JunctionRec(
-            record_type=rt,
-            index=i,
-            owner_index=owner,
-            location=loc,
-        )
-
-    if rt == RecordType.FILE_NAME:
-        return FileNameRec(
-            record_type=rt,
-            index=i,
-            owner_index=owner,
-            text=rec.get("text", ""),
-        )
-
-    if rt == RecordType.DESIGNATOR:
-        desig_text, desig_ol = strip_overline(rec.get("text", ""))
-        return DesignatorRec(
-            record_type=rt,
-            index=i,
-            owner_index=owner,
-            text=desig_text,
-            has_overline=desig_ol,
-        )
-
-    if rt == RecordType.LABEL:
-        loc = (_int(rec, "location.x"), _int(rec, "location.y"))
-        lbl_text, lbl_ol = strip_overline(rec.get("text", ""))
-        return LabelRec(
-            record_type=rt,
-            index=i,
-            owner_index=owner,
-            location=loc,
-            text=lbl_text,
-            has_overline=lbl_ol,
-            orientation=_int(rec, "orientation"),
-        )
-
-    if rt == RecordType.TEXT_FRAME:
-        loc = (_int(rec, "location.x"), _int(rec, "location.y"))
-        corner = (_int(rec, "corner.x"), _int(rec, "corner.y"))
-        return TextFrameRec(
-            record_type=rt,
-            index=i,
-            owner_index=owner,
-            location=loc,
-            corner=corner,
-            text=rec.get("text", ""),
-        )
-
-    if rt == RecordType.SHEET:
-        return SheetRec(
-            record_type=rt,
-            index=i,
-            owner_index=owner,
-            sheet_style=_int(rec, "sheetstyle"),
-            use_custom_sheet=rec.get("usecustomsheet", "").upper() == "T",
-            custom_x=_int(rec, "customx"),
-            custom_y=_int(rec, "customy"),
-            template_file_name=rec.get("templatefilename", ""),
-        )
-
-    if rt == RecordType.SHEET_NAME:
-        sn_text, sn_ol = strip_overline(rec.get("text", ""))
-        return SheetNameRec(
-            record_type=rt,
-            index=i,
-            owner_index=owner,
-            text=sn_text,
-            has_overline=sn_ol,
-        )
-
-    if rt == RecordType.PARAMETER:
-        param_name, ol_name = strip_overline(rec.get("name", ""))
-        param_text, ol_text = strip_overline(rec.get("text", ""))
-        return ParameterRec(
-            record_type=rt,
-            index=i,
-            owner_index=owner,
-            name=param_name,
-            text=param_text,
-            has_overline=ol_name or ol_text,
-            is_hidden=rec.get("ishidden", "").upper() == "T",
-        )
-
-    if rt == RecordType.PARAMETER_SET:
-        loc = (_int(rec, "location.x"), _int(rec, "location.y"))
-        return ParameterSetRec(
-            record_type=rt,
-            index=i,
-            owner_index=owner,
-            location=loc,
-            name=rec.get("name", ""),
-            style=_int(rec, "style"),
-            orientation=_int(rec, "orientation"),
-        )
-
-    if rt == RecordType.IMPLEMENTATION:
-        return ImplementationRec(
-            record_type=rt,
-            index=i,
-            owner_index=owner,
-            model_name=rec.get("modelname", ""),
-            model_type=rec.get("modeltype", ""),
-        )
-
-    if rt == RecordType.BLANKET:
-        loc = (_int(rec, "location.x"), _int(rec, "location.y"))
-        corner = (_int(rec, "corner.x"), _int(rec, "corner.y"))
-        return BlanketRec(
-            record_type=rt,
-            index=i,
-            owner_index=owner,
-            location=loc,
-            corner=corner,
-        )
-
-    if rt == RecordType.HARNESS_CONNECTOR:
-        loc = (_int(rec, "location.x"), _int(rec, "location.y"))
-        return HarnessConnectorRec(
-            record_type=rt,
-            index=i,
-            owner_index=owner,
-            location=loc,
-            x_size=_int(rec, "xsize"),
-            y_size=_int(rec, "ysize"),
-        )
-
-    if rt == RecordType.HARNESS_ENTRY:
-        # Additional stream OwnerIndex defaults to 0 (not -1) because
-        # the first connector's children often omit the field entirely.
-        harness_owner = _int(rec, "ownerindex", 0)
-        he_name, he_ol = strip_overline(rec.get("name", ""))
-        return HarnessEntryRec(
-            record_type=rt,
-            index=i,
-            owner_index=harness_owner,
-            name=he_name,
-            has_overline=he_ol,
-            side=_int(rec, "side"),
-            distance_from_top=_distance_from_top(rec),
-            # coord is computed later during link_children
-        )
-
-    if rt == RecordType.HARNESS_TYPE:
-        harness_owner = _int(rec, "ownerindex", 0)
-        return HarnessTypeRec(
-            record_type=rt,
-            index=i,
-            owner_index=harness_owner,
-            text=rec.get("text", ""),
-        )
-
-    if rt == RecordType.SIGNAL_HARNESS:
-        return SignalHarnessRec(
-            record_type=rt,
-            index=i,
-            owner_index=owner,
-            points=_parse_points(rec),
-        )
-
-    # All other record types
-    return UnknownRecord(
-        record_type=rt,
-        index=i,
-        owner_index=owner,
-        raw=rec,
-    )
+    return factory(i, rec, ctx)
 
 
-def materialize_records(raw_records: list[dict[str, str]]) -> list[AltiumRecord]:
+def materialize_records(
+    raw_records: list[dict[str, str]],
+    ctx: ParseContext | None = None,
+) -> list[AltiumRecord]:
     """Convert raw record dicts into typed dataclasses.
 
     Each record's ``index`` field corresponds to its position in the input
@@ -434,7 +177,9 @@ def materialize_records(raw_records: list[dict[str, str]]) -> list[AltiumRecord]
     refers to ``records[N+1]``, so the lookup key for a record at position
     ``i`` is ``i - 1``.
     """
-    return [_materialize_one(i, rec) for i, rec in enumerate(raw_records)]
+    if ctx is None:
+        ctx = ParseContext()
+    return [_materialize_one(i, rec, ctx) for i, rec in enumerate(raw_records)]
 
 
 def compute_entry_coord(

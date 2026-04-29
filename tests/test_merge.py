@@ -1,8 +1,9 @@
 """Tests for the schematic merge step."""
 
-from phosphor_eda.altium.record_factory import materialize_records, strip_overline
+from phosphor_eda.altium.record_factory import materialize_records
 from phosphor_eda.altium.records import ComponentRec, PinRec
 from phosphor_eda.schematic import Component, Net, Page, Pin, Port, merge_pages
+from phosphor_eda.text import strip_overline
 
 
 def _make_pin(comp, designator, name, net):

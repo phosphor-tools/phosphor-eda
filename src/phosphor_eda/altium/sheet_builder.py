@@ -1138,10 +1138,11 @@ def build_page(
 
                     if prec is not None:
                         pin_name = prec.name
-                        pin_meta["electrical"] = _PIN_ELECTRICAL_NAMES.get(
-                            prec.electrical,
-                            str(prec.electrical),
-                        )
+                        if prec.electrical is not None:
+                            pin_meta["electrical"] = _PIN_ELECTRICAL_NAMES.get(
+                                prec.electrical,
+                                str(prec.electrical),
+                            )
                         if prec.has_overline:
                             pin_meta["active_low"] = "true"
                         if is_multipart and prec.owner_part_id:
