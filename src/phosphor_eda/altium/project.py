@@ -23,7 +23,8 @@ def parse_prjpcb(content: str) -> AltiumProject:
     if parser.has_section("Design"):
         project.hierarchy_mode = parser.getint("Design", "HierarchyMode", fallback=1)
 
-    for section in parser.sections():
+    sections: list[str] = parser.sections()
+    for section in sections:
         if section.startswith("Document"):
             doc_path = parser.get(section, "DocumentPath", fallback="")
             if doc_path.lower().endswith(".schdoc"):

@@ -56,7 +56,12 @@ class UnionFind(dict[T, T]):
 class _Segment:
     """A wire segment projected onto one axis for binary search."""
 
-    __slots__ = ("lo", "hi", "wire", "seg_idx")
+    __slots__: tuple[str, ...] = ("lo", "hi", "wire", "seg_idx")
+
+    lo: int
+    hi: int
+    wire: WireRec
+    seg_idx: int
 
     def __init__(self, lo: int, hi: int, wire: WireRec, seg_idx: int) -> None:
         self.lo = lo

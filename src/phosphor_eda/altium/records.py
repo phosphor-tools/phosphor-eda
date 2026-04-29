@@ -145,7 +145,7 @@ class HeaderRec(AltiumRecord):
     """RECORD=0 — sheet header / metadata."""
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(record_type=RecordType.HEADER, index=index, owner_index=_owner(props))
 
 
@@ -260,7 +260,7 @@ class IeeeSymbolRec(AltiumRecord):
     location: tuple[int, int] = (0, 0)
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.IEEE_SYMBOL,
             index=index,
@@ -314,7 +314,7 @@ class BezierRec(AltiumRecord):
     line_width: int = 0
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.BEZIER,
             index=index,
@@ -359,7 +359,7 @@ class PolygonRec(AltiumRecord):
     is_solid: bool = False
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.POLYGON,
             index=index,
@@ -381,7 +381,7 @@ class EllipseRec(AltiumRecord):
     line_width: int = 0
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.ELLIPSE,
             index=index,
@@ -401,7 +401,7 @@ class PieChartRec(AltiumRecord):
     location: tuple[int, int] = (0, 0)
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.PIECHART,
             index=index,
@@ -422,7 +422,7 @@ class RoundRectangleRec(AltiumRecord):
     line_width: int = 0
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.ROUND_RECTANGLE,
             index=index,
@@ -448,7 +448,7 @@ class EllipticalArcRec(AltiumRecord):
     line_width: int = 0
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.ELLIPTICAL_ARC,
             index=index,
@@ -473,7 +473,7 @@ class ArcRec(AltiumRecord):
     line_width: int = 0
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.ARC,
             index=index,
@@ -495,7 +495,7 @@ class LineRec(AltiumRecord):
     line_width: int = 0
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.LINE,
             index=index,
@@ -516,7 +516,7 @@ class RectangleRec(AltiumRecord):
     is_solid: bool = False
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.RECTANGLE,
             index=index,
@@ -537,7 +537,7 @@ class SheetSymbolRec(AltiumRecord):
     y_size: int = 0
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.SHEET_SYMBOL,
             index=index,
@@ -689,7 +689,7 @@ class NoConnectRec(AltiumRecord):
     location: tuple[int, int] = (0, 0)
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.NO_ERC,
             index=index,
@@ -707,7 +707,7 @@ class NetLabelRec(AltiumRecord):
     has_overline: bool = False
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         text, ol = _overline_str(props, "text")
         return cls(
             record_type=RecordType.NET_LABEL,
@@ -726,7 +726,7 @@ class BusRec(AltiumRecord):
     points: list[tuple[int, int]] = field(default_factory=list)
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.BUS,
             index=index,
@@ -750,7 +750,7 @@ class WireRec(AltiumRecord):
     points: list[tuple[int, int]] = field(default_factory=list)
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.WIRE,
             index=index,
@@ -801,7 +801,7 @@ class JunctionRec(AltiumRecord):
     location: tuple[int, int] = (0, 0)
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.JUNCTION,
             index=index,
@@ -819,7 +819,7 @@ class ImageRec(AltiumRecord):
     filename: str = ""
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.IMAGE,
             index=index,
@@ -868,7 +868,7 @@ class SheetNameRec(AltiumRecord):
     has_overline: bool = False
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         text, ol = _overline_str(props, "text")
         return cls(
             record_type=RecordType.SHEET_NAME,
@@ -886,7 +886,7 @@ class FileNameRec(AltiumRecord):
     text: str = ""
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.FILE_NAME,
             index=index,
@@ -903,7 +903,7 @@ class DesignatorRec(AltiumRecord):
     has_overline: bool = False
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         text, ol = _overline_str(props, "text")
         return cls(
             record_type=RecordType.DESIGNATOR,
@@ -922,7 +922,7 @@ class BusEntryRec(AltiumRecord):
     corner: tuple[int, int] = (0, 0)
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.BUS_ENTRY,
             index=index,
@@ -939,7 +939,7 @@ class TemplateRec(AltiumRecord):
     filename: str = ""
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.TEMPLATE,
             index=index,
@@ -958,7 +958,7 @@ class ParameterRec(AltiumRecord):
     is_hidden: bool = False
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         name, ol_name = _overline_str(props, "name")
         text, ol_text = _overline_str(props, "text")
         return cls(
@@ -982,7 +982,7 @@ class ParameterSetRec(AltiumRecord):
     orientation: int = 0
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.PARAMETER_SET,
             index=index,
@@ -999,7 +999,7 @@ class ImplementationListRec(AltiumRecord):
     """RECORD=44 — implementation list container."""
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.IMPLEMENTATION_LIST,
             index=index,
@@ -1015,7 +1015,7 @@ class ImplementationRec(AltiumRecord):
     model_type: str = ""
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.IMPLEMENTATION,
             index=index,
@@ -1030,7 +1030,7 @@ class MapDefinerListRec(AltiumRecord):
     """RECORD=46 — map definer list container."""
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.MAP_DEFINER_LIST,
             index=index,
@@ -1043,7 +1043,7 @@ class MapDefinerRec(AltiumRecord):
     """RECORD=47 — map definer entry."""
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.MAP_DEFINER,
             index=index,
@@ -1056,7 +1056,7 @@ class ImplParamsRec(AltiumRecord):
     """RECORD=48 — implementation parameters."""
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.IMPL_PARAMS,
             index=index,
@@ -1072,7 +1072,7 @@ class NoteRec(AltiumRecord):
     text: str = ""
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.NOTE,
             index=index,
@@ -1087,7 +1087,7 @@ class CompileMaskRec(AltiumRecord):
     """RECORD=211 — compile mask (controls compilation visibility)."""
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.COMPILE_MASK,
             index=index,
@@ -1104,7 +1104,7 @@ class HarnessConnectorRec(AltiumRecord):
     y_size: int = 0
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.HARNESS_CONNECTOR,
             index=index,
@@ -1130,7 +1130,7 @@ class HarnessEntryRec(AltiumRecord):
     coord: tuple[int, int] = (0, 0)
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         name, ol = _overline_str(props, "name")
         return cls(
             record_type=RecordType.HARNESS_ENTRY,
@@ -1150,7 +1150,7 @@ class HarnessTypeRec(AltiumRecord):
     text: str = ""
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.HARNESS_TYPE,
             index=index,
@@ -1166,7 +1166,7 @@ class SignalHarnessRec(AltiumRecord):
     points: list[tuple[int, int]] = field(default_factory=list)
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.SIGNAL_HARNESS,
             index=index,
@@ -1187,7 +1187,7 @@ class BlanketRec(AltiumRecord):
     corner: tuple[int, int] = (0, 0)
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.BLANKET,
             index=index,
@@ -1205,7 +1205,7 @@ class HyperlinkRec(AltiumRecord):
     url: str = ""
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.HYPERLINK,
             index=index,

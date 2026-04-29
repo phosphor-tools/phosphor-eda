@@ -12,7 +12,7 @@ Binary layout documentation from the KiCad Altium importer
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, ClassVar, Self
 
 from phosphor_eda.altium._helpers import f64, i32, u16, u32
 from phosphor_eda.altium.record_parser import parse_record_payload
@@ -47,7 +47,7 @@ class TrackRecord:
     end: tuple[int, int]
     width: int
 
-    MIN_SIZE = 33
+    MIN_SIZE: ClassVar[int] = 33
 
     @classmethod
     def from_bytes(cls, body: bytes, ctx: ParseContext) -> Self | None:
@@ -89,7 +89,7 @@ class ArcRecord:
     end_angle: float
     width: int
 
-    MIN_SIZE = 45
+    MIN_SIZE: ClassVar[int] = 45
 
     @classmethod
     def from_bytes(cls, body: bytes, ctx: ParseContext) -> Self | None:
@@ -129,7 +129,7 @@ class ViaRecord:
     start_layer: int
     end_layer: int
 
-    MIN_SIZE = 31
+    MIN_SIZE: ClassVar[int] = 31
 
     @classmethod
     def from_bytes(cls, body: bytes, ctx: ParseContext) -> Self | None:
@@ -166,7 +166,7 @@ class FillRecord:
     pos2: tuple[int, int]
     rotation: float
 
-    MIN_SIZE = 37
+    MIN_SIZE: ClassVar[int] = 37
 
     @classmethod
     def from_bytes(cls, body: bytes, ctx: ParseContext) -> Self | None:
@@ -380,7 +380,7 @@ class RegionRecord:
     vertices: list[tuple[float, float]]
     holes: list[list[tuple[float, float]]] = field(default_factory=list)
 
-    MIN_HEADER = 22
+    MIN_HEADER: ClassVar[int] = 22
 
     @classmethod
     def from_bytes(cls, body: bytes, ctx: ParseContext) -> Self | None:
@@ -486,7 +486,7 @@ class ShapeBasedRegionRecord:
     vertices: list[ExtendedVertex]
     holes: list[list[tuple[float, float]]] = field(default_factory=list)
 
-    MIN_HEADER = 22
+    MIN_HEADER: ClassVar[int] = 22
 
     @classmethod
     def from_bytes(cls, body: bytes, ctx: ParseContext) -> Self | None:
