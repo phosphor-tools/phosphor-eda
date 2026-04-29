@@ -110,7 +110,7 @@ def parse_schematic_sheet(schdoc_path: Path) -> SchematicPage:
                 x = _int(rec, f"x{idx}")
                 y = _int(rec, f"y{idx}")
                 points.append((x, y))
-            wire._points = points  # type: ignore[attr-defined]
+            wire.points = points
             page.wires.append(wire)
 
         elif rid == "17":
@@ -172,7 +172,7 @@ def parse_schematic_sheet(schdoc_path: Path) -> SchematicPage:
             components_by_index[owner_idx].pin_connections.append(pin)
 
     # Store path for net resolution to re-read raw records
-    page._schdoc_path = schdoc_path  # type: ignore[attr-defined]
+    page.schdoc_path = schdoc_path
     return page
 
 

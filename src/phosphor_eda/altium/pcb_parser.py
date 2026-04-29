@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import math
 import struct
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import olefile
 
@@ -22,7 +22,6 @@ from phosphor_eda.altium.record_parser import parse_record_payload
 from phosphor_eda.pcb import (
     PcbArc,
     PcbBoard,
-    PcbCircle,
     PcbFootprint,
     PcbLine,
     PcbNet,
@@ -33,6 +32,9 @@ from phosphor_eda.pcb import (
     PcbTraceArc,
     PcbVia,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -356,9 +358,7 @@ def _parse_arcs(
             continue
 
         # Y is already negated in cy; negate angles to flip arc direction.
-        sx, sy, mx, my, ex, ey = _arc_to_three_point(
-            cx, cy, radius, -start_angle, -end_angle
-        )
+        sx, sy, mx, my, ex, ey = _arc_to_three_point(cx, cy, radius, -start_angle, -end_angle)
 
         if comp_idx == _COMPONENT_NONE and layer_num in _COPPER_LAYERS:
             trace_arcs.append(
@@ -391,9 +391,7 @@ def _parse_arcs(
     return trace_arcs, comp_arcs
 
 
-def _parse_pads(
-    data: bytes, nets: dict[int, PcbNet]
-) -> list[tuple[int, PcbPad]]:
+def _parse_pads(data: bytes, nets: dict[int, PcbNet]) -> list[tuple[int, PcbPad]]:
     """Parse Pads6/Data → list of (component_index, PcbPad).
 
     Each pad record has 6 subrecords: name, skip, skip, skip, geometry,
@@ -415,9 +413,7 @@ def _parse_pads(
         pad_name = ""
         if sub1_len > 0:
             name_len = data[pos]
-            pad_name = data[pos + 1 : pos + 1 + name_len].decode(
-                "cp1252", errors="replace"
-            )
+            pad_name = data[pos + 1 : pos + 1 + name_len].decode("cp1252", errors="replace")
         pos += sub1_len
 
         # Sub2–Sub4: skip
@@ -455,8 +451,6 @@ def _parse_pads(
         top_sy = _int_to_mm(struct.unpack_from("<i", sub5, 25)[0])
         holesize = _int_to_mm(struct.unpack_from("<I", sub5, 45)[0])
         shape_byte = sub5[49] if sub5_len > 49 else 1
-        plated = sub5[60] if sub5_len > 60 else 0
-
         # Determine shape
         shape = _PAD_SHAPES.get(shape_byte, "rect")
         # Check sub6 shape_alt for roundrect
@@ -467,12 +461,8 @@ def _parse_pads(
             if shape_alt == _PAD_SHAPE_ALT_ROUNDRECT:
                 shape = "roundrect"
 
-        # Determine layers
-        if layer_num in _COPPER_LAYERS:
-            layers = [_layer_name(layer_num)]
-        else:
-            # Multi-layer pad (layer 74 = keepout = through-hole)
-            layers = ["*.Cu"]
+        # Determine layers (multi-layer pad = layer 74 = keepout = through-hole)
+        layers = [_layer_name(layer_num)] if layer_num in _COPPER_LAYERS else ["*.Cu"]
 
         net_num = _net_number(net_raw)
         net_obj = nets.get(net_num)
@@ -546,9 +536,7 @@ def _parse_texts(data: bytes) -> list[tuple[int, PcbText]]:
         text_content = ""
         if sub2_len > 0:
             str_len = sub2[0]
-            text_content = sub2[1 : 1 + str_len].decode(
-                "cp1252", errors="replace"
-            )
+            text_content = sub2[1 : 1 + str_len].decode("cp1252", errors="replace")
 
         layer = _layer_name(layer_num)
         if not layer:
@@ -606,10 +594,7 @@ def _parse_fills(data: bytes) -> list[PcbPolygon]:
         if rotation != 0:
             rad = math.radians(rotation)
             cos_r, sin_r = math.cos(rad), math.sin(rad)
-            corners = [
-                (dx * cos_r - dy * sin_r, dx * sin_r + dy * cos_r)
-                for dx, dy in corners
-            ]
+            corners = [(dx * cos_r - dy * sin_r, dx * sin_r + dy * cos_r) for dx, dy in corners]
 
         points = [(cx + dx, cy + dy) for dx, dy in corners]
         net_num = _net_number(net_raw)
@@ -775,9 +760,7 @@ def _parse_board_outline(
             end_angle = struct.unpack_from("<d", body, 33)[0]
             width = _int_to_mm(struct.unpack_from("<I", body, 41)[0])
 
-            sx, sy, mx, my, ex, ey = _arc_to_three_point(
-                cx, cy, radius, -start_angle, -end_angle
-            )
+            sx, sy, mx, my, ex, ey = _arc_to_three_point(cx, cy, radius, -start_angle, -end_angle)
             outline_arcs.append(
                 PcbArc(
                     start_x=sx,
@@ -800,12 +783,8 @@ def _compute_bbox(
     """Compute footprint bounding box from pads with 0.5mm margin."""
     if not fp.pads:
         return None
-    xs = [p.x - p.width / 2 for p in fp.pads] + [
-        p.x + p.width / 2 for p in fp.pads
-    ]
-    ys = [p.y - p.height / 2 for p in fp.pads] + [
-        p.y + p.height / 2 for p in fp.pads
-    ]
+    xs = [p.x - p.width / 2 for p in fp.pads] + [p.x + p.width / 2 for p in fp.pads]
+    ys = [p.y - p.height / 2 for p in fp.pads] + [p.y + p.height / 2 for p in fp.pads]
     margin = 0.5
     return (min(xs) - margin, min(ys) - margin, max(xs) + margin, max(ys) + margin)
 

@@ -14,73 +14,17 @@ from typing import TYPE_CHECKING
 
 import sexpdata
 
+from phosphor_eda.kicad import sexp
 from phosphor_eda.schematic import Component, Design, Net, Page, Pin, Port, merge_pages
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-# S-expression element: sexpdata.loads returns nested lists of symbols,
-# strings, ints, floats, and sub-lists.
-type SExpItem = sexpdata.Symbol | str | int | float | list["SExpItem"]
-type SExpNode = list[SExpItem]
+    from phosphor_eda.kicad.sexp import SExpNode
 
 # KiCad overline: ~{TEXT} means TEXT with overline bar.
 # Bare ~ means "no name" (unnamed pin).
 _OVERLINE_RE = re.compile(r"~\{([^}]+)\}")
-
-
-# ---------------------------------------------------------------------------
-# S-expression helpers
-# ---------------------------------------------------------------------------
-
-
-def _tag(item: object) -> str | None:
-    """Return the tag name of an S-expression list, or None."""
-    if isinstance(item, list) and item and isinstance(item[0], sexpdata.Symbol):
-        return item[0].value()
-    return None
-
-
-def _find(items: SExpNode, tag_name: str) -> SExpNode | None:
-    """Find the first child with the given tag."""
-    for item in items:
-        if _tag(item) == tag_name and isinstance(item, list):
-            return item
-    return None
-
-
-def _find_all(items: SExpNode, tag_name: str) -> list[SExpNode]:
-    """Find all children with the given tag."""
-    return [item for item in items if _tag(item) == tag_name and isinstance(item, list)]
-
-
-def _val(item: SExpNode) -> str:
-    """Return the string value of item[1]."""
-    if len(item) > 1:
-        v = item[1]
-        return v.value() if isinstance(v, sexpdata.Symbol) else str(v)
-    return ""
-
-
-def _property(items: SExpNode, name: str) -> str:
-    """Get a named property value from S-expression children."""
-    for item in items:
-        if (
-            _tag(item) == "property"
-            and isinstance(item, list)
-            and len(item) > 2
-            and str(item[1]) == name
-        ):
-            return str(item[2])
-    return ""
-
-
-def _num(node: SExpNode, index: int) -> float:
-    """Extract a numeric value from a sexp node at the given index."""
-    v = node[index]
-    if isinstance(v, (int, float)):
-        return float(v)
-    return float(str(v))
 
 
 # ---------------------------------------------------------------------------
@@ -141,23 +85,23 @@ def _parse_lib_symbols(
     pins_result: dict[str, dict[int, list[tuple[str, str, str, float, float]]]] = {}
     desc_result: dict[str, str] = {}
     for sym in lib_syms[1:]:
-        if _tag(sym) != "symbol" or not isinstance(sym, list):
+        if sexp.tag(sym) != "symbol" or not isinstance(sym, list):
             continue
         lib_id = str(sym[1])
-        desc = _property(sym[2:], "ki_description")
+        desc = sexp.find_property(sym[2:], "ki_description")
         if desc:
             desc_result[lib_id] = desc
         units: dict[int, list[tuple[str, str, str, float, float]]] = {}
         # Pins live in sub-symbol units (e.g., "RP2040_0_1", "RP2040_1_1")
         # Sub-symbol name format: {SymbolName}_{unit}_{variant}
         for child in sym[2:]:
-            if _tag(child) != "symbol" or not isinstance(child, list):
+            if sexp.tag(child) != "symbol" or not isinstance(child, list):
                 continue
             sub_name = str(child[1])
             m = _SUB_SYMBOL_UNIT_RE.search(sub_name)
             unit_num = int(m.group(1)) if m else 1
             for elem in child[1:]:
-                if _tag(elem) != "pin" or not isinstance(elem, list):
+                if sexp.tag(elem) != "pin" or not isinstance(elem, list):
                     continue
                 pin_type = str(elem[1])
                 pnum = pname = ""
@@ -165,14 +109,14 @@ def _parse_lib_symbols(
                 for pe in elem[3:]:
                     if not isinstance(pe, list):
                         continue
-                    t = _tag(pe)
+                    t = sexp.tag(pe)
                     if t == "number":
-                        pnum = _val(pe)
+                        pnum = sexp.val(pe)
                     elif t == "name":
-                        pname = _strip_kicad_markup(_val(pe))
+                        pname = _strip_kicad_markup(sexp.val(pe))
                     elif t == "at":
-                        px = _num(pe, 1)
-                        py = _num(pe, 2)
+                        px = sexp.num(pe, 1)
+                        py = sexp.num(pe, 2)
                 units.setdefault(unit_num, []).append(
                     (pnum, pname, pin_type, px, py),
                 )
@@ -272,14 +216,14 @@ def kicad_to_design(path: Path, name: str = "") -> Design:
         data = sexpdata.loads(f.read())
 
     # Parse embedded symbol library
-    lib_syms_node = _find(data[1:], "lib_symbols")
+    lib_syms_node = sexp.find(data[1:], "lib_symbols")
     if lib_syms_node:
         lib_pins, lib_descs = _parse_lib_symbols(lib_syms_node)
     else:
         lib_pins, lib_descs = {}, {}
 
     # Discover child sheets
-    child_sheets = _find_all(data[1:], "sheet")
+    child_sheets = sexp.find_all(data[1:], "sheet")
     pages: list[Page] = []
     design_meta: dict[str, str] = {}
 
@@ -303,7 +247,7 @@ def kicad_to_design(path: Path, name: str = "") -> Design:
         with open(child_path) as f:
             child_data = sexpdata.loads(f.read())
         child_sheet_data.append((sheet_name, child_data))
-        child_lib_node = _find(child_data[1:], "lib_symbols")
+        child_lib_node = sexp.find(child_data[1:], "lib_symbols")
         if child_lib_node:
             child_lib_pins, child_lib_descs = _parse_lib_symbols(child_lib_node)
             # Add child symbols but don't override existing exact-match keys
@@ -329,7 +273,7 @@ def kicad_to_design(path: Path, name: str = "") -> Design:
         )
 
         # Hierarchical labels in the child become Ports
-        for hlabel in _find_all(child_data[1:], "hierarchical_label"):
+        for hlabel in sexp.find_all(child_data[1:], "hierarchical_label"):
             label_name = _strip_kicad_markup(str(hlabel[1]))
             if "{" in label_name:
                 continue  # Bus aggregate — skip
@@ -347,7 +291,7 @@ def kicad_to_design(path: Path, name: str = "") -> Design:
         pages.append(child_page)
 
         # Sheet pins on the root page become Ports
-        for pin_node in _find_all(sheet_node[1:], "pin"):
+        for pin_node in sexp.find_all(sheet_node[1:], "pin"):
             pin_name = str(pin_node[1])
             if "{" in pin_name:
                 continue  # Bus aggregate — skip
@@ -369,7 +313,7 @@ def _parse_sheet_info(sheet_node: SExpNode) -> tuple[str, str]:
     sheet_name = ""
     sheet_file = ""
     for sub in sheet_node[1:]:
-        if _tag(sub) == "property" and isinstance(sub, list):
+        if sexp.tag(sub) == "property" and isinstance(sub, list):
             prop_name = str(sub[1])
             prop_val = str(sub[2]) if len(sub) > 2 else ""
             if prop_name == "Sheetname":
@@ -396,39 +340,39 @@ def _build_page(
     nets_by_name: dict[str, Net] = {}
 
     # --- Title block ---
-    title_block = _find(data[1:], "title_block")
+    title_block = sexp.find(data[1:], "title_block")
     if title_block:
         for sub in title_block[1:]:
             if not isinstance(sub, list):
                 continue
-            t = _tag(sub)
+            t = sexp.tag(sub)
             if t == "title":
-                page.metadata["PageTitle"] = _val(sub)
-                design_meta["Title"] = _val(sub)
+                page.metadata["PageTitle"] = sexp.val(sub)
+                design_meta["Title"] = sexp.val(sub)
             elif t == "date":
-                design_meta["Date"] = _val(sub)
+                design_meta["Date"] = sexp.val(sub)
             elif t == "rev":
-                design_meta["Revision"] = _val(sub)
+                design_meta["Revision"] = sexp.val(sub)
             elif t == "company":
-                design_meta["Organization"] = _val(sub)
+                design_meta["Organization"] = sexp.val(sub)
 
     # --- Paper size ---
-    paper = _find(data[1:], "paper")
+    paper = sexp.find(data[1:], "paper")
     if paper:
-        page.metadata["SheetSize"] = _val(paper)
+        page.metadata["SheetSize"] = sexp.val(paper)
 
     # --- Wire connectivity via union-find ---
     uf = _UnionFind()
     wire_segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
     wire_points: set[tuple[float, float]] = set()
 
-    for wire_node in _find_all(data[1:], "wire"):
-        pts_node = _find(wire_node[1:], "pts")
+    for wire_node in sexp.find_all(data[1:], "wire"):
+        pts_node = sexp.find(wire_node[1:], "pts")
         if not pts_node:
             continue
         points: list[tuple[float, float]] = []
-        for xy in _find_all(pts_node[1:], "xy"):
-            points.append((round(_num(xy, 1), 4), round(_num(xy, 2), 4)))
+        for xy in sexp.find_all(pts_node[1:], "xy"):
+            points.append((round(sexp.num(xy, 1), 4), round(sexp.num(xy, 2), 4)))
         for i in range(len(points) - 1):
             uf.union(points[i], points[i + 1])
             wire_segments.append((points[i], points[i + 1]))
@@ -436,77 +380,77 @@ def _build_page(
             wire_points.add(points[i + 1])
 
     # Junctions merge wire groups that cross
-    for junc in _find_all(data[1:], "junction"):
-        at_node = _find(junc[1:], "at")
+    for junc in sexp.find_all(data[1:], "junction"):
+        at_node = sexp.find(junc[1:], "at")
         if at_node:
-            jp = (round(_num(at_node, 1), 4), round(_num(at_node, 2), 4))
+            jp = (round(sexp.num(at_node, 1), 4), round(sexp.num(at_node, 2), 4))
             _connect_point(uf, jp, wire_segments, wire_points, merge_all=True)
 
     # --- Labels assign net names to wire groups ---
     group_names: dict[tuple[float, float], str] = {}
 
-    for label in _find_all(data[1:], "label"):
+    for label in sexp.find_all(data[1:], "label"):
         label_name = _strip_kicad_markup(str(label[1]))
         if "{" in label_name:
             continue  # Bus aggregate label — skip
-        at_node = _find(label[2:], "at")
+        at_node = sexp.find(label[2:], "at")
         if not at_node:
             continue
-        lp = (round(_num(at_node, 1), 4), round(_num(at_node, 2), 4))
+        lp = (round(sexp.num(at_node, 1), 4), round(sexp.num(at_node, 2), 4))
         _connect_point(uf, lp, wire_segments, wire_points)
         root = uf.find(lp)
         group_names[root] = label_name
 
     # Global labels work the same way — their names are globally unique
-    for glabel in _find_all(data[1:], "global_label"):
+    for glabel in sexp.find_all(data[1:], "global_label"):
         label_name = _strip_kicad_markup(str(glabel[1]))
         if "{" in label_name:
             continue  # Bus aggregate label — skip
-        at_node = _find(glabel[2:], "at")
+        at_node = sexp.find(glabel[2:], "at")
         if not at_node:
             continue
-        lp = (round(_num(at_node, 1), 4), round(_num(at_node, 2), 4))
+        lp = (round(sexp.num(at_node, 1), 4), round(sexp.num(at_node, 2), 4))
         _connect_point(uf, lp, wire_segments, wire_points)
         root = uf.find(lp)
         group_names[root] = label_name
 
     # Hierarchical labels also name wire groups on their page
-    for hlabel in _find_all(data[1:], "hierarchical_label"):
+    for hlabel in sexp.find_all(data[1:], "hierarchical_label"):
         label_name = _strip_kicad_markup(str(hlabel[1]))
         if "{" in label_name:
             continue  # Bus aggregate label — skip
-        at_node = _find(hlabel[2:], "at")
+        at_node = sexp.find(hlabel[2:], "at")
         if not at_node:
             continue
-        lp = (round(_num(at_node, 1), 4), round(_num(at_node, 2), 4))
+        lp = (round(sexp.num(at_node, 1), 4), round(sexp.num(at_node, 2), 4))
         _connect_point(uf, lp, wire_segments, wire_points)
         root = uf.find(lp)
         group_names[root] = label_name
 
     # --- Power symbols create globally-named nets ---
-    for sym_node in _find_all(data[1:], "symbol"):
-        ref = _property(sym_node[1:], "Reference")
+    for sym_node in sexp.find_all(data[1:], "symbol"):
+        ref = sexp.find_property(sym_node[1:], "Reference")
         if not ref.startswith("#PWR") and not ref.startswith("#FLG"):
             continue
-        value = _property(sym_node[1:], "Value")
+        value = sexp.find_property(sym_node[1:], "Value")
         if not value:
             continue
         # Get the power symbol's pin position
-        lib_id_node = _find(sym_node[1:], "lib_id")
+        lib_id_node = sexp.find(sym_node[1:], "lib_id")
         if not lib_id_node:
             continue
-        lib_id = _val(lib_id_node)
-        at_node = _find(sym_node[1:], "at")
+        lib_id = sexp.val(lib_id_node)
+        at_node = sexp.find(sym_node[1:], "at")
         if not at_node:
             continue
-        comp_x = _num(at_node, 1)
-        comp_y = _num(at_node, 2)
-        comp_rot = _num(at_node, 3) if len(at_node) > 3 else 0.0
+        comp_x = sexp.num(at_node, 1)
+        comp_y = sexp.num(at_node, 2)
+        comp_rot = sexp.num(at_node, 3) if len(at_node) > 3 else 0.0
 
         mirror = None
-        mirror_node = _find(sym_node[1:], "mirror")
+        mirror_node = sexp.find(sym_node[1:], "mirror")
         if mirror_node:
-            mirror = _val(mirror_node)
+            mirror = sexp.val(mirror_node)
 
         # Get pin positions from lib_symbols (power symbols are single-unit)
         unit_pins = _resolve_lib_pins(lib_id, lib_pins)
@@ -520,10 +464,10 @@ def _build_page(
 
     # --- No-connect markers ---
     nc_positions: set[tuple[float, float]] = set()
-    for nc_node in _find_all(data[1:], "no_connect"):
-        at_node = _find(nc_node[1:], "at")
+    for nc_node in sexp.find_all(data[1:], "no_connect"):
+        at_node = sexp.find(nc_node[1:], "at")
         if at_node:
-            nc_positions.add((round(_num(at_node, 1), 4), round(_num(at_node, 2), 4)))
+            nc_positions.add((round(sexp.num(at_node, 1), 4), round(sexp.num(at_node, 2), 4)))
 
     # --- Resolve wire group → net name mapping ---
     def _get_net(pos: tuple[float, float]) -> Net | None:
@@ -540,31 +484,31 @@ def _build_page(
     # --- Build components ---
     auto_net_id = 0
 
-    for sym_node in _find_all(data[1:], "symbol"):
-        ref = _property(sym_node[1:], "Reference")
+    for sym_node in sexp.find_all(data[1:], "symbol"):
+        ref = sexp.find_property(sym_node[1:], "Reference")
         # Skip power symbols and power flags
         if ref.startswith("#"):
             continue
 
-        lib_id_node = _find(sym_node[1:], "lib_id")
-        lib_id = _val(lib_id_node) if lib_id_node else ""
-        value = _property(sym_node[1:], "Value")
+        lib_id_node = sexp.find(sym_node[1:], "lib_id")
+        lib_id = sexp.val(lib_id_node) if lib_id_node else ""
+        value = sexp.find_property(sym_node[1:], "Value")
         description = lib_descs.get(lib_id, "")
-        footprint = _property(sym_node[1:], "Footprint")
+        footprint = sexp.find_property(sym_node[1:], "Footprint")
 
         # DNP (Do Not Place) — KiCad 7+
-        dnp_node = _find(sym_node[1:], "dnp")
-        is_dnp = dnp_node is not None and _val(dnp_node) == "yes"
+        dnp_node = sexp.find(sym_node[1:], "dnp")
+        is_dnp = dnp_node is not None and sexp.val(dnp_node) == "yes"
 
-        at_node = _find(sym_node[1:], "at")
-        comp_x = _num(at_node, 1) if at_node else 0.0
-        comp_y = _num(at_node, 2) if at_node else 0.0
-        comp_rot = _num(at_node, 3) if at_node and len(at_node) > 3 else 0.0
+        at_node = sexp.find(sym_node[1:], "at")
+        comp_x = sexp.num(at_node, 1) if at_node else 0.0
+        comp_y = sexp.num(at_node, 2) if at_node else 0.0
+        comp_rot = sexp.num(at_node, 3) if at_node and len(at_node) > 3 else 0.0
 
         mirror = None
-        mirror_node = _find(sym_node[1:], "mirror")
+        mirror_node = sexp.find(sym_node[1:], "mirror")
         if mirror_node:
-            mirror = _val(mirror_node)
+            mirror = sexp.val(mirror_node)
 
         comp = Component(
             reference=ref,
@@ -581,8 +525,8 @@ def _build_page(
             comp.metadata["dni"] = "yes"
 
         # Get the instance unit number
-        unit_node = _find(sym_node[1:], "unit")
-        inst_unit = int(_num(unit_node, 1)) if unit_node else 1
+        unit_node = sexp.find(sym_node[1:], "unit")
+        inst_unit = int(sexp.num(unit_node, 1)) if unit_node else 1
 
         # Get pin definitions for this unit (+ shared unit 0 pins)
         unit_pins = _resolve_lib_pins(lib_id, lib_pins)

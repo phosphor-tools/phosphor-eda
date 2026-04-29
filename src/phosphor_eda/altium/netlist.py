@@ -17,11 +17,10 @@ def build_netlist(design: ParsedDesign) -> dict[str, list[NetlistEntry]]:
     netlist: dict[str, list[NetlistEntry]] = {}
 
     for page in design.pages:
-        schdoc_path = getattr(page, "_schdoc_path", None)
-        if schdoc_path is None:
+        if page.schdoc_path is None:
             continue
 
-        sheet = load_sheet(str(schdoc_path))
+        sheet = load_sheet(str(page.schdoc_path))
         coord_to_net, _nc = resolve_nets(sheet)
 
         # Populate page.nets from discovered net names

@@ -25,10 +25,9 @@ def altium_to_design(raw: RawDesign, name: str = "") -> Design:
 
     sheets: dict[str, SheetRecords] = {}
     for raw_page in raw.pages:
-        schdoc_path = getattr(raw_page, "_schdoc_path", None)
-        if schdoc_path is None:
+        if raw_page.schdoc_path is None:
             continue
-        sheets[raw_page.name] = load_sheet(str(schdoc_path))
+        sheets[raw_page.name] = load_sheet(str(raw_page.schdoc_path))
 
     # Phase 2: Pre-scan harness info across all pages
     harness_port_nets: dict[str, list[tuple[str, dict[str, str]]]] = {}
