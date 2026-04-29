@@ -39,6 +39,33 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 # ---------------------------------------------------------------------------
+# Typed struct helpers — struct.unpack_from returns tuple[Any, ...] in
+# typeshed, so these thin wrappers keep basedpyright happy.
+# ---------------------------------------------------------------------------
+
+
+def _u16(data: bytes | memoryview, offset: int) -> int:
+    """Read uint16 (little-endian) from *data* at *offset*."""
+    return int.from_bytes(data[offset : offset + 2], "little", signed=False)
+
+
+def _i32(data: bytes | memoryview, offset: int) -> int:
+    """Read int32 (little-endian) from *data* at *offset*."""
+    return int.from_bytes(data[offset : offset + 4], "little", signed=True)
+
+
+def _u32(data: bytes | memoryview, offset: int) -> int:
+    """Read uint32 (little-endian) from *data* at *offset*."""
+    return int.from_bytes(data[offset : offset + 4], "little", signed=False)
+
+
+def _f64(data: bytes | memoryview, offset: int) -> float:
+    """Read float64 (little-endian) from *data* at *offset*."""
+    (val,) = struct.unpack_from("<d", data, offset)  # pyright: ignore[reportAny]
+    return float(val)  # pyright: ignore[reportAny]
+
+
+# ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
@@ -86,6 +113,21 @@ _MECHKIND_MAP: dict[str, tuple[LayerFunction, str]] = {
 # Copper layer numbers for filtering.
 _COPPER_LAYERS = frozenset(range(1, 33))
 
+# V7 layer name → Altium layer number.  Used to resolve the V7_LAYER property
+# that overrides the byte-level layer number in region records.
+_V7_NAME_TO_NUM: dict[str, int] = {
+    "TOP": 1,
+    **{f"MID{i - 1}": i for i in range(2, 32)},
+    "BOTTOM": 32,
+    "TOPOVERLAY": 33,
+    "BOTTOMOVERLAY": 34,
+    "TOPPASTE": 35,
+    "BOTTOMPASTE": 36,
+    "TOPSOLDER": 37,
+    "BOTTOMSOLDER": 38,
+    **{f"MECHANICAL{i}": 56 + i for i in range(1, 17)},
+}
+
 # Pad shape byte → domain string.
 _PAD_SHAPES: dict[int, str] = {
     1: "circle",
@@ -107,7 +149,7 @@ def _read_text_records(data: bytes) -> list[dict[str, str]]:
     records: list[dict[str, str]] = []
     pos = 0
     while pos + 4 <= len(data):
-        length = struct.unpack_from("<I", data, pos)[0]
+        length = _u32(data, pos)
         pos += 4
         if length == 0 or pos + length > len(data):
             break
@@ -125,7 +167,7 @@ def _read_binary_records(data: bytes) -> list[tuple[int, bytes]]:
     pos = 0
     while pos + 5 <= len(data):
         rec_type = data[pos]
-        rec_len = struct.unpack_from("<I", data, pos + 1)[0]
+        rec_len = _u32(data, pos + 1)
         pos += 5
         if pos + rec_len > len(data):
             break
@@ -316,13 +358,13 @@ def _parse_tracks(
             continue
 
         layer_num = body[0]
-        net_raw = struct.unpack_from("<H", body, 3)[0]
-        comp_idx = struct.unpack_from("<H", body, 7)[0]
-        x1 = _int_to_mm(struct.unpack_from("<i", body, 13)[0])
-        y1 = -_int_to_mm(struct.unpack_from("<i", body, 17)[0])
-        x2 = _int_to_mm(struct.unpack_from("<i", body, 21)[0])
-        y2 = -_int_to_mm(struct.unpack_from("<i", body, 25)[0])
-        width = _int_to_mm(struct.unpack_from("<i", body, 29)[0])
+        net_raw = _u16(body, 3)
+        comp_idx = _u16(body, 7)
+        x1 = _int_to_mm(_i32(body, 13))
+        y1 = -_int_to_mm(_i32(body, 17))
+        x2 = _int_to_mm(_i32(body, 21))
+        y2 = -_int_to_mm(_i32(body, 25))
+        width = _int_to_mm(_i32(body, 29))
 
         layer = _layer_name(layer_num, layer_map)
         if not layer:
@@ -365,11 +407,11 @@ def _parse_vias(data: bytes, layer_map: dict[int, PcbLayer]) -> list[PcbVia]:
         if rec_type != 3 or len(body) < 31:
             continue
 
-        net_raw = struct.unpack_from("<H", body, 3)[0]
-        x = _int_to_mm(struct.unpack_from("<i", body, 13)[0])
-        y = -_int_to_mm(struct.unpack_from("<i", body, 17)[0])
-        diameter = _int_to_mm(struct.unpack_from("<i", body, 21)[0])
-        hole = _int_to_mm(struct.unpack_from("<i", body, 25)[0])
+        net_raw = _u16(body, 3)
+        x = _int_to_mm(_i32(body, 13))
+        y = -_int_to_mm(_i32(body, 17))
+        diameter = _int_to_mm(_i32(body, 21))
+        hole = _int_to_mm(_i32(body, 25))
         start_layer = body[29]
         end_layer = body[30]
 
@@ -409,14 +451,14 @@ def _parse_arcs(
             continue
 
         layer_num = body[0]
-        net_raw = struct.unpack_from("<H", body, 3)[0]
-        comp_idx = struct.unpack_from("<H", body, 7)[0]
-        cx = _int_to_mm(struct.unpack_from("<i", body, 13)[0])
-        cy = -_int_to_mm(struct.unpack_from("<i", body, 17)[0])
-        radius = _int_to_mm(struct.unpack_from("<I", body, 21)[0])
-        start_angle = struct.unpack_from("<d", body, 25)[0]
-        end_angle = struct.unpack_from("<d", body, 33)[0]
-        width = _int_to_mm(struct.unpack_from("<I", body, 41)[0])
+        net_raw = _u16(body, 3)
+        comp_idx = _u16(body, 7)
+        cx = _int_to_mm(_i32(body, 13))
+        cy = -_int_to_mm(_i32(body, 17))
+        radius = _int_to_mm(_u32(body, 21))
+        start_angle = _f64(body, 25)
+        end_angle = _f64(body, 33)
+        width = _int_to_mm(_u32(body, 41))
 
         layer = _layer_name(layer_num, layer_map)
         if not layer:
@@ -475,7 +517,7 @@ def _parse_pads(
         # Sub1: pad name (Pascal string)
         if pos + 4 > len(data):
             break
-        sub1_len = struct.unpack_from("<I", data, pos)[0]
+        sub1_len = _u32(data, pos)
         pos += 4
         pad_name = ""
         if sub1_len > 0:
@@ -487,13 +529,13 @@ def _parse_pads(
         for _ in range(3):
             if pos + 4 > len(data):
                 break
-            sl = struct.unpack_from("<I", data, pos)[0]
+            sl = _u32(data, pos)
             pos += 4 + sl
 
         # Sub5: main pad geometry
         if pos + 4 > len(data):
             break
-        sub5_len = struct.unpack_from("<I", data, pos)[0]
+        sub5_len = _u32(data, pos)
         pos += 4
         sub5 = data[pos : pos + sub5_len]
         pos += sub5_len
@@ -501,7 +543,7 @@ def _parse_pads(
         # Sub6: per-layer overrides
         if pos + 4 > len(data):
             break
-        sub6_len = struct.unpack_from("<I", data, pos)[0]
+        sub6_len = _u32(data, pos)
         pos += 4
         sub6 = data[pos : pos + sub6_len] if sub6_len > 0 else b""
         pos += sub6_len
@@ -510,13 +552,13 @@ def _parse_pads(
             continue
 
         layer_num = sub5[0]
-        net_raw = struct.unpack_from("<H", sub5, 3)[0]
-        comp_idx = struct.unpack_from("<H", sub5, 7)[0]
-        px = _int_to_mm(struct.unpack_from("<i", sub5, 13)[0])
-        py = -_int_to_mm(struct.unpack_from("<i", sub5, 17)[0])
-        top_sx = _int_to_mm(struct.unpack_from("<i", sub5, 21)[0])
-        top_sy = _int_to_mm(struct.unpack_from("<i", sub5, 25)[0])
-        holesize = _int_to_mm(struct.unpack_from("<I", sub5, 45)[0])
+        net_raw = _u16(sub5, 3)
+        comp_idx = _u16(sub5, 7)
+        px = _int_to_mm(_i32(sub5, 13))
+        py = -_int_to_mm(_i32(sub5, 17))
+        top_sx = _int_to_mm(_i32(sub5, 21))
+        top_sy = _int_to_mm(_i32(sub5, 25))
+        holesize = _int_to_mm(_u32(sub5, 45))
         shape_byte = sub5[49] if sub5_len > 49 else 1
         # Determine shape
         shape = _PAD_SHAPES.get(shape_byte, "rect")
@@ -573,7 +615,7 @@ def _parse_texts(data: bytes, layer_map: dict[int, PcbLayer]) -> list[tuple[int,
         # Sub1: binary properties
         if pos + 4 > len(data):
             break
-        sub1_len = struct.unpack_from("<I", data, pos)[0]
+        sub1_len = _u32(data, pos)
         pos += 4
         sub1 = data[pos : pos + sub1_len]
         pos += sub1_len
@@ -581,7 +623,7 @@ def _parse_texts(data: bytes, layer_map: dict[int, PcbLayer]) -> list[tuple[int,
         # Sub2: text content (Pascal string)
         if pos + 4 > len(data):
             break
-        sub2_len = struct.unpack_from("<I", data, pos)[0]
+        sub2_len = _u32(data, pos)
         pos += 4
         sub2 = data[pos : pos + sub2_len]
         pos += sub2_len
@@ -590,11 +632,11 @@ def _parse_texts(data: bytes, layer_map: dict[int, PcbLayer]) -> list[tuple[int,
             continue
 
         layer_num = sub1[0]
-        comp_idx = struct.unpack_from("<H", sub1, 7)[0]
-        tx = _int_to_mm(struct.unpack_from("<i", sub1, 13)[0])
-        ty = -_int_to_mm(struct.unpack_from("<i", sub1, 17)[0])
-        height = _int_to_mm(struct.unpack_from("<I", sub1, 21)[0])
-        rotation = struct.unpack_from("<d", sub1, 27)[0]
+        comp_idx = _u16(sub1, 7)
+        tx = _int_to_mm(_i32(sub1, 13))
+        ty = -_int_to_mm(_i32(sub1, 17))
+        height = _int_to_mm(_u32(sub1, 21))
+        rotation = _f64(sub1, 27)
 
         is_comment = sub1[40] if sub1_len > 40 else 0
         is_designator = sub1[41] if sub1_len > 41 else 0
@@ -646,12 +688,12 @@ def _parse_fills(data: bytes, layer_map: dict[int, PcbLayer]) -> list[PcbPolygon
         if layer_num not in _COPPER_LAYERS:
             continue
 
-        net_raw = struct.unpack_from("<H", body, 3)[0]
-        x1 = _int_to_mm(struct.unpack_from("<i", body, 13)[0])
-        y1 = -_int_to_mm(struct.unpack_from("<i", body, 17)[0])
-        x2 = _int_to_mm(struct.unpack_from("<i", body, 21)[0])
-        y2 = -_int_to_mm(struct.unpack_from("<i", body, 25)[0])
-        rotation = struct.unpack_from("<d", body, 29)[0]
+        net_raw = _u16(body, 3)
+        x1 = _int_to_mm(_i32(body, 13))
+        y1 = -_int_to_mm(_i32(body, 17))
+        x2 = _int_to_mm(_i32(body, 21))
+        y2 = -_int_to_mm(_i32(body, 25))
+        rotation = _f64(body, 29)
 
         # Build 4-corner rectangle, apply rotation around center
         cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
@@ -680,34 +722,26 @@ def _parse_fills(data: bytes, layer_map: dict[int, PcbLayer]) -> list[PcbPolygon
 def _parse_regions(
     data: bytes, nets: dict[int, PcbNet], layer_map: dict[int, PcbLayer]
 ) -> list[PcbPolygon]:
-    """Parse Regions6/Data → list of PcbPolygon (copper zone fills).
+    """Parse Regions6/Data → list of PcbPolygon.
 
-    Region records contain a property string followed by vertex data.
-    Only copper-layer regions are included.
+    Region records contain a property string followed by vertex data
+    (pairs of float64 in Altium internal units).  All layers are included —
+    copper regions carry net info, non-copper regions (silkscreen fills,
+    paste openings, etc.) have net_number 0.
     """
     records = _read_binary_records(data)
     polygons: list[PcbPolygon] = []
-
-    # V7 layer name → Altium layer number for resolution.
-    v7_name_to_num: dict[str, int] = {
-        "TOP": 1,
-        "BOTTOM": 32,
-        "TOPOVERLAY": 33,
-        "BOTTOMOVERLAY": 34,
-    }
-    for i in range(2, 32):
-        v7_name_to_num[f"MID{i - 1}"] = i
 
     for rec_type, body in records:
         if rec_type != 11 or len(body) < 22:
             continue
 
         layer_num = body[0]
-        net_raw = struct.unpack_from("<H", body, 3)[0]
-        holecount = struct.unpack_from("<H", body, 14)[0]
+        net_raw = _u16(body, 3)
+        holecount = _u16(body, 14)
 
         # Property string
-        prop_len = struct.unpack_from("<I", body, 18)[0]
+        prop_len = _u32(body, 18)
         prop_end = 22 + prop_len
         if prop_end > len(body):
             continue
@@ -717,13 +751,9 @@ def _parse_regions(
 
         # Determine layer from V7 property or fallback to byte
         v7_layer = props.get("v7_layer", "").upper()
-        resolved_num = layer_num
-        if v7_layer and v7_layer in v7_name_to_num:
-            resolved_num = v7_name_to_num[v7_layer]
-
-        # Only include copper regions
-        if resolved_num not in _COPPER_LAYERS:
-            continue
+        resolved_num = (
+            _V7_NAME_TO_NUM[v7_layer] if v7_layer and v7_layer in _V7_NAME_TO_NUM else layer_num
+        )
 
         layer = _layer_name(resolved_num, layer_map)
         if not layer:
@@ -733,15 +763,15 @@ def _parse_regions(
         vpos = prop_end
         if vpos + 4 > len(body):
             continue
-        vertex_count = struct.unpack_from("<I", body, vpos)[0]
+        vertex_count = _u32(body, vpos)
         vpos += 4
 
         points: list[tuple[float, float]] = []
         for _ in range(vertex_count):
             if vpos + 16 > len(body):
                 break
-            vx = struct.unpack_from("<d", body, vpos)[0]
-            vy = struct.unpack_from("<d", body, vpos + 8)[0]
+            vx = _f64(body, vpos)
+            vy = _f64(body, vpos + 8)
             points.append((_int_to_mm(int(vx)), -_int_to_mm(int(vy))))
             vpos += 16
 
@@ -752,10 +782,10 @@ def _parse_regions(
         for _ in range(holecount):
             if vpos + 4 > len(body):
                 break
-            hole_vc = struct.unpack_from("<I", body, vpos)[0]
+            hole_vc = _u32(body, vpos)
             vpos += 4 + hole_vc * 16
 
-        net_num = _net_number(net_raw)
+        net_num = _net_number(net_raw) if resolved_num in _COPPER_LAYERS else 0
         net_obj = nets.get(net_num)
         net_name = net_obj.name if net_obj else ""
 
@@ -769,6 +799,102 @@ def _parse_regions(
         )
 
     return polygons
+
+
+# Bytes per extended vertex in ShapeBasedRegions6:
+# 1 (isRound) + 4 (x) + 4 (y) + 4 (cx) + 4 (cy) + 4 (radius)
+# + 8 (angle1) + 8 (angle2) = 37
+_EXTENDED_VERTEX_SIZE = 37
+
+
+def _parse_shape_based_regions(
+    data: bytes,
+    nets: dict[int, PcbNet],
+    layer_map: dict[int, PcbLayer],
+) -> tuple[list[PcbPolygon], dict[int, list[PcbPolygon]]]:
+    """Parse ShapeBasedRegions6/Data → board polygons + per-component polygons.
+
+    Uses the extended vertex format (37 bytes per vertex with arc support).
+    Returns (board_polygons, comp_polygons) where comp_polygons maps
+    component index → list of body-outline polygons.
+    """
+    records = _read_binary_records(data)
+    board_polygons: list[PcbPolygon] = []
+    comp_polygons: dict[int, list[PcbPolygon]] = {}
+
+    for rec_type, body in records:
+        if rec_type != 11 or len(body) < 22:
+            continue
+
+        layer_num = body[0]
+        net_raw = _u16(body, 3)
+        comp_idx = _u16(body, 7)
+        holecount = _u16(body, 14)
+
+        # Property string
+        prop_len = _u32(body, 18)
+        prop_end = 22 + prop_len
+        if prop_end > len(body):
+            continue
+
+        props = parse_record_payload(body[22:prop_end])
+
+        # Determine layer from V7 property or fallback to byte
+        v7_layer = props.get("v7_layer", "").upper()
+        resolved_num = (
+            _V7_NAME_TO_NUM[v7_layer] if v7_layer and v7_layer in _V7_NAME_TO_NUM else layer_num
+        )
+
+        layer = _layer_name(resolved_num, layer_map)
+        if not layer:
+            continue
+
+        # Read extended vertices.  Count is stored as N but there are N+1
+        # vertices (closing vertex repeats the first point).
+        vpos = prop_end
+        if vpos + 4 > len(body):
+            continue
+        stored_count = _u32(body, vpos)
+        vertex_count = stored_count + 1  # includes closing vertex
+        vpos += 4
+
+        points: list[tuple[float, float]] = []
+        for _ in range(vertex_count):
+            if vpos + _EXTENDED_VERTEX_SIZE > len(body):
+                break
+            # byte 0: isRound (ignored for now — arcs linearised to endpoint)
+            vx = _i32(body, vpos + 1)
+            vy = _i32(body, vpos + 5)
+            points.append((_int_to_mm(vx), -_int_to_mm(vy)))
+            vpos += _EXTENDED_VERTEX_SIZE
+
+        if len(points) < 3:
+            continue
+
+        # Skip hole vertices (simple f64 pairs, same as Regions6)
+        for _ in range(holecount):
+            if vpos + 4 > len(body):
+                break
+            hole_vc = _u32(body, vpos)
+            vpos += 4 + hole_vc * 16
+
+        net_num = _net_number(net_raw) if resolved_num in _COPPER_LAYERS else 0
+        net_obj = nets.get(net_num)
+        net_name = net_obj.name if net_obj else ""
+
+        poly = PcbPolygon(
+            points=points,
+            layer=layer,
+            net_number=net_num,
+            net_name=net_name,
+        )
+
+        if comp_idx == _COMPONENT_NONE:
+            board_polygons.append(poly)
+        else:
+            comp_polygons.setdefault(comp_idx, []).append(poly)
+
+    return board_polygons, comp_polygons
 
 
 def _parse_board_outline(
@@ -808,15 +934,15 @@ def _parse_board_outline(
                 continue
             if body[0] != target_layer:
                 continue
-            comp_idx = struct.unpack_from("<H", body, 7)[0]
+            comp_idx = _u16(body, 7)
             if comp_idx != _COMPONENT_NONE:
                 continue
 
-            x1 = _int_to_mm(struct.unpack_from("<i", body, 13)[0])
-            y1 = -_int_to_mm(struct.unpack_from("<i", body, 17)[0])
-            x2 = _int_to_mm(struct.unpack_from("<i", body, 21)[0])
-            y2 = -_int_to_mm(struct.unpack_from("<i", body, 25)[0])
-            width = _int_to_mm(struct.unpack_from("<i", body, 29)[0])
+            x1 = _int_to_mm(_i32(body, 13))
+            y1 = -_int_to_mm(_i32(body, 17))
+            x2 = _int_to_mm(_i32(body, 21))
+            y2 = -_int_to_mm(_i32(body, 25))
+            width = _int_to_mm(_i32(body, 29))
 
             outline_lines.append(
                 PcbLine(
@@ -834,16 +960,16 @@ def _parse_board_outline(
                 continue
             if body[0] != target_layer:
                 continue
-            comp_idx = struct.unpack_from("<H", body, 7)[0]
+            comp_idx = _u16(body, 7)
             if comp_idx != _COMPONENT_NONE:
                 continue
 
-            cx = _int_to_mm(struct.unpack_from("<i", body, 13)[0])
-            cy = -_int_to_mm(struct.unpack_from("<i", body, 17)[0])
-            radius = _int_to_mm(struct.unpack_from("<I", body, 21)[0])
-            start_angle = struct.unpack_from("<d", body, 25)[0]
-            end_angle = struct.unpack_from("<d", body, 33)[0]
-            width = _int_to_mm(struct.unpack_from("<I", body, 41)[0])
+            cx = _int_to_mm(_i32(body, 13))
+            cy = -_int_to_mm(_i32(body, 17))
+            radius = _int_to_mm(_u32(body, 21))
+            start_angle = _f64(body, 25)
+            end_angle = _f64(body, 33)
+            width = _int_to_mm(_u32(body, 41))
 
             sx, sy, mx, my, ex, ey = _arc_to_three_point(cx, cy, radius, -start_angle, -end_angle)
             outline_arcs.append(
@@ -900,6 +1026,7 @@ def parse_altium_pcb(path: Path) -> PcbBoard:
         texts_data = _read_stream(ole, "Texts6/Data")
         fills_data = _read_stream(ole, "Fills6/Data")
         regions_data = _read_stream(ole, "Regions6/Data")
+        sb_regions_data = _read_stream(ole, "ShapeBasedRegions6/Data")
         board_data = _read_stream(ole, "Board6/Data")
     finally:
         ole.close()
@@ -924,6 +1051,7 @@ def parse_altium_pcb(path: Path) -> PcbBoard:
     raw_texts = _parse_texts(texts_data, layer_map)
     fills = _parse_fills(fills_data, layer_map)
     regions = _parse_regions(regions_data, nets, layer_map)
+    sb_board_polys, sb_comp_polys = _parse_shape_based_regions(sb_regions_data, nets, layer_map)
 
     # Board outline
     outline_lines, outline_arcs = _parse_board_outline(tracks_data, arcs_data, layer_map)
@@ -960,6 +1088,15 @@ def parse_altium_pcb(path: Path) -> PcbBoard:
                 if arc.layer in fab_names:
                     fp.fab_arcs.append(arc)
 
+    for comp_idx, polys in sb_comp_polys.items():
+        if comp_idx < len(footprints):
+            fp = footprints[comp_idx]
+            for poly in polys:
+                if poly.layer in silk_names:
+                    fp.silkscreen_polygons.append(poly)
+                elif poly.layer in fab_names:
+                    fp.fab_polygons.append(poly)
+
     # Compute footprint bounding boxes
     for fp in footprints:
         fp.bbox = _compute_bbox(fp)
@@ -971,7 +1108,7 @@ def parse_altium_pcb(path: Path) -> PcbBoard:
     if board_name.endswith(".$$$"):
         board_name = board_name[:-4]
 
-    polygons = fills + regions
+    polygons = fills + regions + sb_board_polys
 
     return PcbBoard(
         name=board_name,

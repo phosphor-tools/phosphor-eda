@@ -149,10 +149,12 @@ class PcbFootprint:
     layer: str  # "F.Cu" or "B.Cu"
     pads: list[PcbPad] = field(default_factory=list)
     silkscreen_lines: list[PcbLine] = field(default_factory=list)
+    silkscreen_polygons: list[PcbPolygon] = field(default_factory=list)
     courtyard_lines: list[PcbLine] = field(default_factory=list)
     fab_lines: list[PcbLine] = field(default_factory=list)
     fab_circles: list[PcbCircle] = field(default_factory=list)
     fab_arcs: list[PcbArc] = field(default_factory=list)
+    fab_polygons: list[PcbPolygon] = field(default_factory=list)
     texts: list[PcbText] = field(default_factory=list)
     bbox: tuple[float, float, float, float] | None = None  # min_x, min_y, max_x, max_y
 
