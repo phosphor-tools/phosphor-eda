@@ -926,17 +926,8 @@ def _resolve_net_metadata(
         net.metadata.update(pset_params)
 
 
-def build_page(
-    sheet: SheetRecords,
-    coord_to_net_name: dict[tuple[int, int], str],
-    harness_port_nets: dict[str, list[tuple[str, dict[str, str]]]],
-    harness_members_by_type: dict[str, list[str]],
-    nc_wire_coords: set[tuple[int, int]] | None = None,
-) -> Page:
-    """Build a domain model Page from a sheet's typed records."""
-    page = Page(name=sheet.name)
-
-    # --- Page metadata from RECORD=31 (sheet properties) ---
+def _build_page_metadata(page: Page, sheet: SheetRecords) -> None:
+    """Populate page metadata from sheet properties and parameters."""
     sr = sheet.sheet_rec
     if sr is not None:
         if sr.use_custom_sheet:
@@ -947,26 +938,23 @@ def build_page(
         if sr.template_file_name:
             page.metadata["TemplateFile"] = sr.template_file_name
 
-    # --- Page metadata from sheet-level RECORD=41 parameters ---
     for param in sheet.sheet_level_parameters:
         if param.name and param.text and param.text != "*":
             page.metadata[param.name] = param.text
 
-    # --- Text annotations from RECORD=28 text frames ---
     # Text frames carry revision notes, design rationale, and change history.
     for frame in sheet.text_frames:
         text = frame.text.replace("~1", "\n").strip()
         if text:
             page.annotations.append(text)
 
-    # Build Net objects
-    nets_by_name: dict[str, Net] = {}
-    for nname in sorted(set(coord_to_net_name.values())):
-        net = Net(name=nname)
-        nets_by_name[nname] = net
-        page.nets.append(net)
 
-    # Mark active-low nets (those whose name came from an overline source)
+def _mark_active_low_nets(
+    sheet: SheetRecords,
+    nets_by_name: dict[str, Net],
+    coord_to_net_name: dict[tuple[int, int], str],
+) -> None:
+    """Flag nets whose name originated from an overlined label/port/power port."""
     for label in sheet.net_labels:
         if label.has_overline and label.text in nets_by_name:
             nets_by_name[label.text].metadata["active_low"] = "true"
@@ -980,14 +968,54 @@ def build_page(
             if net_name and net_name in nets_by_name:
                 nets_by_name[net_name].metadata["active_low"] = "true"
 
-    # No-connect marker coordinates — expanded through wire groups so
-    # that NC markers at wire endpoints propagate to connected pins.
-    nc_coords: set[tuple[int, int]] = set()
-    for nc in sheet.no_connects:
-        nc_coords.add(nc.location)
-    if nc_wire_coords:
-        nc_coords |= nc_wire_coords
 
+def _enrich_component_metadata(
+    comp: Component,
+    comp_rec: ComponentRec,
+    comp_owner_idx: int,
+    params_by_owner: dict[int, dict[str, str]],
+    children: dict[int, list[AltiumRecord]],
+) -> None:
+    """Apply parameters and ComponentRec fields to a Component's metadata."""
+    if comp_owner_idx in params_by_owner:
+        comp.metadata.update(params_by_owner[comp_owner_idx])
+
+    if "Description" in comp.metadata:
+        comp.description = comp.metadata.pop("Description")
+
+    if not comp.description and comp_rec.description:
+        comp.description = comp_rec.description
+
+    if comp_rec.unique_id:
+        comp.metadata["UniqueId"] = comp_rec.unique_id
+    if comp_rec.database_table:
+        comp.metadata["DatabaseTable"] = comp_rec.database_table
+    if comp_rec.design_item_id:
+        comp.metadata["DesignItemId"] = comp_rec.design_item_id
+    if comp_rec.part_count > 2:
+        comp.metadata["PartCount"] = str(comp_rec.part_count)
+        comp.metadata["CurrentPartId"] = str(comp_rec.current_part_id)
+    if comp_rec.display_mode_count > 1:
+        comp.metadata["DisplayModeCount"] = str(comp_rec.display_mode_count)
+        comp.metadata["DisplayMode"] = str(comp_rec.display_mode)
+    if comp_rec.orientation:
+        comp.metadata["Orientation"] = str(comp_rec.orientation)
+    if comp_rec.is_mirrored:
+        comp.metadata["IsMirrored"] = "True"
+
+    footprint = _find_footprint(comp_owner_idx, children)
+    if footprint:
+        comp.metadata["Footprint"] = footprint
+
+
+def _build_components(
+    sheet: SheetRecords,
+    page: Page,
+    coord_to_net_name: dict[tuple[int, int], str],
+    nets_by_name: dict[str, Net],
+    nc_coords: set[tuple[int, int]],
+) -> None:
+    """Build Component and Pin domain objects from typed records."""
     # Index components by OwnerIndex-compatible key (index - 1)
     comp_record_keys: dict[int, ComponentRec] = {}
     for comp_rec in sheet.components:
@@ -999,10 +1027,7 @@ def build_page(
         if desig.owner_index >= 0:
             designator_by_owner[desig.owner_index] = desig.text
 
-    # PinRec keyed by (OwnerIndex, Designator).
-    # Filter by display mode: components can have alternate visual variants
-    # (e.g. Normal + Small) with separate pin records per variant.  Only
-    # pins matching the owning component's active DisplayMode are kept.
+    # PinRec keyed by (OwnerIndex, Designator), filtered by display mode
     pin_rec_by_key: dict[tuple[int, str], PinRec] = {}
     for pin in sheet.pins:
         if pin.owner_index >= 0 and pin.designator:
@@ -1022,7 +1047,6 @@ def build_page(
     for key, prec in pin_rec_by_key.items():
         pins_by_owner.setdefault(key[0], []).append(prec)
 
-    # Build Component and Pin objects directly from typed records
     for comp_owner_idx in sorted(comp_record_keys):
         comp_rec = comp_record_keys[comp_owner_idx]
         reference = designator_by_owner.get(comp_owner_idx, "")
@@ -1035,39 +1059,13 @@ def build_page(
             description="",
             pages=[page],
         )
-
-        # Apply parameters as metadata
-        if comp_owner_idx in params_by_owner:
-            comp.metadata.update(params_by_owner[comp_owner_idx])
-
-        if "Description" in comp.metadata:
-            comp.description = comp.metadata.pop("Description")
-
-        # Description from ComponentRec (fallback if not from parameter)
-        if not comp.description and comp_rec.description:
-            comp.description = comp_rec.description
-
-        if comp_rec.unique_id:
-            comp.metadata["UniqueId"] = comp_rec.unique_id
-        if comp_rec.database_table:
-            comp.metadata["DatabaseTable"] = comp_rec.database_table
-        if comp_rec.design_item_id:
-            comp.metadata["DesignItemId"] = comp_rec.design_item_id
-        if comp_rec.part_count > 2:
-            comp.metadata["PartCount"] = str(comp_rec.part_count)
-            comp.metadata["CurrentPartId"] = str(comp_rec.current_part_id)
-        if comp_rec.display_mode_count > 1:
-            comp.metadata["DisplayModeCount"] = str(comp_rec.display_mode_count)
-            comp.metadata["DisplayMode"] = str(comp_rec.display_mode)
-        if comp_rec.orientation:
-            comp.metadata["Orientation"] = str(comp_rec.orientation)
-        if comp_rec.is_mirrored:
-            comp.metadata["IsMirrored"] = "True"
-
-        # Footprint via Implementation chain
-        footprint = _find_footprint(comp_owner_idx, sheet.children)
-        if footprint:
-            comp.metadata["Footprint"] = footprint
+        _enrich_component_metadata(
+            comp,
+            comp_rec,
+            comp_owner_idx,
+            params_by_owner,
+            sheet.children,
+        )
 
         # Altium's PartCount is always actual_electrical_parts + 1.
         # PartCount=2 means 1 part (every simple passive); true
@@ -1116,10 +1114,17 @@ def build_page(
 
         page.components.append(comp)
 
-    # --- Net metadata from ParameterSets (RECORD=43) ---
-    _resolve_net_metadata(sheet, coord_to_net_name, nets_by_name)
 
-    # Collect non-harness ports (RECORD=18) with io_type metadata
+def _collect_ports(
+    sheet: SheetRecords,
+    page: Page,
+    nets_by_name: dict[str, Net],
+    coord_to_net_name: dict[tuple[int, int], str],
+    harness_port_nets: dict[str, list[tuple[str, dict[str, str]]]],
+    harness_members_by_type: dict[str, list[str]],
+) -> None:
+    """Collect all port types (regular, sheet entry, harness) onto the page."""
+    # Non-harness ports (RECORD=18) with io_type metadata
     for port_rec in sheet.ports:
         if port_rec.harness_type or not port_rec.name:
             continue
@@ -1143,17 +1148,50 @@ def build_page(
             )
             page.ports.append(port)
 
-    # Sheet entry ports (hierarchical bridging)
     _collect_sheet_entry_ports(sheet, page, nets_by_name, coord_to_net_name)
-
-    # Harness member ports on child pages
     _collect_harness_member_ports(sheet, page, nets_by_name, coord_to_net_name)
-
-    # Harness bridge ports on parent pages
     _collect_harness_bridge_ports(
         sheet,
         page,
         nets_by_name,
+        harness_port_nets,
+        harness_members_by_type,
+    )
+
+
+def build_page(
+    sheet: SheetRecords,
+    coord_to_net_name: dict[tuple[int, int], str],
+    harness_port_nets: dict[str, list[tuple[str, dict[str, str]]]],
+    harness_members_by_type: dict[str, list[str]],
+    nc_wire_coords: set[tuple[int, int]] | None = None,
+) -> Page:
+    """Build a domain model Page from a sheet's typed records."""
+    page = Page(name=sheet.name)
+
+    _build_page_metadata(page, sheet)
+
+    # Build Net objects
+    nets_by_name: dict[str, Net] = {}
+    for nname in sorted(set(coord_to_net_name.values())):
+        net = Net(name=nname)
+        nets_by_name[nname] = net
+        page.nets.append(net)
+
+    _mark_active_low_nets(sheet, nets_by_name, coord_to_net_name)
+
+    # No-connect coordinates, expanded through wire groups
+    nc_coords: set[tuple[int, int]] = {nc.location for nc in sheet.no_connects}
+    if nc_wire_coords:
+        nc_coords |= nc_wire_coords
+
+    _build_components(sheet, page, coord_to_net_name, nets_by_name, nc_coords)
+    _resolve_net_metadata(sheet, coord_to_net_name, nets_by_name)
+    _collect_ports(
+        sheet,
+        page,
+        nets_by_name,
+        coord_to_net_name,
         harness_port_nets,
         harness_members_by_type,
     )

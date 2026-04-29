@@ -1,10 +1,13 @@
 """Tests for Altium PCB record types with from_bytes loaders."""
 
+import math
 import struct
 
 from phosphor_eda.altium.errors import ParseContext
+from phosphor_eda.altium.pcb_parser import linearize_arc_vertices
 from phosphor_eda.altium.pcb_records import (
     ArcRecord,
+    ExtendedVertex,
     FillRecord,
     PadRecord,
     RegionRecord,
@@ -432,3 +435,136 @@ def test_region_truncated():
     rec = RegionRecord.from_bytes(b"\x00" * 10, ctx)
     assert rec is None
     assert len(ctx.issues) == 1
+
+
+# ---------------------------------------------------------------------------
+# Arc linearization in ExtendedVertex lists
+# ---------------------------------------------------------------------------
+
+
+def _make_vertex(
+    x: int,
+    y: int,
+    is_round: bool = False,
+    cx: int = 0,
+    cy: int = 0,
+    radius: int = 0,
+    start_angle: float = 0.0,
+    end_angle: float = 0.0,
+) -> ExtendedVertex:
+    return ExtendedVertex(
+        x=x,
+        y=y,
+        is_round=is_round,
+        center_x=cx,
+        center_y=cy,
+        radius=radius,
+        start_angle=start_angle,
+        end_angle=end_angle,
+    )
+
+
+def test_linearize_straight_edges_only():
+    """No arc vertices — returns the same points as simple coordinate extraction."""
+    # A simple triangle, coordinates in Altium internal units (0.1 µinch)
+    verts = [
+        _make_vertex(0, 0),
+        _make_vertex(100000, 0),
+        _make_vertex(50000, 86603),
+    ]
+    points = linearize_arc_vertices(verts)
+    assert len(points) == 3
+    assert points[0] == (0, 0)
+    assert points[1] == (100000, 0)
+    assert points[2] == (50000, 86603)
+
+
+def test_linearize_90_degree_arc():
+    """A 90° arc edge should produce intermediate points along the arc."""
+    # Square with one rounded corner: 3 straight edges + 1 arc edge.
+    # Arc from (1000, 0) to (0, 1000) with center at (0, 0), radius 1000.
+    # Angles: 0° to 90° CCW.
+    verts = [
+        _make_vertex(
+            x=1000,
+            y=0,
+            is_round=True,
+            cx=0,
+            cy=0,
+            radius=1000,
+            start_angle=0.0,
+            end_angle=90.0,
+        ),
+        _make_vertex(0, 1000),
+        _make_vertex(-1000, 1000),
+        _make_vertex(-1000, 0),
+    ]
+    points = linearize_arc_vertices(verts)
+
+    # Should have the start point + interpolated arc points + remaining straight edges
+    assert len(points) > 4  # more than the 4 original vertices
+
+    # First point is the arc start
+    assert points[0] == (1000, 0)
+
+    # Check that interpolated points lie on the arc (radius ~1000 from origin)
+    for px, py in points[:-2]:  # last two are straight vertices
+        dist = math.sqrt(px**2 + py**2)
+        assert abs(dist - 1000) < 1, f"Point ({px}, {py}) not on arc: dist={dist}"
+
+    # Last two points are the straight vertices
+    assert points[-2] == (-1000, 1000)
+    assert points[-1] == (-1000, 0)
+
+
+def test_linearize_full_circle_arc():
+    """A full 360° arc edge produces a full circle of interpolated points."""
+    # A single arc vertex that sweeps a full circle
+    verts = [
+        _make_vertex(
+            x=1000,
+            y=0,
+            is_round=True,
+            cx=0,
+            cy=0,
+            radius=1000,
+            start_angle=0.0,
+            end_angle=360.0,
+        ),
+        _make_vertex(1000, 0),  # closing vertex
+    ]
+    points = linearize_arc_vertices(verts)
+    # Should have many interpolated points
+    assert len(points) > 10
+
+    # All points should lie on the circle
+    for px, py in points:
+        dist = math.sqrt(px**2 + py**2)
+        assert abs(dist - 1000) < 1, f"Point ({px}, {py}) not on circle: dist={dist}"
+
+
+def test_linearize_arc_wrapping_past_360():
+    """An arc that wraps past 360° (e.g. 350° to 10° going CCW)."""
+    radius = 1000
+    verts = [
+        _make_vertex(
+            x=round(radius * math.cos(math.radians(350))),
+            y=round(radius * math.sin(math.radians(350))),
+            is_round=True,
+            cx=0,
+            cy=0,
+            radius=radius,
+            start_angle=350.0,
+            end_angle=10.0,
+        ),
+        _make_vertex(
+            x=round(radius * math.cos(math.radians(10))),
+            y=round(radius * math.sin(math.radians(10))),
+        ),
+    ]
+    points = linearize_arc_vertices(verts)
+    # Small arc (20°), should have a few interpolated points
+    assert len(points) >= 2
+    for px, py in points:
+        dist = math.sqrt(px**2 + py**2)
+        assert abs(dist - 1000) < 2  # small tolerance for rounding
