@@ -20,9 +20,11 @@ import olefile
 
 from phosphor_eda.altium.record_parser import parse_record_payload
 from phosphor_eda.pcb import (
+    LayerFunction,
     PcbArc,
     PcbBoard,
     PcbFootprint,
+    PcbLayer,
     PcbLine,
     PcbNet,
     PcbPad,
@@ -49,17 +51,36 @@ _MIL_TO_MM = 0.0254
 _NET_UNCONNECTED = 0xFFFF
 _COMPONENT_NONE = 0xFFFF
 
-# Altium layer number → KiCad-convention layer name.
-_LAYER_MAP: dict[int, str] = {
-    1: "F.Cu",
-    **{i: f"In{i - 1}.Cu" for i in range(2, 32)},
-    32: "B.Cu",
-    33: "F.SilkS",
-    34: "B.SilkS",
-    35: "F.Paste",
-    36: "B.Paste",
-    37: "F.Mask",
-    38: "B.Mask",
+# Static Altium layer info: (native_name, function, side).
+# Mechanical layers (57-72) are defaults overridden by Board6 MECHKIND.
+_ALTIUM_LAYER_INFO: dict[int, tuple[str, LayerFunction, str]] = {
+    1: ("Top Layer", LayerFunction.COPPER, "front"),
+    **{i: (f"Mid-Layer {i - 1}", LayerFunction.COPPER, "") for i in range(2, 32)},
+    32: ("Bottom Layer", LayerFunction.COPPER, "back"),
+    33: ("Top Overlay", LayerFunction.SILKSCREEN, "front"),
+    34: ("Bottom Overlay", LayerFunction.SILKSCREEN, "back"),
+    35: ("Top Paste", LayerFunction.SOLDER_PASTE, "front"),
+    36: ("Bottom Paste", LayerFunction.SOLDER_PASTE, "back"),
+    37: ("Top Solder", LayerFunction.SOLDER_MASK, "front"),
+    38: ("Bottom Solder", LayerFunction.SOLDER_MASK, "back"),
+    **{i: (f"Mechanical {i - 56}", LayerFunction.MECHANICAL, "") for i in range(57, 73)},
+}
+
+# MECHKIND values from Board6 → (function, side).
+_MECHKIND_MAP: dict[str, tuple[LayerFunction, str]] = {
+    "assemblytop": (LayerFunction.FAB, "front"),
+    "assemblybottom": (LayerFunction.FAB, "back"),
+    "courtyardtop": (LayerFunction.COURTYARD, "front"),
+    "courtyardbottom": (LayerFunction.COURTYARD, "back"),
+    "boardshape": (LayerFunction.EDGE, ""),
+    "componentoutlinetop": (LayerFunction.FAB, "front"),
+    "componentoutlinebottom": (LayerFunction.FAB, "back"),
+    "3dbodytop": (LayerFunction.OTHER, "front"),
+    "3dbodybottom": (LayerFunction.OTHER, "back"),
+    "designatortop": (LayerFunction.SILKSCREEN, "front"),
+    "designatorbottom": (LayerFunction.SILKSCREEN, "back"),
+    "fabnotes": (LayerFunction.FAB, ""),
+    "vcut": (LayerFunction.MECHANICAL, ""),
 }
 
 # Copper layer numbers for filtering.
@@ -133,9 +154,51 @@ def _parse_rotation(s: str) -> float:
     return float(s)
 
 
-def _layer_name(num: int) -> str:
-    """Map an Altium layer number to the renderer's layer name string."""
-    return _LAYER_MAP.get(num, "")
+def _build_layer_map(board_props: dict[str, str]) -> dict[int, PcbLayer]:
+    """Build layer definitions from Board6 properties and static defaults.
+
+    Reads mechanical layer names and MECHKIND from the Board6 property
+    record to determine each mechanical layer's function (assembly,
+    courtyard, board outline, etc.).
+    """
+    layers: dict[int, PcbLayer] = {}
+    for num, (name, fn, side) in _ALTIUM_LAYER_INFO.items():
+        layers[num] = PcbLayer(name=name, function=fn, side=side, number=num)
+
+    # Override mechanical layer metadata from Board6 if available.
+    for i in range(1, 17):
+        layer_num = 56 + i
+        # Try multiple property name patterns (lowercase from parse_record_payload)
+        name_key = f"mechanical{i}name"
+        kind_key = f"mechanical{i}kind"
+        v9_kind_key = f"v9_mechanical{i}kind"
+
+        custom_name = board_props.get(name_key, "")
+        if custom_name:
+            layers[layer_num] = PcbLayer(
+                name=custom_name,
+                function=layers[layer_num].function,
+                side=layers[layer_num].side,
+                number=layer_num,
+            )
+
+        kind = (board_props.get(kind_key) or board_props.get(v9_kind_key) or "").lower()
+        if kind and kind in _MECHKIND_MAP:
+            fn, side = _MECHKIND_MAP[kind]
+            layers[layer_num] = PcbLayer(
+                name=layers[layer_num].name,
+                function=fn,
+                side=side,
+                number=layer_num,
+            )
+
+    return layers
+
+
+def _layer_name(num: int, layer_map: dict[int, PcbLayer]) -> str:
+    """Get native layer name for a layer number, or '' if unmapped."""
+    layer = layer_map.get(num)
+    return layer.name if layer else ""
 
 
 def _net_number(raw: int) -> int:
@@ -199,7 +262,7 @@ def _parse_nets(data: bytes) -> dict[int, PcbNet]:
     return nets
 
 
-def _parse_components(data: bytes) -> list[PcbFootprint]:
+def _parse_components(data: bytes, layer_map: dict[int, PcbLayer]) -> list[PcbFootprint]:
     """Parse Components6/Data → list of footprint shells.
 
     Component records are text-based and contain position, pattern,
@@ -207,6 +270,8 @@ def _parse_components(data: bytes) -> list[PcbFootprint]:
     """
     records = _read_text_records(data)
     footprints: list[PcbFootprint] = []
+    front_name = _layer_name(1, layer_map) or "Top Layer"
+    back_name = _layer_name(32, layer_map) or "Bottom Layer"
     for rec in records:
         x_str = rec.get("x", "0mil")
         y_str = rec.get("y", "0mil")
@@ -214,7 +279,7 @@ def _parse_components(data: bytes) -> list[PcbFootprint]:
         y_mm = -_parse_mil(y_str)  # Negate Y
 
         layer_str = rec.get("layer", "TOP")
-        layer = "F.Cu" if layer_str.upper() == "TOP" else "B.Cu"
+        layer = front_name if layer_str.upper() == "TOP" else back_name
 
         rot = _parse_rotation(rec.get("rotation", "0"))
 
@@ -235,7 +300,7 @@ def _parse_components(data: bytes) -> list[PcbFootprint]:
 
 
 def _parse_tracks(
-    data: bytes,
+    data: bytes, layer_map: dict[int, PcbLayer]
 ) -> tuple[list[PcbSegment], dict[int, list[PcbLine]]]:
     """Parse Tracks6/Data → board-level segments + per-component lines.
 
@@ -259,7 +324,7 @@ def _parse_tracks(
         y2 = -_int_to_mm(struct.unpack_from("<i", body, 25)[0])
         width = _int_to_mm(struct.unpack_from("<i", body, 29)[0])
 
-        layer = _layer_name(layer_num)
+        layer = _layer_name(layer_num, layer_map)
         if not layer:
             continue
 
@@ -291,7 +356,7 @@ def _parse_tracks(
     return segments, comp_lines
 
 
-def _parse_vias(data: bytes) -> list[PcbVia]:
+def _parse_vias(data: bytes, layer_map: dict[int, PcbLayer]) -> list[PcbVia]:
     """Parse Vias6/Data → list of PcbVia."""
     records = _read_binary_records(data)
     vias: list[PcbVia] = []
@@ -308,7 +373,7 @@ def _parse_vias(data: bytes) -> list[PcbVia]:
         start_layer = body[29]
         end_layer = body[30]
 
-        layers = [_layer_name(start_layer), _layer_name(end_layer)]
+        layers = [_layer_name(start_layer, layer_map), _layer_name(end_layer, layer_map)]
         layers = [ly for ly in layers if ly]
         if not layers:
             continue
@@ -328,7 +393,7 @@ def _parse_vias(data: bytes) -> list[PcbVia]:
 
 
 def _parse_arcs(
-    data: bytes,
+    data: bytes, layer_map: dict[int, PcbLayer]
 ) -> tuple[list[PcbTraceArc], dict[int, list[PcbArc]]]:
     """Parse Arcs6/Data → board-level trace arcs + per-component arcs.
 
@@ -353,7 +418,7 @@ def _parse_arcs(
         end_angle = struct.unpack_from("<d", body, 33)[0]
         width = _int_to_mm(struct.unpack_from("<I", body, 41)[0])
 
-        layer = _layer_name(layer_num)
+        layer = _layer_name(layer_num, layer_map)
         if not layer:
             continue
 
@@ -391,7 +456,9 @@ def _parse_arcs(
     return trace_arcs, comp_arcs
 
 
-def _parse_pads(data: bytes, nets: dict[int, PcbNet]) -> list[tuple[int, PcbPad]]:
+def _parse_pads(
+    data: bytes, nets: dict[int, PcbNet], layer_map: dict[int, PcbLayer]
+) -> list[tuple[int, PcbPad]]:
     """Parse Pads6/Data → list of (component_index, PcbPad).
 
     Each pad record has 6 subrecords: name, skip, skip, skip, geometry,
@@ -461,8 +528,8 @@ def _parse_pads(data: bytes, nets: dict[int, PcbNet]) -> list[tuple[int, PcbPad]
             if shape_alt == _PAD_SHAPE_ALT_ROUNDRECT:
                 shape = "roundrect"
 
-        # Determine layers (multi-layer pad = layer 74 = keepout = through-hole)
-        layers = [_layer_name(layer_num)] if layer_num in _COPPER_LAYERS else ["*.Cu"]
+        # Determine layers (multi-layer pad = layer 74 = through-hole)
+        layers = [_layer_name(layer_num, layer_map)] if layer_num in _COPPER_LAYERS else ["*.Cu"]
 
         net_num = _net_number(net_raw)
         net_obj = nets.get(net_num)
@@ -490,7 +557,7 @@ def _parse_pads(data: bytes, nets: dict[int, PcbNet]) -> list[tuple[int, PcbPad]
     return pads
 
 
-def _parse_texts(data: bytes) -> list[tuple[int, PcbText]]:
+def _parse_texts(data: bytes, layer_map: dict[int, PcbLayer]) -> list[tuple[int, PcbText]]:
     """Parse Texts6/Data → list of (component_index, PcbText).
 
     Each text record has 2 subrecords: binary properties + Pascal string.
@@ -538,7 +605,7 @@ def _parse_texts(data: bytes) -> list[tuple[int, PcbText]]:
             str_len = sub2[0]
             text_content = sub2[1 : 1 + str_len].decode("cp1252", errors="replace")
 
-        layer = _layer_name(layer_num)
+        layer = _layer_name(layer_num, layer_map)
         if not layer:
             continue
 
@@ -566,7 +633,7 @@ def _parse_texts(data: bytes) -> list[tuple[int, PcbText]]:
     return texts
 
 
-def _parse_fills(data: bytes) -> list[PcbPolygon]:
+def _parse_fills(data: bytes, layer_map: dict[int, PcbLayer]) -> list[PcbPolygon]:
     """Parse Fills6/Data → list of PcbPolygon (rectangular copper fills)."""
     records = _read_binary_records(data)
     fills: list[PcbPolygon] = []
@@ -602,7 +669,7 @@ def _parse_fills(data: bytes) -> list[PcbPolygon]:
         fills.append(
             PcbPolygon(
                 points=points,
-                layer=_layer_name(layer_num),
+                layer=_layer_name(layer_num, layer_map),
                 net_number=net_num,
             )
         )
@@ -610,7 +677,9 @@ def _parse_fills(data: bytes) -> list[PcbPolygon]:
     return fills
 
 
-def _parse_regions(data: bytes, nets: dict[int, PcbNet]) -> list[PcbPolygon]:
+def _parse_regions(
+    data: bytes, nets: dict[int, PcbNet], layer_map: dict[int, PcbLayer]
+) -> list[PcbPolygon]:
     """Parse Regions6/Data → list of PcbPolygon (copper zone fills).
 
     Region records contain a property string followed by vertex data.
@@ -618,6 +687,16 @@ def _parse_regions(data: bytes, nets: dict[int, PcbNet]) -> list[PcbPolygon]:
     """
     records = _read_binary_records(data)
     polygons: list[PcbPolygon] = []
+
+    # V7 layer name → Altium layer number for resolution.
+    v7_name_to_num: dict[str, int] = {
+        "TOP": 1,
+        "BOTTOM": 32,
+        "TOPOVERLAY": 33,
+        "BOTTOMOVERLAY": 34,
+    }
+    for i in range(2, 32):
+        v7_name_to_num[f"MID{i - 1}"] = i
 
     for rec_type, body in records:
         if rec_type != 11 or len(body) < 22:
@@ -638,27 +717,16 @@ def _parse_regions(data: bytes, nets: dict[int, PcbNet]) -> list[PcbPolygon]:
 
         # Determine layer from V7 property or fallback to byte
         v7_layer = props.get("v7_layer", "").upper()
-        layer = ""
-        if v7_layer:
-            # Map common V7 layer names
-            v7_map = {
-                "TOP": "F.Cu",
-                "BOTTOM": "B.Cu",
-                "TOPOVERLAY": "F.SilkS",
-                "BOTTOMOVERLAY": "B.SilkS",
-            }
-            for k, v in v7_map.items():
-                if v7_layer == k:
-                    layer = v
-                    break
-            # Check for mid-layer pattern
-            if not layer and v7_layer.startswith("MID"):
-                layer = _layer_name(layer_num)
-        if not layer:
-            layer = _layer_name(layer_num)
+        resolved_num = layer_num
+        if v7_layer and v7_layer in v7_name_to_num:
+            resolved_num = v7_name_to_num[v7_layer]
 
         # Only include copper regions
-        if not layer.endswith(".Cu"):
+        if resolved_num not in _COPPER_LAYERS:
+            continue
+
+        layer = _layer_name(resolved_num, layer_map)
+        if not layer:
             continue
 
         # Read outline vertices (f64 pairs)
@@ -704,19 +772,36 @@ def _parse_regions(data: bytes, nets: dict[int, PcbNet]) -> list[PcbPolygon]:
 
 
 def _parse_board_outline(
-    tracks_data: bytes, arcs_data: bytes
+    tracks_data: bytes, arcs_data: bytes, layer_map: dict[int, PcbLayer]
 ) -> tuple[list[PcbLine], list[PcbArc]]:
     """Extract board outline from tracks and arcs on Mechanical 1 (layer 57).
 
     Falls back to Keep-Out layer (74) if no Mechanical 1 primitives found.
+    Also checks for any mechanical layer whose MECHKIND is EDGE.
     """
     outline_lines: list[PcbLine] = []
     outline_arcs: list[PcbArc] = []
 
-    # Try Mechanical 1 first, then Keep-Out
-    for target_layer in (57, 74):
+    # Prefer a layer with EDGE function (from MECHKIND=BoardShape), then
+    # fall back to Mechanical 1 (57), then Keep-Out (74).
+    edge_layers = [
+        num for num, lyr in layer_map.items() if lyr.function == LayerFunction.EDGE and num >= 57
+    ]
+    candidates = edge_layers or [57]
+    candidates.append(74)
+    # Deduplicate while preserving order
+    seen: set[int] = set()
+    target_layers: list[int] = []
+    for n in candidates:
+        if n not in seen:
+            seen.add(n)
+            target_layers.append(n)
+
+    for target_layer in target_layers:
         if outline_lines or outline_arcs:
             break
+
+        edge_name = _layer_name(target_layer, layer_map) or "Edge"
 
         for rec_type, body in _read_binary_records(tracks_data):
             if rec_type != 4 or len(body) < 33:
@@ -739,7 +824,7 @@ def _parse_board_outline(
                     start_y=y1,
                     end_x=x2,
                     end_y=y2,
-                    layer="Edge.Cuts",
+                    layer=edge_name,
                     width=width,
                 )
             )
@@ -769,7 +854,7 @@ def _parse_board_outline(
                     mid_y=my,
                     end_x=ex,
                     end_y=ey,
-                    layer="Edge.Cuts",
+                    layer=edge_name,
                     width=width,
                 )
             )
@@ -819,25 +904,36 @@ def parse_altium_pcb(path: Path) -> PcbBoard:
     finally:
         ole.close()
 
+    # Build layer map from Board6 metadata + static defaults
+    board_props: dict[str, str] = {}
+    if board_data:
+        board_records = _read_text_records(board_data)
+        if board_records:
+            board_props = board_records[0]
+    layer_map = _build_layer_map(board_props)
+
     # Parse text streams
     nets = _parse_nets(nets_data)
-    footprints = _parse_components(comp_data)
+    footprints = _parse_components(comp_data, layer_map)
 
     # Parse binary streams
-    segments, comp_lines = _parse_tracks(tracks_data)
-    vias = _parse_vias(vias_data)
-    trace_arcs, comp_arcs = _parse_arcs(arcs_data)
-    raw_pads = _parse_pads(pads_data, nets)
-    raw_texts = _parse_texts(texts_data)
-    fills = _parse_fills(fills_data)
-    regions = _parse_regions(regions_data, nets)
+    segments, comp_lines = _parse_tracks(tracks_data, layer_map)
+    vias = _parse_vias(vias_data, layer_map)
+    trace_arcs, comp_arcs = _parse_arcs(arcs_data, layer_map)
+    raw_pads = _parse_pads(pads_data, nets, layer_map)
+    raw_texts = _parse_texts(texts_data, layer_map)
+    fills = _parse_fills(fills_data, layer_map)
+    regions = _parse_regions(regions_data, nets, layer_map)
 
     # Board outline
-    outline_lines, outline_arcs = _parse_board_outline(tracks_data, arcs_data)
+    outline_lines, outline_arcs = _parse_board_outline(tracks_data, arcs_data, layer_map)
 
-    # Assemble footprints: assign pads, texts, lines, arcs by component index
-    _SILK_LAYERS = {"F.SilkS", "B.SilkS"}
-    _FAB_LAYERS = {"F.Fab", "B.Fab"}
+    # Assemble footprints: assign pads, texts, lines, arcs by component index.
+    # Build name→function lookup for categorising component geometry.
+    silk_names = {
+        lyr.name for lyr in layer_map.values() if lyr.function == LayerFunction.SILKSCREEN
+    }
+    fab_names = {lyr.name for lyr in layer_map.values() if lyr.function == LayerFunction.FAB}
 
     for comp_idx, pad in raw_pads:
         if comp_idx < len(footprints):
@@ -852,33 +948,28 @@ def parse_altium_pcb(path: Path) -> PcbBoard:
         if comp_idx < len(footprints):
             fp = footprints[comp_idx]
             for line in lines:
-                if line.layer in _SILK_LAYERS:
+                if line.layer in silk_names:
                     fp.silkscreen_lines.append(line)
-                elif line.layer in _FAB_LAYERS:
+                elif line.layer in fab_names:
                     fp.fab_lines.append(line)
 
     for comp_idx, arcs in comp_arcs.items():
         if comp_idx < len(footprints):
             fp = footprints[comp_idx]
             for arc in arcs:
-                if arc.layer in _FAB_LAYERS:
+                if arc.layer in fab_names:
                     fp.fab_arcs.append(arc)
 
     # Compute footprint bounding boxes
     for fp in footprints:
         fp.bbox = _compute_bbox(fp)
 
-    # Board name from Board6/Data
-    board_name = ""
-    if board_data:
-        board_records = _read_text_records(board_data)
-        if board_records:
-            board_name = board_records[0].get("filename", "")
-            # Extract just the filename from the path
-            if "\\" in board_name:
-                board_name = board_name.rsplit("\\", 1)[-1]
-            if board_name.endswith(".$$$"):
-                board_name = board_name[:-4]
+    # Board name from Board6/Data (board_props already parsed above)
+    board_name = board_props.get("filename", "")
+    if "\\" in board_name:
+        board_name = board_name.rsplit("\\", 1)[-1]
+    if board_name.endswith(".$$$"):
+        board_name = board_name[:-4]
 
     polygons = fills + regions
 
@@ -892,4 +983,5 @@ def parse_altium_pcb(path: Path) -> PcbBoard:
         outline_arcs=outline_arcs,
         polygons=polygons,
         trace_arcs=trace_arcs,
+        layers=list(layer_map.values()),
     )

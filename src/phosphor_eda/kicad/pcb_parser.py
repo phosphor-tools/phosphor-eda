@@ -14,10 +14,12 @@ import sexpdata
 
 from phosphor_eda.kicad import sexp
 from phosphor_eda.pcb import (
+    LayerFunction,
     PcbArc,
     PcbBoard,
     PcbCircle,
     PcbFootprint,
+    PcbLayer,
     PcbLine,
     PcbNet,
     PcbPad,
@@ -84,6 +86,61 @@ def _layers(item: SExpNode) -> list[str]:
             result.append(v)
         elif isinstance(v, sexpdata.Symbol):
             result.append(v.value())
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Layer definitions
+# ---------------------------------------------------------------------------
+
+# KiCad name-pattern → function mapping.
+_KICAD_FUNCTION_RULES: list[tuple[str, LayerFunction]] = [
+    (".Cu", LayerFunction.COPPER),
+    ("SilkS", LayerFunction.SILKSCREEN),
+    ("Silkscreen", LayerFunction.SILKSCREEN),
+    ("Mask", LayerFunction.SOLDER_MASK),
+    ("Paste", LayerFunction.SOLDER_PASTE),
+    ("Fab", LayerFunction.FAB),
+    ("CrtYd", LayerFunction.COURTYARD),
+    ("Courtyard", LayerFunction.COURTYARD),
+]
+
+
+def _infer_kicad_function(name: str) -> LayerFunction:
+    """Infer layer function from a KiCad layer name."""
+    if name == "Edge.Cuts":
+        return LayerFunction.EDGE
+    for pattern, fn in _KICAD_FUNCTION_RULES:
+        if pattern in name:
+            return fn
+    return LayerFunction.OTHER
+
+
+def _infer_kicad_side(name: str) -> str:
+    """Infer front/back side from a KiCad layer name prefix."""
+    if name.startswith("F."):
+        return "front"
+    if name.startswith("B."):
+        return "back"
+    return ""
+
+
+def _parse_layer_defs(sexpr: SExpNode) -> list[PcbLayer]:
+    """Parse the board-level ``(layers ...)`` section into PcbLayer objects."""
+    layers_section = sexp.find(sexpr, "layers")
+    if not layers_section:
+        return []
+    result: list[PcbLayer] = []
+    for item in layers_section[1:]:
+        if not isinstance(item, list) or len(item) < 3:
+            continue
+        raw_num = item[0]
+        num = int(raw_num) if isinstance(raw_num, (int, float)) else 0
+        raw_name = item[1]
+        name = raw_name.value() if isinstance(raw_name, sexpdata.Symbol) else str(raw_name)
+        fn = _infer_kicad_function(name)
+        side = _infer_kicad_side(name)
+        result.append(PcbLayer(name=name, function=fn, side=side, number=num))
     return result
 
 
@@ -709,6 +766,9 @@ def parse_kicad_pcb(path: Path) -> PcbBoard:
     data: SExpNode = sexpdata.loads(text)
     sexpr: SExpNode = list(data[1:]) if data else []
 
+    # Layer definitions
+    layer_defs = _parse_layer_defs(sexpr)
+
     # Title for the board name
     title_block = sexp.find(sexpr, "title_block")
     title_node = sexp.find(title_block, "title") if title_block else None
@@ -775,4 +835,5 @@ def parse_kicad_pcb(path: Path) -> PcbBoard:
         outline_arcs=outline_arcs,
         polygons=polygons,
         trace_arcs=trace_arcs,
+        layers=layer_defs,
     )

@@ -10,10 +10,13 @@ No external dependencies — SVG is built via string formatting.
 from __future__ import annotations
 
 import math
+import re
 from collections import defaultdict
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 from xml.sax.saxutils import escape as xml_escape
+
+from phosphor_eda.pcb import LayerFunction, PcbLayer
 
 if TYPE_CHECKING:
     from phosphor_eda.pcb import (
@@ -384,28 +387,16 @@ def _chain_lines_to_polygon(lines: list[PcbLine]) -> list[tuple[float, float]] |
 # Layer helpers
 # ---------------------------------------------------------------------------
 
-_SILK_NAMES = {"F.SilkS", "F.Silkscreen", "B.SilkS", "B.Silkscreen"}
-_FAB_NAMES = {"F.Fab", "B.Fab"}
-
-# Canonical layer paint order (bottom-up).  The renderer discovers which
-# layers actually have content and emits only those, in this order.
-_LAYER_ORDER = [
-    "B.Cu",
-    "In1.Cu",
-    "In2.Cu",
-    "In3.Cu",
-    "In4.Cu",
-    "In5.Cu",
-    "In6.Cu",
-    "In7.Cu",
-    "In8.Cu",
-    "F.Cu",
-]
+# Regex that replaces non-alphanumeric, non-hyphen characters with hyphens.
+_CSS_SANITIZE_RE = re.compile(r"[^a-zA-Z0-9-]")
 
 
 def _layer_class(layer: str) -> str:
-    """Sanitize a layer name for use as a CSS class: 'F.Cu' -> 'layer-F-Cu'."""
-    return "layer-" + layer.replace(".", "-")
+    """Sanitize a layer name for use as a CSS class.
+
+    ``"F.Cu"`` → ``"layer-F-Cu"``; ``"Top Layer"`` → ``"layer-Top-Layer"``.
+    """
+    return "layer-" + _CSS_SANITIZE_RE.sub("-", layer)
 
 
 def _net_name(board: PcbBoard, net_num: int) -> str:
@@ -414,66 +405,98 @@ def _net_name(board: PcbBoard, net_num: int) -> str:
     return net.name if net else ""
 
 
-def _pad_copper_layer(pad: PcbPad, fp_layer: str) -> str:
+def _pad_copper_layer(pad: PcbPad, fp_layer: str, layer_lookup: dict[str, PcbLayer]) -> str:
     """Determine which copper layer a pad belongs to for rendering.
 
-    Through-hole pads (*.Cu) are placed in the footprint's primary layer.
-    SMD pads are placed in whichever copper layer they specify.
+    Through-hole pads (``*.Cu``) are placed in the footprint's primary
+    layer.  SMD pads are placed in whichever copper layer they specify.
     """
     for ly in pad.layers:
-        if ly.startswith("*."):
+        if ly == "*.Cu":
             return fp_layer
-        if ly.endswith(".Cu"):
+        info = layer_lookup.get(ly)
+        if info and info.function == LayerFunction.COPPER:
             return ly
     return fp_layer
+
+
+def _copper_paint_order(layer: PcbLayer) -> int:
+    """Sort key for copper layers: back → inner → front."""
+    if layer.side == "back":
+        return 0
+    if layer.side == "front":
+        return 10000
+    # Inner layers sort by number (or name as fallback)
+    return layer.number if layer.number is not None else 5000
 
 
 # ---------------------------------------------------------------------------
 # CSS theme
 # ---------------------------------------------------------------------------
 
-# KiCad default layer colors (from builtin_color_themes.h)
-_COPPER_COLORS: dict[str, str] = {
-    "F.Cu": "#c83434",
-    "B.Cu": "#4d7fc4",
-    "In1.Cu": "#7fc87f",
-    "In2.Cu": "#ce7d2c",
-    "In3.Cu": "#4fcbcb",
-    "In4.Cu": "#db628b",
-    "In5.Cu": "#c8c83e",
-    "In6.Cu": "#a18d3e",
-    "In7.Cu": "#3ec8c8",
-    "In8.Cu": "#c83ec8",
-}
-_SILK_COLORS: dict[str, str] = {
-    "F.SilkS": "#f2eda1",
-    "F.Silkscreen": "#f2eda1",
-    "B.SilkS": "#e8b2a7",
-    "B.Silkscreen": "#e8b2a7",
-}
-_FAB_COLORS: dict[str, str] = {
-    "F.Fab": "#afafaf",
-    "B.Fab": "#585d84",
-}
-_EDGE_CUTS_COLOR = "#d0d2cd"
+# Colors assigned by layer function + side, not by layer name.
+_COPPER_COLOR_FRONT = "#c83434"
+_COPPER_COLOR_BACK = "#4d7fc4"
+_COPPER_COLOR_INNER = [
+    "#7fc87f",
+    "#ce7d2c",
+    "#4fcbcb",
+    "#db628b",
+    "#c8c83e",
+    "#a18d3e",
+    "#3ec8c8",
+    "#c83ec8",
+]
+_SILK_COLOR_FRONT = "#f2eda1"
+_SILK_COLOR_BACK = "#e8b2a7"
+_FAB_COLOR_FRONT = "#afafaf"
+_FAB_COLOR_BACK = "#585d84"
+_EDGE_COLOR = "#d0d2cd"
 _VIA_COLOR = "#e3b72e"
 
+_COPPER_FALLBACK = "#b87333"
 
-def _design_theme_css(side: str, copper_layers: list[str]) -> str:
+
+def _copper_color(layer: PcbLayer, inner_index: int) -> str:
+    """Assign a copper color by side and inner-layer position."""
+    if layer.side == "front":
+        return _COPPER_COLOR_FRONT
+    if layer.side == "back":
+        return _COPPER_COLOR_BACK
+    return _COPPER_COLOR_INNER[inner_index % len(_COPPER_COLOR_INNER)]
+
+
+def _silk_color(layer: PcbLayer) -> str:
+    return _SILK_COLOR_FRONT if layer.side == "front" else _SILK_COLOR_BACK
+
+
+def _fab_color(layer: PcbLayer) -> str:
+    return _FAB_COLOR_FRONT if layer.side == "front" else _FAB_COLOR_BACK
+
+
+def _design_theme_css(side: str, layers: list[PcbLayer]) -> str:
     """Return the design-mode CSS theme for the SVG.
 
     Design mode shows the board as an EDA editor would: dark background,
     board outline visible, no solder mask fill, distinct colors per layer.
     """
+    copper = [lyr for lyr in layers if lyr.function == LayerFunction.COPPER]
+    silk = [lyr for lyr in layers if lyr.function == LayerFunction.SILKSCREEN]
+    fab = [lyr for lyr in layers if lyr.function == LayerFunction.FAB]
+    opposite = "back" if side == "front" else "front"
+
     rules: list[str] = []
     rules.append("/* Board — design mode uses outline only, no solder mask fill */")
-    rules.append(f".board-fill {{ fill: none; stroke: {_EDGE_CUTS_COLOR}; stroke-width: 0.15; }}")
+    rules.append(f".board-fill {{ fill: none; stroke: {_EDGE_COLOR}; stroke-width: 0.15; }}")
     rules.append("")
 
-    rules.append("/* Copper layers (KiCad default colors) */")
-    for layer in copper_layers:
-        cls = _layer_class(layer)
-        color = _COPPER_COLORS.get(layer, "#b87333")
+    rules.append("/* Copper layers */")
+    inner_idx = 0
+    for layer in copper:
+        cls = _layer_class(layer.name)
+        color = _copper_color(layer, inner_idx)
+        if not layer.side:
+            inner_idx += 1
         rules.append(f"g.{cls} .trace {{ stroke: {color}; stroke-linecap: round; fill: none; }}")
         rules.append(
             f"g.{cls} .trace-arc {{ stroke: {color}; stroke-linecap: round; fill: none; }}"
@@ -488,14 +511,16 @@ def _design_theme_css(side: str, copper_layers: list[str]) -> str:
 
     rules.append("")
     rules.append("/* Silkscreen */")
-    for silk_layer, color in _SILK_COLORS.items():
-        cls = _layer_class(silk_layer)
+    for layer in silk:
+        cls = _layer_class(layer.name)
+        color = _silk_color(layer)
         rules.append(f"g.{cls} .silk {{ stroke: {color}; stroke-linecap: round; fill: none; }}")
 
     rules.append("")
     rules.append("/* Fab / component bodies */")
-    for fab_layer, color in _FAB_COLORS.items():
-        cls = _layer_class(fab_layer)
+    for layer in fab:
+        cls = _layer_class(layer.name)
+        color = _fab_color(layer)
         rules.append(
             f"g.{cls} .body {{ fill: none; stroke: {color};"
             f" stroke-width: 0.1; stroke-linejoin: round; }}"
@@ -507,16 +532,18 @@ def _design_theme_css(side: str, copper_layers: list[str]) -> str:
 
     rules.append("")
     rules.append("/* Ref text (outside layer groups) */")
-    rules.append(f".ref-text {{ fill: {_FAB_COLORS.get('F.Fab', '#afafaf')}; }}")
+    rules.append(f".ref-text {{ fill: {_FAB_COLOR_FRONT}; }}")
 
     _append_highlight_rules(rules)
 
-    # Design mode: hide fab/assembly layers by default (less clutter)
-    opposite = "B" if side == "front" else "F"
+    # Design mode: hide opposite-side silk + all fab layers
     rules.append("")
-    rules.append("/* Side visibility — design mode hides opposite silk + both fab */")
-    rules.append(f"g.layer-{opposite}-SilkS, g.layer-{opposite}-Silkscreen {{ display: none; }}")
-    rules.append("g.layer-F-Fab, g.layer-B-Fab { display: none; }")
+    rules.append("/* Side visibility — design mode hides opposite silk + all fab */")
+    for layer in silk:
+        if layer.side == opposite:
+            rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
+    for layer in fab:
+        rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
 
     return "\n".join(rules)
 
@@ -539,14 +566,17 @@ def _append_highlight_rules(rules: list[str]) -> None:
     rules.append(_HIGHLIGHT_CSS)
 
 
-def _review_theme_css(side: str, copper_layers: list[str]) -> str:
+def _review_theme_css(side: str, layers: list[PcbLayer]) -> str:
     """Return the review-mode CSS theme for the SVG.
 
     Realistic top-down view: green solder mask over copper, exposed pads
     in copper color, white silkscreen, dark component bodies.
     """
-    front = side == "front"
-    opposite = "B" if front else "F"
+    copper = [lyr for lyr in layers if lyr.function == LayerFunction.COPPER]
+    silk = [lyr for lyr in layers if lyr.function == LayerFunction.SILKSCREEN]
+    fab = [lyr for lyr in layers if lyr.function == LayerFunction.FAB]
+    opposite = "back" if side == "front" else "front"
+
     rules: list[str] = []
 
     rules.append("/* Board — green solder mask */")
@@ -554,8 +584,8 @@ def _review_theme_css(side: str, copper_layers: list[str]) -> str:
     rules.append("")
 
     rules.append("/* Copper under solder mask — dimmed */")
-    for layer in copper_layers:
-        cls = _layer_class(layer)
+    for layer in copper:
+        cls = _layer_class(layer.name)
         rules.append(
             f"g.{cls} .trace, g.{cls} .trace-arc "
             f"{{ stroke: #145222; stroke-linecap: round; fill: none; opacity: 0.6; }}"
@@ -570,14 +600,14 @@ def _review_theme_css(side: str, copper_layers: list[str]) -> str:
 
     rules.append("")
     rules.append("/* Silkscreen — white */")
-    for silk_layer in _SILK_COLORS:
-        cls = _layer_class(silk_layer)
+    for layer in silk:
+        cls = _layer_class(layer.name)
         rules.append(f"g.{cls} .silk {{ stroke: #ffffffcc; stroke-linecap: round; fill: none; }}")
 
     rules.append("")
     rules.append("/* Component bodies */")
-    for fab_layer in _FAB_COLORS:
-        cls = _layer_class(fab_layer)
+    for layer in fab:
+        cls = _layer_class(layer.name)
         rules.append(
             f"g.{cls} .body {{ fill: {_BODY_FILL}; stroke: {_BODY_STROKE}; "
             f"stroke-width: 0.06; stroke-linejoin: round; }}"
@@ -591,26 +621,34 @@ def _review_theme_css(side: str, copper_layers: list[str]) -> str:
 
     _append_highlight_rules(rules)
 
+    # Hide opposite-side copper, inner copper, opposite silk, opposite fab
     rules.append("")
     rules.append("/* Layer visibility — single side + fab */")
-    rules.append(f"g.layer-{opposite}-Cu {{ display: none; }}")
-    for i in range(1, 9):
-        rules.append(f"g.layer-In{i}-Cu {{ display: none; }}")
-    rules.append(f"g.layer-{opposite}-SilkS, g.layer-{opposite}-Silkscreen {{ display: none; }}")
-    rules.append(f"g.layer-{opposite}-Fab {{ display: none; }}")
+    for layer in copper:
+        if layer.side == opposite or not layer.side:
+            rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
+    for layer in silk:
+        if layer.side == opposite:
+            rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
+    for layer in fab:
+        if layer.side == opposite:
+            rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
 
     return "\n".join(rules)
 
 
-def _clean_theme_css(side: str, copper_layers: list[str]) -> str:
+def _clean_theme_css(side: str, layers: list[PcbLayer]) -> str:
     """Return the clean/documentation CSS theme for the SVG.
 
     Documentation view: green board, no copper/vias/silkscreen, hides
     passive components (R/C/L/TP), shows only ICs and connectors with
     ref labels.
     """
-    front = side == "front"
-    opposite = "B" if front else "F"
+    copper = [lyr for lyr in layers if lyr.function == LayerFunction.COPPER]
+    silk = [lyr for lyr in layers if lyr.function == LayerFunction.SILKSCREEN]
+    fab = [lyr for lyr in layers if lyr.function == LayerFunction.FAB]
+    opposite = "back" if side == "front" else "front"
+
     rules: list[str] = []
 
     rules.append("/* Board — green solder mask */")
@@ -618,11 +656,11 @@ def _clean_theme_css(side: str, copper_layers: list[str]) -> str:
     rules.append("")
 
     rules.append("/* Hide copper, vias, silkscreen */")
-    rules.append('g[data-layer$="Cu"] { display: none; }')
+    for layer in copper:
+        rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
     rules.append("g.layer-vias { display: none; }")
-    for silk in _SILK_COLORS:
-        cls = _layer_class(silk)
-        rules.append(f"g.{cls} {{ display: none; }}")
+    for layer in silk:
+        rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
 
     rules.append("")
     rules.append("/* Hide passive component bodies and labels */")
@@ -632,8 +670,8 @@ def _clean_theme_css(side: str, copper_layers: list[str]) -> str:
 
     rules.append("")
     rules.append("/* Component bodies — dark */")
-    for fab_layer in _FAB_COLORS:
-        cls = _layer_class(fab_layer)
+    for layer in fab:
+        cls = _layer_class(layer.name)
         rules.append(
             f"g.{cls} .body {{ fill: {_BODY_FILL}; stroke: {_BODY_STROKE}; "
             f"stroke-width: 0.06; stroke-linejoin: round; }}"
@@ -642,14 +680,17 @@ def _clean_theme_css(side: str, copper_layers: list[str]) -> str:
 
     _append_highlight_rules(rules)
 
+    # Hide opposite-side fab
     rules.append("")
     rules.append("/* Layer visibility — only same-side fab */")
-    rules.append(f"g.layer-{opposite}-Fab {{ display: none; }}")
+    for layer in fab:
+        if layer.side == opposite:
+            rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
 
     return "\n".join(rules)
 
 
-_ThemeFn = Callable[[str, list[str]], str]
+_ThemeFn = Callable[[str, list[PcbLayer]], str]
 
 _THEME_CSS_FN: dict[str, _ThemeFn] = {
     "design": _design_theme_css,
@@ -660,13 +701,17 @@ _THEME_CSS_FN: dict[str, _ThemeFn] = {
 THEME_NAMES: list[str] = list(_THEME_CSS_FN.keys())
 
 
-def _theme_css(theme: str, side: str, copper_layers: list[str]) -> str:
+def _theme_css(theme: str, side: str, layers: list[PcbLayer]) -> str:
     """Dispatch to the appropriate theme CSS function."""
     fn = _THEME_CSS_FN.get(theme, _design_theme_css)
-    return fn(side, copper_layers)
+    return fn(side, layers)
 
 
-def _highlight_css(hl_net_nums: set[int], hl_refs: set[str]) -> str:
+def _highlight_css(
+    hl_net_nums: set[int],
+    hl_refs: set[str],
+    copper_layers: list[PcbLayer],
+) -> str:
     """Return CSS that dims non-highlighted elements and brightens highlighted."""
     rules: list[str] = []
     rules.append("/* Dim non-highlighted elements */")
@@ -691,8 +736,12 @@ def _highlight_css(hl_net_nums: set[int], hl_refs: set[str]) -> str:
         rules.append(f"{zone_sel} {{ opacity: 0.25 !important; }}")
         rules.append("")
         rules.append("/* Restore vibrant copper colors for highlighted traces and pads */")
-        for layer, color in _COPPER_COLORS.items():
-            cls = _layer_class(layer)
+        inner_idx = 0
+        for layer in copper_layers:
+            color = _copper_color(layer, inner_idx)
+            if not layer.side:
+                inner_idx += 1
+            cls = _layer_class(layer.name)
             trace_sel = ", ".join(
                 f'g.{cls} .trace[data-net-number="{nn}"], '
                 f'g.{cls} .trace-arc[data-net-number="{nn}"]'
@@ -775,6 +824,17 @@ def render_pcb_svg(
 
     has_hl = bool(hl_net_nums) or bool(hl_refs)
 
+    # -- Layer lookup from board definitions --------------------------------
+    layer_lookup: dict[str, PcbLayer] = {lyr.name: lyr for lyr in board.layers}
+    all_copper = sorted(
+        [lyr for lyr in board.layers if lyr.function == LayerFunction.COPPER],
+        key=_copper_paint_order,
+    )
+    silk_layer_names = {
+        lyr.name for lyr in board.layers if lyr.function == LayerFunction.SILKSCREEN
+    }
+    fab_layer_defs = [lyr for lyr in board.layers if lyr.function == LayerFunction.FAB]
+
     # -- Discover which copper layers have content -------------------------
     copper_layers_present: set[str] = set()
     for seg in board.segments:
@@ -782,16 +842,14 @@ def render_pcb_svg(
     for ta in board.trace_arcs:
         copper_layers_present.add(ta.layer)
     for poly in board.polygons:
-        if poly.layer.endswith(".Cu"):
+        info = layer_lookup.get(poly.layer)
+        if info and info.function == LayerFunction.COPPER:
             copper_layers_present.add(poly.layer)
     for fp in board.footprints:
         for pad in fp.pads:
-            copper_layers_present.add(_pad_copper_layer(pad, fp.layer))
-    # Ordered subset of _LAYER_ORDER that actually has content
-    copper_layers = [ly for ly in _LAYER_ORDER if ly in copper_layers_present]
-    # Add any extra layers not in _LAYER_ORDER (unlikely but defensive)
-    for ly in sorted(copper_layers_present - set(_LAYER_ORDER)):
-        copper_layers.append(ly)
+            copper_layers_present.add(_pad_copper_layer(pad, fp.layer, layer_lookup))
+    # Ordered subset of all_copper that actually has content
+    copper_layers = [lyr for lyr in all_copper if lyr.name in copper_layers_present]
 
     # -- Build indexes for per-layer rendering ----------------------------
     # Segments by layer
@@ -804,24 +862,25 @@ def render_pcb_svg(
     for ta in board.trace_arcs:
         tarcs_by_layer[ta.layer].append(ta)
 
-    # Zone polygons by layer
+    # Zone polygons by layer (copper only)
     zones_by_layer: dict[str, list[PcbPolygon]] = defaultdict(list)
     for poly in board.polygons:
-        if poly.layer.endswith(".Cu"):
+        info = layer_lookup.get(poly.layer)
+        if info and info.function == LayerFunction.COPPER:
             zones_by_layer[poly.layer].append(poly)
 
     # Pads by copper layer
     pads_by_layer: dict[str, list[tuple[PcbPad, str]]] = defaultdict(list)
     for fp in board.footprints:
         for pad in fp.pads:
-            ly = _pad_copper_layer(pad, fp.layer)
+            ly = _pad_copper_layer(pad, fp.layer, layer_lookup)
             pads_by_layer[ly].append((pad, fp.reference))
 
     # Silkscreen lines by layer
     silk_by_layer: dict[str, list[PcbLine]] = defaultdict(list)
     for fp in board.footprints:
         for ln in fp.silkscreen_lines:
-            if ln.layer in _SILK_NAMES:
+            if ln.layer in silk_layer_names:
                 silk_by_layer[ln.layer].append(ln)
 
     # -- ViewBox -----------------------------------------------------------
@@ -842,12 +901,12 @@ def render_pcb_svg(
 
     # -- CSS theme ---------------------------------------------------------
     svg.raw('<style id="theme">')
-    svg.raw(_theme_css(theme, side, copper_layers))
+    svg.raw(_theme_css(theme, side, board.layers))
     svg.raw("</style>")
 
     if has_hl:
         svg.raw('<style id="highlight">')
-        svg.raw(_highlight_css(hl_net_nums, hl_refs))
+        svg.raw(_highlight_css(hl_net_nums, hl_refs, copper_layers))
         svg.raw("</style>")
 
     # -- Back-side mirror --------------------------------------------------
@@ -908,7 +967,8 @@ def render_pcb_svg(
     svg.raw(f'<g clip-path="url(#{active_clip})">')
 
     # -- Copper layer groups (paint order: back → inner → front) -----------
-    for layer in copper_layers:
+    for cu_layer in copper_layers:
+        layer = cu_layer.name
         cls = _layer_class(layer)
         svg.group_start(attrs={"data-layer": layer, "class": cls})
 
@@ -1002,7 +1062,10 @@ def render_pcb_svg(
         svg.group_end()
 
     # -- Fab layer groups (component bodies) -------------------------------
-    for fab_layer in ("B.Fab", "F.Fab"):
+    # Paint order: back fab first, then front fab (same as copper).
+    fab_ordered = sorted(fab_layer_defs, key=lambda lyr: 0 if lyr.side == "back" else 1)
+    for fab_def in fab_ordered:
+        fab_layer = fab_def.name
         fab_content: list[tuple[str, list[PcbLine], list[PcbCircle], list[PcbArc]]] = []
         for fp in board.footprints:
             fab_lines = [ln for ln in fp.fab_lines if ln.layer == fab_layer]
@@ -1053,8 +1116,13 @@ def render_pcb_svg(
         svg.group_end()
 
     # -- Collect ref designator texts for rendering outside mirror ---------
-    active_fab = {"F.Fab"} if side == "front" else {"B.Fab"}
-    active_silk = {"F.SilkS", "F.Silkscreen"} if side == "front" else {"B.SilkS", "B.Silkscreen"}
+    active_side = "front" if side == "front" else "back"
+    active_fab = {lyr.name for lyr in fab_layer_defs if lyr.side == active_side}
+    active_silk = {
+        lyr.name
+        for lyr in board.layers
+        if lyr.function == LayerFunction.SILKSCREEN and lyr.side == active_side
+    }
     active_text_layers = active_fab | active_silk
     deferred_texts: list[tuple[float, float, str, float, float]] = []
     for fp in board.footprints:

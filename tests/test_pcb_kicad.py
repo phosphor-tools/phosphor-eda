@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from phosphor_eda.kicad.pcb_parser import parse_kicad_pcb
+from phosphor_eda.pcb import LayerFunction
 
 FIXTURE = Path(__file__).parent / "fixtures" / "swd_switch.kicad_pcb"
 
@@ -12,6 +13,73 @@ FIXTURE = Path(__file__).parent / "fixtures" / "swd_switch.kicad_pcb"
 @pytest.fixture(scope="module")
 def board():
     return parse_kicad_pcb(FIXTURE)
+
+
+# ---------------------------------------------------------------------------
+# Layer definitions
+# ---------------------------------------------------------------------------
+
+
+def test_layer_definitions_populated(board):
+    """Parser should populate board.layers from the (layers ...) section."""
+    assert len(board.layers) > 0
+
+
+def test_copper_layer_function(board):
+    fcu = board.layer_for("F.Cu")
+    assert fcu is not None
+    assert fcu.function == LayerFunction.COPPER
+    assert fcu.side == "front"
+    assert fcu.number == 0
+
+
+def test_back_copper_layer(board):
+    bcu = board.layer_for("B.Cu")
+    assert bcu is not None
+    assert bcu.function == LayerFunction.COPPER
+    assert bcu.side == "back"
+
+
+def test_inner_copper_layer(board):
+    in1 = board.layer_for("In1.Cu")
+    assert in1 is not None
+    assert in1.function == LayerFunction.COPPER
+    assert in1.side == ""  # inner copper has no side
+
+
+def test_silk_layer_function(board):
+    layers = board.layers_by_function(LayerFunction.SILKSCREEN)
+    assert len(layers) >= 2
+    names = {lyr.name for lyr in layers}
+    assert "F.SilkS" in names
+
+
+def test_fab_layer_function(board):
+    layers = board.layers_by_function(LayerFunction.FAB)
+    names = {lyr.name for lyr in layers}
+    assert "F.Fab" in names
+    assert "B.Fab" in names
+
+
+def test_edge_layer(board):
+    layers = board.layers_by_function(LayerFunction.EDGE)
+    assert len(layers) == 1
+    assert layers[0].name == "Edge.Cuts"
+
+
+def test_layers_by_function_filters(board):
+    copper = board.layers_by_function(LayerFunction.COPPER)
+    assert all(lyr.function == LayerFunction.COPPER for lyr in copper)
+    assert len(copper) >= 2  # At least F.Cu and B.Cu
+
+
+def test_layer_for_missing(board):
+    assert board.layer_for("Nonexistent") is None
+
+
+# ---------------------------------------------------------------------------
+# Board metadata
+# ---------------------------------------------------------------------------
 
 
 def test_board_name(board):
@@ -134,6 +202,7 @@ def test_footprint_by_ref_missing(board):
 # ---------------------------------------------------------------------------
 # Zone / polygon parsing
 # ---------------------------------------------------------------------------
+
 
 def test_polygon_count(board):
     """swd_switch has 2 zones with multiple filled_polygon entries."""

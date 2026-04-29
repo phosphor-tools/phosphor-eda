@@ -3,11 +3,44 @@
 Dataclasses representing a parsed PCB board — footprints, pads, traces,
 vias, and board outline.  Coordinates are in millimetres (absolute board
 space, Y increases downward).
+
+Each layer carries its native name (e.g. ``"F.Cu"`` for KiCad,
+``"Top Layer"`` for Altium) plus a :class:`LayerFunction` label and a
+*side* string (``"front"`` / ``"back"`` / ``""`` for inner or N/A).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
+
+
+class LayerFunction(Enum):
+    """Semantic purpose of a PCB layer."""
+
+    COPPER = "copper"
+    SILKSCREEN = "silkscreen"
+    SOLDER_MASK = "solder_mask"
+    SOLDER_PASTE = "solder_paste"
+    FAB = "fab"
+    COURTYARD = "courtyard"
+    EDGE = "edge"
+    MECHANICAL = "mechanical"
+    OTHER = "other"
+
+
+@dataclass
+class PcbLayer:
+    """A layer definition with function metadata.
+
+    ``name`` is the native layer name from the source format (e.g.
+    ``"F.Cu"`` for KiCad, ``"Top Layer"`` for Altium).
+    """
+
+    name: str
+    function: LayerFunction
+    side: str = ""  # "front", "back", or "" for inner/both/N/A
+    number: int | None = None
 
 
 @dataclass
@@ -170,6 +203,22 @@ class PcbBoard:
     outline_arcs: list[PcbArc]
     polygons: list[PcbPolygon] = field(default_factory=list)
     trace_arcs: list[PcbTraceArc] = field(default_factory=list)
+    layers: list[PcbLayer] = field(default_factory=list)
+
+    # -- Layer helpers --------------------------------------------------------
+
+    def layers_by_function(self, fn: LayerFunction) -> list[PcbLayer]:
+        """Return all layers with a given function."""
+        return [lyr for lyr in self.layers if lyr.function == fn]
+
+    def layer_for(self, name: str) -> PcbLayer | None:
+        """Look up a layer definition by native name."""
+        for lyr in self.layers:
+            if lyr.name == name:
+                return lyr
+        return None
+
+    # -- Component helpers ----------------------------------------------------
 
     def footprint_by_ref(self, ref: str) -> PcbFootprint | None:
         """Look up a footprint by reference designator (case-insensitive)."""
@@ -189,11 +238,7 @@ class PcbBoard:
     def net_numbers_by_name(self, name: str) -> set[int]:
         """Return net numbers matching *name* (case-insensitive substring)."""
         needle = name.upper()
-        return {
-            n.number
-            for n in self.nets.values()
-            if n.name and needle in n.name.upper()
-        }
+        return {n.number for n in self.nets.values() if n.name and needle in n.name.upper()}
 
     def bbox(self) -> tuple[float, float, float, float]:
         """Board bounding box from outline geometry."""
