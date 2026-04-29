@@ -7,10 +7,14 @@ duplicating the logic.
 
 from __future__ import annotations
 
+import re
 import struct
 
 # DistanceFromTop fractional properties use 1/100000 resolution.
 _FRAC_DENOM = 100_000
+
+# Matches ``PREFIX[START..END]`` in Altium bus notation.
+_BUS_RANGE_RE = re.compile(r"^(.*?)\[(\d+)\.\.(\d+)\]$")
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +99,37 @@ def compute_pin_tip(
         return (ox - pin_length, oy)
     else:  # down
         return (ox, oy - pin_length)
+
+
+def parse_bus_notation(text: str) -> list[str] | None:
+    """Expand Altium bus notation into individual signal names.
+
+    Handles range notation (``D[0..7]``), descending ranges (``D[7..0]``),
+    and comma-separated mixed forms (``D[0..3],CLK,RESET``).
+
+    Returns ``None`` if *text* does not contain any range notation.
+    """
+    if "[" not in text:
+        return None
+
+    members: list[str] = []
+    has_range = False
+
+    for token in text.split(","):
+        token = token.strip()
+        m = _BUS_RANGE_RE.match(token)
+        if m:
+            has_range = True
+            prefix = m.group(1)
+            start = int(m.group(2))
+            end = int(m.group(3))
+            step = 1 if start <= end else -1
+            for i in range(start, end + step, step):
+                members.append(f"{prefix}{i}")
+        else:
+            members.append(token)
+
+    return members if has_range else None
 
 
 # ---------------------------------------------------------------------------

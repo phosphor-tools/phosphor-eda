@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from phosphor_eda.altium._helpers import parse_bus_notation
 from phosphor_eda.altium.errors import ParseContext
 from phosphor_eda.altium.record_factory import (
     compute_entry_coord,
@@ -430,9 +431,12 @@ def resolve_nets(
         root = uf.find(loc)
         group_names[root] = pp.text
 
-    # Ports (skip harness-type — those connect to signal harness wires)
+    # Ports (skip harness-type and bus-notation — those are expanded
+    # into individual member ports during build_page)
     for port in sheet.ports:
         if port.harness_type or not port.name:
+            continue
+        if parse_bus_notation(port.name) is not None:
             continue
         loc = _port_wire_coord(port, sheet.wire_index)
         all_named_points.add(loc)
@@ -448,8 +452,12 @@ def resolve_nets(
     # no net label, power port, or port already names the group.  This
     # ensures wire groups connecting only sheet entries (e.g. ADC1_IN3
     # and SLIDE_POS wired together on the Top Level page) get named.
+    # Bus-notation entries (e.g. "D[0..7]") are skipped — they're
+    # expanded into individual member ports during build_page.
     for entry in sheet.sheet_entries:
         if entry.harness_type or not entry.name:
+            continue
+        if parse_bus_notation(entry.name) is not None:
             continue
         ep = entry.coord
         all_named_points.add(ep)
@@ -715,18 +723,70 @@ def collect_harness_port_nets(
 # ---------------------------------------------------------------------------
 
 
+def _expand_bus_ports(
+    members: list[str],
+    bus_name: str,
+    page: Page,
+    nets_by_name: dict[str, Net],
+    io_type: int = 0,
+    has_overline: bool = False,
+) -> None:
+    """Create individual Port objects for each bus member.
+
+    For each member name (e.g. "D0"), looks up the net by name in
+    *nets_by_name* and creates a Port linking to it. Sets ``Net.bus``
+    to *bus_name* so the bus grouping is preserved in the domain model.
+    """
+    for member_name in members:
+        if member_name not in nets_by_name:
+            continue
+        net = nets_by_name[member_name]
+        if not net.bus:
+            net.bus = bus_name
+        port_meta: dict[str, str] = {}
+        if io_type:
+            port_meta["io_type"] = _IO_TYPE_NAMES.get(io_type, str(io_type))
+        if has_overline:
+            port_meta["active_low"] = "true"
+        port = Port(
+            name=member_name,
+            page=page,
+            net=net,
+            metadata=port_meta,
+        )
+        page.ports.append(port)
+
+
 def _collect_sheet_entry_ports(
     sheet: SheetRecords,
     page: Page,
     nets_by_name: dict[str, Net],
     coord_to_net_name: dict[tuple[int, int], str],
 ) -> None:
-    """Add Port objects for non-harness sheet entries on this page."""
+    """Add Port objects for non-harness sheet entries on this page.
+
+    Bus-notation entries (e.g. ``D[0..7]``) are expanded into individual
+    member ports (D0, D1, ...) by looking up each member's net by name.
+    """
     for entry in sheet.sheet_entries:
         if entry.harness_type:
             continue
         if not entry.name:
             continue
+
+        # Bus-notation entry: expand to individual member ports
+        bus_members = parse_bus_notation(entry.name)
+        if bus_members is not None:
+            _expand_bus_ports(
+                bus_members,
+                entry.name,
+                page,
+                nets_by_name,
+                io_type=entry.io_type,
+                has_overline=entry.has_overline,
+            )
+            continue
+
         net_name = coord_to_net_name.get(entry.coord)
         if net_name and net_name in nets_by_name:
             port_meta: dict[str, str] = {}
@@ -1134,6 +1194,20 @@ def _collect_ports(
     for port_rec in sheet.ports:
         if port_rec.harness_type or not port_rec.name:
             continue
+
+        # Bus-notation port: expand to individual member ports
+        bus_members = parse_bus_notation(port_rec.name)
+        if bus_members is not None:
+            _expand_bus_ports(
+                bus_members,
+                port_rec.name,
+                page,
+                nets_by_name,
+                io_type=port_rec.io_type,
+                has_overline=port_rec.has_overline,
+            )
+            continue
+
         wire_coord = _port_wire_coord(port_rec, sheet.wire_index)
         net_name = coord_to_net_name.get(wire_coord)
         if net_name and net_name in nets_by_name:
