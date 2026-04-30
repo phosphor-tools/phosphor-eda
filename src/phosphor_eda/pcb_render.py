@@ -156,6 +156,34 @@ class _Svg:
             f"{html}</foreignObject>"
         )
 
+    def foreign_object_scaled(
+        self,
+        x: float,
+        y: float,
+        width: float,
+        height: float,
+        html: str,
+        scale: float,
+    ) -> None:
+        """Emit a foreignObject whose content renders at CSS-friendly sizes.
+
+        Wraps in ``<g transform="scale(s)">`` so the HTML inside can use
+        normal pixel values (14px font, 1px borders, 4px radius).  The
+        position and dimensions are divided by *scale* to compensate,
+        keeping the visual result at the intended board-mm position.
+        """
+        inv = 1.0 / scale
+        sx = x * inv
+        sy = y * inv
+        sw = width * inv
+        sh = height * inv
+        self._parts.append(
+            f'<g transform="scale({scale:.6f})">'
+            f'<foreignObject x="{sx:.4f}" y="{sy:.4f}" '
+            f'width="{sw:.4f}" height="{sh:.4f}">'
+            f"{html}</foreignObject></g>"
+        )
+
     def build(self) -> str:
         return "\n".join(self._parts)
 
@@ -830,22 +858,78 @@ def _body_group_attrs(
 # ---------------------------------------------------------------------------
 
 
+_BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
+
+
+def _xhtml_safe(html: str) -> str:
+    """Make user-supplied label HTML safe for XHTML inside foreignObject.
+
+    Converts ``<br>`` to ``<br/>``.
+    """
+    return _BR_RE.sub("<br/>", html)
+
+
+_ANNOTATION_CSS_PX = 13
+"""Target CSS font-size in px for annotation labels.
+
+foreignObject content is wrapped in ``<g transform="scale(s)">`` so the
+browser sees normal pixel values.  This constant is the reference size
+that all label CSS is designed around.
+"""
+
+
+def _annotation_scale(font_size_mm: float) -> float:
+    """Scale factor that maps board-mm to CSS px for annotation labels."""
+    return font_size_mm / _ANNOTATION_CSS_PX
+
+
 def _annotation_css() -> str:
-    """Default CSS for annotation elements."""
+    """Default CSS for annotation elements.
+
+    foreignObject content is rendered inside a scaled ``<g>`` so CSS px
+    values behave as normal screen pixels — borders, padding, and radius
+    all render at the sizes written here.
+    """
     return """\
-.annotation-box { stroke: rgba(255,107,53,0.9); stroke-width: 0.3; fill: none;
-  stroke-dasharray: 1,0.5; }
-.annotation-pointer { stroke: rgba(255,107,53,0.9); stroke-width: 0.15; fill: none; }
-.annotation-leader { stroke: rgba(200,200,200,0.5); stroke-width: 0.1;
-  stroke-dasharray: 0.5,0.3; fill: none; }
-.annotation-label-box { background: rgba(0,0,0,0.7); padding: 0.3em 0.5em;
-  border-radius: 3px; color: #e0e0e0; width: max-content; }
-.legend-box { background: rgba(20,20,35,0.85); border: 1px solid rgba(255,255,255,0.2);
-  padding: 0.5em 0.8em; border-radius: 4px; color: #e0e0e0; width: max-content; }
-.annotation-text { font-family: system-ui, sans-serif; line-height: 1.4; margin: 0; }
-.legend-title { font-weight: bold; margin: 0 0 0.3em 0; }
-.legend-entry { display: flex; align-items: center; gap: 0.4em; margin: 0.15em 0; }
-.legend-swatch { width: 1em; height: 1em; border-radius: 2px; flex-shrink: 0; }"""
+.annotation-box { stroke-width: 0.3; fill: none;
+  stroke-dasharray: 1.2,0.6; stroke-linecap: round; }
+.annotation-pointer { stroke-width: 0.15; fill: none; }
+.annotation-leader { stroke: rgba(200,200,200,0.4); stroke-width: 0.08;
+  stroke-dasharray: 0.4,0.25; fill: none; }
+.annotation-label-box {
+  background: rgba(12,12,20,0.82);
+  padding: 3px 7px;
+  border-radius: 4px;
+  border: 1px solid rgba(255,255,255,0.12);
+  color: #f0f0f0;
+  width: max-content;
+  letter-spacing: 0.01em;
+}
+.annotation-label-box--muted {
+  background: rgba(12,12,20,0.65);
+  border-color: rgba(255,255,255,0.08);
+}
+.legend-box {
+  background: rgba(12,12,20,0.85);
+  border: 1px solid rgba(255,255,255,0.15);
+  padding: 6px 10px;
+  border-radius: 5px;
+  color: #f0f0f0;
+  width: max-content;
+}
+.annotation-text {
+  font-family: "SF Pro Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  line-height: 1.35; margin: 0; font-weight: 500;
+}
+.legend-title {
+  font-weight: 600; margin: 0 0 4px 0;
+  letter-spacing: 0.03em; text-transform: uppercase;
+  font-size: 0.8em; opacity: 0.7;
+}
+.legend-entry { display: flex; align-items: center; gap: 5px; margin: 2px 0; }
+.legend-swatch {
+  width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0;
+}"""
 
 
 def _render_annotations(
@@ -868,26 +952,27 @@ def _render_annotations(
 
 def _render_box(svg: _Svg, box: ResolvedBox, font_size: float) -> None:
     """Render a dashed box with an optional label."""
+    rx = font_size * 0.4
     svg.rect(
         box.x,
         box.y,
         box.width,
         box.height,
-        rx=font_size * 0.5,
+        rx=rx,
         attrs={"class": "annotation-box", "style": f"stroke: {box.color}"},
     )
     if box.label_html:
-        # foreignObject must be large enough to contain the label at max-content.
-        # Use a generous size — the inner div sizes to content via max-content.
+        scale = _annotation_scale(font_size)
         fo_w = max(box.width * 3, font_size * 30)
         fo_h = font_size * 10
         html = (
             f'<div xmlns="http://www.w3.org/1999/xhtml" '
             f'class="annotation-label-box annotation-text" '
-            f'style="font-size: {font_size:.3f}px">'
-            f"{box.label_html}</div>"
+            f'style="font-size: {_ANNOTATION_CSS_PX}px; '
+            f'border-color: {box.color}">'
+            f"{_xhtml_safe(box.label_html)}</div>"
         )
-        svg.foreign_object(box.label_x, box.label_y, fo_w, fo_h, html)
+        svg.foreign_object_scaled(box.label_x, box.label_y, fo_w, fo_h, html, scale)
 
 
 def _render_pointer(svg: _Svg, pointer: ResolvedPointer, font_size: float) -> None:
@@ -914,15 +999,17 @@ def _render_pointer(svg: _Svg, pointer: ResolvedPointer, font_size: float) -> No
         },
     )
     if pointer.label_html:
+        scale = _annotation_scale(font_size)
         fo_w = font_size * 30
         fo_h = font_size * 10
         html = (
             f'<div xmlns="http://www.w3.org/1999/xhtml" '
             f'class="annotation-label-box annotation-text" '
-            f'style="font-size: {font_size:.3f}px">'
-            f"{pointer.label_html}</div>"
+            f'style="font-size: {_ANNOTATION_CSS_PX}px; '
+            f'border-color: {pointer.color}">'
+            f"{_xhtml_safe(pointer.label_html)}</div>"
         )
-        svg.foreign_object(pointer.label_x, pointer.label_y, fo_w, fo_h, html)
+        svg.foreign_object_scaled(pointer.label_x, pointer.label_y, fo_w, fo_h, html, scale)
 
 
 def _render_label(svg: _Svg, label: ResolvedLabel, font_size: float) -> None:
@@ -938,40 +1025,38 @@ def _render_label(svg: _Svg, label: ResolvedLabel, font_size: float) -> None:
             attrs={"class": "annotation-leader"},
         )
     if label.label_html:
+        scale = _annotation_scale(font_size)
         fo_w = font_size * 30
         fo_h = font_size * 10
         html = (
             f'<div xmlns="http://www.w3.org/1999/xhtml" '
-            f'class="annotation-label-box annotation-text" '
-            f'style="font-size: {font_size:.3f}px; '
-            f'background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1)">'
-            f"{label.label_html}</div>"
+            f'class="annotation-label-box annotation-label-box--muted annotation-text" '
+            f'style="font-size: {_ANNOTATION_CSS_PX}px">'
+            f"{_xhtml_safe(label.label_html)}</div>"
         )
-        svg.foreign_object(label.label_x, label.label_y, fo_w, fo_h, html)
+        svg.foreign_object_scaled(label.label_x, label.label_y, fo_w, fo_h, html, scale)
 
 
 def _render_legend(svg: _Svg, legend: ResolvedLegend, font_size: float) -> None:
     """Render a legend box with color swatches."""
     title_html = ""
     if legend.title:
-        title_html = (
-            f'<p class="annotation-text legend-title" '
-            f'style="font-size: {font_size:.3f}px">'
-            f"{xml_escape(legend.title)}</p>"
-        )
+        title_html = f'<p class="annotation-text legend-title">{xml_escape(legend.title)}</p>'
     entries_html = ""
     for entry in legend.entries:
         entries_html += (
-            f'<div class="legend-entry" style="font-size: {font_size:.3f}px">'
+            f'<div class="legend-entry">'
             f'<div class="legend-swatch" style="background: {entry.color}"></div>'
             f'<span class="annotation-text">{xml_escape(entry.label)}</span>'
             f"</div>"
         )
+    scale = _annotation_scale(font_size)
     html = (
-        f'<div xmlns="http://www.w3.org/1999/xhtml" class="legend-box">'
+        f'<div xmlns="http://www.w3.org/1999/xhtml" class="legend-box annotation-text" '
+        f'style="font-size: {_ANNOTATION_CSS_PX}px">'
         f"{title_html}{entries_html}</div>"
     )
-    svg.foreign_object(legend.x, legend.y, legend.width * 2, legend.height * 2, html)
+    svg.foreign_object_scaled(legend.x, legend.y, legend.width * 2, legend.height * 2, html, scale)
 
 
 # ---------------------------------------------------------------------------
