@@ -344,14 +344,28 @@ class TestEstimateSize:
 
 
 def test_font_size_scales_with_diagonal() -> None:
-    small_bbox = (0.0, 0.0, 20.0, 20.0)
-    large_bbox = (0.0, 0.0, 200.0, 200.0)
+    small_bbox = (0.0, 0.0, 30.0, 30.0)
+    large_bbox = (0.0, 0.0, 100.0, 100.0)
     small_font = compute_annotation_font_size(small_bbox)
     large_font = compute_annotation_font_size(large_bbox)
     assert large_font > small_font
-    # Font should scale roughly proportionally to diagonal
+    # Both within the [0.4, 3.0] clamp range, so ratio should track diagonal
     ratio = large_font / small_font
-    assert ratio == pytest.approx(10.0, rel=0.5)
+    assert ratio == pytest.approx(100 / 30, rel=0.1)
+
+
+def test_font_size_clamp_minimum() -> None:
+    """Very small board should hit minimum font size."""
+    tiny_bbox = (0.0, 0.0, 5.0, 5.0)
+    font = compute_annotation_font_size(tiny_bbox)
+    assert font == 0.4
+
+
+def test_font_size_clamp_maximum() -> None:
+    """Very large board should hit maximum font size."""
+    huge_bbox = (0.0, 0.0, 500.0, 500.0)
+    font = compute_annotation_font_size(huge_bbox)
+    assert font == 3.0
 
 
 # ---------------------------------------------------------------------------

@@ -350,10 +350,14 @@ def _estimate_label_size(html: str, font_size: float) -> tuple[float, float]:
 def compute_annotation_font_size(
     board_bbox: tuple[float, float, float, float],
 ) -> float:
-    """Compute annotation font size from board diagonal."""
+    """Compute annotation font size from board diagonal.
+
+    Scales linearly with diagonal (0.015×), clamped to [0.4, 3.0] mm
+    to stay readable on very small boards and not overwhelm large ones.
+    """
     x1, y1, x2, y2 = board_bbox
     diagonal = math.hypot(x2 - x1, y2 - y1)
-    return diagonal * 0.015
+    return max(0.4, min(3.0, diagonal * 0.015))
 
 
 # ---------------------------------------------------------------------------

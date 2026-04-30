@@ -873,26 +873,37 @@ def _render_box(svg: _Svg, box: ResolvedBox, font_size: float) -> None:
         box.y,
         box.width,
         box.height,
-        rx=font_size * 0.3,
+        rx=font_size * 0.5,
         attrs={"class": "annotation-box", "style": f"stroke: {box.color}"},
     )
     if box.label_html:
-        fo_size = font_size * 10  # large enough for content
+        # foreignObject must be large enough to contain the label at max-content.
+        # Use a generous size — the inner div sizes to content via max-content.
+        fo_w = max(box.width * 3, font_size * 30)
+        fo_h = font_size * 10
         html = (
             f'<div xmlns="http://www.w3.org/1999/xhtml" '
             f'class="annotation-label-box annotation-text" '
             f'style="font-size: {font_size:.3f}px">'
             f"{box.label_html}</div>"
         )
-        svg.foreign_object(box.label_x, box.label_y, fo_size, fo_size, html)
+        svg.foreign_object(box.label_x, box.label_y, fo_w, fo_h, html)
 
 
 def _render_pointer(svg: _Svg, pointer: ResolvedPointer, font_size: float) -> None:
     """Render an arrow line with arrowhead and optional label."""
-    # Leader line from label to target
+    # Pick the leader line origin on the label edge closest to the target
+    lx = pointer.label_x
+    ly = pointer.label_y + font_size * 0.5
+    if pointer.position == "left":
+        # Label is left of target — start from right edge of label
+        lx = pointer.label_x + font_size * 2
+    elif pointer.position == "above":
+        ly = pointer.label_y + font_size * 1.2
+
     svg.line(
-        pointer.label_x,
-        pointer.label_y + font_size * 0.5,
+        lx,
+        ly,
         pointer.target_x,
         pointer.target_y,
         font_size * 0.1,
@@ -903,14 +914,15 @@ def _render_pointer(svg: _Svg, pointer: ResolvedPointer, font_size: float) -> No
         },
     )
     if pointer.label_html:
-        fo_size = font_size * 10
+        fo_w = font_size * 30
+        fo_h = font_size * 10
         html = (
             f'<div xmlns="http://www.w3.org/1999/xhtml" '
             f'class="annotation-label-box annotation-text" '
             f'style="font-size: {font_size:.3f}px">'
             f"{pointer.label_html}</div>"
         )
-        svg.foreign_object(pointer.label_x, pointer.label_y, fo_size, fo_size, html)
+        svg.foreign_object(pointer.label_x, pointer.label_y, fo_w, fo_h, html)
 
 
 def _render_label(svg: _Svg, label: ResolvedLabel, font_size: float) -> None:
@@ -926,7 +938,8 @@ def _render_label(svg: _Svg, label: ResolvedLabel, font_size: float) -> None:
             attrs={"class": "annotation-leader"},
         )
     if label.label_html:
-        fo_size = font_size * 10
+        fo_w = font_size * 30
+        fo_h = font_size * 10
         html = (
             f'<div xmlns="http://www.w3.org/1999/xhtml" '
             f'class="annotation-label-box annotation-text" '
@@ -934,7 +947,7 @@ def _render_label(svg: _Svg, label: ResolvedLabel, font_size: float) -> None:
             f'background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1)">'
             f"{label.label_html}</div>"
         )
-        svg.foreign_object(label.label_x, label.label_y, fo_size, fo_size, html)
+        svg.foreign_object(label.label_x, label.label_y, fo_w, fo_h, html)
 
 
 def _render_legend(svg: _Svg, legend: ResolvedLegend, font_size: float) -> None:
