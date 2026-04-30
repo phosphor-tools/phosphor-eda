@@ -140,49 +140,8 @@ class _Svg:
     def group_end(self) -> None:
         self._parts.append("</g>")
 
-    def foreign_object(
-        self,
-        x: float,
-        y: float,
-        width: float,
-        height: float,
-        html: str,
-        attrs: dict[str, str] | None = None,
-    ) -> None:
-        """Emit a <foreignObject> with the given HTML content."""
-        self._parts.append(
-            f'<foreignObject x="{x:.4f}" y="{y:.4f}" '
-            f'width="{width:.4f}" height="{height:.4f}"{_fmt_attrs(attrs)}>'
-            f"{html}</foreignObject>"
-        )
-
-    def foreign_object_scaled(
-        self,
-        x: float,
-        y: float,
-        width: float,
-        height: float,
-        html: str,
-        scale: float,
-    ) -> None:
-        """Emit a foreignObject whose content renders at CSS-friendly sizes.
-
-        Wraps in ``<g transform="scale(s)">`` so the HTML inside can use
-        normal pixel values (14px font, 1px borders, 4px radius).  The
-        position and dimensions are divided by *scale* to compensate,
-        keeping the visual result at the intended board-mm position.
-        """
-        inv = 1.0 / scale
-        sx = x * inv
-        sy = y * inv
-        sw = width * inv
-        sh = height * inv
-        self._parts.append(
-            f'<g transform="scale({scale:.6f})">'
-            f'<foreignObject x="{sx:.4f}" y="{sy:.4f}" '
-            f'width="{sw:.4f}" height="{sh:.4f}">'
-            f"{html}</foreignObject></g>"
-        )
+    def path(self, d: str, attrs: dict[str, str] | None = None) -> None:
+        self._parts.append(f'<path d="{d}"{_fmt_attrs(attrs)}/>')
 
     def build(self) -> str:
         return "\n".join(self._parts)
@@ -859,77 +818,39 @@ def _body_group_attrs(
 
 
 _BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
+# Matches any HTML tag (for stripping)
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
-def _xhtml_safe(html: str) -> str:
-    """Make user-supplied label HTML safe for XHTML inside foreignObject.
+def _annotation_css(font_size: float) -> str:
+    """CSS for pure-SVG annotation elements.
 
-    Converts ``<br>`` to ``<br/>``.
+    All sizes are in board mm (SVG user units).
     """
-    return _BR_RE.sub("<br/>", html)
-
-
-_ANNOTATION_CSS_PX = 13
-"""Target CSS font-size in px for annotation labels.
-
-foreignObject content is wrapped in ``<g transform="scale(s)">`` so the
-browser sees normal pixel values.  This constant is the reference size
-that all label CSS is designed around.
-"""
-
-
-def _annotation_scale(font_size_mm: float) -> float:
-    """Scale factor that maps board-mm to CSS px for annotation labels."""
-    return font_size_mm / _ANNOTATION_CSS_PX
-
-
-def _annotation_css() -> str:
-    """Default CSS for annotation elements.
-
-    foreignObject content is rendered inside a scaled ``<g>`` so CSS px
-    values behave as normal screen pixels — borders, padding, and radius
-    all render at the sizes written here.
-    """
-    return """\
-.annotation-box { stroke-width: 0.3; fill: none;
-  stroke-dasharray: 1.2,0.6; stroke-linecap: round; }
-.annotation-pointer { stroke-width: 0.15; fill: none; }
-.annotation-leader { stroke: rgba(200,200,200,0.4); stroke-width: 0.08;
-  stroke-dasharray: 0.4,0.25; fill: none; }
-.annotation-label-box {
-  background: rgba(12,12,20,0.82);
-  padding: 3px 7px;
-  border-radius: 4px;
-  border: 1px solid rgba(255,255,255,0.12);
-  color: #f0f0f0;
-  width: max-content;
-  letter-spacing: 0.01em;
-}
-.annotation-label-box--muted {
-  background: rgba(12,12,20,0.65);
-  border-color: rgba(255,255,255,0.08);
-}
-.legend-box {
-  background: rgba(12,12,20,0.85);
-  border: 1px solid rgba(255,255,255,0.15);
-  padding: 6px 10px;
-  border-radius: 5px;
-  color: #f0f0f0;
-  width: max-content;
-}
-.annotation-text {
-  font-family: "SF Pro Text", "Segoe UI", system-ui, -apple-system, sans-serif;
-  line-height: 1.35; margin: 0; font-weight: 500;
-}
-.legend-title {
-  font-weight: 600; margin: 0 0 4px 0;
-  letter-spacing: 0.03em; text-transform: uppercase;
-  font-size: 0.8em; opacity: 0.7;
-}
-.legend-entry { display: flex; align-items: center; gap: 5px; margin: 2px 0; }
-.legend-swatch {
-  width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0;
-}"""
+    sw = font_size * 0.04  # connector stroke width
+    box_sw = font_size * 0.08
+    box_dash = font_size * 0.4
+    box_gap = font_size * 0.2
+    return f"""\
+.annotation-connector {{ stroke: rgba(180,180,200,0.5); stroke-width: {sw:.4f};
+  fill: none; }}
+.annotation-box {{ stroke-width: {box_sw:.4f}; fill: none;
+  stroke-dasharray: {box_dash:.3f},{box_gap:.3f}; stroke-linecap: round; }}
+.annotation-pill {{ fill: rgba(12,12,20,0.82); stroke: rgba(255,255,255,0.12);
+  stroke-width: {font_size * 0.03:.4f}; }}
+.annotation-pill--muted {{ fill: rgba(12,12,20,0.65);
+  stroke: rgba(255,255,255,0.08); }}
+.annotation-label-text {{ fill: #f0f0f0; font-family: Inter, "SF Pro Text",
+  "Segoe UI", system-ui, sans-serif; font-weight: 500;
+  font-size: {font_size:.4f}px; }}
+.annotation-dot {{ fill: rgba(255,107,53,0.85); }}
+.legend-bg {{ fill: rgba(12,12,20,0.85); stroke: rgba(255,255,255,0.15);
+  stroke-width: {font_size * 0.03:.4f}; }}
+.legend-title-text {{ fill: #f0f0f0; font-family: Inter, "SF Pro Text",
+  system-ui, sans-serif; font-weight: 600; font-size: {font_size * 0.85:.4f}px;
+  opacity: 0.7; text-transform: uppercase; letter-spacing: 0.05em; }}
+.legend-entry-text {{ fill: #f0f0f0; font-family: Inter, "SF Pro Text",
+  system-ui, sans-serif; font-weight: 500; font-size: {font_size:.4f}px; }}"""
 
 
 def _render_annotations(
@@ -937,7 +858,7 @@ def _render_annotations(
     annotations: ResolvedAnnotations,
     font_size: float,
 ) -> None:
-    """Emit all annotation elements into an <g class="annotations"> group."""
+    """Emit all annotation elements as pure SVG (no foreignObject)."""
     svg.group_start(attrs={"class": "annotations"})
     for box in annotations.boxes:
         _render_box(svg, box, font_size)
@@ -950,8 +871,73 @@ def _render_annotations(
     svg.group_end()
 
 
+def _connector_path_d(points: list[tuple[float, float]]) -> str:
+    """Build an SVG path d attribute from a list of waypoints."""
+    if len(points) < 2:
+        return ""
+    parts = [f"M {points[0][0]:.4f} {points[0][1]:.4f}"]
+    for x, y in points[1:]:
+        parts.append(f"L {x:.4f} {y:.4f}")
+    return " ".join(parts)
+
+
+def _render_connector(
+    svg: _Svg,
+    path: list[tuple[float, float]],
+    color: str,
+    font_size: float,
+) -> None:
+    """Render an orthogonal connector path with a dot at the target end."""
+    if len(path) < 2:
+        return
+    d = _connector_path_d(path)
+    svg.path(d, attrs={"class": "annotation-connector", "style": f"stroke: {color}"})
+    # Dot at the target (last point)
+    tx, ty = path[-1]
+    dot_r = font_size * 0.15
+    svg.circle(tx, ty, dot_r, attrs={"class": "annotation-dot", "style": f"fill: {color}"})
+
+
+def _split_label_lines(text: str) -> list[str]:
+    """Split label text on <br> tags and strip HTML tags."""
+    lines = _BR_RE.split(text)
+    return [_HTML_TAG_RE.sub("", line) for line in lines]
+
+
+def _render_pill_label(
+    svg: _Svg,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    text: str,
+    font_size: float,
+    css_class: str = "annotation-pill",
+    border_color: str = "",
+) -> None:
+    """Render a pill-shaped label (rounded rect + centered text)."""
+    rx = height / 2
+    style = f"stroke: {border_color}" if border_color else ""
+    svg.rect(x, y, width, height, rx=rx, attrs={"class": css_class, "style": style})
+
+    # Render text lines centered in the pill
+    lines = _split_label_lines(text)
+    line_height = font_size * 1.2
+    total_text_h = len(lines) * line_height
+    cx = x + width / 2
+    # Start y for the first line baseline (centered vertically)
+    start_y = y + (height - total_text_h) / 2 + font_size * 0.85
+
+    for i, line in enumerate(lines):
+        ty = start_y + i * line_height
+        svg.raw(
+            f'<text x="{cx:.4f}" y="{ty:.4f}" text-anchor="middle" '
+            f'class="annotation-label-text">{xml_escape(line)}</text>'
+        )
+
+
 def _render_box(svg: _Svg, box: ResolvedBox, font_size: float) -> None:
-    """Render a dashed box with an optional label."""
+    """Render a dashed box with an optional margin label."""
     rx = font_size * 0.4
     svg.rect(
         box.x,
@@ -961,102 +947,108 @@ def _render_box(svg: _Svg, box: ResolvedBox, font_size: float) -> None:
         rx=rx,
         attrs={"class": "annotation-box", "style": f"stroke: {box.color}"},
     )
-    if box.label_html:
-        scale = _annotation_scale(font_size)
-        fo_w = max(box.width * 3, font_size * 30)
-        fo_h = font_size * 10
-        html = (
-            f'<div xmlns="http://www.w3.org/1999/xhtml" '
-            f'class="annotation-label-box annotation-text" '
-            f'style="font-size: {_ANNOTATION_CSS_PX}px; '
-            f'border-color: {box.color}">'
-            f"{_xhtml_safe(box.label_html)}</div>"
+    if box.label_text:
+        _render_connector(svg, box.connector_path, box.color, font_size)
+        _render_pill_label(
+            svg,
+            box.label_x,
+            box.label_y,
+            box.label_width,
+            box.label_height,
+            box.label_text,
+            font_size,
+            border_color=box.color,
         )
-        svg.foreign_object_scaled(box.label_x, box.label_y, fo_w, fo_h, html, scale)
 
 
 def _render_pointer(svg: _Svg, pointer: ResolvedPointer, font_size: float) -> None:
-    """Render an arrow line with arrowhead and optional label."""
-    # Pick the leader line origin on the label edge closest to the target
-    lx = pointer.label_x
-    ly = pointer.label_y + font_size * 0.5
-    if pointer.position == "left":
-        # Label is left of target — start from right edge of label
-        lx = pointer.label_x + font_size * 2
-    elif pointer.position == "above":
-        ly = pointer.label_y + font_size * 1.2
-
-    svg.line(
-        lx,
-        ly,
-        pointer.target_x,
-        pointer.target_y,
-        font_size * 0.1,
-        attrs={
-            "class": "annotation-pointer",
-            "style": f"stroke: {pointer.color}",
-            "marker-end": "url(#annotation-arrowhead)",
-        },
-    )
-    if pointer.label_html:
-        scale = _annotation_scale(font_size)
-        fo_w = font_size * 30
-        fo_h = font_size * 10
-        html = (
-            f'<div xmlns="http://www.w3.org/1999/xhtml" '
-            f'class="annotation-label-box annotation-text" '
-            f'style="font-size: {_ANNOTATION_CSS_PX}px; '
-            f'border-color: {pointer.color}">'
-            f"{_xhtml_safe(pointer.label_html)}</div>"
+    """Render a pointer with connector and margin label."""
+    if pointer.label_text:
+        _render_connector(svg, pointer.connector_path, pointer.color, font_size)
+        _render_pill_label(
+            svg,
+            pointer.label_x,
+            pointer.label_y,
+            pointer.label_width,
+            pointer.label_height,
+            pointer.label_text,
+            font_size,
+            border_color=pointer.color,
         )
-        svg.foreign_object_scaled(pointer.label_x, pointer.label_y, fo_w, fo_h, html, scale)
+    elif pointer.connector_path:
+        _render_connector(svg, pointer.connector_path, pointer.color, font_size)
 
 
 def _render_label(svg: _Svg, label: ResolvedLabel, font_size: float) -> None:
-    """Render a label with optional leader line to its target."""
-    if label.leader_target is not None:
-        tx, ty = label.leader_target
-        svg.line(
-            label.label_x + font_size,
-            label.label_y + font_size * 0.5,
-            tx,
-            ty,
-            font_size * 0.05,
-            attrs={"class": "annotation-leader"},
+    """Render a label with optional connector to its target."""
+    if label.connector_path:
+        _render_connector(svg, label.connector_path, "rgba(180,180,200,0.5)", font_size)
+    if label.label_text:
+        _render_pill_label(
+            svg,
+            label.label_x,
+            label.label_y,
+            label.label_width,
+            label.label_height,
+            label.label_text,
+            font_size,
+            css_class="annotation-pill annotation-pill--muted",
         )
-    if label.label_html:
-        scale = _annotation_scale(font_size)
-        fo_w = font_size * 30
-        fo_h = font_size * 10
-        html = (
-            f'<div xmlns="http://www.w3.org/1999/xhtml" '
-            f'class="annotation-label-box annotation-label-box--muted annotation-text" '
-            f'style="font-size: {_ANNOTATION_CSS_PX}px">'
-            f"{_xhtml_safe(label.label_html)}</div>"
-        )
-        svg.foreign_object_scaled(label.label_x, label.label_y, fo_w, fo_h, html, scale)
 
 
 def _render_legend(svg: _Svg, legend: ResolvedLegend, font_size: float) -> None:
-    """Render a legend box with color swatches."""
-    title_html = ""
-    if legend.title:
-        title_html = f'<p class="annotation-text legend-title">{xml_escape(legend.title)}</p>'
-    entries_html = ""
-    for entry in legend.entries:
-        entries_html += (
-            f'<div class="legend-entry">'
-            f'<div class="legend-swatch" style="background: {entry.color}"></div>'
-            f'<span class="annotation-text">{xml_escape(entry.label)}</span>'
-            f"</div>"
-        )
-    scale = _annotation_scale(font_size)
-    html = (
-        f'<div xmlns="http://www.w3.org/1999/xhtml" class="legend-box annotation-text" '
-        f'style="font-size: {_ANNOTATION_CSS_PX}px">'
-        f"{title_html}{entries_html}</div>"
+    """Render a legend box with color swatches using pure SVG."""
+    rx = font_size * 0.4
+    svg.rect(
+        legend.x,
+        legend.y,
+        legend.width,
+        legend.height,
+        rx=rx,
+        attrs={"class": "legend-bg"},
     )
-    svg.foreign_object_scaled(legend.x, legend.y, legend.width * 2, legend.height * 2, html, scale)
+
+    pad_h = font_size * 0.6
+    pad_v = font_size * 0.5
+    cursor_y = legend.y + pad_v
+
+    # Title
+    if legend.title:
+        title_fs = font_size * 0.85
+        cursor_y += title_fs * 0.85
+        svg.raw(
+            f'<text x="{legend.x + pad_h:.4f}" y="{cursor_y:.4f}" '
+            f'class="legend-title-text">{xml_escape(legend.title)}</text>'
+        )
+        cursor_y += title_fs * 0.5  # gap after title
+
+    # Entries
+    swatch_size = font_size * 0.8
+    swatch_gap = font_size * 0.4
+    entry_gap = font_size * 0.2
+    for i, entry in enumerate(legend.entries):
+        if i > 0:
+            cursor_y += entry_gap
+        # Swatch
+        swatch_x = legend.x + pad_h
+        swatch_y = cursor_y + (font_size - swatch_size) * 0.3
+        swatch_rx = swatch_size * 0.2
+        svg.rect(
+            swatch_x,
+            swatch_y,
+            swatch_size,
+            swatch_size,
+            rx=swatch_rx,
+            attrs={"style": f"fill: {entry.color}; stroke: none"},
+        )
+        # Label text
+        text_x = swatch_x + swatch_size + swatch_gap
+        text_y = cursor_y + font_size * 0.75
+        svg.raw(
+            f'<text x="{text_x:.4f}" y="{text_y:.4f}" '
+            f'class="legend-entry-text">{xml_escape(entry.label)}</text>'
+        )
+        cursor_y += max(font_size, swatch_size)
 
 
 # ---------------------------------------------------------------------------
@@ -1243,7 +1235,7 @@ def render_pcb_svg(
 
     if annotations is not None:
         svg.raw('<style id="annotations">')
-        svg.raw(_annotation_css())
+        svg.raw(_annotation_css(annotations.font_size))
         svg.raw("</style>")
 
     # -- Back-side mirror --------------------------------------------------
@@ -1290,15 +1282,6 @@ def render_pcb_svg(
         active_clip = "drill-clip"
     else:
         active_clip = "board-clip"
-    # Arrowhead marker for pointer annotations
-    has_pointers = annotations is not None and bool(annotations.pointers)
-    if has_pointers:
-        svg.raw(
-            '<marker id="annotation-arrowhead" markerWidth="6" markerHeight="4" '
-            'refX="5" refY="2" orient="auto">'
-            '<path d="M 0 0 L 6 2 L 0 4 Z" fill="rgba(255,107,53,0.9)"/>'
-            "</marker>"
-        )
     svg.raw("</defs>")
 
     # -- Board fill (clipped) ----------------------------------------------
@@ -1550,10 +1533,7 @@ def render_pcb_svg(
 
     # -- Annotations (outside clip and mirror, always read left-to-right) ---
     if annotations is not None:
-        from phosphor_eda.pcb_annotations import compute_annotation_font_size
-
-        ann_font = compute_annotation_font_size(board.bbox())
-        _render_annotations(svg, annotations, ann_font)
+        _render_annotations(svg, annotations, annotations.font_size)
 
     # -- Component metadata (embedded JSON for downstream tooling) ----------
     meta = {

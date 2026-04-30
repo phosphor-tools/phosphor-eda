@@ -8,16 +8,24 @@ by default; the model can override with position hints.
 The pipeline is:
 
 1. ``parse_annotations(data)`` — validate JSON → ``AnnotationSpec``
-2. ``resolve_annotations(spec, board, side)`` — resolve targets, auto-place
+2. ``resolve_annotations(spec, board, side)`` — resolve targets, measure
+   text, run margin-based placement solver, compute orthogonal connectors
    → ``ResolvedAnnotations`` (coordinates in board mm, ready for SVG)
+
+Labels are placed in clear margins outside the board outline, connected
+to their targets by orthogonal (right-angle) connector paths.  The
+CP-SAT solver from OR-Tools ensures labels never overlap within a margin.
 """
 
 from __future__ import annotations
 
 import math
-import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
+
+from ortools.sat.python import cp_model
+
+from phosphor_eda.text_metrics import measure_text
 
 if TYPE_CHECKING:
     from phosphor_eda.pcb import PcbBoard
@@ -97,41 +105,58 @@ class AnnotationSpec:
 
 @dataclass
 class ResolvedBox:
-    """Box annotation with computed coordinates."""
+    """Box annotation with computed coordinates.
+
+    The box rect sits on the board.  The label goes in a margin
+    and is connected to the box by an orthogonal connector path.
+    """
 
     x: float
     y: float
     width: float
     height: float
-    label_html: str
+    label_text: str
     label_x: float
     label_y: float
-    label_position: str
+    label_width: float
+    label_height: float
+    connector_path: list[tuple[float, float]]
     color: str
 
 
 @dataclass
 class ResolvedPointer:
-    """Pointer annotation with computed coordinates."""
+    """Pointer annotation with computed coordinates.
+
+    The label is in a margin, connected to the target point
+    by an orthogonal connector with an arrowhead at the target.
+    """
 
     target_x: float
     target_y: float
-    label_html: str
+    label_text: str
     label_x: float
     label_y: float
-    position: str
+    label_width: float
+    label_height: float
+    connector_path: list[tuple[float, float]]
     color: str
 
 
 @dataclass
 class ResolvedLabel:
-    """Label annotation with computed coordinates."""
+    """Label annotation with computed coordinates.
 
-    label_html: str
+    The label is in a margin, connected to the target point
+    by an orthogonal connector path.
+    """
+
+    label_text: str
     label_x: float
     label_y: float
-    position: str
-    leader_target: tuple[float, float] | None = None
+    label_width: float
+    label_height: float
+    connector_path: list[tuple[float, float]]
 
 
 @dataclass
@@ -144,7 +169,6 @@ class ResolvedLegend:
     y: float
     width: float
     height: float
-    position: str
 
 
 @dataclass
@@ -155,15 +179,13 @@ class ResolvedAnnotations:
     pointers: list[ResolvedPointer] = field(default_factory=list)
     labels: list[ResolvedLabel] = field(default_factory=list)
     legend: ResolvedLegend | None = None
+    font_size: float = 1.0
     content_bbox: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
 
 
 # ---------------------------------------------------------------------------
 # JSON parsing
 # ---------------------------------------------------------------------------
-
-# Matches HTML tags like <b>, </b>, <br>, <span class="x">
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
 def parse_annotations(data: JsonDict) -> AnnotationSpec:
@@ -321,30 +343,8 @@ def _resolve_net_target(net_name: str, near_ref: str, board: PcbBoard) -> tuple[
 
 
 # ---------------------------------------------------------------------------
-# Size estimation
+# Font size and label measurement
 # ---------------------------------------------------------------------------
-
-
-def _estimate_label_size(html: str, font_size: float) -> tuple[float, float]:
-    """Estimate label dimensions from HTML content.
-
-    Strips HTML tags for character counting; counts ``<br>`` for line breaks.
-    Returns (width, height) in the same units as font_size.
-    """
-    # Count lines (split on <br> variants)
-    lines = re.split(r"<br\s*/?>", html, flags=re.IGNORECASE)
-    num_lines = max(len(lines), 1)
-
-    # Strip tags for character counting — find the longest line
-    max_chars = 0
-    for line in lines:
-        plain = _HTML_TAG_RE.sub("", line)
-        max_chars = max(max_chars, len(plain))
-    max_chars = max(max_chars, 1)
-
-    width = max_chars * font_size * 0.55
-    height = num_lines * font_size * 1.4
-    return (width, height)
 
 
 def compute_annotation_font_size(
@@ -360,134 +360,377 @@ def compute_annotation_font_size(
     return max(0.4, min(3.0, diagonal * 0.015))
 
 
-# ---------------------------------------------------------------------------
-# Auto-placement heuristics
-# ---------------------------------------------------------------------------
+# Label padding around measured text (as multiples of font_size)
+_PAD_H = 0.5  # horizontal padding on each side
+_PAD_V = 0.35  # vertical padding on each side
 
 
-def _auto_place_pointer(
+def _measure_label(text: str, font_size: float) -> tuple[float, float]:
+    """Measure a label pill including padding.
+
+    Returns (width, height) in board mm.
+    """
+    if not text:
+        return (0.0, 0.0)
+    tw, th = measure_text(text, font_size)
+    return (tw + 2 * _PAD_H * font_size, th + 2 * _PAD_V * font_size)
+
+
+# ---------------------------------------------------------------------------
+# Margin assignment
+# ---------------------------------------------------------------------------
+
+_MARGIN_SIDES = ("left", "right", "top", "bottom")
+
+
+def _hint_to_margin(hint: str) -> str:
+    """Convert a position hint to a margin side.
+
+    Explicit margin hints: "left", "right", "above"/"top", "below"/"bottom",
+    "board-left", "board-right", "board-top", "board-bottom".
+    Returns "" if the hint doesn't specify a margin.
+    """
+    h = hint.lower().replace("board-", "")
+    if h in ("right",):
+        return "right"
+    if h in ("left",):
+        return "left"
+    if h in ("above", "top"):
+        return "top"
+    if h in ("below", "bottom"):
+        return "bottom"
+    return ""
+
+
+def _auto_assign_margin(
     target_x: float,
     target_y: float,
-    label_w: float,
-    label_h: float,
     board_bbox: tuple[float, float, float, float],
 ) -> str:
-    """Pick which side to place a pointer label based on target position.
+    """Pick which margin to place a label in based on target position.
 
-    Returns one of "above", "below", "left", "right".
+    Places the label in the margin that faces away from the board center,
+    so connectors don't cross the board.
     """
     bx1, by1, bx2, by2 = board_bbox
-    center_x = (bx1 + bx2) / 2
-    center_y = (by1 + by2) / 2
+    cx = (bx1 + bx2) / 2
+    cy = (by1 + by2) / 2
 
-    dx = target_x - center_x
-    dy = target_y - center_y
+    dx = target_x - cx
+    dy = target_y - cy
 
-    # Normalize by board dimensions to handle non-square boards
-    board_w = max(bx2 - bx1, 0.1)
-    board_h = max(by2 - by1, 0.1)
-    ndx = dx / board_w
-    ndy = dy / board_h
+    # Normalize by board dimensions
+    bw = max(bx2 - bx1, 0.1)
+    bh = max(by2 - by1, 0.1)
+    ndx = dx / bw
+    ndy = dy / bh
 
-    # Place label on the side facing away from center
     if abs(ndx) >= abs(ndy):
         return "right" if ndx >= 0 else "left"
-    return "below" if ndy >= 0 else "above"
+    return "bottom" if ndy >= 0 else "top"
 
 
-def _auto_place_box_label(
-    box_bbox: tuple[float, float, float, float],
+# ---------------------------------------------------------------------------
+# Placement solver (CP-SAT)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _PlacementItem:
+    """Internal item for the margin placement solver."""
+
+    label_width: float
+    label_height: float
+    target_x: float
+    target_y: float
+    margin: str  # "left", "right", "top", "bottom"
+
+
+@dataclass
+class _PlacedResult:
+    """Solved position for a placement item."""
+
+    label_x: float
+    label_y: float
+
+
+# Integer coordinate scale: 1 unit = 0.01 mm
+_COORD_SCALE = 100
+
+
+def _solve_margin_placement(
+    items: list[_PlacementItem],
+    board_bbox: tuple[float, float, float, float],
+    margin_gap: float,
+) -> list[_PlacedResult]:
+    """Position all labels in their assigned margins using CP-SAT.
+
+    Each label gets a fixed position in one dimension (determined by
+    its margin side) and a variable position in the other dimension.
+    The solver minimizes total connector length while preventing
+    label overlaps.
+
+    Falls back to greedy stacking if the solver doesn't find a
+    solution in time.
+    """
+    if not items:
+        return []
+
+    bx1, by1, bx2, by2 = board_bbox
+    bw = bx2 - bx1
+    bh = by2 - by1
+    spacing = margin_gap * 0.3  # minimum gap between labels
+
+    # Fixed x positions for left/right margins
+    right_x = bx2 + margin_gap
+    # Fixed y positions for top/bottom margins
+    bottom_y = by2 + margin_gap
+
+    # Domain bounds for the variable dimension
+    y_lo = int((by1 - bh) * _COORD_SCALE)
+    y_hi = int((by2 + bh) * _COORD_SCALE)
+    x_lo = int((bx1 - bw) * _COORD_SCALE)
+    x_hi = int((bx2 + bw) * _COORD_SCALE)
+
+    model = cp_model.CpModel()
+
+    # Per-item variables and intervals, grouped by margin
+    item_vars: list[cp_model.IntVar] = []  # variable dimension for each item
+    item_fixed: list[float] = []  # fixed dimension for each item
+
+    margin_intervals: dict[str, list[cp_model.IntervalVar]] = {m: [] for m in _MARGIN_SIDES}
+
+    for i, it in enumerate(items):
+        margin = it.margin
+        if margin in ("left", "right"):
+            # Variable: y position
+            size = int(it.label_height * _COORD_SCALE)
+            gap = int(spacing * _COORD_SCALE)
+            v = model.new_int_var(y_lo, y_hi, f"y_{i}")
+            item_vars.append(v)
+            # Fixed: x position
+            if margin == "right":
+                item_fixed.append(right_x)
+            else:
+                item_fixed.append(bx1 - margin_gap - it.label_width)
+            # 1D interval for non-overlap along y axis
+            interval = model.new_fixed_size_interval_var(v, size + gap, f"iy_{i}")
+            margin_intervals[margin].append(interval)
+        else:
+            # Variable: x position
+            size = int(it.label_width * _COORD_SCALE)
+            gap = int(spacing * _COORD_SCALE)
+            v = model.new_int_var(x_lo, x_hi, f"x_{i}")
+            item_vars.append(v)
+            # Fixed: y position
+            if margin == "bottom":
+                item_fixed.append(bottom_y)
+            else:
+                item_fixed.append(by1 - margin_gap - it.label_height)
+            # 1D interval for non-overlap along x axis
+            interval = model.new_fixed_size_interval_var(v, size + gap, f"ix_{i}")
+            margin_intervals[margin].append(interval)
+
+    # Non-overlap within each margin
+    for m in _MARGIN_SIDES:
+        intervals = margin_intervals[m]
+        if len(intervals) >= 2:
+            _ = model.add_no_overlap(intervals)
+
+    # Objective: minimize total distance from label center to target
+    abs_vars: list[cp_model.IntVar] = []
+    for i, it in enumerate(items):
+        if it.margin in ("left", "right"):
+            # Variable is y; target is target_y
+            target_scaled = int((it.target_y - it.label_height / 2) * _COORD_SCALE)
+            diff = model.new_int_var(-(y_hi - y_lo), y_hi - y_lo, f"diff_{i}")
+            _ = model.add(diff == item_vars[i] - target_scaled)
+            abs_v = model.new_int_var(0, y_hi - y_lo, f"abs_{i}")
+            _ = model.add_abs_equality(abs_v, diff)
+            abs_vars.append(abs_v)
+        else:
+            # Variable is x; target is target_x
+            target_scaled = int((it.target_x - it.label_width / 2) * _COORD_SCALE)
+            diff = model.new_int_var(-(x_hi - x_lo), x_hi - x_lo, f"diff_{i}")
+            _ = model.add(diff == item_vars[i] - target_scaled)
+            abs_v = model.new_int_var(0, x_hi - x_lo, f"abs_{i}")
+            _ = model.add_abs_equality(abs_v, diff)
+            abs_vars.append(abs_v)
+
+    model.minimize(sum(abs_vars))
+
+    solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = 1.0
+    status = solver.solve(model)
+
+    if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+        results: list[_PlacedResult] = []
+        for i, it in enumerate(items):
+            v = solver.value(item_vars[i]) / _COORD_SCALE
+            fx = item_fixed[i]
+            if it.margin in ("left", "right"):
+                results.append(_PlacedResult(label_x=fx, label_y=v))
+            else:
+                results.append(_PlacedResult(label_x=v, label_y=fx))
+        return results
+
+    # Fallback: greedy stacking sorted by target position
+    return _fallback_placement(items, board_bbox, margin_gap)
+
+
+def _fallback_placement(
+    items: list[_PlacementItem],
+    board_bbox: tuple[float, float, float, float],
+    margin_gap: float,
+) -> list[_PlacedResult]:
+    """Simple sorted-stacking when the solver fails."""
+    bx1, by1, bx2, by2 = board_bbox
+    spacing = margin_gap * 0.3
+
+    right_x = bx2 + margin_gap
+    bottom_y = by2 + margin_gap
+
+    results: list[_PlacedResult] = [_PlacedResult(0.0, 0.0)] * len(items)
+
+    # Group by margin, sort by target position, stack
+    for margin in _MARGIN_SIDES:
+        indices = [i for i, it in enumerate(items) if it.margin == margin]
+        if not indices:
+            continue
+
+        if margin in ("left", "right"):
+            # Sort by target_y, stack vertically
+            indices.sort(key=lambda i: items[i].target_y)
+            cursor_y = by1
+            for idx in indices:
+                it = items[idx]
+                fx = right_x if margin == "right" else bx1 - margin_gap - it.label_width
+                results[idx] = _PlacedResult(label_x=fx, label_y=cursor_y)
+                cursor_y += it.label_height + spacing
+        else:
+            # Sort by target_x, stack horizontally
+            indices.sort(key=lambda i: items[i].target_x)
+            cursor_x = bx1
+            for idx in indices:
+                it = items[idx]
+                fy = bottom_y if margin == "bottom" else by1 - margin_gap - it.label_height
+                results[idx] = _PlacedResult(label_x=cursor_x, label_y=fy)
+                cursor_x += it.label_width + spacing
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Orthogonal connector paths
+# ---------------------------------------------------------------------------
+
+
+def _compute_connector(
+    label_x: float,
+    label_y: float,
     label_w: float,
     label_h: float,
+    target_x: float,
+    target_y: float,
+    margin: str,
     board_bbox: tuple[float, float, float, float],
-) -> tuple[str, float, float]:
-    """Pick label position for a box annotation.
+    margin_gap: float,
+) -> list[tuple[float, float]]:
+    """Compute an orthogonal (right-angle) connector path.
 
-    Tries all four sides and picks the one with the most room between
-    the box edge and the board edge.
-
-    Returns (position, label_x, label_y).
-    """
-    bx1, by1, bx2, by2 = box_bbox
-    bbx1, bby1, bbx2, bby2 = board_bbox
-    margin = label_h * 0.3
-    box_cx = (bx1 + bx2) / 2
-
-    # Room on each side between box edge and board edge
-    room: dict[str, float] = {
-        "above": by1 - bby1,
-        "below": bby2 - by2,
-        "left": bx1 - bbx1,
-        "right": bbx2 - bx2,
-    }
-    best = max(room, key=lambda k: room[k])
-
-    if best == "above":
-        return ("above", box_cx - label_w / 2, by1 - margin - label_h)
-    if best == "below":
-        return ("below", box_cx - label_w / 2, by2 + margin)
-    if best == "left":
-        return ("left", bx1 - margin - label_w, (by1 + by2) / 2 - label_h / 2)
-    # right
-    return ("right", bx2 + margin, (by1 + by2) / 2 - label_h / 2)
-
-
-def _auto_place_legend(
-    board_bbox: tuple[float, float, float, float],
-    legend_w: float,
-    legend_h: float,
-) -> tuple[str, float, float]:
-    """Pick legend position based on board aspect ratio.
-
-    Wide boards → legend below; tall boards → legend to the right.
-    Returns (position, x, y).
+    Returns a list of (x, y) waypoints from the label edge to the
+    target point.  The path has at most two right-angle turns.
     """
     bx1, by1, bx2, by2 = board_bbox
-    board_w = bx2 - bx1
-    board_h = by2 - by1
-    margin = max(board_w, board_h) * 0.03
+    label_cy = label_y + label_h / 2
+    label_cx = label_x + label_w / 2
+    # Routing column/row sits halfway between board edge and label column
+    route_offset = margin_gap * 0.45
 
-    if board_w >= board_h:
-        # Wide board: place legend below, centered
-        x = bx1 + (board_w - legend_w) / 2
-        y = by2 + margin
-        return ("board-bottom", x, y)
-    # Tall board: place legend to the right, vertically centered
-    x = bx2 + margin
-    y = by1 + (board_h - legend_h) / 2
-    return ("board-right", x, y)
+    if margin == "right":
+        start_x = label_x
+        start_y = label_cy
+        route_x = bx2 + route_offset
+        return [
+            (start_x, start_y),
+            (route_x, start_y),
+            (route_x, target_y),
+            (target_x, target_y),
+        ]
+
+    if margin == "left":
+        start_x = label_x + label_w
+        start_y = label_cy
+        route_x = bx1 - route_offset
+        return [
+            (start_x, start_y),
+            (route_x, start_y),
+            (route_x, target_y),
+            (target_x, target_y),
+        ]
+
+    if margin == "bottom":
+        start_x = label_cx
+        start_y = label_y
+        route_y = by2 + route_offset
+        return [
+            (start_x, start_y),
+            (start_x, route_y),
+            (target_x, route_y),
+            (target_x, target_y),
+        ]
+
+    # top
+    start_x = label_cx
+    start_y = label_y + label_h
+    route_y = by1 - route_offset
+    return [
+        (start_x, start_y),
+        (start_x, route_y),
+        (target_x, route_y),
+        (target_x, target_y),
+    ]
 
 
-def _position_from_hint(
-    hint: str,
-    target_xy: tuple[float, float],
-    label_wh: tuple[float, float],
-    board_bbox: tuple[float, float, float, float],
-    margin: float,
+# ---------------------------------------------------------------------------
+# Legend measurement
+# ---------------------------------------------------------------------------
+
+
+def _measure_legend(
+    spec: LegendSpec,
+    font_size: float,
 ) -> tuple[float, float]:
-    """Convert an explicit position hint to (x, y) coordinates."""
-    tx, ty = target_xy
-    lw, lh = label_wh
-    bx1, by1, bx2, by2 = board_bbox
+    """Compute legend box size from title and entries.
 
-    if hint == "above":
-        return (tx - lw / 2, ty - margin - lh)
-    if hint == "below":
-        return (tx - lw / 2, ty + margin)
-    if hint == "left":
-        return (tx - margin - lw, ty - lh / 2)
-    if hint == "right":
-        return (tx + margin, ty - lh / 2)
-    if hint == "board-top":
-        return (bx1 + (bx2 - bx1 - lw) / 2, by1 - margin - lh)
-    if hint == "board-bottom":
-        return (bx1 + (bx2 - bx1 - lw) / 2, by2 + margin)
-    if hint == "board-left":
-        return (bx1 - margin - lw, by1 + (by2 - by1 - lh) / 2)
-    if hint == "board-right":
-        return (bx2 + margin, by1 + (by2 - by1 - lh) / 2)
-    # Unknown hint, treat as auto → use "right" as fallback
-    return (tx + margin, ty - lh / 2)
+    Returns (width, height) in board mm.
+    """
+    title_w = 0.0
+    title_h = 0.0
+    if spec.title:
+        tw, th = measure_text(spec.title, font_size * 0.85)
+        title_w = tw
+        title_h = th + font_size * 0.3  # gap below title
+
+    swatch_size = font_size * 0.8
+    swatch_gap = font_size * 0.4
+    entry_gap = font_size * 0.2
+    max_entry_w = 0.0
+    total_entry_h = 0.0
+    for i, entry in enumerate(spec.entries):
+        ew, eh = measure_text(entry.label, font_size)
+        row_w = swatch_size + swatch_gap + ew
+        max_entry_w = max(max_entry_w, row_w)
+        total_entry_h += max(eh, swatch_size)
+        if i > 0:
+            total_entry_h += entry_gap
+
+    pad_h = font_size * 0.6
+    pad_v = font_size * 0.5
+    width = max(title_w, max_entry_w) + 2 * pad_h
+    height = title_h + total_entry_h + 2 * pad_v
+
+    return (width, height)
 
 
 # ---------------------------------------------------------------------------
@@ -506,55 +749,298 @@ def resolve_annotations(
     """
     board_bbox = board.bbox()
     font_size = compute_annotation_font_size(board_bbox)
-    margin = font_size * 1.5
+    margin_gap = font_size * 4
 
-    resolved_boxes: list[ResolvedBox] = []
-    resolved_pointers: list[ResolvedPointer] = []
-    resolved_labels: list[ResolvedLabel] = []
-    resolved_legend: ResolvedLegend | None = None
+    # Phase 1: Resolve all targets and measure all labels
+    # Collect placement items for the margin solver
 
-    # Track all annotation positions for content_bbox
+    placement_items: list[_PlacementItem] = []
+    # Back-references: (source_type, source_index) for each placement item
+    placement_refs: list[tuple[str, int]] = []
+
+    # Pre-resolve data for each annotation type
+    box_data: list[tuple[float, float, float, float, str]] = []  # (x, y, w, h, color)
+    ptr_data: list[tuple[float, float, str]] = []  # (target_x, target_y, color)
+    lbl_data: list[tuple[float, float]] = []  # (target_x, target_y)
+
+    # --- Boxes ---
+    for i, box_spec in enumerate(spec.boxes):
+        # Compute box rect from target union
+        min_x = float("inf")
+        min_y = float("inf")
+        max_x = float("-inf")
+        max_y = float("-inf")
+        for ref in box_spec.targets:
+            _center, bbox = _resolve_component_target(ref, board)
+            bx1, by1, bx2, by2 = bbox
+            min_x = min(min_x, bx1)
+            min_y = min(min_y, by1)
+            max_x = max(max_x, bx2)
+            max_y = max(max_y, by2)
+
+        pad = font_size * 0.5
+        box_x = min_x - pad
+        box_y = min_y - pad
+        box_w = (max_x - min_x) + 2 * pad
+        box_h = (max_y - min_y) + 2 * pad
+        color = box_spec.color or "rgba(255,107,53,0.9)"
+        box_data.append((box_x, box_y, box_w, box_h, color))
+
+        if box_spec.label:
+            lw, lh = _measure_label(box_spec.label, font_size)
+            target_cx = box_x + box_w / 2
+            target_cy = box_y + box_h / 2
+
+            margin = _hint_to_margin(box_spec.label_position)
+            if not margin:
+                margin = _auto_assign_margin(target_cx, target_cy, board_bbox)
+
+            placement_items.append(_PlacementItem(lw, lh, target_cx, target_cy, margin))
+            placement_refs.append(("box", i))
+
+    # --- Pointers ---
+    for i, ptr_spec in enumerate(spec.pointers):
+        if ptr_spec.target:
+            if "." in ptr_spec.target:
+                tx, ty = _resolve_pad_target(ptr_spec.target, board)
+            else:
+                center, _bbox = _resolve_component_target(ptr_spec.target, board)
+                tx, ty = center
+        else:
+            tx, ty = _resolve_net_target(ptr_spec.target_net, ptr_spec.target_near, board)
+        color = ptr_spec.color or "rgba(255,107,53,0.9)"
+        ptr_data.append((tx, ty, color))
+
+        if ptr_spec.label:
+            lw, lh = _measure_label(ptr_spec.label, font_size)
+            margin = _hint_to_margin(ptr_spec.position)
+            if not margin:
+                margin = _auto_assign_margin(tx, ty, board_bbox)
+
+            placement_items.append(_PlacementItem(lw, lh, tx, ty, margin))
+            placement_refs.append(("pointer", i))
+
+    # --- Labels ---
+    for i, label_spec in enumerate(spec.labels):
+        if label_spec.target:
+            center, _bbox = _resolve_component_target(label_spec.target, board)
+            tx, ty = center
+        else:
+            # No target: aim at board center
+            tx = (board_bbox[0] + board_bbox[2]) / 2
+            ty = (board_bbox[1] + board_bbox[3]) / 2
+        lbl_data.append((tx, ty))
+
+        if label_spec.content:
+            lw, lh = _measure_label(label_spec.content, font_size)
+            margin = _hint_to_margin(label_spec.position)
+            if not margin:
+                margin = _auto_assign_margin(tx, ty, board_bbox)
+
+            placement_items.append(_PlacementItem(lw, lh, tx, ty, margin))
+            placement_refs.append(("label", i))
+
+    # --- Legend ---
+    legend_width = 0.0
+    legend_height = 0.0
+    legend_margin = ""
+    if spec.legend is not None:
+        legend_width, legend_height = _measure_legend(spec.legend, font_size)
+        legend_margin = _hint_to_margin(spec.legend.position)
+        if not legend_margin:
+            # Default: bottom for wide boards, right for tall boards
+            bw = board_bbox[2] - board_bbox[0]
+            bh = board_bbox[3] - board_bbox[1]
+            legend_margin = "bottom" if bw >= bh else "right"
+
+        placement_items.append(
+            _PlacementItem(
+                legend_width,
+                legend_height,
+                (board_bbox[0] + board_bbox[2]) / 2,
+                (board_bbox[1] + board_bbox[3]) / 2,
+                legend_margin,
+            )
+        )
+        placement_refs.append(("legend", 0))
+
+    # Phase 2: Run placement solver
+    placed = _solve_margin_placement(placement_items, board_bbox, margin_gap)
+
+    # Phase 3: Build resolved annotations from placement results
+
+    # Index placement results by (source_type, source_index)
+    placed_by_ref: dict[tuple[str, int], tuple[_PlacedResult, _PlacementItem]] = {}
+    for ref, result, item in zip(placement_refs, placed, placement_items, strict=True):
+        placed_by_ref[ref] = (result, item)
+
     all_xs: list[float] = []
     all_ys: list[float] = []
 
-    # --- Boxes ---
-    for box_spec in spec.boxes:
-        resolved_box = _resolve_box(box_spec, board, board_bbox, font_size, margin)
-        resolved_boxes.append(resolved_box)
-        all_xs.extend([resolved_box.x, resolved_box.x + resolved_box.width])
-        all_ys.extend([resolved_box.y, resolved_box.y + resolved_box.height])
-        if resolved_box.label_html:
-            lw, lh = _estimate_label_size(resolved_box.label_html, font_size)
-            all_xs.extend([resolved_box.label_x, resolved_box.label_x + lw])
-            all_ys.extend([resolved_box.label_y, resolved_box.label_y + lh])
+    # --- Build resolved boxes ---
+    resolved_boxes: list[ResolvedBox] = []
+    for i, (bx, by, bw, bh, color) in enumerate(box_data):
+        box_spec_i = spec.boxes[i]
+        if box_spec_i.label and ("box", i) in placed_by_ref:
+            result, item = placed_by_ref[("box", i)]
+            connector = _compute_connector(
+                result.label_x,
+                result.label_y,
+                item.label_width,
+                item.label_height,
+                item.target_x,
+                item.target_y,
+                item.margin,
+                board_bbox,
+                margin_gap,
+            )
+            resolved_boxes.append(
+                ResolvedBox(
+                    x=bx,
+                    y=by,
+                    width=bw,
+                    height=bh,
+                    label_text=box_spec_i.label,
+                    label_x=result.label_x,
+                    label_y=result.label_y,
+                    label_width=item.label_width,
+                    label_height=item.label_height,
+                    connector_path=connector,
+                    color=color,
+                )
+            )
+            all_xs.extend([bx, bx + bw, result.label_x, result.label_x + item.label_width])
+            all_ys.extend([by, by + bh, result.label_y, result.label_y + item.label_height])
+        else:
+            resolved_boxes.append(
+                ResolvedBox(
+                    x=bx,
+                    y=by,
+                    width=bw,
+                    height=bh,
+                    label_text="",
+                    label_x=bx,
+                    label_y=by,
+                    label_width=0,
+                    label_height=0,
+                    connector_path=[],
+                    color=color,
+                )
+            )
+            all_xs.extend([bx, bx + bw])
+            all_ys.extend([by, by + bh])
 
-    # --- Pointers ---
-    for ptr_spec in spec.pointers:
-        resolved_ptr = _resolve_pointer(ptr_spec, board, board_bbox, font_size, margin)
-        resolved_pointers.append(resolved_ptr)
-        all_xs.append(resolved_ptr.target_x)
-        all_ys.append(resolved_ptr.target_y)
-        if resolved_ptr.label_html:
-            lw, lh = _estimate_label_size(resolved_ptr.label_html, font_size)
-            all_xs.extend([resolved_ptr.label_x, resolved_ptr.label_x + lw])
-            all_ys.extend([resolved_ptr.label_y, resolved_ptr.label_y + lh])
+    # --- Build resolved pointers ---
+    resolved_pointers: list[ResolvedPointer] = []
+    for i, (tx, ty, color) in enumerate(ptr_data):
+        ptr_spec_i = spec.pointers[i]
+        if ptr_spec_i.label and ("pointer", i) in placed_by_ref:
+            result, item = placed_by_ref[("pointer", i)]
+            connector = _compute_connector(
+                result.label_x,
+                result.label_y,
+                item.label_width,
+                item.label_height,
+                tx,
+                ty,
+                item.margin,
+                board_bbox,
+                margin_gap,
+            )
+            resolved_pointers.append(
+                ResolvedPointer(
+                    target_x=tx,
+                    target_y=ty,
+                    label_text=ptr_spec_i.label,
+                    label_x=result.label_x,
+                    label_y=result.label_y,
+                    label_width=item.label_width,
+                    label_height=item.label_height,
+                    connector_path=connector,
+                    color=color,
+                )
+            )
+            all_xs.extend([tx, result.label_x, result.label_x + item.label_width])
+            all_ys.extend([ty, result.label_y, result.label_y + item.label_height])
+        else:
+            resolved_pointers.append(
+                ResolvedPointer(
+                    target_x=tx,
+                    target_y=ty,
+                    label_text="",
+                    label_x=tx,
+                    label_y=ty,
+                    label_width=0,
+                    label_height=0,
+                    connector_path=[],
+                    color=color,
+                )
+            )
+            all_xs.append(tx)
+            all_ys.append(ty)
 
-    # --- Labels ---
-    for label_spec in spec.labels:
-        resolved_label = _resolve_label(label_spec, board, board_bbox, font_size, margin)
-        resolved_labels.append(resolved_label)
-        if resolved_label.label_html:
-            lw, lh = _estimate_label_size(resolved_label.label_html, font_size)
-            all_xs.extend([resolved_label.label_x, resolved_label.label_x + lw])
-            all_ys.extend([resolved_label.label_y, resolved_label.label_y + lh])
+    # --- Build resolved labels ---
+    resolved_labels: list[ResolvedLabel] = []
+    for i, (tx, ty) in enumerate(lbl_data):
+        label_spec_i = spec.labels[i]
+        if label_spec_i.content and ("label", i) in placed_by_ref:
+            result, item = placed_by_ref[("label", i)]
+            has_target = bool(label_spec_i.target)
+            connector = (
+                _compute_connector(
+                    result.label_x,
+                    result.label_y,
+                    item.label_width,
+                    item.label_height,
+                    tx,
+                    ty,
+                    item.margin,
+                    board_bbox,
+                    margin_gap,
+                )
+                if has_target
+                else []
+            )
+            resolved_labels.append(
+                ResolvedLabel(
+                    label_text=label_spec_i.content,
+                    label_x=result.label_x,
+                    label_y=result.label_y,
+                    label_width=item.label_width,
+                    label_height=item.label_height,
+                    connector_path=connector,
+                )
+            )
+            all_xs.extend([result.label_x, result.label_x + item.label_width])
+            all_ys.extend([result.label_y, result.label_y + item.label_height])
+        else:
+            resolved_labels.append(
+                ResolvedLabel(
+                    label_text="",
+                    label_x=tx,
+                    label_y=ty,
+                    label_width=0,
+                    label_height=0,
+                    connector_path=[],
+                )
+            )
 
-    # --- Legend ---
-    if spec.legend is not None:
-        resolved_legend = _resolve_legend_spec(spec.legend, board_bbox, font_size)
-        all_xs.extend([resolved_legend.x, resolved_legend.x + resolved_legend.width])
-        all_ys.extend([resolved_legend.y, resolved_legend.y + resolved_legend.height])
+    # --- Build resolved legend ---
+    resolved_legend: ResolvedLegend | None = None
+    if spec.legend is not None and ("legend", 0) in placed_by_ref:
+        result, item = placed_by_ref[("legend", 0)]
+        resolved_legend = ResolvedLegend(
+            title=spec.legend.title,
+            entries=spec.legend.entries,
+            x=result.label_x,
+            y=result.label_y,
+            width=legend_width,
+            height=legend_height,
+        )
+        all_xs.extend([result.label_x, result.label_x + legend_width])
+        all_ys.extend([result.label_y, result.label_y + legend_height])
 
-    # Compute content bbox
+    # Content bbox
     if all_xs and all_ys:
         content_bbox = (min(all_xs), min(all_ys), max(all_xs), max(all_ys))
     else:
@@ -565,199 +1051,6 @@ def resolve_annotations(
         pointers=resolved_pointers,
         labels=resolved_labels,
         legend=resolved_legend,
+        font_size=font_size,
         content_bbox=content_bbox,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Per-annotation resolution helpers
-# ---------------------------------------------------------------------------
-
-
-def _resolve_box(
-    spec: BoxSpec,
-    board: PcbBoard,
-    board_bbox: tuple[float, float, float, float],
-    font_size: float,
-    margin: float,
-) -> ResolvedBox:
-    """Resolve a box spec to coordinates."""
-    # Union of all target bboxes
-    min_x = float("inf")
-    min_y = float("inf")
-    max_x = float("-inf")
-    max_y = float("-inf")
-    for ref in spec.targets:
-        _center, bbox = _resolve_component_target(ref, board)
-        bx1, by1, bx2, by2 = bbox
-        min_x = min(min_x, bx1)
-        min_y = min(min_y, by1)
-        max_x = max(max_x, bx2)
-        max_y = max(max_y, by2)
-
-    # Add padding around the union bbox
-    pad = font_size * 0.5
-    box_x = min_x - pad
-    box_y = min_y - pad
-    box_w = (max_x - min_x) + 2 * pad
-    box_h = (max_y - min_y) + 2 * pad
-    box_bbox = (box_x, box_y, box_x + box_w, box_y + box_h)
-
-    # Place label
-    label_x = box_x
-    label_y = box_y
-    label_position = spec.label_position
-    if spec.label:
-        lw, lh = _estimate_label_size(spec.label, font_size)
-        if label_position:
-            label_x, label_y = _position_from_hint(
-                label_position,
-                ((box_x + box_x + box_w) / 2, (box_y + box_y + box_h) / 2),
-                (lw, lh),
-                board_bbox,
-                margin,
-            )
-        else:
-            label_position, label_x, label_y = _auto_place_box_label(box_bbox, lw, lh, board_bbox)
-
-    color = spec.color or "rgba(255,107,53,0.9)"
-    return ResolvedBox(
-        x=box_x,
-        y=box_y,
-        width=box_w,
-        height=box_h,
-        label_html=spec.label,
-        label_x=label_x,
-        label_y=label_y,
-        label_position=label_position,
-        color=color,
-    )
-
-
-def _resolve_pointer(
-    spec: PointerSpec,
-    board: PcbBoard,
-    board_bbox: tuple[float, float, float, float],
-    font_size: float,
-    margin: float,
-) -> ResolvedPointer:
-    """Resolve a pointer spec to coordinates."""
-    # Determine target point
-    if spec.target:
-        if "." in spec.target:
-            tx, ty = _resolve_pad_target(spec.target, board)
-        else:
-            center, _bbox = _resolve_component_target(spec.target, board)
-            tx, ty = center
-    else:
-        tx, ty = _resolve_net_target(spec.target_net, spec.target_near, board)
-
-    # Place label
-    lw, lh = _estimate_label_size(spec.label, font_size) if spec.label else (0.0, 0.0)
-    position = spec.position
-    if position:
-        lx, ly = _position_from_hint(position, (tx, ty), (lw, lh), board_bbox, margin)
-    else:
-        position = _auto_place_pointer(tx, ty, lw, lh, board_bbox)
-        lx, ly = _position_from_hint(position, (tx, ty), (lw, lh), board_bbox, margin)
-
-    color = spec.color or "rgba(255,107,53,0.9)"
-    return ResolvedPointer(
-        target_x=tx,
-        target_y=ty,
-        label_html=spec.label,
-        label_x=lx,
-        label_y=ly,
-        position=position,
-        color=color,
-    )
-
-
-def _resolve_label(
-    spec: LabelSpec,
-    board: PcbBoard,
-    board_bbox: tuple[float, float, float, float],
-    font_size: float,
-    margin: float,
-) -> ResolvedLabel:
-    """Resolve a label spec to coordinates."""
-    # Determine target and position
-    target_xy: tuple[float, float] | None = None
-    if spec.target:
-        center, _bbox = _resolve_component_target(spec.target, board)
-        target_xy = center
-
-    lw, lh = _estimate_label_size(spec.content, font_size) if spec.content else (0.0, 0.0)
-
-    position = spec.position
-    is_board_position = position.startswith("board-") if position else False
-
-    if target_xy is not None:
-        if position:
-            lx, ly = _position_from_hint(position, target_xy, (lw, lh), board_bbox, margin)
-        else:
-            # Auto-place: use pointer placement to pick a side
-            position = _auto_place_pointer(target_xy[0], target_xy[1], lw, lh, board_bbox)
-            lx, ly = _position_from_hint(position, target_xy, (lw, lh), board_bbox, margin)
-        leader = target_xy if not is_board_position else None
-    else:
-        # No target — place at board edge
-        if not position:
-            position = "board-bottom"
-        lx, ly = _position_from_hint(
-            position,
-            ((board_bbox[0] + board_bbox[2]) / 2, board_bbox[3]),
-            (lw, lh),
-            board_bbox,
-            margin,
-        )
-        leader = None
-
-    return ResolvedLabel(
-        label_html=spec.content,
-        label_x=lx,
-        label_y=ly,
-        position=position,
-        leader_target=leader,
-    )
-
-
-def _resolve_legend_spec(
-    spec: LegendSpec,
-    board_bbox: tuple[float, float, float, float],
-    font_size: float,
-) -> ResolvedLegend:
-    """Resolve a legend spec to coordinates."""
-    # Estimate legend size from entries
-    max_label_len = max((len(e.label) for e in spec.entries), default=5)
-    title_len = len(spec.title) if spec.title else 0
-    max_text_w = max(max_label_len, title_len) * font_size * 0.55
-    # Each entry is one row: swatch + label
-    swatch_w = font_size * 1.2
-    legend_w = swatch_w + max_text_w + font_size * 2  # padding
-    # Title line + one row per entry + padding
-    num_rows = len(spec.entries) + (1 if spec.title else 0)
-    legend_h = num_rows * font_size * 1.6 + font_size  # padding
-
-    position = spec.position
-    if position:
-        margin = max(board_bbox[2] - board_bbox[0], board_bbox[3] - board_bbox[1]) * 0.03
-        x, y = _position_from_hint(
-            position,
-            ((board_bbox[0] + board_bbox[2]) / 2, board_bbox[3]),
-            (legend_w, legend_h),
-            board_bbox,
-            margin,
-        )
-    else:
-        position, x, y = _auto_place_legend(board_bbox, legend_w, legend_h)
-
-    return ResolvedLegend(
-        title=spec.title,
-        entries=spec.entries,
-        x=x,
-        y=y,
-        width=legend_w,
-        height=legend_h,
-        position=position,
     )

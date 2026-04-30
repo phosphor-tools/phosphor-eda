@@ -560,10 +560,12 @@ def _make_resolved_box() -> ResolvedBox:
         y=9.0,
         width=4.0,
         height=4.0,
-        label_html="MCU",
-        label_x=9.0,
-        label_y=7.0,
-        label_position="above",
+        label_text="MCU",
+        label_x=25.0,
+        label_y=9.5,
+        label_width=6.0,
+        label_height=2.0,
+        connector_path=[(25.0, 10.5), (22.0, 10.5), (22.0, 11.0), (11.0, 11.0)],
         color="rgba(255,107,53,0.9)",
     )
 
@@ -572,10 +574,12 @@ def _make_resolved_pointer() -> ResolvedPointer:
     return ResolvedPointer(
         target_x=10.0,
         target_y=10.0,
-        label_html="Clock",
-        label_x=14.0,
-        label_y=9.0,
-        position="right",
+        label_text="Clock",
+        label_x=25.0,
+        label_y=13.0,
+        label_width=7.0,
+        label_height=2.0,
+        connector_path=[(25.0, 14.0), (22.0, 14.0), (22.0, 10.0), (10.0, 10.0)],
         color="rgba(255,107,53,0.9)",
     )
 
@@ -591,7 +595,6 @@ def _make_resolved_legend() -> ResolvedLegend:
         y=22.0,
         width=10.0,
         height=4.0,
-        position="board-bottom",
     )
 
 
@@ -607,57 +610,59 @@ def _make_annotations(
         pointers=[_make_resolved_pointer()] if pointers else [],
         labels=[
             ResolvedLabel(
-                label_html="Main MCU",
-                label_x=14.0,
-                label_y=9.0,
-                position="right",
-                leader_target=(10.0, 10.0),
+                label_text="Main MCU",
+                label_x=25.0,
+                label_y=16.0,
+                label_width=8.0,
+                label_height=2.0,
+                connector_path=[(25.0, 17.0), (22.0, 17.0), (22.0, 10.0), (10.0, 10.0)],
             )
         ]
         if labels
         else [],
         legend=_make_resolved_legend() if legend else None,
-        content_bbox=(5.0, 5.0, 25.0, 26.0),
+        font_size=1.0,
+        content_bbox=(5.0, 5.0, 33.0, 26.0),
     )
 
 
 def test_annotation_box_rendered() -> None:
-    """SVG should contain annotation box rect and foreignObject label."""
+    """SVG should contain annotation box rect and pill label."""
     board = _make_board_with_component()
     annotations = _make_annotations(boxes=True)
     svg = render_pcb_svg(board, annotations=annotations)
     assert 'class="annotation-box"' in svg
-    assert "<foreignObject" in svg
+    assert "annotation-pill" in svg
     assert "MCU" in svg
 
 
 def test_annotation_pointer_rendered() -> None:
-    """SVG should contain leader line with arrowhead and label."""
+    """SVG should contain connector path and pill label."""
     board = _make_board_with_component()
     annotations = _make_annotations(pointers=True)
     svg = render_pcb_svg(board, annotations=annotations)
-    assert "annotation-pointer" in svg
-    assert '<marker id="annotation-arrowhead"' in svg
+    assert "annotation-connector" in svg
+    assert "annotation-dot" in svg
     assert "Clock" in svg
 
 
 def test_annotation_legend_rendered() -> None:
-    """SVG should contain legend foreignObject with title and entries."""
+    """SVG should contain legend box with title and entries."""
     board = _make_board_with_component()
     annotations = _make_annotations(legend=True)
     svg = render_pcb_svg(board, annotations=annotations)
-    assert "legend-box" in svg
+    assert "legend-bg" in svg
     assert "SPI Signals" in svg
     assert "SCLK" in svg
     assert "#4488ff" in svg
 
 
-def test_annotation_label_with_leader() -> None:
-    """Label annotation should have a leader line and the label content."""
+def test_annotation_label_with_connector() -> None:
+    """Label annotation should have a connector and the label content."""
     board = _make_board_with_component()
     annotations = _make_annotations(labels=True)
     svg = render_pcb_svg(board, annotations=annotations)
-    assert "annotation-leader" in svg
+    assert "annotation-connector" in svg
     assert "Main MCU" in svg
 
 
@@ -711,6 +716,14 @@ def test_back_side_annotations_not_mirrored() -> None:
     assert annotation_group_pos > scale_pos
 
 
+def test_no_foreign_object() -> None:
+    """Pure SVG rendering should not use foreignObject."""
+    board = _make_board_with_component()
+    annotations = _make_annotations(boxes=True, pointers=True, legend=True, labels=True)
+    svg = render_pcb_svg(board, annotations=annotations)
+    assert "<foreignObject" not in svg
+
+
 # ---------------------------------------------------------------------------
 # End-to-end: parse + resolve + render on real fixture
 # ---------------------------------------------------------------------------
@@ -729,5 +742,5 @@ def test_swd_switch_annotation_end_to_end(board: PcbBoard) -> None:
     svg = render_pcb_svg(board, annotations=resolved)
     assert 'class="annotation-box"' in svg
     assert "Status LED" in svg
-    assert "annotation-pointer" in svg
+    assert "annotation-connector" in svg
     assert "SWD Enable" in svg

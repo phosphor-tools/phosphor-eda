@@ -17,10 +17,9 @@ from phosphor_eda.pcb_annotations import (
     LegendSpec,
     PointerSpec,
     ResolvedAnnotations,
-    _auto_place_box_label,  # pyright: ignore[reportPrivateUsage]
-    _auto_place_legend,  # pyright: ignore[reportPrivateUsage]
-    _auto_place_pointer,  # pyright: ignore[reportPrivateUsage]
-    _estimate_label_size,  # pyright: ignore[reportPrivateUsage]
+    _auto_assign_margin,  # pyright: ignore[reportPrivateUsage]
+    _compute_connector,  # pyright: ignore[reportPrivateUsage]
+    _measure_label,  # pyright: ignore[reportPrivateUsage]
     _resolve_component_target,  # pyright: ignore[reportPrivateUsage]
     _resolve_net_target,  # pyright: ignore[reportPrivateUsage]
     _resolve_pad_target,  # pyright: ignore[reportPrivateUsage]
@@ -271,71 +270,118 @@ class TestResolveTargets:
 
 
 # ---------------------------------------------------------------------------
-# Placement heuristics
+# Margin assignment
 # ---------------------------------------------------------------------------
 
 
-class TestPlacement:
-    def test_auto_place_pointer_top_right(self) -> None:
-        """Target in the top-right quadrant → label placed right or above."""
+class TestMarginAssignment:
+    def test_target_right_of_center(self) -> None:
         board_bbox = (0.0, 0.0, 40.0, 20.0)
-        pos = _auto_place_pointer(35.0, 5.0, 5.0, 2.0, board_bbox)
-        assert pos in ("right", "above")
+        margin = _auto_assign_margin(35.0, 10.0, board_bbox)
+        assert margin == "right"
 
-    def test_auto_place_pointer_bottom_left(self) -> None:
-        """Target in the bottom-left quadrant → label placed left or below."""
+    def test_target_left_of_center(self) -> None:
         board_bbox = (0.0, 0.0, 40.0, 20.0)
-        pos = _auto_place_pointer(5.0, 15.0, 5.0, 2.0, board_bbox)
-        assert pos in ("left", "below")
+        margin = _auto_assign_margin(5.0, 10.0, board_bbox)
+        assert margin == "left"
 
-    def test_auto_place_box_label_near_top(self) -> None:
-        """Box near top edge → label placed below."""
+    def test_target_below_center(self) -> None:
         board_bbox = (0.0, 0.0, 40.0, 20.0)
-        box_bbox = (15.0, 1.0, 25.0, 5.0)
-        pos, _x, _y = _auto_place_box_label(box_bbox, 5.0, 2.0, board_bbox)
-        assert pos == "below"
+        margin = _auto_assign_margin(20.0, 18.0, board_bbox)
+        assert margin == "bottom"
 
-    def test_auto_place_box_label_near_bottom(self) -> None:
-        """Box near bottom edge → label placed above."""
+    def test_target_above_center(self) -> None:
         board_bbox = (0.0, 0.0, 40.0, 20.0)
-        box_bbox = (15.0, 15.0, 25.0, 19.0)
-        pos, _x, _y = _auto_place_box_label(box_bbox, 5.0, 2.0, board_bbox)
-        assert pos == "above"
-
-    def test_auto_place_legend_wide_board(self) -> None:
-        """Wide board → legend at bottom."""
-        board_bbox = (0.0, 0.0, 100.0, 30.0)
-        pos, _x, _y = _auto_place_legend(board_bbox, 20.0, 5.0)
-        assert pos == "board-bottom"
-
-    def test_auto_place_legend_tall_board(self) -> None:
-        """Tall board → legend on the right."""
-        board_bbox = (0.0, 0.0, 30.0, 100.0)
-        pos, _x, _y = _auto_place_legend(board_bbox, 10.0, 20.0)
-        assert pos == "board-right"
+        margin = _auto_assign_margin(20.0, 2.0, board_bbox)
+        assert margin == "top"
 
 
 # ---------------------------------------------------------------------------
-# Label size estimation
+# Connector paths
 # ---------------------------------------------------------------------------
 
 
-class TestEstimateSize:
-    def test_simple_text(self) -> None:
-        w, h = _estimate_label_size("Hello", 1.0)
-        assert w > 0
-        assert h > 0
+class TestConnectorPath:
+    def test_right_margin_connector(self) -> None:
+        """Right margin connector: label → horizontal → vertical → target."""
+        board_bbox = (0.0, 0.0, 40.0, 20.0)
+        path = _compute_connector(
+            label_x=45.0,
+            label_y=8.0,
+            label_w=10.0,
+            label_h=4.0,
+            target_x=30.0,
+            target_y=10.0,
+            margin="right",
+            board_bbox=board_bbox,
+            margin_gap=5.0,
+        )
+        assert len(path) == 4
+        # First point is at label left edge
+        assert path[0][0] == pytest.approx(45.0)
+        # Last point is at target
+        assert path[-1] == pytest.approx((30.0, 10.0), abs=0.01)
 
-    def test_multiline_taller(self) -> None:
-        _, h1 = _estimate_label_size("One line", 1.0)
-        _, h2 = _estimate_label_size("Line 1<br>Line 2", 1.0)
-        assert h2 > h1
+    def test_left_margin_connector(self) -> None:
+        board_bbox = (0.0, 0.0, 40.0, 20.0)
+        path = _compute_connector(
+            label_x=-15.0,
+            label_y=8.0,
+            label_w=10.0,
+            label_h=4.0,
+            target_x=5.0,
+            target_y=10.0,
+            margin="left",
+            board_bbox=board_bbox,
+            margin_gap=5.0,
+        )
+        assert len(path) == 4
+        # First point is at label right edge
+        assert path[0][0] == pytest.approx(-5.0)
+        # Last point is at target
+        assert path[-1] == pytest.approx((5.0, 10.0), abs=0.01)
 
-    def test_html_tags_stripped_for_width(self) -> None:
-        """Tags like <b> shouldn't inflate the width estimate."""
-        w_plain, _ = _estimate_label_size("bold text", 1.0)
-        w_tagged, _ = _estimate_label_size("<b>bold text</b>", 1.0)
-        assert w_plain == pytest.approx(w_tagged)
+    def test_connector_is_orthogonal(self) -> None:
+        """All segments should be horizontal or vertical."""
+        board_bbox = (0.0, 0.0, 40.0, 20.0)
+        path = _compute_connector(
+            label_x=45.0,
+            label_y=5.0,
+            label_w=10.0,
+            label_h=3.0,
+            target_x=35.0,
+            target_y=15.0,
+            margin="right",
+            board_bbox=board_bbox,
+            margin_gap=5.0,
+        )
+        for i in range(len(path) - 1):
+            x1, y1 = path[i]
+            x2, y2 = path[i + 1]
+            # Each segment is either horizontal (same y) or vertical (same x)
+            assert x1 == pytest.approx(x2) or y1 == pytest.approx(y2)
+
+
+# ---------------------------------------------------------------------------
+# Label measurement
+# ---------------------------------------------------------------------------
+
+
+class TestMeasureLabel:
+    def test_empty_text(self) -> None:
+        w, h = _measure_label("", 1.0)
+        assert w == 0.0
+        assert h == 0.0
+
+    def test_includes_padding(self) -> None:
+        """Label pill should be larger than raw text measurement."""
+        from phosphor_eda.text_metrics import measure_text
+
+        text = "Hello"
+        raw_w, raw_h = measure_text(text, 1.0)
+        pill_w, pill_h = _measure_label(text, 1.0)
+        assert pill_w > raw_w
+        assert pill_h > raw_h
 
 
 # ---------------------------------------------------------------------------
@@ -418,7 +464,8 @@ class TestResolveAnnotations:
         assert resolved.legend is not None
         assert resolved.legend.title == "Signals"
 
-    def test_label_with_leader(self, board: PcbBoard) -> None:
+    def test_label_with_connector(self, board: PcbBoard) -> None:
+        """Labels targeting a component should get a connector path."""
         spec = AnnotationSpec(
             boxes=[],
             pointers=[],
@@ -427,9 +474,20 @@ class TestResolveAnnotations:
         resolved = resolve_annotations(spec, board, "front")
         assert len(resolved.labels) == 1
         label = resolved.labels[0]
-        assert label.label_html == "Main MCU"
-        # On-board labels get a leader line to the target
-        assert label.leader_target is not None
+        assert label.label_text == "Main MCU"
+        # On-board labels get a connector path to the target
+        assert len(label.connector_path) >= 2
+
+    def test_label_without_target_no_connector(self, board: PcbBoard) -> None:
+        """Labels without a target should have no connector."""
+        spec = AnnotationSpec(
+            boxes=[],
+            pointers=[],
+            labels=[LabelSpec(content="Board note")],
+        )
+        resolved = resolve_annotations(spec, board, "front")
+        label = resolved.labels[0]
+        assert label.connector_path == []
 
     def test_net_pointer(self, board: PcbBoard) -> None:
         """Pointer via target_net + target_near resolves to the correct pad."""
@@ -458,20 +516,76 @@ class TestResolveAnnotations:
         assert resolved.labels == []
         assert resolved.legend is None
 
-    def test_box_with_explicit_position(self, board: PcbBoard) -> None:
+    def test_box_label_in_margin(self, board: PcbBoard) -> None:
+        """Box labels should be placed in a margin outside the board."""
         spec = AnnotationSpec(
-            boxes=[
-                BoxSpec(
-                    targets=["U1"],
-                    label="MCU",
-                    label_position="above",
-                )
-            ],
+            boxes=[BoxSpec(targets=["U1"], label="MCU")],
             pointers=[],
             labels=[],
         )
         resolved = resolve_annotations(spec, board, "front")
         box = resolved.boxes[0]
-        assert box.label_position == "above"
-        # Label should be above the box
-        assert box.label_y < box.y
+        board_bbox = board.bbox()
+        # Label should be outside the board bbox
+        label_right = box.label_x + box.label_width
+        label_bottom = box.label_y + box.label_height
+        outside = (
+            box.label_x > board_bbox[2]  # right of board
+            or label_right < board_bbox[0]  # left of board
+            or box.label_y > board_bbox[3]  # below board
+            or label_bottom < board_bbox[1]  # above board
+        )
+        assert outside, f"Label at ({box.label_x}, {box.label_y}) should be outside board"
+
+    def test_box_label_has_connector(self, board: PcbBoard) -> None:
+        """Box labels should have an orthogonal connector path."""
+        spec = AnnotationSpec(
+            boxes=[BoxSpec(targets=["U1"], label="MCU")],
+            pointers=[],
+            labels=[],
+        )
+        resolved = resolve_annotations(spec, board, "front")
+        box = resolved.boxes[0]
+        assert len(box.connector_path) >= 2
+
+    def test_label_dimensions_populated(self, board: PcbBoard) -> None:
+        """Resolved labels should have positive width and height."""
+        spec = AnnotationSpec(
+            boxes=[],
+            pointers=[PointerSpec(target="U1", label="Main IC")],
+            labels=[],
+        )
+        resolved = resolve_annotations(spec, board, "front")
+        ptr = resolved.pointers[0]
+        assert ptr.label_width > 0
+        assert ptr.label_height > 0
+
+    def test_no_label_overlap(self, board: PcbBoard) -> None:
+        """Multiple labels in the same margin should not overlap."""
+        spec = AnnotationSpec(
+            boxes=[],
+            pointers=[],
+            labels=[
+                LabelSpec(target="U1", content="First"),
+                LabelSpec(target="U2", content="Second"),
+            ],
+        )
+        resolved = resolve_annotations(spec, board, "front")
+        if len(resolved.labels) >= 2:
+            a = resolved.labels[0]
+            b = resolved.labels[1]
+            # Check no vertical overlap (for labels in the same left/right margin)
+            # or no horizontal overlap (for top/bottom margin)
+            a_r = a.label_x + a.label_width
+            b_r = b.label_x + b.label_width
+            a_b = a.label_y + a.label_height
+            b_b = b.label_y + b.label_height
+            h_overlap = a.label_x < b_r and b.label_x < a_r
+            v_overlap = a.label_y < b_b and b.label_y < a_b
+            assert not (h_overlap and v_overlap), "Labels overlap"
+
+    def test_font_size_stored(self, board: PcbBoard) -> None:
+        """Resolved annotations should include the computed font size."""
+        spec = AnnotationSpec(boxes=[], pointers=[], labels=[])
+        resolved = resolve_annotations(spec, board, "front")
+        assert resolved.font_size > 0
