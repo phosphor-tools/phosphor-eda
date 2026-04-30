@@ -49,6 +49,7 @@ from phosphor_eda.pcb import (
     PcbTraceArc,
     PcbVia,
 )
+from phosphor_eda.text import strip_overline
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -344,7 +345,11 @@ def _parse_nets(data: bytes) -> dict[int, PcbNet]:
     nets: dict[int, PcbNet] = {0: PcbNet(number=0, name="")}
     for i, rec in enumerate(records):
         num = i + 1
-        nets[num] = PcbNet(number=num, name=rec.get("name", ""))
+        raw_name = rec.get("name", "")
+        # Strip Altium overline markup (e.g. "C\S\" → "CS") so net names
+        # are clean for CSS selectors and downstream tooling.
+        clean_name = strip_overline(raw_name)[0]
+        nets[num] = PcbNet(number=num, name=clean_name)
     return nets
 
 
