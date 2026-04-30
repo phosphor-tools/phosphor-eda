@@ -240,6 +240,7 @@ def _parse_fp_lines(
     fp_y: float,
     fp_rot: float,
     layer_filter: set[str],
+    fp_ref: str = "",
 ) -> list[PcbLine]:
     """Parse fp_line elements matching layer_filter, transform to absolute."""
     lines: list[PcbLine] = []
@@ -267,7 +268,9 @@ def _parse_fp_lines(
             w = _float_val(sw) if sw else 0.1
         else:
             w = 0.1
-        lines.append(PcbLine(abs_s[0], abs_s[1], abs_e[0], abs_e[1], layer, w))
+        lines.append(
+            PcbLine(abs_s[0], abs_s[1], abs_e[0], abs_e[1], layer, w, footprint_ref=fp_ref)
+        )
     return lines
 
 
@@ -277,6 +280,7 @@ def _parse_fp_circles(
     fp_y: float,
     fp_rot: float,
     layer_filter: set[str],
+    fp_ref: str = "",
 ) -> list[PcbCircle]:
     """Parse fp_circle elements matching layer_filter, transform to absolute."""
     circles: list[PcbCircle] = []
@@ -306,7 +310,9 @@ def _parse_fp_circles(
             w = 0.1
         fill_node = sexp.find(item, "fill")
         filled = fill_node is not None and sexp.val(fill_node) == "solid"
-        circles.append(PcbCircle(abs_c[0], abs_c[1], radius, layer, w, filled))
+        circles.append(
+            PcbCircle(abs_c[0], abs_c[1], radius, layer, w, filled, footprint_ref=fp_ref)
+        )
     return circles
 
 
@@ -316,6 +322,7 @@ def _parse_fp_rects_as_lines(
     fp_y: float,
     fp_rot: float,
     layer_filter: set[str],
+    fp_ref: str = "",
 ) -> list[PcbLine]:
     """Parse fp_rect elements as four PcbLine segments."""
     lines: list[PcbLine] = []
@@ -354,6 +361,7 @@ def _parse_fp_rects_as_lines(
                     abs_corners[j][1],
                     layer,
                     w,
+                    footprint_ref=fp_ref,
                 )
             )
     return lines
@@ -365,6 +373,7 @@ def _parse_fp_arcs(
     fp_y: float,
     fp_rot: float,
     layer_filter: set[str],
+    fp_ref: str = "",
 ) -> list[PcbArc]:
     """Parse fp_arc elements matching layer_filter, transform to absolute."""
     arcs: list[PcbArc] = []
@@ -395,7 +404,19 @@ def _parse_fp_arcs(
             w = _float_val(sw) if sw else 0.1
         else:
             w = 0.1
-        arcs.append(PcbArc(abs_s[0], abs_s[1], abs_m[0], abs_m[1], abs_e[0], abs_e[1], layer, w))
+        arcs.append(
+            PcbArc(
+                abs_s[0],
+                abs_s[1],
+                abs_m[0],
+                abs_m[1],
+                abs_e[0],
+                abs_e[1],
+                layer,
+                w,
+                footprint_ref=fp_ref,
+            )
+        )
     return arcs
 
 
@@ -473,6 +494,7 @@ def _parse_fp_texts(
                 font_size=font_size,
                 kind=kind,
                 hidden=hidden,
+                footprint_ref=fp_ref,
             )
         )
     return texts
@@ -535,12 +557,14 @@ def _parse_footprint(
 
     pads = [_parse_pad(p, fp_x, fp_y, fp_rot, ref) for p in sexp.find_all(fp_sexpr, "pad")]
 
-    silk_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _SILK_LAYERS)
-    court_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _COURTYARD_LAYERS)
-    fab_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS)
-    fab_lines.extend(_parse_fp_rects_as_lines(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS))
-    fab_circles = _parse_fp_circles(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS)
-    fab_arcs = _parse_fp_arcs(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS)
+    silk_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _SILK_LAYERS, fp_ref=ref)
+    court_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _COURTYARD_LAYERS, fp_ref=ref)
+    fab_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS, fp_ref=ref)
+    fab_lines.extend(
+        _parse_fp_rects_as_lines(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS, fp_ref=ref)
+    )
+    fab_circles = _parse_fp_circles(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS, fp_ref=ref)
+    fab_arcs = _parse_fp_arcs(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS, fp_ref=ref)
     edge_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _EDGE_LAYERS)
     edge_arcs = _parse_fp_arcs(fp_sexpr, fp_x, fp_y, fp_rot, _EDGE_LAYERS)
     fp_polys = _parse_fp_polys(
@@ -549,6 +573,7 @@ def _parse_footprint(
         fp_y,
         fp_rot,
         _FAB_LAYERS | _SILK_LAYERS,
+        fp_ref=ref,
     )
 
     texts = _parse_fp_texts(fp_sexpr, fp_x, fp_y, fp_rot, ref)
@@ -758,6 +783,7 @@ def _parse_fp_polys(
     fp_y: float,
     fp_rot: float,
     layer_filter: set[str],
+    fp_ref: str = "",
 ) -> list[PcbPolygon]:
     """Parse fp_poly elements matching layer_filter, transform to absolute."""
     polys: list[PcbPolygon] = []
@@ -777,7 +803,7 @@ def _parse_fp_polys(
             ax, ay = _transform_point(lx, ly, fp_x, fp_y, fp_rot)
             points.append((ax, ay))
         if points:
-            polys.append(PcbPolygon(points=points, layer=layer))
+            polys.append(PcbPolygon(points=points, layer=layer, footprint_ref=fp_ref))
     return polys
 
 

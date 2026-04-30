@@ -536,8 +536,6 @@ def _design_theme_css(side: str, layers: list[PcbLayer]) -> str:
     rules.append("/* Ref text (outside layer groups) */")
     rules.append(f".ref-text {{ fill: {_FAB_COLOR_FRONT}; }}")
 
-    _append_highlight_rules(rules)
-
     # Design mode: hide opposite-side silk + all fab layers
     rules.append("")
     rules.append("/* Side visibility — design mode hides opposite silk + all fab */")
@@ -553,19 +551,6 @@ def _design_theme_css(side: str, layers: list[PcbLayer]) -> str:
 _SOLDER_MASK_GREEN = "#1a5c2a"
 _BODY_FILL = "#3d3530"
 _BODY_STROKE = "#5a504a"
-
-_HIGHLIGHT_CSS = (
-    "/* Highlights */\n"
-    ".highlight-box { fill: none; stroke: #ffff00;\n"
-    "  stroke-width: 0.3; stroke-dasharray: 0.5,0.3; }\n"
-    ".highlight-label { fill: #ffff00; }"
-)
-
-
-def _append_highlight_rules(rules: list[str]) -> None:
-    """Append the common highlight CSS rules."""
-    rules.append("")
-    rules.append(_HIGHLIGHT_CSS)
 
 
 def _review_theme_css(side: str, layers: list[PcbLayer]) -> str:
@@ -620,8 +605,6 @@ def _review_theme_css(side: str, layers: list[PcbLayer]) -> str:
             f"g.{cls} .body-arc {{ fill: none; stroke: {_BODY_STROKE}; stroke-linecap: round; }}"
         )
     rules.append(".ref-text { fill: #ffffffcc; }")
-
-    _append_highlight_rules(rules)
 
     # Hide opposite-side copper, inner copper, opposite silk, opposite fab
     rules.append("")
@@ -680,8 +663,6 @@ def _clean_theme_css(side: str, layers: list[PcbLayer]) -> str:
         )
     rules.append(".ref-text { fill: #ffffffee; }")
 
-    _append_highlight_rules(rules)
-
     # Hide opposite-side fab
     rules.append("")
     rules.append("/* Layer visibility — only same-side fab */")
@@ -714,7 +695,13 @@ def _highlight_css(
     hl_refs: set[str],
     copper_layers: list[PcbLayer],
 ) -> str:
-    """Return CSS that dims non-highlighted elements and brightens highlighted."""
+    """Return CSS that dims non-highlighted elements and brightens highlighted.
+
+    Net highlights (``-n``) restore traces, pads, and vias on matching nets.
+    Component highlights (``-c``) restore pads, bodies, and ref text for
+    matching components.  The two are independent — specify both to see
+    a component *and* its connected traces.
+    """
     rules: list[str] = []
     rules.append("/* Dim non-highlighted elements */")
     rules.append("g[data-layer] .trace, g[data-layer] .trace-arc { opacity: 0.12; }")
@@ -728,10 +715,12 @@ def _highlight_css(
         "{ opacity: 0.3; }"
     )
     rules.append(".ref-text { opacity: 0.3; }")
-    rules.append("")
-    rules.append("/* Restore highlighted nets */")
-    nn_sel = ", ".join(f'[data-net-number="{nn}"]' for nn in sorted(hl_net_nums))
-    if nn_sel:
+
+    # -- Restore highlighted nets (traces, pads, vias) -------------------------
+    if hl_net_nums:
+        rules.append("")
+        rules.append("/* Restore highlighted nets */")
+        nn_sel = ", ".join(f'[data-net-number="{nn}"]' for nn in sorted(hl_net_nums))
         rules.append(f"{nn_sel} {{ opacity: 1 !important; }}")
         # Keep highlighted zones less dominant so they don't flood the view
         zone_sel = ", ".join(f'.zone[data-net-number="{nn}"]' for nn in sorted(hl_net_nums))
@@ -754,6 +743,14 @@ def _highlight_css(
                 f'g.{cls} .pad[data-net-number="{nn}"]' for nn in sorted(hl_net_nums)
             )
             rules.append(f"{pad_sel} {{ fill: {color} !important; }}")
+
+    # -- Restore highlighted components (pads, bodies, ref text) ---------------
+    if hl_refs:
+        rules.append("")
+        rules.append("/* Restore highlighted components */")
+        ref_sel = ", ".join(f'[data-component="{ref}"]' for ref in sorted(hl_refs))
+        rules.append(f"{ref_sel} {{ opacity: 1 !important; }}")
+
     return "\n".join(rules)
 
 
@@ -843,7 +840,6 @@ def render_pcb_svg(
             fp = board.footprint_by_ref(ref)
             if fp:
                 hl_refs.add(fp.reference)
-                hl_net_nums |= board.nets_for_component(fp.reference)
 
     has_hl = bool(hl_net_nums) or bool(hl_refs)
 
@@ -1074,13 +1070,16 @@ def render_pcb_svg(
         cls = _layer_class(silk_layer)
         svg.group_start(attrs={"data-layer": silk_layer, "class": cls})
         for ln in silk_by_layer[silk_layer]:
+            attrs: dict[str, str] = {"class": "silk"}
+            if ln.footprint_ref:
+                attrs["data-component"] = ln.footprint_ref
             svg.line(
                 ln.start_x,
                 ln.start_y,
                 ln.end_x,
                 ln.end_y,
                 max(ln.width, 0.1),
-                attrs={"class": "silk"},
+                attrs=attrs,
             )
         svg.group_end()
 
@@ -1111,14 +1110,20 @@ def render_pcb_svg(
             body_attrs = _body_group_attrs(fp)
             svg.group_start(attrs=body_attrs)
             emitted_refs.add(fp.reference)
+            ref = fp.reference
             # Try to build filled polygon from fab lines
             poly = _chain_lines_to_polygon(fab_lines)
             if poly:
-                svg.polygon(poly, attrs={"class": "body"})
+                svg.polygon(poly, attrs={"class": "body", "data-component": ref})
             # Circles
             for circ in fab_circles:
                 if circ.fill:
-                    svg.circle(circ.cx, circ.cy, circ.radius, attrs={"class": "body-circle-filled"})
+                    svg.circle(
+                        circ.cx,
+                        circ.cy,
+                        circ.radius,
+                        attrs={"class": "body-circle-filled", "data-component": ref},
+                    )
                 else:
                     svg.circle(
                         circ.cx,
@@ -1126,6 +1131,7 @@ def render_pcb_svg(
                         circ.radius,
                         attrs={
                             "class": "body-circle",
+                            "data-component": ref,
                             "stroke-width": f"{max(circ.width, 0.08):.4f}",
                         },
                     )
@@ -1140,7 +1146,8 @@ def render_pcb_svg(
                     arc.end_y,
                 )
                 svg.raw(
-                    f'<path d="{d}" stroke-width="{max(arc.width, 0.08):.4f}" class="body-arc"/>'
+                    f'<path d="{d}" stroke-width="{max(arc.width, 0.08):.4f}"'
+                    f' class="body-arc" data-component="{xml_escape(ref)}"/>'
                 )
             svg.group_end()
         svg.group_end()
@@ -1195,26 +1202,6 @@ def render_pcb_svg(
     # -- Close content clip group ------------------------------------------
     svg.group_end()
 
-    # -- Highlight boxes (inside mirror, outside clip) ---------------------
-    hl_labels: list[tuple[float, float, float, float, str]] = []
-    if hl_refs:
-        for fp in board.footprints:
-            if fp.reference not in hl_refs:
-                continue
-            bbox = fp.bbox
-            if not bbox:
-                continue
-            mx0, my0, mx1, my1 = bbox
-            margin = 0.5
-            svg.rect(
-                mx0 - margin,
-                my0 - margin,
-                (mx1 - mx0) + 2 * margin,
-                (my1 - my0) + 2 * margin,
-                attrs={"class": "highlight-box", "data-component": fp.reference},
-            )
-            hl_labels.append((mx0, my0, mx1, my1, fp.reference))
-
     # -- Close mirror group ------------------------------------------------
     if side == "back":
         svg.group_end()
@@ -1233,24 +1220,6 @@ def render_pcb_svg(
             attrs={
                 "class": "ref-text",
                 "data-component": ttext,
-            },
-        )
-
-    # -- Highlight labels (outside mirror) ---------------------------------
-    for mx0, my0, mx1, _my1, ref in hl_labels:
-        margin = 0.5
-        label_y = my0 - margin - 0.4
-        label_x = (mx0 + mx1) / 2
-        if side == "back":
-            label_x = (bx0 + bx1) - label_x
-        svg.text(
-            label_x,
-            label_y,
-            ref,
-            font_size=1.8,
-            bold=True,
-            attrs={
-                "class": "highlight-label",
             },
         )
 

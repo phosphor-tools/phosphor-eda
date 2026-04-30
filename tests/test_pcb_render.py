@@ -138,15 +138,17 @@ def test_highlight_css_targets_net(board: PcbBoard) -> None:
     assert 'data-net-number="1"' in svg
 
 
-def test_highlight_component_box(board: PcbBoard) -> None:
+def test_highlight_component_restores_by_ref(board: PcbBoard) -> None:
+    """Component highlight CSS restores elements by data-component, not net."""
     svg = render_pcb_svg(board, highlight_components=["TP3"])
-    assert "highlight-box" in svg
-    assert "TP3" in svg
+    assert 'data-component="TP3"' in svg
+    assert "Restore highlighted components" in svg
 
 
-def test_highlight_component_label(board: PcbBoard) -> None:
+def test_highlight_component_does_not_highlight_nets(board: PcbBoard) -> None:
+    """-c alone should not produce net-number restore rules."""
     svg = render_pcb_svg(board, highlight_components=["TP3"])
-    assert "highlight-label" in svg
+    assert "Restore highlighted nets" not in svg
 
 
 def test_no_highlight_without_args(board: PcbBoard) -> None:

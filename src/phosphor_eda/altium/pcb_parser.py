@@ -1042,12 +1042,14 @@ def parse_altium_pcb(
 
     for comp_idx, text in raw_texts:
         if comp_idx != _COMPONENT_NONE and comp_idx < len(footprints):
+            text.footprint_ref = footprints[comp_idx].reference
             footprints[comp_idx].texts.append(text)
 
     for comp_idx, lines in comp_lines.items():
         if comp_idx < len(footprints):
             fp = footprints[comp_idx]
             for line in lines:
+                line.footprint_ref = fp.reference
                 if line.layer in silk_names:
                     fp.silkscreen_lines.append(line)
                 elif line.layer in fab_names:
@@ -1057,6 +1059,7 @@ def parse_altium_pcb(
         if comp_idx < len(footprints):
             fp = footprints[comp_idx]
             for arc in arcs:
+                arc.footprint_ref = fp.reference
                 if arc.layer in fab_names:
                     fp.fab_arcs.append(arc)
 
@@ -1064,6 +1067,7 @@ def parse_altium_pcb(
         if comp_idx < len(footprints):
             fp = footprints[comp_idx]
             for poly in polys:
+                poly.footprint_ref = fp.reference
                 if poly.layer in silk_names:
                     fp.silkscreen_polygons.append(poly)
                 elif poly.layer in fab_names:

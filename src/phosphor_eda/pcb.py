@@ -53,6 +53,7 @@ class PcbLine:
     end_y: float
     layer: str
     width: float
+    footprint_ref: str = ""
 
 
 @dataclass
@@ -65,6 +66,7 @@ class PcbCircle:
     layer: str
     width: float
     fill: bool = False
+    footprint_ref: str = ""
 
 
 @dataclass
@@ -79,6 +81,7 @@ class PcbArc:
     end_y: float
     layer: str
     width: float
+    footprint_ref: str = ""
 
 
 @dataclass
@@ -93,6 +96,7 @@ class PcbText:
     font_size: float
     kind: str = ""  # "reference", "value", "user"
     hidden: bool = False
+    footprint_ref: str = ""
 
 
 @dataclass
@@ -103,6 +107,7 @@ class PcbPolygon:
     layer: str
     net_number: int = 0
     net_name: str = ""
+    footprint_ref: str = ""
 
 
 @dataclass
