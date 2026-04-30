@@ -181,6 +181,21 @@ def _extract_reference(fp_sexpr: SExpNode) -> str:
     return "?"
 
 
+def _extract_value(fp_sexpr: SExpNode) -> str:
+    """Get component value, handling both KiCad 6 and 8 formats."""
+    # KiCad 8: (property "Value" "100nF" ...)
+    val = sexp.find_property(fp_sexpr, "Value")
+    if val:
+        return val
+    # KiCad 6: (fp_text value "100nF" ...)
+    for item in fp_sexpr:
+        if isinstance(item, list) and sexp.tag(item) == "fp_text" and len(item) > 2:
+            v = item[1]
+            if isinstance(v, sexpdata.Symbol) and v.value() == "value":
+                return str(item[2])
+    return ""
+
+
 def _parse_pad(
     pad_sexpr: SExpNode,
     fp_x: float,
@@ -554,6 +569,7 @@ def _parse_footprint(
     fp_x, fp_y, fp_rot = _at(at_node) if at_node else (0.0, 0.0, 0.0)
 
     ref = _extract_reference(fp_sexpr)
+    value = _extract_value(fp_sexpr)
 
     pads = [_parse_pad(p, fp_x, fp_y, fp_rot, ref) for p in sexp.find_all(fp_sexpr, "pad")]
 
@@ -589,6 +605,7 @@ def _parse_footprint(
         y=fp_y,
         rotation=fp_rot,
         layer=layer,
+        value=value,
         pads=pads,
         silkscreen_lines=silk_lines,
         courtyard_lines=court_lines,

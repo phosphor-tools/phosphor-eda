@@ -774,9 +774,16 @@ def _draw_pad(svg: _Svg, pad: PcbPad, attrs: dict[str, str]) -> None:
         svg.rect(pad.x - hw, pad.y - hh, pad.width, pad.height, attrs=attrs)
 
 
-def _body_group_attrs(fp: PcbFootprint) -> dict[str, str]:
+def _body_group_attrs(
+    fp: PcbFootprint,
+    component_attrs_fn: Callable[[str], dict[str, str]] | None = None,
+) -> dict[str, str]:
     """Build attributes for a component body <g>, including model metadata."""
-    attrs: dict[str, str] = {"data-type": "body", "data-component": fp.reference}
+    if component_attrs_fn:
+        base = component_attrs_fn(fp.reference)
+    else:
+        base = {"data-component": fp.reference}
+    attrs: dict[str, str] = {"data-type": "body", **base}
     cached_models = [m for m in fp.models_3d if m.cache_key]
     if cached_models:
         models_json = json.dumps(
@@ -808,6 +815,7 @@ def render_pcb_svg(
     highlight_components: list[str] | None = None,
     width_px: int = 800,
     theme: str = "design",
+    custom_css: str = "",
 ) -> str:
     """Render a PcbBoard as a layered SVG string with CSS theming.
 
@@ -820,12 +828,16 @@ def render_pcb_svg(
     highlight_nets:
         Net names to highlight (case-insensitive substring match).
     highlight_components:
-        Component references to highlight.  Also highlights their nets.
+        Component references to highlight (footprint only, not nets).
     width_px:
         Pixel width of the SVG.
     theme:
         CSS theme: "design" (EDA view), "review" (realistic), or
         "clean" (documentation — hides copper/passives).
+    custom_css:
+        Extra CSS injected after the theme and highlight styles.
+        Overrides any built-in rule.  Useful for per-net colors,
+        board mask recoloring, layer visibility, etc.
     """
     # -- Resolve highlights ------------------------------------------------
     hl_net_nums: set[int] = set()
@@ -842,6 +854,21 @@ def render_pcb_svg(
                 hl_refs.add(fp.reference)
 
     has_hl = bool(hl_net_nums) or bool(hl_refs)
+
+    # -- Component metadata lookup (ref → lib, value) ----------------------
+    fp_meta: dict[str, tuple[str, str]] = {}
+    for fp in board.footprints:
+        fp_meta[fp.reference] = (fp.footprint_lib, fp.value)
+
+    def _component_attrs(ref: str) -> dict[str, str]:
+        """Build data-component/data-footprint-lib/data-value for a ref."""
+        attrs: dict[str, str] = {"data-component": ref}
+        lib, val = fp_meta.get(ref, ("", ""))
+        if lib:
+            attrs["data-footprint-lib"] = lib
+        if val:
+            attrs["data-value"] = val
+        return attrs
 
     # -- Layer lookup from board definitions --------------------------------
     layer_lookup: dict[str, PcbLayer] = {lyr.name: lyr for lyr in board.layers}
@@ -926,6 +953,11 @@ def render_pcb_svg(
     if has_hl:
         svg.raw('<style id="highlight">')
         svg.raw(_highlight_css(hl_net_nums, hl_refs, copper_layers))
+        svg.raw("</style>")
+
+    if custom_css:
+        svg.raw('<style id="custom">')
+        svg.raw(custom_css)
         svg.raw("</style>")
 
     # -- Back-side mirror --------------------------------------------------
@@ -1034,18 +1066,15 @@ def render_pcb_svg(
         # Pads
         for pad, fp_ref in pads_by_layer.get(layer, []):
             net_nm = pad.net_name or _net_name(board, pad.net_number)
-            _draw_pad(
-                svg,
-                pad,
-                {
-                    "class": "pad",
-                    "data-type": "pad",
-                    "data-component": fp_ref,
-                    "data-pad": pad.number,
-                    "data-net": net_nm,
-                    "data-net-number": str(pad.net_number),
-                },
-            )
+            pad_attrs = {
+                "class": "pad",
+                "data-type": "pad",
+                **_component_attrs(fp_ref),
+                "data-pad": pad.number,
+                "data-net": net_nm,
+                "data-net-number": str(pad.net_number),
+            }
+            _draw_pad(svg, pad, pad_attrs)
 
         svg.group_end()
 
@@ -1072,7 +1101,7 @@ def render_pcb_svg(
         for ln in silk_by_layer[silk_layer]:
             attrs: dict[str, str] = {"class": "silk"}
             if ln.footprint_ref:
-                attrs["data-component"] = ln.footprint_ref
+                attrs.update(_component_attrs(ln.footprint_ref))
             svg.line(
                 ln.start_x,
                 ln.start_y,
@@ -1107,14 +1136,15 @@ def render_pcb_svg(
         cls = _layer_class(fab_layer)
         svg.group_start(attrs={"data-layer": fab_layer, "class": cls})
         for fp, fab_lines, fab_circles, fab_arcs in fab_content:
-            body_attrs = _body_group_attrs(fp)
+            body_attrs = _body_group_attrs(fp, _component_attrs)
             svg.group_start(attrs=body_attrs)
             emitted_refs.add(fp.reference)
             ref = fp.reference
+            comp_attrs = _component_attrs(ref)
             # Try to build filled polygon from fab lines
             poly = _chain_lines_to_polygon(fab_lines)
             if poly:
-                svg.polygon(poly, attrs={"class": "body", "data-component": ref})
+                svg.polygon(poly, attrs={"class": "body", **comp_attrs})
             # Circles
             for circ in fab_circles:
                 if circ.fill:
@@ -1122,7 +1152,7 @@ def render_pcb_svg(
                         circ.cx,
                         circ.cy,
                         circ.radius,
-                        attrs={"class": "body-circle-filled", "data-component": ref},
+                        attrs={"class": "body-circle-filled", **comp_attrs},
                     )
                 else:
                     svg.circle(
@@ -1131,7 +1161,7 @@ def render_pcb_svg(
                         circ.radius,
                         attrs={
                             "class": "body-circle",
-                            "data-component": ref,
+                            **comp_attrs,
                             "stroke-width": f"{max(circ.width, 0.08):.4f}",
                         },
                     )
@@ -1147,7 +1177,7 @@ def render_pcb_svg(
                 )
                 svg.raw(
                     f'<path d="{d}" stroke-width="{max(arc.width, 0.08):.4f}"'
-                    f' class="body-arc" data-component="{xml_escape(ref)}"/>'
+                    f' class="body-arc"{_fmt_attrs(comp_attrs)}/>'
                 )
             svg.group_end()
         svg.group_end()
@@ -1162,7 +1192,7 @@ def render_pcb_svg(
     if model_only_fps:
         svg.group_start(attrs={"data-layer": "models", "class": "models"})
         for fp in model_only_fps:
-            svg.group_start(attrs=_body_group_attrs(fp))
+            svg.group_start(attrs=_body_group_attrs(fp, _component_attrs))
             svg.group_end()
         svg.group_end()
 
@@ -1219,9 +1249,18 @@ def render_pcb_svg(
             rotation=trot,
             attrs={
                 "class": "ref-text",
-                "data-component": ttext,
+                **_component_attrs(ttext),
             },
         )
+
+    # -- Component metadata (embedded JSON for downstream tooling) ----------
+    meta = {
+        ref: {"lib": lib, "value": val} for ref, (lib, val) in sorted(fp_meta.items()) if lib or val
+    }
+    if meta:
+        svg.raw('<script type="application/json" id="pcb-metadata">')
+        svg.raw(json.dumps(meta, separators=(",", ":")))
+        svg.raw("</script>")
 
     svg.raw("</svg>")
     return svg.build()

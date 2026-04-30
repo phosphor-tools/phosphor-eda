@@ -1077,8 +1077,10 @@ def parse_altium_pcb(
         if comp_idx < len(footprints):
             footprints[comp_idx].models_3d.extend(models)
 
-    # Compute footprint bounding boxes
+    # Extract value text and compute bounding boxes
     for fp in footprints:
+        if not fp.value:
+            fp.value = next((t.text for t in fp.texts if t.kind == "value"), "")
         fp.bbox = _compute_bbox(fp)
 
     # Board name from Board6/Data (board_props already parsed above)

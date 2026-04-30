@@ -8,8 +8,10 @@ import pytest
 
 from phosphor_eda.kicad.pcb_parser import parse_kicad_pcb
 from phosphor_eda.pcb import (
+    LayerFunction,
     PcbBoard,
     PcbFootprint,
+    PcbLayer,
     PcbLine,
     PcbModel3D,
     PcbNet,
@@ -332,3 +334,177 @@ def test_model_only_footprint_gets_body_group() -> None:
     svg = render_pcb_svg(board)
     assert "data-models=" in svg
     assert 'data-component="U1"' in svg
+
+
+# ---------------------------------------------------------------------------
+# Component metadata attributes (data-footprint-lib, data-value)
+# ---------------------------------------------------------------------------
+
+
+def _make_board_with_component(
+    *,
+    ref: str = "U1",
+    lib: str = "Package_SO:SOIC-8",
+    value: str = "SN74LVC2G66",
+) -> PcbBoard:
+    """Board with one footprint that has lib/value metadata and a pad + fab line."""
+    from phosphor_eda.pcb import PcbPad
+
+    fp = PcbFootprint(
+        reference=ref,
+        footprint_lib=lib,
+        x=10.0,
+        y=10.0,
+        rotation=0.0,
+        layer="F.Cu",
+        value=value,
+        pads=[
+            PcbPad(
+                number="1",
+                x=10.0,
+                y=10.0,
+                width=1.0,
+                height=1.0,
+                shape="rect",
+                layers=["F.Cu"],
+                net_number=1,
+                net_name="VCC",
+                footprint_ref=ref,
+            )
+        ],
+        silkscreen_lines=[
+            PcbLine(9, 9, 11, 9, "F.SilkS", 0.12, footprint_ref=ref),
+        ],
+        fab_lines=[
+            PcbLine(9, 9, 11, 9, "F.Fab", 0.1, footprint_ref=ref),
+            PcbLine(11, 9, 11, 11, "F.Fab", 0.1, footprint_ref=ref),
+            PcbLine(11, 11, 9, 11, "F.Fab", 0.1, footprint_ref=ref),
+            PcbLine(9, 11, 9, 9, "F.Fab", 0.1, footprint_ref=ref),
+        ],
+        texts=[],
+    )
+    return PcbBoard(
+        name="test",
+        nets={0: PcbNet(0, ""), 1: PcbNet(1, "VCC")},
+        footprints=[fp],
+        segments=[],
+        vias=[],
+        outline_lines=[
+            PcbLine(0, 0, 20, 0, "Edge.Cuts", 0.1),
+            PcbLine(20, 0, 20, 20, "Edge.Cuts", 0.1),
+            PcbLine(20, 20, 0, 20, "Edge.Cuts", 0.1),
+            PcbLine(0, 20, 0, 0, "Edge.Cuts", 0.1),
+        ],
+        outline_arcs=[],
+        layers=[
+            PcbLayer("F.Cu", LayerFunction.COPPER, side="front"),
+            PcbLayer("F.SilkS", LayerFunction.SILKSCREEN, side="front"),
+            PcbLayer("F.Fab", LayerFunction.FAB, side="front"),
+        ],
+    )
+
+
+def test_pad_has_footprint_lib_and_value() -> None:
+    """Pads carry data-footprint-lib and data-value from the footprint."""
+    board = _make_board_with_component()
+    svg = render_pcb_svg(board)
+    assert 'data-footprint-lib="Package_SO:SOIC-8"' in svg
+    assert 'data-value="SN74LVC2G66"' in svg
+
+
+def test_silk_has_footprint_lib() -> None:
+    """Silkscreen lines with a footprint_ref carry lib/value attributes."""
+    board = _make_board_with_component()
+    svg = render_pcb_svg(board)
+    # Silk lines should have component attrs
+    silk_pattern = re.compile(r'class="silk"[^/]*data-footprint-lib="Package_SO:SOIC-8"')
+    assert silk_pattern.search(svg)
+
+
+def test_body_group_has_lib_and_value() -> None:
+    """Body group <g> carries data-footprint-lib and data-value."""
+    board = _make_board_with_component()
+    svg = render_pcb_svg(board)
+    body_pattern = re.compile(r'data-type="body"[^>]*data-footprint-lib="Package_SO:SOIC-8"')
+    assert body_pattern.search(svg)
+
+
+def test_ref_text_has_lib_and_value() -> None:
+    """Ref text labels carry data-footprint-lib and data-value."""
+    from phosphor_eda.pcb import PcbText
+
+    board = _make_board_with_component()
+    # Add a visible ref text so it renders
+    board.footprints[0].texts.append(
+        PcbText(
+            text="U1",
+            x=10.0,
+            y=8.0,
+            rotation=0.0,
+            layer="F.Fab",
+            font_size=0.5,
+            kind="reference",
+            footprint_ref="U1",
+        )
+    )
+    svg = render_pcb_svg(board)
+    ref_pattern = re.compile(r'class="ref-text"[^>]*data-footprint-lib="Package_SO:SOIC-8"')
+    assert ref_pattern.search(svg)
+
+
+def test_no_lib_attr_when_empty() -> None:
+    """No data-footprint-lib if the footprint has no lib string."""
+    board = _make_board_with_component(lib="", value="")
+    svg = render_pcb_svg(board)
+    assert "data-footprint-lib" not in svg
+    assert "data-value" not in svg
+
+
+# ---------------------------------------------------------------------------
+# Component metadata JSON block
+# ---------------------------------------------------------------------------
+
+
+def test_pcb_metadata_json_block() -> None:
+    """SVG contains a JSON metadata block with component lib/value info."""
+    board = _make_board_with_component()
+    svg = render_pcb_svg(board)
+    assert '<script type="application/json" id="pcb-metadata">' in svg
+    match = re.search(
+        r'<script type="application/json" id="pcb-metadata">\n(.*?)\n</script>',
+        svg,
+        re.DOTALL,
+    )
+    assert match is not None
+    parsed = json.loads(match.group(1))
+    assert "U1" in parsed
+    assert parsed["U1"]["lib"] == "Package_SO:SOIC-8"
+    assert parsed["U1"]["value"] == "SN74LVC2G66"
+
+
+def test_no_metadata_when_no_lib_or_value() -> None:
+    """No metadata block if all footprints lack lib and value."""
+    board = _make_board_with_component(lib="", value="")
+    svg = render_pcb_svg(board)
+    assert "pcb-metadata" not in svg
+
+
+# ---------------------------------------------------------------------------
+# Custom CSS injection
+# ---------------------------------------------------------------------------
+
+
+def test_custom_css_injected() -> None:
+    """Custom CSS appears in a dedicated <style id="custom"> block."""
+    board = _make_board_with_component()
+    css = ".board-fill { fill: purple; }"
+    svg = render_pcb_svg(board, custom_css=css)
+    assert '<style id="custom">' in svg
+    assert "fill: purple;" in svg
+
+
+def test_custom_css_not_present_when_empty() -> None:
+    """No custom style block when no custom CSS provided."""
+    board = _make_board_with_component()
+    svg = render_pcb_svg(board)
+    assert '<style id="custom">' not in svg

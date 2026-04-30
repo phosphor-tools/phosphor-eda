@@ -163,6 +163,7 @@ class PcbFootprint:
     y: float
     rotation: float
     layer: str  # "F.Cu" or "B.Cu"
+    value: str = ""
     pads: list[PcbPad] = field(default_factory=list)
     silkscreen_lines: list[PcbLine] = field(default_factory=list)
     silkscreen_polygons: list[PcbPolygon] = field(default_factory=list)
