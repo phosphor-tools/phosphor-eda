@@ -20,11 +20,11 @@ from phosphor_eda.pcb_annotations import (
     _auto_place_box_label,  # pyright: ignore[reportPrivateUsage]
     _auto_place_legend,  # pyright: ignore[reportPrivateUsage]
     _auto_place_pointer,  # pyright: ignore[reportPrivateUsage]
-    _compute_annotation_font_size,  # pyright: ignore[reportPrivateUsage]
     _estimate_label_size,  # pyright: ignore[reportPrivateUsage]
     _resolve_component_target,  # pyright: ignore[reportPrivateUsage]
     _resolve_net_target,  # pyright: ignore[reportPrivateUsage]
     _resolve_pad_target,  # pyright: ignore[reportPrivateUsage]
+    compute_annotation_font_size,
     parse_annotations,
     resolve_annotations,
 )
@@ -346,8 +346,8 @@ class TestEstimateSize:
 def test_font_size_scales_with_diagonal() -> None:
     small_bbox = (0.0, 0.0, 20.0, 20.0)
     large_bbox = (0.0, 0.0, 200.0, 200.0)
-    small_font = _compute_annotation_font_size(small_bbox)
-    large_font = _compute_annotation_font_size(large_bbox)
+    small_font = compute_annotation_font_size(small_bbox)
+    large_font = compute_annotation_font_size(large_bbox)
     assert large_font > small_font
     # Font should scale roughly proportionally to diagonal
     ratio = large_font / small_font

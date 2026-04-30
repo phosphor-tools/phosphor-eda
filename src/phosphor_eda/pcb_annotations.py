@@ -347,7 +347,7 @@ def _estimate_label_size(html: str, font_size: float) -> tuple[float, float]:
     return (width, height)
 
 
-def _compute_annotation_font_size(
+def compute_annotation_font_size(
     board_bbox: tuple[float, float, float, float],
 ) -> float:
     """Compute annotation font size from board diagonal."""
@@ -501,7 +501,7 @@ def resolve_annotations(
     ``side`` is "front" or "back" — used for future back-side adjustments.
     """
     board_bbox = board.bbox()
-    font_size = _compute_annotation_font_size(board_bbox)
+    font_size = compute_annotation_font_size(board_bbox)
     margin = font_size * 1.5
 
     resolved_boxes: list[ResolvedBox] = []

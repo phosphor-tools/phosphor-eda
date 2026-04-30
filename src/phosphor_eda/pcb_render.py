@@ -31,6 +31,13 @@ if TYPE_CHECKING:
         PcbSegment,
         PcbTraceArc,
     )
+    from phosphor_eda.pcb_annotations import (
+        ResolvedAnnotations,
+        ResolvedBox,
+        ResolvedLabel,
+        ResolvedLegend,
+        ResolvedPointer,
+    )
 
 # ---------------------------------------------------------------------------
 # SVG builder
@@ -132,6 +139,22 @@ class _Svg:
 
     def group_end(self) -> None:
         self._parts.append("</g>")
+
+    def foreign_object(
+        self,
+        x: float,
+        y: float,
+        width: float,
+        height: float,
+        html: str,
+        attrs: dict[str, str] | None = None,
+    ) -> None:
+        """Emit a <foreignObject> with the given HTML content."""
+        self._parts.append(
+            f'<foreignObject x="{x:.4f}" y="{y:.4f}" '
+            f'width="{width:.4f}" height="{height:.4f}"{_fmt_attrs(attrs)}>'
+            f"{html}</foreignObject>"
+        )
 
     def build(self) -> str:
         return "\n".join(self._parts)
@@ -803,6 +826,142 @@ def _body_group_attrs(
 
 
 # ---------------------------------------------------------------------------
+# Annotation rendering
+# ---------------------------------------------------------------------------
+
+
+def _annotation_css() -> str:
+    """Default CSS for annotation elements."""
+    return """\
+.annotation-box { stroke: rgba(255,107,53,0.9); stroke-width: 0.3; fill: none;
+  stroke-dasharray: 1,0.5; }
+.annotation-pointer { stroke: rgba(255,107,53,0.9); stroke-width: 0.15; fill: none; }
+.annotation-leader { stroke: rgba(200,200,200,0.5); stroke-width: 0.1;
+  stroke-dasharray: 0.5,0.3; fill: none; }
+.annotation-label-box { background: rgba(0,0,0,0.7); padding: 0.3em 0.5em;
+  border-radius: 3px; color: #e0e0e0; width: max-content; }
+.legend-box { background: rgba(20,20,35,0.85); border: 1px solid rgba(255,255,255,0.2);
+  padding: 0.5em 0.8em; border-radius: 4px; color: #e0e0e0; width: max-content; }
+.annotation-text { font-family: system-ui, sans-serif; line-height: 1.4; margin: 0; }
+.legend-title { font-weight: bold; margin: 0 0 0.3em 0; }
+.legend-entry { display: flex; align-items: center; gap: 0.4em; margin: 0.15em 0; }
+.legend-swatch { width: 1em; height: 1em; border-radius: 2px; flex-shrink: 0; }"""
+
+
+def _render_annotations(
+    svg: _Svg,
+    annotations: ResolvedAnnotations,
+    font_size: float,
+) -> None:
+    """Emit all annotation elements into an <g class="annotations"> group."""
+    svg.group_start(attrs={"class": "annotations"})
+    for box in annotations.boxes:
+        _render_box(svg, box, font_size)
+    for pointer in annotations.pointers:
+        _render_pointer(svg, pointer, font_size)
+    for label in annotations.labels:
+        _render_label(svg, label, font_size)
+    if annotations.legend is not None:
+        _render_legend(svg, annotations.legend, font_size)
+    svg.group_end()
+
+
+def _render_box(svg: _Svg, box: ResolvedBox, font_size: float) -> None:
+    """Render a dashed box with an optional label."""
+    svg.rect(
+        box.x,
+        box.y,
+        box.width,
+        box.height,
+        rx=font_size * 0.3,
+        attrs={"class": "annotation-box", "style": f"stroke: {box.color}"},
+    )
+    if box.label_html:
+        fo_size = font_size * 10  # large enough for content
+        html = (
+            f'<div xmlns="http://www.w3.org/1999/xhtml" '
+            f'class="annotation-label-box annotation-text" '
+            f'style="font-size: {font_size:.3f}px">'
+            f"{box.label_html}</div>"
+        )
+        svg.foreign_object(box.label_x, box.label_y, fo_size, fo_size, html)
+
+
+def _render_pointer(svg: _Svg, pointer: ResolvedPointer, font_size: float) -> None:
+    """Render an arrow line with arrowhead and optional label."""
+    # Leader line from label to target
+    svg.line(
+        pointer.label_x,
+        pointer.label_y + font_size * 0.5,
+        pointer.target_x,
+        pointer.target_y,
+        font_size * 0.1,
+        attrs={
+            "class": "annotation-pointer",
+            "style": f"stroke: {pointer.color}",
+            "marker-end": "url(#annotation-arrowhead)",
+        },
+    )
+    if pointer.label_html:
+        fo_size = font_size * 10
+        html = (
+            f'<div xmlns="http://www.w3.org/1999/xhtml" '
+            f'class="annotation-label-box annotation-text" '
+            f'style="font-size: {font_size:.3f}px">'
+            f"{pointer.label_html}</div>"
+        )
+        svg.foreign_object(pointer.label_x, pointer.label_y, fo_size, fo_size, html)
+
+
+def _render_label(svg: _Svg, label: ResolvedLabel, font_size: float) -> None:
+    """Render a label with optional leader line to its target."""
+    if label.leader_target is not None:
+        tx, ty = label.leader_target
+        svg.line(
+            label.label_x + font_size,
+            label.label_y + font_size * 0.5,
+            tx,
+            ty,
+            font_size * 0.05,
+            attrs={"class": "annotation-leader"},
+        )
+    if label.label_html:
+        fo_size = font_size * 10
+        html = (
+            f'<div xmlns="http://www.w3.org/1999/xhtml" '
+            f'class="annotation-label-box annotation-text" '
+            f'style="font-size: {font_size:.3f}px; '
+            f'background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.1)">'
+            f"{label.label_html}</div>"
+        )
+        svg.foreign_object(label.label_x, label.label_y, fo_size, fo_size, html)
+
+
+def _render_legend(svg: _Svg, legend: ResolvedLegend, font_size: float) -> None:
+    """Render a legend box with color swatches."""
+    title_html = ""
+    if legend.title:
+        title_html = (
+            f'<p class="annotation-text legend-title" '
+            f'style="font-size: {font_size:.3f}px">'
+            f"{xml_escape(legend.title)}</p>"
+        )
+    entries_html = ""
+    for entry in legend.entries:
+        entries_html += (
+            f'<div class="legend-entry" style="font-size: {font_size:.3f}px">'
+            f'<div class="legend-swatch" style="background: {entry.color}"></div>'
+            f'<span class="annotation-text">{xml_escape(entry.label)}</span>'
+            f"</div>"
+        )
+    html = (
+        f'<div xmlns="http://www.w3.org/1999/xhtml" class="legend-box">'
+        f"{title_html}{entries_html}</div>"
+    )
+    svg.foreign_object(legend.x, legend.y, legend.width * 2, legend.height * 2, html)
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -816,6 +975,7 @@ def render_pcb_svg(
     width_px: int = 800,
     theme: str = "design",
     custom_css: str = "",
+    annotations: ResolvedAnnotations | None = None,
 ) -> str:
     """Render a PcbBoard as a layered SVG string with CSS theming.
 
@@ -838,6 +998,8 @@ def render_pcb_svg(
         Extra CSS injected after the theme and highlight styles.
         Overrides any built-in rule.  Useful for per-net colors,
         board mask recoloring, layer visibility, etc.
+    annotations:
+        Resolved annotations to overlay on the board.
     """
     # -- Resolve highlights ------------------------------------------------
     hl_net_nums: set[int] = set()
@@ -936,6 +1098,27 @@ def render_pcb_svg(
     vb_y = by0 - pad_mm
     vb_w = (bx1 - bx0) + 2 * pad_mm
     vb_h = (by1 - by0) + 2 * pad_mm
+
+    # Expand viewBox to include annotation content
+    if annotations is not None:
+        ax0, ay0, ax1, ay1 = annotations.content_bbox
+        if ax0 < vb_x:
+            vb_w += vb_x - ax0
+            vb_x = ax0
+        if ay0 < vb_y:
+            vb_h += vb_y - ay0
+            vb_y = ay0
+        if ax1 > vb_x + vb_w:
+            vb_w = ax1 - vb_x
+        if ay1 > vb_y + vb_h:
+            vb_h = ay1 - vb_y
+        # Add margin around annotations
+        ann_margin = pad_mm
+        vb_x -= ann_margin
+        vb_y -= ann_margin
+        vb_w += 2 * ann_margin
+        vb_h += 2 * ann_margin
+
     height_px = int(width_px * vb_h / vb_w) if vb_w > 0 else width_px
 
     svg = _Svg()
@@ -958,6 +1141,11 @@ def render_pcb_svg(
     if custom_css:
         svg.raw('<style id="custom">')
         svg.raw(custom_css)
+        svg.raw("</style>")
+
+    if annotations is not None:
+        svg.raw('<style id="annotations">')
+        svg.raw(_annotation_css())
         svg.raw("</style>")
 
     # -- Back-side mirror --------------------------------------------------
@@ -1004,6 +1192,15 @@ def render_pcb_svg(
         active_clip = "drill-clip"
     else:
         active_clip = "board-clip"
+    # Arrowhead marker for pointer annotations
+    has_pointers = annotations is not None and bool(annotations.pointers)
+    if has_pointers:
+        svg.raw(
+            '<marker id="annotation-arrowhead" markerWidth="6" markerHeight="4" '
+            'refX="5" refY="2" orient="auto">'
+            '<path d="M 0 0 L 6 2 L 0 4 Z" fill="rgba(255,107,53,0.9)"/>'
+            "</marker>"
+        )
     svg.raw("</defs>")
 
     # -- Board fill (clipped) ----------------------------------------------
@@ -1252,6 +1449,13 @@ def render_pcb_svg(
                 **_component_attrs(ttext),
             },
         )
+
+    # -- Annotations (outside clip and mirror, always read left-to-right) ---
+    if annotations is not None:
+        from phosphor_eda.pcb_annotations import compute_annotation_font_size
+
+        ann_font = compute_annotation_font_size(board.bbox())
+        _render_annotations(svg, annotations, ann_font)
 
     # -- Component metadata (embedded JSON for downstream tooling) ----------
     meta = {

@@ -16,6 +16,14 @@ from phosphor_eda.pcb import (
     PcbModel3D,
     PcbNet,
 )
+from phosphor_eda.pcb_annotations import (
+    LegendEntry,
+    ResolvedAnnotations,
+    ResolvedBox,
+    ResolvedLabel,
+    ResolvedLegend,
+    ResolvedPointer,
+)
 from phosphor_eda.pcb_render import (
     _fmt_attrs,  # pyright: ignore[reportPrivateUsage]
     render_pcb_svg,
@@ -539,3 +547,165 @@ def test_swd_switch_has_data_value(board: PcbBoard) -> None:
     """At least some elements should carry data-value for components with values."""
     svg = render_pcb_svg(board)
     assert "data-value=" in svg
+
+
+# ---------------------------------------------------------------------------
+# Annotation rendering
+# ---------------------------------------------------------------------------
+
+
+def _make_resolved_box() -> ResolvedBox:
+    return ResolvedBox(
+        x=9.0,
+        y=9.0,
+        width=4.0,
+        height=4.0,
+        label_html="MCU",
+        label_x=9.0,
+        label_y=7.0,
+        label_position="above",
+        color="rgba(255,107,53,0.9)",
+    )
+
+
+def _make_resolved_pointer() -> ResolvedPointer:
+    return ResolvedPointer(
+        target_x=10.0,
+        target_y=10.0,
+        label_html="Clock",
+        label_x=14.0,
+        label_y=9.0,
+        position="right",
+        color="rgba(255,107,53,0.9)",
+    )
+
+
+def _make_resolved_legend() -> ResolvedLegend:
+    return ResolvedLegend(
+        title="SPI Signals",
+        entries=[
+            LegendEntry(color="#4488ff", label="SCLK"),
+            LegendEntry(color="#e8922e", label="MOSI"),
+        ],
+        x=5.0,
+        y=22.0,
+        width=10.0,
+        height=4.0,
+        position="board-bottom",
+    )
+
+
+def _make_annotations(
+    *,
+    boxes: bool = False,
+    pointers: bool = False,
+    legend: bool = False,
+    labels: bool = False,
+) -> ResolvedAnnotations:
+    return ResolvedAnnotations(
+        boxes=[_make_resolved_box()] if boxes else [],
+        pointers=[_make_resolved_pointer()] if pointers else [],
+        labels=[
+            ResolvedLabel(
+                label_html="Main MCU",
+                label_x=14.0,
+                label_y=9.0,
+                position="right",
+                leader_target=(10.0, 10.0),
+            )
+        ]
+        if labels
+        else [],
+        legend=_make_resolved_legend() if legend else None,
+        content_bbox=(5.0, 5.0, 25.0, 26.0),
+    )
+
+
+def test_annotation_box_rendered() -> None:
+    """SVG should contain annotation box rect and foreignObject label."""
+    board = _make_board_with_component()
+    annotations = _make_annotations(boxes=True)
+    svg = render_pcb_svg(board, annotations=annotations)
+    assert 'class="annotation-box"' in svg
+    assert "<foreignObject" in svg
+    assert "MCU" in svg
+
+
+def test_annotation_pointer_rendered() -> None:
+    """SVG should contain leader line with arrowhead and label."""
+    board = _make_board_with_component()
+    annotations = _make_annotations(pointers=True)
+    svg = render_pcb_svg(board, annotations=annotations)
+    assert "annotation-pointer" in svg
+    assert '<marker id="annotation-arrowhead"' in svg
+    assert "Clock" in svg
+
+
+def test_annotation_legend_rendered() -> None:
+    """SVG should contain legend foreignObject with title and entries."""
+    board = _make_board_with_component()
+    annotations = _make_annotations(legend=True)
+    svg = render_pcb_svg(board, annotations=annotations)
+    assert "legend-box" in svg
+    assert "SPI Signals" in svg
+    assert "SCLK" in svg
+    assert "#4488ff" in svg
+
+
+def test_annotation_label_with_leader() -> None:
+    """Label annotation should have a leader line and the label content."""
+    board = _make_board_with_component()
+    annotations = _make_annotations(labels=True)
+    svg = render_pcb_svg(board, annotations=annotations)
+    assert "annotation-leader" in svg
+    assert "Main MCU" in svg
+
+
+def test_no_annotations_no_group() -> None:
+    """Without annotations, no annotation group or style block should appear."""
+    board = _make_board_with_component()
+    svg = render_pcb_svg(board)
+    assert "annotations" not in svg or "pcb-metadata" in svg
+    assert '<style id="annotations">' not in svg
+
+
+def test_annotation_css_present() -> None:
+    """Annotation CSS block appears when annotations are provided."""
+    board = _make_board_with_component()
+    annotations = _make_annotations(boxes=True)
+    svg = render_pcb_svg(board, annotations=annotations)
+    assert '<style id="annotations">' in svg
+    assert ".annotation-box" in svg
+
+
+def test_viewbox_expands_for_annotations() -> None:
+    """ViewBox should expand to include off-board annotation content."""
+    board = _make_board_with_component()
+    # Default viewBox is around (0,0)-(20,20) with 2mm padding
+    svg_default = render_pcb_svg(board)
+    # Annotation with content below the board
+    annotations = ResolvedAnnotations(
+        content_bbox=(-10.0, -10.0, 30.0, 40.0),
+    )
+    svg_annotated = render_pcb_svg(board, annotations=annotations)
+    # Extract viewBox values
+    vb_default = re.search(r'viewBox="([^"]+)"', svg_default)
+    vb_annotated = re.search(r'viewBox="([^"]+)"', svg_annotated)
+    assert vb_default is not None and vb_annotated is not None
+    # Annotated viewBox should be larger
+    def_vals = [float(x) for x in vb_default.group(1).split()]
+    ann_vals = [float(x) for x in vb_annotated.group(1).split()]
+    # Width and height should be larger
+    assert ann_vals[2] > def_vals[2] or ann_vals[3] > def_vals[3]
+
+
+def test_back_side_annotations_not_mirrored() -> None:
+    """Annotations should render outside the mirror group."""
+    board = _make_board_with_component()
+    annotations = _make_annotations(boxes=True)
+    svg = render_pcb_svg(board, side="back", annotations=annotations)
+    # The annotation group element should appear after the mirror group
+    scale_pos = svg.index("scale(-1")
+    # Look for the <g class="annotations"> group, not the CSS class name
+    annotation_group_pos = svg.index('class="annotations"')
+    assert annotation_group_pos > scale_pos
