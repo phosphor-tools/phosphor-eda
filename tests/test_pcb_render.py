@@ -709,3 +709,25 @@ def test_back_side_annotations_not_mirrored() -> None:
     # Look for the <g class="annotations"> group, not the CSS class name
     annotation_group_pos = svg.index('class="annotations"')
     assert annotation_group_pos > scale_pos
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: parse + resolve + render on real fixture
+# ---------------------------------------------------------------------------
+
+
+def test_swd_switch_annotation_end_to_end(board: PcbBoard) -> None:
+    """Full annotation pipeline on a real board: parse → resolve → render."""
+    from phosphor_eda.pcb_annotations import parse_annotations, resolve_annotations
+
+    data = {
+        "boxes": [{"targets": ["D1"], "label": "Status LED"}],
+        "pointers": [{"target": "TP3", "label": "SWD Enable"}],
+    }
+    spec = parse_annotations(data)
+    resolved = resolve_annotations(spec, board, "front")
+    svg = render_pcb_svg(board, annotations=resolved)
+    assert 'class="annotation-box"' in svg
+    assert "Status LED" in svg
+    assert "annotation-pointer" in svg
+    assert "SWD Enable" in svg
