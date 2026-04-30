@@ -138,6 +138,17 @@ class PcbPad:
 
 
 @dataclass
+class PcbModel3D:
+    """A 3D model reference attached to a footprint."""
+
+    source: str  # raw model path (KiCad) or OLE model ID (Altium)
+    offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    rotation: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    cache_key: str = ""  # sha256 of model content, set by cache functions
+
+
+@dataclass
 class PcbFootprint:
     """A placed footprint (component) on the board."""
 
@@ -156,6 +167,7 @@ class PcbFootprint:
     fab_arcs: list[PcbArc] = field(default_factory=list)
     fab_polygons: list[PcbPolygon] = field(default_factory=list)
     texts: list[PcbText] = field(default_factory=list)
+    models_3d: list[PcbModel3D] = field(default_factory=list)
     bbox: tuple[float, float, float, float] | None = None  # min_x, min_y, max_x, max_y
 
 
