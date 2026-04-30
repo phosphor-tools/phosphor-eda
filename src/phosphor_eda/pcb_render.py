@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from xml.sax.saxutils import escape as xml_escape
 
 from phosphor_eda.pcb import LayerFunction, PcbLayer
+from phosphor_eda.text_metrics import BASELINE_CENTER_OFFSET, INTER_REGULAR_BASE64
 
 if TYPE_CHECKING:
     from phosphor_eda.pcb import (
@@ -822,35 +823,62 @@ _BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
+_ANNOTATION_FONT_FAMILY = "InterEmbed, Inter, system-ui, sans-serif"
+
+# Regex for parsing color strings into (r, g, b) 0–255
+_HEX3_RE = re.compile(r"^#([0-9a-fA-F])([0-9a-fA-F])([0-9a-fA-F])$")
+_HEX6_RE = re.compile(r"^#([0-9a-fA-F]{2})([0-9a-fA-F]{2})([0-9a-fA-F]{2})")
+_RGBA_RE = re.compile(r"rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)")
+
+
+def _parse_rgb(color: str) -> tuple[int, int, int]:
+    """Extract (r, g, b) from a CSS color string. Returns (255,107,53) as fallback."""
+    m = _HEX6_RE.match(color)
+    if m:
+        return (int(m.group(1), 16), int(m.group(2), 16), int(m.group(3), 16))
+    m = _HEX3_RE.match(color)
+    if m:
+        return (int(m.group(1), 16) * 17, int(m.group(2), 16) * 17, int(m.group(3), 16) * 17)
+    m = _RGBA_RE.match(color)
+    if m:
+        return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    return (255, 107, 53)  # default annotation orange
+
+
+def _contrast_text_color(bg_color: str) -> str:
+    """Return '#000' or '#fff' for best contrast against *bg_color*."""
+    r, g, b = _parse_rgb(bg_color)
+    # Relative luminance (ITU-R BT.709)
+    luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    return "#000" if luminance > 140 else "#fff"
+
+
 def _annotation_css(font_size: float) -> str:
     """CSS for pure-SVG annotation elements.
 
-    All sizes are in board mm (SVG user units).
+    Embeds a subset of Inter-Regular via @font-face so the rendered
+    font exactly matches the font used for text measurement.  The
+    annotation group has a ``scale()`` transform that maps pixel space
+    onto the SVG viewBox, so all sizes here are in display pixels.
     """
-    sw = font_size * 0.04  # connector stroke width
-    box_sw = font_size * 0.08
-    box_dash = font_size * 0.4
-    box_gap = font_size * 0.2
+    ff = _ANNOTATION_FONT_FAMILY
     return f"""\
-.annotation-connector {{ stroke: rgba(180,180,200,0.5); stroke-width: {sw:.4f};
-  fill: none; }}
-.annotation-box {{ stroke-width: {box_sw:.4f}; fill: none;
-  stroke-dasharray: {box_dash:.3f},{box_gap:.3f}; stroke-linecap: round; }}
-.annotation-pill {{ fill: rgba(12,12,20,0.82); stroke: rgba(255,255,255,0.12);
-  stroke-width: {font_size * 0.03:.4f}; }}
-.annotation-pill--muted {{ fill: rgba(12,12,20,0.65);
-  stroke: rgba(255,255,255,0.08); }}
-.annotation-label-text {{ fill: #f0f0f0; font-family: Inter, "SF Pro Text",
-  "Segoe UI", system-ui, sans-serif; font-weight: 500;
-  font-size: {font_size:.4f}px; }}
-.annotation-dot {{ fill: rgba(255,107,53,0.85); }}
+@font-face {{ font-family: "InterEmbed"; font-weight: 400;
+  src: url("data:font/truetype;base64,{INTER_REGULAR_BASE64}") format("truetype"); }}
+.annotation-connector {{ stroke-width: 2; fill: none; }}
+.annotation-box {{ stroke-width: 2; }}
+.annotation-pill {{ stroke: none; }}
+.annotation-pill--muted {{ stroke: none; }}
+.annotation-label-text {{ font-family: {ff};
+  font-weight: 500; font-size: {font_size:.1f}px; }}
+.annotation-dot {{}}
 .legend-bg {{ fill: rgba(12,12,20,0.85); stroke: rgba(255,255,255,0.15);
-  stroke-width: {font_size * 0.03:.4f}; }}
-.legend-title-text {{ fill: #f0f0f0; font-family: Inter, "SF Pro Text",
-  system-ui, sans-serif; font-weight: 600; font-size: {font_size * 0.85:.4f}px;
+  stroke-width: 4; paint-order: stroke fill; }}
+.legend-title-text {{ fill: #f0f0f0; font-family: {ff};
+  font-weight: 600; font-size: {font_size * 0.85:.1f}px;
   opacity: 0.7; text-transform: uppercase; letter-spacing: 0.05em; }}
-.legend-entry-text {{ fill: #f0f0f0; font-family: Inter, "SF Pro Text",
-  system-ui, sans-serif; font-weight: 500; font-size: {font_size:.4f}px; }}"""
+.legend-entry-text {{ fill: #f0f0f0; font-family: {ff};
+  font-weight: 500; font-size: {font_size:.1f}px; }}"""
 
 
 def _render_annotations(
@@ -858,8 +886,17 @@ def _render_annotations(
     annotations: ResolvedAnnotations,
     font_size: float,
 ) -> None:
-    """Emit all annotation elements as pure SVG (no foreignObject)."""
-    svg.group_start(attrs={"class": "annotations"})
+    """Emit all annotation elements as pure SVG.
+
+    The annotation group gets ``transform="scale(px_scale)"`` so that
+    coordinates authored in pixel space map correctly onto the board-mm
+    viewBox.  All sizes (font, stroke, padding) are in display pixels.
+    """
+    s = annotations.px_scale
+    svg.group_start(
+        attrs={"class": "annotations"},
+        transform=f"scale({s:.6f})",
+    )
     for box in annotations.boxes:
         _render_box(svg, box, font_size)
     for pointer in annotations.pointers:
@@ -885,17 +922,18 @@ def _render_connector(
     svg: _Svg,
     path: list[tuple[float, float]],
     color: str,
-    font_size: float,
+    *,
+    dot: bool = True,
 ) -> None:
-    """Render an orthogonal connector path with a dot at the target end."""
+    """Render an orthogonal connector path with an optional dot at the end."""
     if len(path) < 2:
         return
     d = _connector_path_d(path)
     svg.path(d, attrs={"class": "annotation-connector", "style": f"stroke: {color}"})
-    # Dot at the target (last point)
-    tx, ty = path[-1]
-    dot_r = font_size * 0.15
-    svg.circle(tx, ty, dot_r, attrs={"class": "annotation-dot", "style": f"fill: {color}"})
+    if dot:
+        tx, ty = path[-1]
+        dot_r = 2.5  # pixels
+        svg.circle(tx, ty, dot_r, attrs={"class": "annotation-dot", "style": f"fill: {color}"})
 
 
 def _split_label_lines(text: str) -> list[str]:
@@ -912,43 +950,51 @@ def _render_pill_label(
     height: float,
     text: str,
     font_size: float,
+    color: str,
     css_class: str = "annotation-pill",
-    border_color: str = "",
 ) -> None:
-    """Render a pill-shaped label (rounded rect + centered text)."""
+    """Render a pill-shaped label with solid color fill and contrast text."""
     rx = height / 2
-    style = f"stroke: {border_color}" if border_color else ""
-    svg.rect(x, y, width, height, rx=rx, attrs={"class": css_class, "style": style})
+    text_color = _contrast_text_color(color)
+    svg.rect(
+        x,
+        y,
+        width,
+        height,
+        rx=rx,
+        attrs={"class": css_class, "style": f"fill: {color}"},
+    )
 
     # Render text lines centered in the pill
     lines = _split_label_lines(text)
     line_height = font_size * 1.2
     total_text_h = len(lines) * line_height
     cx = x + width / 2
-    # Start y for the first line baseline (centered vertically)
-    start_y = y + (height - total_text_h) / 2 + font_size * 0.85
+    center_y = y + height / 2
+    start_y = center_y - total_text_h / 2 + line_height / 2 + BASELINE_CENTER_OFFSET * font_size
 
     for i, line in enumerate(lines):
         ty = start_y + i * line_height
         svg.raw(
             f'<text x="{cx:.4f}" y="{ty:.4f}" text-anchor="middle" '
-            f'class="annotation-label-text">{xml_escape(line)}</text>'
+            f'class="annotation-label-text" fill="{text_color}">'
+            f"{xml_escape(line)}</text>"
         )
 
 
 def _render_box(svg: _Svg, box: ResolvedBox, font_size: float) -> None:
-    """Render a dashed box with an optional margin label."""
-    rx = font_size * 0.4
+    """Render a solid box with semi-transparent fill and a margin label."""
+    r, g, b = _parse_rgb(box.color)
+    fill = f"rgba({r},{g},{b},0.15)"
     svg.rect(
         box.x,
         box.y,
         box.width,
         box.height,
-        rx=rx,
-        attrs={"class": "annotation-box", "style": f"stroke: {box.color}"},
+        attrs={"class": "annotation-box", "style": f"stroke: {box.color}; fill: {fill}"},
     )
     if box.label_text:
-        _render_connector(svg, box.connector_path, box.color, font_size)
+        _render_connector(svg, box.connector_path, box.color, dot=False)
         _render_pill_label(
             svg,
             box.label_x,
@@ -957,14 +1003,14 @@ def _render_box(svg: _Svg, box: ResolvedBox, font_size: float) -> None:
             box.label_height,
             box.label_text,
             font_size,
-            border_color=box.color,
+            color=box.color,
         )
 
 
 def _render_pointer(svg: _Svg, pointer: ResolvedPointer, font_size: float) -> None:
     """Render a pointer with connector and margin label."""
     if pointer.label_text:
-        _render_connector(svg, pointer.connector_path, pointer.color, font_size)
+        _render_connector(svg, pointer.connector_path, pointer.color)
         _render_pill_label(
             svg,
             pointer.label_x,
@@ -973,16 +1019,16 @@ def _render_pointer(svg: _Svg, pointer: ResolvedPointer, font_size: float) -> No
             pointer.label_height,
             pointer.label_text,
             font_size,
-            border_color=pointer.color,
+            color=pointer.color,
         )
     elif pointer.connector_path:
-        _render_connector(svg, pointer.connector_path, pointer.color, font_size)
+        _render_connector(svg, pointer.connector_path, pointer.color)
 
 
 def _render_label(svg: _Svg, label: ResolvedLabel, font_size: float) -> None:
     """Render a label with optional connector to its target."""
     if label.connector_path:
-        _render_connector(svg, label.connector_path, "rgba(180,180,200,0.5)", font_size)
+        _render_connector(svg, label.connector_path, "rgba(180,180,200,0.5)")
     if label.label_text:
         _render_pill_label(
             svg,
@@ -992,13 +1038,14 @@ def _render_label(svg: _Svg, label: ResolvedLabel, font_size: float) -> None:
             label.label_height,
             label.label_text,
             font_size,
+            color="rgba(60,60,80,0.9)",
             css_class="annotation-pill annotation-pill--muted",
         )
 
 
 def _render_legend(svg: _Svg, legend: ResolvedLegend, font_size: float) -> None:
     """Render a legend box with color swatches using pure SVG."""
-    rx = font_size * 0.4
+    rx = 5.0  # corner radius in pixels
     svg.rect(
         legend.x,
         legend.y,
@@ -1015,7 +1062,7 @@ def _render_legend(svg: _Svg, legend: ResolvedLegend, font_size: float) -> None:
     # Title
     if legend.title:
         title_fs = font_size * 0.85
-        cursor_y += title_fs * 0.85
+        cursor_y += title_fs / 2 + BASELINE_CENTER_OFFSET * title_fs
         svg.raw(
             f'<text x="{legend.x + pad_h:.4f}" y="{cursor_y:.4f}" '
             f'class="legend-title-text">{xml_escape(legend.title)}</text>'
@@ -1029,21 +1076,24 @@ def _render_legend(svg: _Svg, legend: ResolvedLegend, font_size: float) -> None:
     for i, entry in enumerate(legend.entries):
         if i > 0:
             cursor_y += entry_gap
-        # Swatch
-        swatch_x = legend.x + pad_h
-        swatch_y = cursor_y + (font_size - swatch_size) * 0.3
-        swatch_rx = swatch_size * 0.2
-        svg.rect(
-            swatch_x,
-            swatch_y,
-            swatch_size,
-            swatch_size,
-            rx=swatch_rx,
-            attrs={"style": f"fill: {entry.color}; stroke: none"},
-        )
-        # Label text
-        text_x = swatch_x + swatch_size + swatch_gap
-        text_y = cursor_y + font_size * 0.75
+        if entry.color:
+            # Color swatch + label
+            swatch_x = legend.x + pad_h
+            swatch_y = cursor_y + (font_size - swatch_size) * 0.3
+            swatch_rx = swatch_size * 0.2
+            svg.rect(
+                swatch_x,
+                swatch_y,
+                swatch_size,
+                swatch_size,
+                rx=swatch_rx,
+                attrs={"style": f"fill: {entry.color}; stroke: none"},
+            )
+            text_x = swatch_x + swatch_size + swatch_gap
+        else:
+            # Text-only entry (no swatch)
+            text_x = legend.x + pad_h
+        text_y = cursor_y + font_size / 2 + BASELINE_CENTER_OFFSET * font_size
         svg.raw(
             f'<text x="{text_x:.4f}" y="{text_y:.4f}" '
             f'class="legend-entry-text">{xml_escape(entry.label)}</text>'
@@ -1202,12 +1252,6 @@ def render_pcb_svg(
             vb_w = ax1 - vb_x
         if ay1 > vb_y + vb_h:
             vb_h = ay1 - vb_y
-        # Add margin around annotations
-        ann_margin = pad_mm
-        vb_x -= ann_margin
-        vb_y -= ann_margin
-        vb_w += 2 * ann_margin
-        vb_h += 2 * ann_margin
 
     height_px = int(width_px * vb_h / vb_w) if vb_w > 0 else width_px
 

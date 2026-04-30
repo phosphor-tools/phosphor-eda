@@ -657,6 +657,37 @@ def test_annotation_legend_rendered() -> None:
     assert "#4488ff" in svg
 
 
+def test_annotation_legend_text_only_entry() -> None:
+    """Legend entries without a color should render text without a swatch."""
+    board = _make_board_with_component()
+    legend = ResolvedLegend(
+        title="Notes",
+        entries=[
+            LegendEntry(color="", label="Bypass caps within 5mm"),
+            LegendEntry(color="#ff0000", label="CLK"),
+        ],
+        x=5.0,
+        y=22.0,
+        width=10.0,
+        height=4.0,
+    )
+    annotations = ResolvedAnnotations(
+        boxes=[],
+        pointers=[],
+        labels=[],
+        legend=legend,
+        font_size=1.0,
+        px_scale=0.025,
+        content_bbox=(0, 0, 20, 20),
+    )
+    svg = render_pcb_svg(board, annotations=annotations)
+    assert "Bypass caps within 5mm" in svg
+    assert "CLK" in svg
+    assert "#ff0000" in svg
+    # Only one swatch rect (for CLK), none for the text-only entry
+    assert svg.count("fill: #ff0000") == 1
+
+
 def test_annotation_label_with_connector() -> None:
     """Label annotation should have a connector and the label content."""
     board = _make_board_with_component()

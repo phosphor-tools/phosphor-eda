@@ -1,14 +1,19 @@
-"""Text measurement using fonttools for accurate glyph-level width computation.
+"""Text measurement and font embedding for SVG annotations.
 
-Uses the bundled Inter-Regular.ttf font to compute text dimensions in
-board millimeters, giving the SVG annotation renderer accurate bounding
-boxes for label placement.
+Uses the bundled Inter-Regular.ttf font to compute text dimensions,
+giving the SVG annotation renderer accurate bounding boxes for label
+placement.  Also provides a base64-encoded subset of the font for
+embedding in SVG ``@font-face`` rules, guaranteeing the rendered font
+matches what we measure.
 """
 
 from __future__ import annotations
 
+import base64
+import io
 import re
 
+from fontTools import subset as ft_subset  # pyright: ignore[reportMissingTypeStubs]
 from fontTools.ttLib import TTFont  # pyright: ignore[reportMissingTypeStubs]
 
 from phosphor_eda.fonts import INTER_REGULAR
@@ -33,6 +38,33 @@ _ascender: int = int(_os2.sTypoAscender)  # pyright: ignore[reportAttributeAcces
 _descender: int = abs(int(_os2.sTypoDescender))  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
 _line_gap: int = int(_os2.sTypoLineGap)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
 _LINE_HEIGHT_RATIO: float = (_ascender + _descender + _line_gap) / _units_per_em
+
+# Vertical offset from the center of the text block to the baseline,
+# as a fraction of font_size.  Used to vertically center a single line
+# of text: baseline_y = center_y + BASELINE_CENTER_OFFSET * font_size
+BASELINE_CENTER_OFFSET: float = (_ascender - _descender) / (2 * _units_per_em)
+
+
+def _build_embedded_font() -> str:
+    """Subset Inter-Regular to printable ASCII + Latin Extended, return base64.
+
+    The subset is small (~50KB TTF, ~67KB base64) and is embedded in the
+    SVG via @font-face so the rendered font exactly matches our metrics.
+    """
+    font = TTFont(INTER_REGULAR)
+    chars = set(range(0x20, 0x7F))  # Basic ASCII
+    chars.update(range(0x00C0, 0x0100))  # Latin Extended-A
+    chars.update(ord(c) for c in "°µΩ±×÷≤≥≠←→↑↓•–—''")
+    subsetter = ft_subset.Subsetter()  # pyright: ignore[reportUnknownMemberType]
+    subsetter.populate(unicodes=chars)  # pyright: ignore[reportUnknownMemberType]
+    subsetter.subset(font)  # pyright: ignore[reportUnknownMemberType]
+    buf = io.BytesIO()
+    font.save(buf)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+INTER_REGULAR_BASE64: str = _build_embedded_font()
+"""Base64-encoded subset of Inter-Regular.ttf for SVG @font-face embedding."""
 
 
 def _measure_line_width(text: str) -> int:

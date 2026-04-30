@@ -10,6 +10,7 @@ from phosphor_eda.pcb import (
     PcbPad,
 )
 from phosphor_eda.pcb_annotations import (
+    ANNOTATION_FONT_PX,
     AnnotationSpec,
     BoxSpec,
     LabelSpec,
@@ -209,6 +210,23 @@ class TestParseAnnotations:
         assert spec.pointers[0].target_net == "SPI_CLK"
         assert spec.pointers[0].target_near == "U2"
 
+    def test_legend_entry_color_optional(self) -> None:
+        """Legend entries without a color are text-only (descriptive)."""
+        data = {
+            "legend": {
+                "title": "Notes",
+                "entries": [
+                    {"label": "All bypass caps within 5mm of VDD"},
+                    {"color": "#ff0000", "label": "CLK"},
+                ],
+            }
+        }
+        spec = parse_annotations(data)
+        assert spec.legend is not None
+        assert spec.legend.entries[0].color == ""
+        assert spec.legend.entries[0].label == "All bypass caps within 5mm of VDD"
+        assert spec.legend.entries[1].color == "#ff0000"
+
     def test_legend_missing_entries_raises(self) -> None:
         with pytest.raises(ValueError, match="entries"):
             parse_annotations({"legend": {"title": "X"}})
@@ -389,29 +407,19 @@ class TestMeasureLabel:
 # ---------------------------------------------------------------------------
 
 
-def test_font_size_scales_with_diagonal() -> None:
+def test_font_size_is_constant() -> None:
+    """Font size is a fixed pixel constant, independent of board size."""
     small_bbox = (0.0, 0.0, 30.0, 30.0)
     large_bbox = (0.0, 0.0, 100.0, 100.0)
-    small_font = compute_annotation_font_size(small_bbox)
-    large_font = compute_annotation_font_size(large_bbox)
-    assert large_font > small_font
-    # Both within the [0.4, 3.0] clamp range, so ratio should track diagonal
-    ratio = large_font / small_font
-    assert ratio == pytest.approx(100 / 30, rel=0.1)
+    assert compute_annotation_font_size(small_bbox) == ANNOTATION_FONT_PX
+    assert compute_annotation_font_size(large_bbox) == ANNOTATION_FONT_PX
 
 
-def test_font_size_clamp_minimum() -> None:
-    """Very small board should hit minimum font size."""
-    tiny_bbox = (0.0, 0.0, 5.0, 5.0)
-    font = compute_annotation_font_size(tiny_bbox)
-    assert font == 0.4
-
-
-def test_font_size_clamp_maximum() -> None:
-    """Very large board should hit maximum font size."""
+def test_font_size_constant_for_huge_board() -> None:
+    """Font size is the same constant even for very large boards."""
     huge_bbox = (0.0, 0.0, 500.0, 500.0)
     font = compute_annotation_font_size(huge_bbox)
-    assert font == 3.0
+    assert font == ANNOTATION_FONT_PX
 
 
 # ---------------------------------------------------------------------------
@@ -430,10 +438,11 @@ class TestResolveAnnotations:
         assert isinstance(resolved, ResolvedAnnotations)
         assert len(resolved.boxes) == 1
         assert len(resolved.pointers) == 1
-        # Box should encompass both U1 and U2
+        # Box should encompass both U1 and U2 (coords are in pixel space)
         box = resolved.boxes[0]
-        assert box.x <= 9.0  # U1 left edge
-        assert box.x + box.width >= 33.0  # U2 right edge
+        scale = resolved.px_scale
+        assert box.x * scale <= 9.0  # U1 left edge in board mm
+        assert (box.x + box.width) * scale >= 33.0  # U2 right edge
 
     def test_content_bbox_encompasses_annotations(self, board: PcbBoard) -> None:
         spec = AnnotationSpec(
@@ -443,12 +452,14 @@ class TestResolveAnnotations:
         )
         resolved = resolve_annotations(spec, board, "front")
         cx, cy, cx2, cy2 = resolved.content_bbox
-        # Content bbox should encompass box + label
+        # Content bbox is in board mm; box coords are in pixels.
+        # Convert box to board mm and check containment.
         box = resolved.boxes[0]
-        assert cx <= box.x
-        assert cy <= box.y
-        assert cx2 >= box.x + box.width
-        assert cy2 >= box.y + box.height
+        s = resolved.px_scale
+        assert cx <= box.x * s
+        assert cy <= box.y * s
+        assert cx2 >= (box.x + box.width) * s
+        assert cy2 >= (box.y + box.height) * s
 
     def test_legend_resolved(self, board: PcbBoard) -> None:
         spec = AnnotationSpec(
@@ -505,8 +516,10 @@ class TestResolveAnnotations:
         )
         resolved = resolve_annotations(spec, board, "front")
         ptr = resolved.pointers[0]
-        assert ptr.target_x == pytest.approx(30.0)
-        assert ptr.target_y == pytest.approx(10.0)
+        s = resolved.px_scale
+        # Target coords are in pixel space; convert back to board mm
+        assert ptr.target_x * s == pytest.approx(30.0)
+        assert ptr.target_y * s == pytest.approx(10.0)
 
     def test_empty_spec_returns_empty(self, board: PcbBoard) -> None:
         spec = AnnotationSpec(boxes=[], pointers=[], labels=[])
@@ -525,17 +538,20 @@ class TestResolveAnnotations:
         )
         resolved = resolve_annotations(spec, board, "front")
         box = resolved.boxes[0]
+        s = resolved.px_scale
         board_bbox = board.bbox()
-        # Label should be outside the board bbox
-        label_right = box.label_x + box.label_width
-        label_bottom = box.label_y + box.label_height
+        # Convert label coords from pixels back to board mm for comparison
+        lx = box.label_x * s
+        ly = box.label_y * s
+        lr = (box.label_x + box.label_width) * s
+        lb = (box.label_y + box.label_height) * s
         outside = (
-            box.label_x > board_bbox[2]  # right of board
-            or label_right < board_bbox[0]  # left of board
-            or box.label_y > board_bbox[3]  # below board
-            or label_bottom < board_bbox[1]  # above board
+            lx > board_bbox[2]  # right of board
+            or lr < board_bbox[0]  # left of board
+            or ly > board_bbox[3]  # below board
+            or lb < board_bbox[1]  # above board
         )
-        assert outside, f"Label at ({box.label_x}, {box.label_y}) should be outside board"
+        assert outside, f"Label at ({lx}, {ly}) should be outside board"
 
     def test_box_label_has_connector(self, board: PcbBoard) -> None:
         """Box labels should have an orthogonal connector path."""

@@ -8,9 +8,16 @@ by default; the model can override with position hints.
 The pipeline is:
 
 1. ``parse_annotations(data)`` — validate JSON → ``AnnotationSpec``
-2. ``resolve_annotations(spec, board, side)`` — resolve targets, measure
-   text, run margin-based placement solver, compute orthogonal connectors
-   → ``ResolvedAnnotations`` (coordinates in board mm, ready for SVG)
+2. ``resolve_annotations(spec, board, side, width_px)`` — resolve targets,
+   convert to pixel space, run placement solver, compute connectors
+   → ``ResolvedAnnotations`` (coordinates in display pixels)
+
+All resolved coordinates are in **display pixel space**, not board mm.
+The renderer wraps the annotation ``<g>`` with
+``transform="scale(px_scale)"`` where ``px_scale = board_width / width_px``
+to map pixel coordinates back into the SVG viewBox.  This means CSS
+properties like ``font-size: 14px`` are actual screen pixels regardless
+of board physical size.
 
 Labels are placed in clear margins outside the board outline, connected
 to their targets by orthogonal (right-angle) connector paths.  The
@@ -19,7 +26,6 @@ CP-SAT solver from OR-Tools ensures labels never overlap within a margin.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
@@ -99,7 +105,7 @@ class AnnotationSpec:
 
 
 # ---------------------------------------------------------------------------
-# Resolved types (coordinates in board mm, ready for SVG emission)
+# Resolved types (coordinates in display pixels, ready for SVG emission)
 # ---------------------------------------------------------------------------
 
 
@@ -173,13 +179,19 @@ class ResolvedLegend:
 
 @dataclass
 class ResolvedAnnotations:
-    """All resolved annotations ready for SVG rendering."""
+    """All resolved annotations ready for SVG rendering.
+
+    Coordinates are in display pixel space.  The renderer applies
+    ``transform="scale(px_scale)"`` to map back to SVG viewBox units.
+    ``content_bbox`` is in **board mm** (for viewBox expansion).
+    """
 
     boxes: list[ResolvedBox] = field(default_factory=list)
     pointers: list[ResolvedPointer] = field(default_factory=list)
     labels: list[ResolvedLabel] = field(default_factory=list)
     legend: ResolvedLegend | None = None
-    font_size: float = 1.0
+    font_size: float = 10.0
+    px_scale: float = 1.0
     content_bbox: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
 
 
@@ -347,33 +359,67 @@ def _resolve_net_target(net_name: str, near_ref: str, board: PcbBoard) -> tuple[
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Pixel-space constants
+# ---------------------------------------------------------------------------
+
+# Annotation font size in display pixels.  The annotation layer uses a
+# transform so that 1 unit = 1 screen pixel regardless of board size.
+ANNOTATION_FONT_PX = 10.0
+
+# Margin gap between board edge and label column (pixels)
+_MARGIN_GAP_PX = 16.0
+
+# Margin gap for legends (pixels)
+_LEGEND_GAP_PX = 10.0
+
+# Minimum gap between labels in the same margin (pixels)
+_LABEL_SPACING_PX = 12.0
+
+# Label pill padding (as multiples of font size)
+_PAD_H_PX = 6.0  # horizontal padding on each side (pixels)
+_PAD_V_PX = 4.0  # vertical padding on each side (pixels)
+
+# Box padding around target components (pixels)
+_BOX_PAD_PX = 6.0
+
+
 def compute_annotation_font_size(
     board_bbox: tuple[float, float, float, float],
 ) -> float:
-    """Compute annotation font size from board diagonal.
+    """Return the fixed annotation font size in pixels.
 
-    Scales linearly with diagonal (0.015×), clamped to [0.4, 3.0] mm
-    to stay readable on very small boards and not overwhelm large ones.
+    Kept as a function for backward compatibility with tests, but the
+    value is now a constant — board size no longer affects annotation
+    font size because annotations render in pixel space.
     """
-    x1, y1, x2, y2 = board_bbox
-    diagonal = math.hypot(x2 - x1, y2 - y1)
-    return max(0.4, min(3.0, diagonal * 0.015))
+    _x1, _y1, _x2, _y2 = board_bbox
+    return ANNOTATION_FONT_PX
 
 
-# Label padding around measured text (as multiples of font_size)
-_PAD_H = 0.5  # horizontal padding on each side
-_PAD_V = 0.35  # vertical padding on each side
+def _px_scale(
+    board_bbox: tuple[float, float, float, float],
+    width_px: int,
+) -> float:
+    """Compute the board-mm-to-pixel scale factor.
+
+    Returns the number of board mm per display pixel.
+    Multiply a pixel value by this to get board mm.
+    Divide a board-mm value by this to get pixels.
+    """
+    bw = board_bbox[2] - board_bbox[0]
+    return bw / width_px if width_px > 0 else 1.0
 
 
 def _measure_label(text: str, font_size: float) -> tuple[float, float]:
     """Measure a label pill including padding.
 
-    Returns (width, height) in board mm.
+    Returns (width, height) in the same units as ``font_size``.
     """
     if not text:
         return (0.0, 0.0)
     tw, th = measure_text(text, font_size)
-    return (tw + 2 * _PAD_H * font_size, th + 2 * _PAD_V * font_size)
+    return (tw + 2 * _PAD_H_PX, th + 2 * _PAD_V_PX)
 
 
 # ---------------------------------------------------------------------------
@@ -444,6 +490,7 @@ class _PlacementItem:
     target_x: float
     target_y: float
     margin: str  # "left", "right", "top", "bottom"
+    margin_gap: float = 0.0  # 0 = use the default gap
 
 
 @dataclass
@@ -479,12 +526,7 @@ def _solve_margin_placement(
     bx1, by1, bx2, by2 = board_bbox
     bw = bx2 - bx1
     bh = by2 - by1
-    spacing = margin_gap * 0.3  # minimum gap between labels
-
-    # Fixed x positions for left/right margins
-    right_x = bx2 + margin_gap
-    # Fixed y positions for top/bottom margins
-    bottom_y = by2 + margin_gap
+    spacing = _LABEL_SPACING_PX
 
     # Domain bounds for the variable dimension
     y_lo = int((by1 - bh) * _COORD_SCALE)
@@ -502,6 +544,7 @@ def _solve_margin_placement(
 
     for i, it in enumerate(items):
         margin = it.margin
+        mg = it.margin_gap if it.margin_gap > 0 else margin_gap
         if margin in ("left", "right"):
             # Variable: y position
             size = int(it.label_height * _COORD_SCALE)
@@ -510,9 +553,9 @@ def _solve_margin_placement(
             item_vars.append(v)
             # Fixed: x position
             if margin == "right":
-                item_fixed.append(right_x)
+                item_fixed.append(bx2 + mg)
             else:
-                item_fixed.append(bx1 - margin_gap - it.label_width)
+                item_fixed.append(bx1 - mg - it.label_width)
             # 1D interval for non-overlap along y axis
             interval = model.new_fixed_size_interval_var(v, size + gap, f"iy_{i}")
             margin_intervals[margin].append(interval)
@@ -524,9 +567,9 @@ def _solve_margin_placement(
             item_vars.append(v)
             # Fixed: y position
             if margin == "bottom":
-                item_fixed.append(bottom_y)
+                item_fixed.append(by2 + mg)
             else:
-                item_fixed.append(by1 - margin_gap - it.label_height)
+                item_fixed.append(by1 - mg - it.label_height)
             # 1D interval for non-overlap along x axis
             interval = model.new_fixed_size_interval_var(v, size + gap, f"ix_{i}")
             margin_intervals[margin].append(interval)
@@ -587,9 +630,6 @@ def _fallback_placement(
     bx1, by1, bx2, by2 = board_bbox
     spacing = margin_gap * 0.3
 
-    right_x = bx2 + margin_gap
-    bottom_y = by2 + margin_gap
-
     results: list[_PlacedResult] = [_PlacedResult(0.0, 0.0)] * len(items)
 
     # Group by margin, sort by target position, stack
@@ -604,7 +644,8 @@ def _fallback_placement(
             cursor_y = by1
             for idx in indices:
                 it = items[idx]
-                fx = right_x if margin == "right" else bx1 - margin_gap - it.label_width
+                mg = it.margin_gap if it.margin_gap > 0 else margin_gap
+                fx = bx2 + mg if margin == "right" else bx1 - mg - it.label_width
                 results[idx] = _PlacedResult(label_x=fx, label_y=cursor_y)
                 cursor_y += it.label_height + spacing
         else:
@@ -613,7 +654,8 @@ def _fallback_placement(
             cursor_x = bx1
             for idx in indices:
                 it = items[idx]
-                fy = bottom_y if margin == "bottom" else by1 - margin_gap - it.label_height
+                mg = it.margin_gap if it.margin_gap > 0 else margin_gap
+                fy = by2 + mg if margin == "bottom" else by1 - mg - it.label_height
                 results[idx] = _PlacedResult(label_x=cursor_x, label_y=fy)
                 cursor_x += it.label_width + spacing
 
@@ -635,17 +677,40 @@ def _compute_connector(
     margin: str,
     board_bbox: tuple[float, float, float, float],
     margin_gap: float,
+    target_rect: tuple[float, float, float, float] | None = None,
 ) -> list[tuple[float, float]]:
     """Compute an orthogonal (right-angle) connector path.
 
     Returns a list of (x, y) waypoints from the label edge to the
     target point.  The path has at most two right-angle turns.
+
+    When *target_rect* ``(x, y, w, h)`` is given, the endpoint is
+    clipped to the nearest edge of that rect instead of going to the
+    center (used for box annotations).
     """
     bx1, by1, bx2, by2 = board_bbox
     label_cy = label_y + label_h / 2
     label_cx = label_x + label_w / 2
     # Routing column/row sits halfway between board edge and label column
     route_offset = margin_gap * 0.45
+
+    # When targeting a box rect, clip the endpoint to the box edge.
+    # The last segment is horizontal for left/right margins, vertical
+    # for top/bottom — so we clamp the appropriate axis.
+    end_x = target_x
+    end_y = target_y
+    if target_rect is not None:
+        rx, ry, rw, rh = target_rect
+        if margin in ("left", "right"):
+            # Last segment is horizontal — clip x to box edge
+            end_x = rx + rw if margin == "right" else rx
+            # Clamp y to stay within the box vertically
+            end_y = max(ry, min(ry + rh, target_y))
+        else:
+            # Last segment is vertical — clip y to box edge
+            end_y = ry + rh if margin == "bottom" else ry
+            # Clamp x to stay within the box horizontally
+            end_x = max(rx, min(rx + rw, target_x))
 
     if margin == "right":
         start_x = label_x
@@ -654,8 +719,8 @@ def _compute_connector(
         return [
             (start_x, start_y),
             (route_x, start_y),
-            (route_x, target_y),
-            (target_x, target_y),
+            (route_x, end_y),
+            (end_x, end_y),
         ]
 
     if margin == "left":
@@ -665,8 +730,8 @@ def _compute_connector(
         return [
             (start_x, start_y),
             (route_x, start_y),
-            (route_x, target_y),
-            (target_x, target_y),
+            (route_x, end_y),
+            (end_x, end_y),
         ]
 
     if margin == "bottom":
@@ -676,8 +741,8 @@ def _compute_connector(
         return [
             (start_x, start_y),
             (start_x, route_y),
-            (target_x, route_y),
-            (target_x, target_y),
+            (end_x, route_y),
+            (end_x, end_y),
         ]
 
     # top
@@ -687,8 +752,8 @@ def _compute_connector(
     return [
         (start_x, start_y),
         (start_x, route_y),
-        (target_x, route_y),
-        (target_x, target_y),
+        (end_x, route_y),
+        (end_x, end_y),
     ]
 
 
@@ -703,7 +768,7 @@ def _measure_legend(
 ) -> tuple[float, float]:
     """Compute legend box size from title and entries.
 
-    Returns (width, height) in board mm.
+    Returns (width, height) in the same units as ``font_size``.
     """
     title_w = 0.0
     title_h = 0.0
@@ -719,7 +784,7 @@ def _measure_legend(
     total_entry_h = 0.0
     for i, entry in enumerate(spec.entries):
         ew, eh = measure_text(entry.label, font_size)
-        row_w = swatch_size + swatch_gap + ew
+        row_w = (swatch_size + swatch_gap + ew) if entry.color else ew
         max_entry_w = max(max_entry_w, row_w)
         total_entry_h += max(eh, swatch_size)
         if i > 0:
@@ -742,14 +807,29 @@ def resolve_annotations(
     spec: AnnotationSpec,
     board: PcbBoard,
     side: str,
+    width_px: int = 800,
 ) -> ResolvedAnnotations:
-    """Resolve annotation spec to concrete coordinates.
+    """Resolve annotation spec to concrete pixel-space coordinates.
 
-    ``side`` is "front" or "back" — used for future back-side adjustments.
+    Board-mm targets are converted to display pixel space so that all
+    annotation sizes (fonts, padding, margins) are independent of board
+    physical dimensions.  The renderer applies
+    ``transform="scale(px_scale)"`` to map back to the SVG viewBox.
+
+    ``content_bbox`` is returned in board mm for viewBox expansion.
     """
     board_bbox = board.bbox()
-    font_size = compute_annotation_font_size(board_bbox)
-    margin_gap = font_size * 4
+    scale = _px_scale(board_bbox, width_px)
+    font_size = ANNOTATION_FONT_PX
+    margin_gap = _MARGIN_GAP_PX
+    box_pad = _BOX_PAD_PX
+
+    # Convert board bbox to pixel space for placement engine
+    pbx1 = board_bbox[0] / scale
+    pby1 = board_bbox[1] / scale
+    pbx2 = board_bbox[2] / scale
+    pby2 = board_bbox[3] / scale
+    px_board_bbox = (pbx1, pby1, pbx2, pby2)
 
     # Phase 1: Resolve all targets and measure all labels
     # Collect placement items for the margin solver
@@ -758,14 +838,14 @@ def resolve_annotations(
     # Back-references: (source_type, source_index) for each placement item
     placement_refs: list[tuple[str, int]] = []
 
-    # Pre-resolve data for each annotation type
+    # Pre-resolve data for each annotation type (pixel space)
     box_data: list[tuple[float, float, float, float, str]] = []  # (x, y, w, h, color)
     ptr_data: list[tuple[float, float, str]] = []  # (target_x, target_y, color)
     lbl_data: list[tuple[float, float]] = []  # (target_x, target_y)
 
     # --- Boxes ---
     for i, box_spec in enumerate(spec.boxes):
-        # Compute box rect from target union
+        # Compute box rect from target union (board mm → pixels)
         min_x = float("inf")
         min_y = float("inf")
         max_x = float("-inf")
@@ -773,16 +853,15 @@ def resolve_annotations(
         for ref in box_spec.targets:
             _center, bbox = _resolve_component_target(ref, board)
             bx1, by1, bx2, by2 = bbox
-            min_x = min(min_x, bx1)
-            min_y = min(min_y, by1)
-            max_x = max(max_x, bx2)
-            max_y = max(max_y, by2)
+            min_x = min(min_x, bx1 / scale)
+            min_y = min(min_y, by1 / scale)
+            max_x = max(max_x, bx2 / scale)
+            max_y = max(max_y, by2 / scale)
 
-        pad = font_size * 0.5
-        box_x = min_x - pad
-        box_y = min_y - pad
-        box_w = (max_x - min_x) + 2 * pad
-        box_h = (max_y - min_y) + 2 * pad
+        box_x = min_x - box_pad
+        box_y = min_y - box_pad
+        box_w = (max_x - min_x) + 2 * box_pad
+        box_h = (max_y - min_y) + 2 * box_pad
         color = box_spec.color or "rgba(255,107,53,0.9)"
         box_data.append((box_x, box_y, box_w, box_h, color))
 
@@ -793,7 +872,7 @@ def resolve_annotations(
 
             margin = _hint_to_margin(box_spec.label_position)
             if not margin:
-                margin = _auto_assign_margin(target_cx, target_cy, board_bbox)
+                margin = _auto_assign_margin(target_cx, target_cy, px_board_bbox)
 
             placement_items.append(_PlacementItem(lw, lh, target_cx, target_cy, margin))
             placement_refs.append(("box", i))
@@ -802,12 +881,14 @@ def resolve_annotations(
     for i, ptr_spec in enumerate(spec.pointers):
         if ptr_spec.target:
             if "." in ptr_spec.target:
-                tx, ty = _resolve_pad_target(ptr_spec.target, board)
+                tx_mm, ty_mm = _resolve_pad_target(ptr_spec.target, board)
             else:
                 center, _bbox = _resolve_component_target(ptr_spec.target, board)
-                tx, ty = center
+                tx_mm, ty_mm = center
         else:
-            tx, ty = _resolve_net_target(ptr_spec.target_net, ptr_spec.target_near, board)
+            tx_mm, ty_mm = _resolve_net_target(ptr_spec.target_net, ptr_spec.target_near, board)
+        tx = tx_mm / scale
+        ty = ty_mm / scale
         color = ptr_spec.color or "rgba(255,107,53,0.9)"
         ptr_data.append((tx, ty, color))
 
@@ -815,7 +896,7 @@ def resolve_annotations(
             lw, lh = _measure_label(ptr_spec.label, font_size)
             margin = _hint_to_margin(ptr_spec.position)
             if not margin:
-                margin = _auto_assign_margin(tx, ty, board_bbox)
+                margin = _auto_assign_margin(tx, ty, px_board_bbox)
 
             placement_items.append(_PlacementItem(lw, lh, tx, ty, margin))
             placement_refs.append(("pointer", i))
@@ -824,18 +905,18 @@ def resolve_annotations(
     for i, label_spec in enumerate(spec.labels):
         if label_spec.target:
             center, _bbox = _resolve_component_target(label_spec.target, board)
-            tx, ty = center
+            tx = center[0] / scale
+            ty = center[1] / scale
         else:
-            # No target: aim at board center
-            tx = (board_bbox[0] + board_bbox[2]) / 2
-            ty = (board_bbox[1] + board_bbox[3]) / 2
+            tx = (board_bbox[0] + board_bbox[2]) / 2 / scale
+            ty = (board_bbox[1] + board_bbox[3]) / 2 / scale
         lbl_data.append((tx, ty))
 
         if label_spec.content:
             lw, lh = _measure_label(label_spec.content, font_size)
             margin = _hint_to_margin(label_spec.position)
             if not margin:
-                margin = _auto_assign_margin(tx, ty, board_bbox)
+                margin = _auto_assign_margin(tx, ty, px_board_bbox)
 
             placement_items.append(_PlacementItem(lw, lh, tx, ty, margin))
             placement_refs.append(("label", i))
@@ -857,15 +938,16 @@ def resolve_annotations(
             _PlacementItem(
                 legend_width,
                 legend_height,
-                (board_bbox[0] + board_bbox[2]) / 2,
-                (board_bbox[1] + board_bbox[3]) / 2,
+                (pbx1 + pbx2) / 2,
+                (pby1 + pby2) / 2,
                 legend_margin,
+                margin_gap=_LEGEND_GAP_PX,
             )
         )
         placement_refs.append(("legend", 0))
 
-    # Phase 2: Run placement solver
-    placed = _solve_margin_placement(placement_items, board_bbox, margin_gap)
+    # Phase 2: Run placement solver (all in pixel space)
+    placed = _solve_margin_placement(placement_items, px_board_bbox, margin_gap)
 
     # Phase 3: Build resolved annotations from placement results
 
@@ -891,8 +973,9 @@ def resolve_annotations(
                 item.target_x,
                 item.target_y,
                 item.margin,
-                board_bbox,
+                px_board_bbox,
                 margin_gap,
+                target_rect=(bx, by, bw, bh),
             )
             resolved_boxes.append(
                 ResolvedBox(
@@ -944,7 +1027,7 @@ def resolve_annotations(
                 tx,
                 ty,
                 item.margin,
-                board_bbox,
+                px_board_bbox,
                 margin_gap,
             )
             resolved_pointers.append(
@@ -995,7 +1078,7 @@ def resolve_annotations(
                     tx,
                     ty,
                     item.margin,
-                    board_bbox,
+                    px_board_bbox,
                     margin_gap,
                 )
                 if has_target
@@ -1040,9 +1123,16 @@ def resolve_annotations(
         all_xs.extend([result.label_x, result.label_x + legend_width])
         all_ys.extend([result.label_y, result.label_y + legend_height])
 
-    # Content bbox
+    # Content bbox — add padding for outward strokes and dots, then
+    # convert from pixel space back to board mm for viewBox expansion.
+    _CONTENT_PAD_PX = 6.0  # covers stroke-width + dot radius
     if all_xs and all_ys:
-        content_bbox = (min(all_xs), min(all_ys), max(all_xs), max(all_ys))
+        content_bbox = (
+            (min(all_xs) - _CONTENT_PAD_PX) * scale,
+            (min(all_ys) - _CONTENT_PAD_PX) * scale,
+            (max(all_xs) + _CONTENT_PAD_PX) * scale,
+            (max(all_ys) + _CONTENT_PAD_PX) * scale,
+        )
     else:
         content_bbox = board_bbox
 
@@ -1052,5 +1142,6 @@ def resolve_annotations(
         labels=resolved_labels,
         legend=resolved_legend,
         font_size=font_size,
+        px_scale=scale,
         content_bbox=content_bbox,
     )
