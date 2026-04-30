@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from phosphor_eda.altium.parser import parse_altium
 from phosphor_eda.altium.project import parse_prjpcb
+from phosphor_eda.altium.to_schematic import altium_to_design
 from phosphor_eda.convert import find_project_root
 from phosphor_eda.kicad.to_schematic import kicad_to_design
 
@@ -40,7 +40,7 @@ def test_prjpcb_preserves_raw_paths():
 
 
 def test_altium_loads_schdoc_with_backslash_paths(tmp_path: Path):
-    """parse_altium resolves backslash paths from .PrjPcb to real files."""
+    """altium_to_design resolves backslash paths from .PrjPcb to real files."""
     sub = tmp_path / "sheets"
     sub.mkdir()
 
@@ -55,16 +55,16 @@ def test_altium_loads_schdoc_with_backslash_paths(tmp_path: Path):
         "[Design]\nHierarchyMode=1\n\n[Document1]\nDocumentPath=sheets\\Main.SchDoc\n"
     )
 
-    design = parse_altium(prjpcb)
+    design = altium_to_design(prjpcb)
     assert len(design.pages) == 1
 
 
 def test_altium_warns_on_missing_schdoc(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
-    """parse_altium prints a warning for missing schematic sheets."""
+    """altium_to_design prints a warning for missing schematic sheets."""
     prjpcb = tmp_path / "Test.PrjPcb"
     prjpcb.write_text("[Design]\nHierarchyMode=1\n\n[Document1]\nDocumentPath=Missing.SchDoc\n")
 
-    design = parse_altium(prjpcb)
+    design = altium_to_design(prjpcb)
     assert len(design.pages) == 0
 
     captured = capsys.readouterr()
@@ -80,7 +80,7 @@ def test_altium_warns_on_missing_backslash_schdoc(
         "[Design]\nHierarchyMode=1\n\n[Document1]\nDocumentPath=sub\\Missing.SchDoc\n"
     )
 
-    design = parse_altium(prjpcb)
+    design = altium_to_design(prjpcb)
     assert len(design.pages) == 0
 
     captured = capsys.readouterr()

@@ -1,45 +1,67 @@
 """Net resolution for Altium schematics.
 
-Builds a netlist by resolving wire connectivity on each sheet, then
-matching pin coordinates to named wire groups.
+Builds a netlist by loading typed records from each sheet, resolving
+wire connectivity, and matching pin tip coordinates to named nets.
 """
 
-from phosphor_eda.altium.sheet_builder import load_sheet, resolve_nets
-from phosphor_eda.models import NetlistEntry, PageNetEntry, ParsedDesign
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from phosphor_eda.altium.sheet_builder import resolve_nets
+from phosphor_eda.altium.to_schematic import load_project_sheets
+from phosphor_eda.models import NetlistEntry
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
-def build_netlist(design: ParsedDesign) -> dict[str, list[NetlistEntry]]:
-    """Build a netlist from an Altium ParsedDesign.
+def build_netlist(path: Path) -> dict[str, list[NetlistEntry]]:
+    """Build a netlist from an Altium .PrjPcb or single .SchDoc file.
 
-    For each page, resolves wire connectivity using typed records and
-    spatial indices, then matches pin coordinates to named wire groups.
+    For each sheet, resolves wire connectivity using typed records and
+    spatial indices, then matches pin tip coordinates to named nets.
     """
+    sheets = load_project_sheets(path)
     netlist: dict[str, list[NetlistEntry]] = {}
 
-    for page in design.pages:
-        schdoc_path = getattr(page, "_schdoc_path", None)
-        if schdoc_path is None:
-            continue
-
-        sheet = load_sheet(str(schdoc_path))
+    for sheet in sheets.values():
         coord_to_net, _nc = resolve_nets(sheet)
 
-        # Populate page.nets from discovered net names
-        net_names = sorted(set(coord_to_net.values()))
-        page.nets = [PageNetEntry(name=n, net_id=i) for i, n in enumerate(net_names)]
+        # Build component index for designator lookup
+        comp_keys: dict[int, int] = {}  # owner_index → display_mode
+        desig_by_owner: dict[int, str] = {}
 
-        # Match pins to nets
-        for inst in page.instances:
-            for pin in inst.pin_connections:
-                coord = (pin.pin_x, pin.pin_y)
-                net_name = coord_to_net.get(coord)
-                if net_name:
-                    entry = NetlistEntry(
-                        reference=inst.reference,
-                        pin_number=pin.pin_number,
-                        pin_name="",
+        for comp_rec in sheet.components:
+            key = comp_rec.index - 1
+            comp_keys[key] = comp_rec.display_mode
+
+        for desig in sheet.designators:
+            if desig.owner_index >= 0:
+                desig_by_owner[desig.owner_index] = desig.text
+
+        # Match pins to nets using PinRec.tip coordinates
+        for pin in sheet.pins:
+            if pin.owner_index < 0 or not pin.designator:
+                continue
+            # Filter by display mode
+            display_mode = comp_keys.get(pin.owner_index)
+            if display_mode is not None and pin.owner_part_display_mode != display_mode:
+                continue
+
+            reference = desig_by_owner.get(pin.owner_index, "")
+            if not reference:
+                continue
+
+            net_name = coord_to_net.get(pin.tip)
+            if net_name:
+                netlist.setdefault(net_name, []).append(
+                    NetlistEntry(
+                        reference=reference,
+                        pin_number=pin.designator,
+                        pin_name=pin.name,
                         net_name=net_name,
                     )
-                    netlist.setdefault(net_name, []).append(entry)
+                )
 
     return netlist

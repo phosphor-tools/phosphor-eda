@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from phosphor_eda.altium._helpers import parse_bus_notation
+from phosphor_eda.altium.errors import ParseContext
 from phosphor_eda.altium.record_factory import (
     compute_entry_coord,
     link_children,
@@ -49,7 +51,6 @@ from phosphor_eda.altium.records import (
     WireRec,
 )
 from phosphor_eda.altium.spatial import UnionFind, WireIndex, point_on_segment
-from phosphor_eda.models import SchematicPage
 from phosphor_eda.schematic import Component, Net, Page, Pin, Port
 
 if TYPE_CHECKING:
@@ -307,10 +308,15 @@ class SheetRecords:
 # ---------------------------------------------------------------------------
 
 
-def load_sheet(schdoc_path: str) -> SheetRecords:
+def load_sheet(
+    schdoc_path: str,
+    ctx: ParseContext | None = None,
+) -> SheetRecords:
     """Parse a .SchDoc file into typed records with spatial indices."""
+    if ctx is None:
+        ctx = ParseContext()
     raw_records = read_schematic_records(schdoc_path)
-    records = materialize_records(raw_records)
+    records = materialize_records(raw_records, ctx=ctx)
     children = link_children(records)
 
     wire_recs = [r for r in records if isinstance(r, WireRec)]
@@ -425,9 +431,12 @@ def resolve_nets(
         root = uf.find(loc)
         group_names[root] = pp.text
 
-    # Ports (skip harness-type — those connect to signal harness wires)
+    # Ports (skip harness-type and bus-notation — those are expanded
+    # into individual member ports during build_page)
     for port in sheet.ports:
         if port.harness_type or not port.name:
+            continue
+        if parse_bus_notation(port.name) is not None:
             continue
         loc = _port_wire_coord(port, sheet.wire_index)
         all_named_points.add(loc)
@@ -443,8 +452,12 @@ def resolve_nets(
     # no net label, power port, or port already names the group.  This
     # ensures wire groups connecting only sheet entries (e.g. ADC1_IN3
     # and SLIDE_POS wired together on the Top Level page) get named.
+    # Bus-notation entries (e.g. "D[0..7]") are skipped — they're
+    # expanded into individual member ports during build_page.
     for entry in sheet.sheet_entries:
         if entry.harness_type or not entry.name:
+            continue
+        if parse_bus_notation(entry.name) is not None:
             continue
         ep = entry.coord
         all_named_points.add(ep)
@@ -710,18 +723,70 @@ def collect_harness_port_nets(
 # ---------------------------------------------------------------------------
 
 
+def _expand_bus_ports(
+    members: list[str],
+    bus_name: str,
+    page: Page,
+    nets_by_name: dict[str, Net],
+    io_type: int = 0,
+    has_overline: bool = False,
+) -> None:
+    """Create individual Port objects for each bus member.
+
+    For each member name (e.g. "D0"), looks up the net by name in
+    *nets_by_name* and creates a Port linking to it. Sets ``Net.bus``
+    to *bus_name* so the bus grouping is preserved in the domain model.
+    """
+    for member_name in members:
+        if member_name not in nets_by_name:
+            continue
+        net = nets_by_name[member_name]
+        if not net.bus:
+            net.bus = bus_name
+        port_meta: dict[str, str] = {}
+        if io_type:
+            port_meta["io_type"] = _IO_TYPE_NAMES.get(io_type, str(io_type))
+        if has_overline:
+            port_meta["active_low"] = "true"
+        port = Port(
+            name=member_name,
+            page=page,
+            net=net,
+            metadata=port_meta,
+        )
+        page.ports.append(port)
+
+
 def _collect_sheet_entry_ports(
     sheet: SheetRecords,
     page: Page,
     nets_by_name: dict[str, Net],
     coord_to_net_name: dict[tuple[int, int], str],
 ) -> None:
-    """Add Port objects for non-harness sheet entries on this page."""
+    """Add Port objects for non-harness sheet entries on this page.
+
+    Bus-notation entries (e.g. ``D[0..7]``) are expanded into individual
+    member ports (D0, D1, ...) by looking up each member's net by name.
+    """
     for entry in sheet.sheet_entries:
         if entry.harness_type:
             continue
         if not entry.name:
             continue
+
+        # Bus-notation entry: expand to individual member ports
+        bus_members = parse_bus_notation(entry.name)
+        if bus_members is not None:
+            _expand_bus_ports(
+                bus_members,
+                entry.name,
+                page,
+                nets_by_name,
+                io_type=entry.io_type,
+                has_overline=entry.has_overline,
+            )
+            continue
+
         net_name = coord_to_net_name.get(entry.coord)
         if net_name and net_name in nets_by_name:
             port_meta: dict[str, str] = {}
@@ -927,23 +992,8 @@ def _resolve_net_metadata(
         net.metadata.update(pset_params)
 
 
-def build_page(
-    sheet: SheetRecords,
-    coord_to_net_name: dict[tuple[int, int], str],
-    harness_port_nets: dict[str, list[tuple[str, dict[str, str]]]],
-    harness_members_by_type: dict[str, list[str]],
-    raw_page: object | None = None,
-    nc_wire_coords: set[tuple[int, int]] | None = None,
-) -> Page:
-    """Build a domain model Page from a sheet's typed records.
-
-    ``raw_page`` is the legacy ``SchematicPage`` from ``models.py``, needed
-    during the transition to get PlacedInstance data. Once the migration is
-    complete, this parameter can be removed.
-    """
-    page = Page(name=sheet.name)
-
-    # --- Page metadata from RECORD=31 (sheet properties) ---
+def _build_page_metadata(page: Page, sheet: SheetRecords) -> None:
+    """Populate page metadata from sheet properties and parameters."""
     sr = sheet.sheet_rec
     if sr is not None:
         if sr.use_custom_sheet:
@@ -954,26 +1004,23 @@ def build_page(
         if sr.template_file_name:
             page.metadata["TemplateFile"] = sr.template_file_name
 
-    # --- Page metadata from sheet-level RECORD=41 parameters ---
     for param in sheet.sheet_level_parameters:
         if param.name and param.text and param.text != "*":
             page.metadata[param.name] = param.text
 
-    # --- Text annotations from RECORD=28 text frames ---
     # Text frames carry revision notes, design rationale, and change history.
     for frame in sheet.text_frames:
         text = frame.text.replace("~1", "\n").strip()
         if text:
             page.annotations.append(text)
 
-    # Build Net objects
-    nets_by_name: dict[str, Net] = {}
-    for nname in sorted(set(coord_to_net_name.values())):
-        net = Net(name=nname)
-        nets_by_name[nname] = net
-        page.nets.append(net)
 
-    # Mark active-low nets (those whose name came from an overline source)
+def _mark_active_low_nets(
+    sheet: SheetRecords,
+    nets_by_name: dict[str, Net],
+    coord_to_net_name: dict[tuple[int, int], str],
+) -> None:
+    """Flag nets whose name originated from an overlined label/port/power port."""
     for label in sheet.net_labels:
         if label.has_overline and label.text in nets_by_name:
             nets_by_name[label.text].metadata["active_low"] = "true"
@@ -987,14 +1034,54 @@ def build_page(
             if net_name and net_name in nets_by_name:
                 nets_by_name[net_name].metadata["active_low"] = "true"
 
-    # No-connect marker coordinates — expanded through wire groups so
-    # that NC markers at wire endpoints propagate to connected pins.
-    nc_coords: set[tuple[int, int]] = set()
-    for nc in sheet.no_connects:
-        nc_coords.add(nc.location)
-    if nc_wire_coords:
-        nc_coords |= nc_wire_coords
 
+def _enrich_component_metadata(
+    comp: Component,
+    comp_rec: ComponentRec,
+    comp_owner_idx: int,
+    params_by_owner: dict[int, dict[str, str]],
+    children: dict[int, list[AltiumRecord]],
+) -> None:
+    """Apply parameters and ComponentRec fields to a Component's metadata."""
+    if comp_owner_idx in params_by_owner:
+        comp.metadata.update(params_by_owner[comp_owner_idx])
+
+    if "Description" in comp.metadata:
+        comp.description = comp.metadata.pop("Description")
+
+    if not comp.description and comp_rec.description:
+        comp.description = comp_rec.description
+
+    if comp_rec.unique_id:
+        comp.metadata["UniqueId"] = comp_rec.unique_id
+    if comp_rec.database_table:
+        comp.metadata["DatabaseTable"] = comp_rec.database_table
+    if comp_rec.design_item_id:
+        comp.metadata["DesignItemId"] = comp_rec.design_item_id
+    if comp_rec.part_count > 2:
+        comp.metadata["PartCount"] = str(comp_rec.part_count)
+        comp.metadata["CurrentPartId"] = str(comp_rec.current_part_id)
+    if comp_rec.display_mode_count > 1:
+        comp.metadata["DisplayModeCount"] = str(comp_rec.display_mode_count)
+        comp.metadata["DisplayMode"] = str(comp_rec.display_mode)
+    if comp_rec.orientation:
+        comp.metadata["Orientation"] = str(comp_rec.orientation)
+    if comp_rec.is_mirrored:
+        comp.metadata["IsMirrored"] = "True"
+
+    footprint = _find_footprint(comp_owner_idx, children)
+    if footprint:
+        comp.metadata["Footprint"] = footprint
+
+
+def _build_components(
+    sheet: SheetRecords,
+    page: Page,
+    coord_to_net_name: dict[tuple[int, int], str],
+    nets_by_name: dict[str, Net],
+    nc_coords: set[tuple[int, int]],
+) -> None:
+    """Build Component and Pin domain objects from typed records."""
     # Index components by OwnerIndex-compatible key (index - 1)
     comp_record_keys: dict[int, ComponentRec] = {}
     for comp_rec in sheet.components:
@@ -1006,10 +1093,7 @@ def build_page(
         if desig.owner_index >= 0:
             designator_by_owner[desig.owner_index] = desig.text
 
-    # PinRec keyed by (OwnerIndex, Designator).
-    # Filter by display mode: components can have alternate visual variants
-    # (e.g. Normal + Small) with separate pin records per variant.  Only
-    # pins matching the owning component's active DisplayMode are kept.
+    # PinRec keyed by (OwnerIndex, Designator), filtered by display mode
     pin_rec_by_key: dict[tuple[int, str], PinRec] = {}
     for pin in sheet.pins:
         if pin.owner_index >= 0 and pin.designator:
@@ -1024,150 +1108,106 @@ def build_page(
         if param.owner_index >= 0 and param.name and param.text and param.text != "*":
             params_by_owner.setdefault(param.owner_index, {})[param.name] = param.text
 
-    # Build Component and Pin objects
-    # We need PlacedInstance data from raw_page for pin coordinates
-    if raw_page is not None:
-        assert isinstance(raw_page, SchematicPage)
+    # Group pin records by owner index for efficient per-component lookup
+    pins_by_owner: dict[int, list[PinRec]] = {}
+    for key, prec in pin_rec_by_key.items():
+        pins_by_owner.setdefault(key[0], []).append(prec)
 
-        for raw_inst in raw_page.instances:
-            comp = Component(
-                reference=raw_inst.reference,
-                part=raw_inst.package_name,
-                description="",
-                pages=[page],
-            )
+    for comp_owner_idx in sorted(comp_record_keys):
+        comp_rec = comp_record_keys[comp_owner_idx]
+        reference = designator_by_owner.get(comp_owner_idx, "")
+        if not reference:
+            continue
 
-            # Find OwnerIndex for this component.
-            # For multi-part components on the same page, match by
-            # location so each PlacedInstance pairs with the correct
-            # ComponentRec (and its current_part_id).
-            comp_owner_idx: int | None = None
-            inst_loc = (raw_inst.loc_x, raw_inst.loc_y)
-            for idx, ref_text in designator_by_owner.items():
-                if (
-                    ref_text == raw_inst.reference
-                    and idx in comp_record_keys
-                    and comp_record_keys[idx].location == inst_loc
-                ):
-                    comp_owner_idx = idx
-                    break
-            # Fallback: first reference match (single-instance case)
-            if comp_owner_idx is None:
-                for idx, ref_text in designator_by_owner.items():
-                    if ref_text == raw_inst.reference and idx in comp_record_keys:
-                        comp_owner_idx = idx
-                        break
+        comp = Component(
+            reference=reference,
+            part=comp_rec.lib_reference,
+            description="",
+            pages=[page],
+        )
+        _enrich_component_metadata(
+            comp,
+            comp_rec,
+            comp_owner_idx,
+            params_by_owner,
+            sheet.children,
+        )
 
-            # Apply parameters as metadata
-            if comp_owner_idx is not None and comp_owner_idx in params_by_owner:
-                comp.metadata.update(params_by_owner[comp_owner_idx])
+        # Altium's PartCount is always actual_electrical_parts + 1.
+        # PartCount=2 means 1 part (every simple passive); true
+        # multi-part components (e.g. dual opamp, MCU sections) have
+        # PartCount > 2.
+        is_multipart = comp_rec.part_count > 2
 
-            if "Description" in comp.metadata:
-                comp.description = comp.metadata.pop("Description")
+        for prec in pins_by_owner.get(comp_owner_idx, []):
+            # For multi-part components, skip pins belonging to
+            # other parts.  owner_part_id==0 means shared (e.g.
+            # power pins), which we keep on every part.
+            if (
+                is_multipart
+                and prec.owner_part_id != 0
+                and prec.owner_part_id != comp_rec.current_part_id
+            ):
+                continue
 
-            # Enrich from ComponentRec fields
-            if comp_owner_idx is not None:
-                comp_rec = comp_record_keys[comp_owner_idx]
+            coord = prec.tip
+            net_name = coord_to_net_name.get(coord)
+            net = nets_by_name.get(net_name) if net_name else None
+            is_nc = coord in nc_coords
 
-                # Description from ComponentRec (fallback if not from parameter)
-                if not comp.description and comp_rec.description:
-                    comp.description = comp_rec.description
-
-                if comp_rec.unique_id:
-                    comp.metadata["UniqueId"] = comp_rec.unique_id
-                if comp_rec.database_table:
-                    comp.metadata["DatabaseTable"] = comp_rec.database_table
-                if comp_rec.design_item_id:
-                    comp.metadata["DesignItemId"] = comp_rec.design_item_id
-                if comp_rec.part_count > 2:
-                    comp.metadata["PartCount"] = str(comp_rec.part_count)
-                    comp.metadata["CurrentPartId"] = str(comp_rec.current_part_id)
-                if comp_rec.display_mode_count > 1:
-                    comp.metadata["DisplayModeCount"] = str(comp_rec.display_mode_count)
-                    comp.metadata["DisplayMode"] = str(comp_rec.display_mode)
-                if comp_rec.orientation:
-                    comp.metadata["Orientation"] = str(comp_rec.orientation)
-                if comp_rec.is_mirrored:
-                    comp.metadata["IsMirrored"] = "True"
-
-                # Footprint via Implementation chain
-                footprint = _find_footprint(comp_owner_idx, sheet.children)
-                if footprint:
-                    comp.metadata["Footprint"] = footprint
-
-            # Altium's PartCount is always actual_electrical_parts + 1.
-            # PartCount=2 means 1 part (every simple passive); true
-            # multi-part components (e.g. dual opamp, MCU sections) have
-            # PartCount > 2.
-            comp_rec_for_pins: ComponentRec | None = (
-                comp_record_keys.get(comp_owner_idx) if comp_owner_idx is not None else None
-            )
-            is_multipart = comp_rec_for_pins is not None and comp_rec_for_pins.part_count > 2
-            for raw_pin in raw_inst.pin_connections:
-                coord = (raw_pin.pin_x, raw_pin.pin_y)
-                net_name = coord_to_net_name.get(coord)
-                net = nets_by_name.get(net_name) if net_name else None
-                is_nc = coord in nc_coords
-
-                pin_name = ""
-                pin_meta: dict[str, str] = {}
-                prec: PinRec | None = None
-                if comp_owner_idx is not None:
-                    pin_key = (comp_owner_idx, raw_pin.pin_number)
-                    prec = pin_rec_by_key.get(pin_key)
-
-                    # For multi-part components, skip pins belonging to
-                    # other parts.  owner_part_id==0 means shared (e.g.
-                    # power pins), which we keep on every page.
-                    if (
-                        is_multipart
-                        and prec is not None
-                        and comp_rec_for_pins is not None
-                        and (
-                            prec.owner_part_id != 0
-                            and prec.owner_part_id != comp_rec_for_pins.current_part_id
-                        )
-                    ):
-                        continue
-
-                    # If we have no PinRec for a multi-part component and
-                    # the pin has no net connection, it's a ghost from
-                    # another part's pin set — skip it.
-                    if is_multipart and prec is None and net is None and not is_nc:
-                        continue
-
-                    if prec is not None:
-                        pin_name = prec.name
-                        pin_meta["electrical"] = _PIN_ELECTRICAL_NAMES.get(
-                            prec.electrical,
-                            str(prec.electrical),
-                        )
-                        if prec.has_overline:
-                            pin_meta["active_low"] = "true"
-                        if is_multipart and prec.owner_part_id:
-                            pin_meta["owner_part_id"] = str(prec.owner_part_id)
-
-                pin = Pin(
-                    designator=raw_pin.pin_number,
-                    name=pin_name,
-                    component=comp,
-                    net=net,
-                    no_connect=is_nc,
-                    metadata=pin_meta,
+            pin_meta: dict[str, str] = {}
+            if prec.electrical is not None:
+                pin_meta["electrical"] = _PIN_ELECTRICAL_NAMES.get(
+                    prec.electrical,
+                    str(prec.electrical),
                 )
-                comp.pins.append(pin)
-                if net is not None:
-                    net.pins.append(pin)
+            if prec.has_overline:
+                pin_meta["active_low"] = "true"
+            if is_multipart and prec.owner_part_id:
+                pin_meta["owner_part_id"] = str(prec.owner_part_id)
 
-            page.components.append(comp)
+            pin = Pin(
+                designator=prec.designator,
+                name=prec.name,
+                component=comp,
+                net=net,
+                no_connect=is_nc,
+                metadata=pin_meta,
+            )
+            comp.pins.append(pin)
+            if net is not None:
+                net.pins.append(pin)
 
-    # --- Net metadata from ParameterSets (RECORD=43) ---
-    _resolve_net_metadata(sheet, coord_to_net_name, nets_by_name)
+        page.components.append(comp)
 
-    # Collect non-harness ports (RECORD=18) with io_type metadata
+
+def _collect_ports(
+    sheet: SheetRecords,
+    page: Page,
+    nets_by_name: dict[str, Net],
+    coord_to_net_name: dict[tuple[int, int], str],
+    harness_port_nets: dict[str, list[tuple[str, dict[str, str]]]],
+    harness_members_by_type: dict[str, list[str]],
+) -> None:
+    """Collect all port types (regular, sheet entry, harness) onto the page."""
+    # Non-harness ports (RECORD=18) with io_type metadata
     for port_rec in sheet.ports:
         if port_rec.harness_type or not port_rec.name:
             continue
+
+        # Bus-notation port: expand to individual member ports
+        bus_members = parse_bus_notation(port_rec.name)
+        if bus_members is not None:
+            _expand_bus_ports(
+                bus_members,
+                port_rec.name,
+                page,
+                nets_by_name,
+                io_type=port_rec.io_type,
+                has_overline=port_rec.has_overline,
+            )
+            continue
+
         wire_coord = _port_wire_coord(port_rec, sheet.wire_index)
         net_name = coord_to_net_name.get(wire_coord)
         if net_name and net_name in nets_by_name:
@@ -1188,17 +1228,50 @@ def build_page(
             )
             page.ports.append(port)
 
-    # Sheet entry ports (hierarchical bridging)
     _collect_sheet_entry_ports(sheet, page, nets_by_name, coord_to_net_name)
-
-    # Harness member ports on child pages
     _collect_harness_member_ports(sheet, page, nets_by_name, coord_to_net_name)
-
-    # Harness bridge ports on parent pages
     _collect_harness_bridge_ports(
         sheet,
         page,
         nets_by_name,
+        harness_port_nets,
+        harness_members_by_type,
+    )
+
+
+def build_page(
+    sheet: SheetRecords,
+    coord_to_net_name: dict[tuple[int, int], str],
+    harness_port_nets: dict[str, list[tuple[str, dict[str, str]]]],
+    harness_members_by_type: dict[str, list[str]],
+    nc_wire_coords: set[tuple[int, int]] | None = None,
+) -> Page:
+    """Build a domain model Page from a sheet's typed records."""
+    page = Page(name=sheet.name)
+
+    _build_page_metadata(page, sheet)
+
+    # Build Net objects
+    nets_by_name: dict[str, Net] = {}
+    for nname in sorted(set(coord_to_net_name.values())):
+        net = Net(name=nname)
+        nets_by_name[nname] = net
+        page.nets.append(net)
+
+    _mark_active_low_nets(sheet, nets_by_name, coord_to_net_name)
+
+    # No-connect coordinates, expanded through wire groups
+    nc_coords: set[tuple[int, int]] = {nc.location for nc in sheet.no_connects}
+    if nc_wire_coords:
+        nc_coords |= nc_wire_coords
+
+    _build_components(sheet, page, coord_to_net_name, nets_by_name, nc_coords)
+    _resolve_net_metadata(sheet, coord_to_net_name, nets_by_name)
+    _collect_ports(
+        sheet,
+        page,
+        nets_by_name,
+        coord_to_net_name,
         harness_port_nets,
         harness_members_by_type,
     )

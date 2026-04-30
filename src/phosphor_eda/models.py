@@ -1,6 +1,12 @@
 """Data models for parsed schematic designs."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @dataclass
@@ -34,6 +40,8 @@ class Wire:
     aliases: list[WireAlias] = field(default_factory=list)
     display_props: list[SymbolDisplayProp] = field(default_factory=list)
     is_bus: bool = False
+    # All vertex coordinates along the wire, used for net resolution
+    points: list[tuple[int, int]] = field(default_factory=list)
 
 
 @dataclass
@@ -101,6 +109,8 @@ class SchematicPage:
     off_page_connectors: list[GraphicInst] = field(default_factory=list)
     # Internal: coordinate -> set of net_ids, used by build_netlist
     wire_net_map: dict[tuple[int, int], set[int]] = field(default_factory=dict)
+    # Path to the source .SchDoc file, set by the Altium parser for net resolution
+    schdoc_path: Path | None = None
 
 
 @dataclass
