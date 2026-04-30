@@ -508,3 +508,34 @@ def test_custom_css_not_present_when_empty() -> None:
     board = _make_board_with_component()
     svg = render_pcb_svg(board)
     assert '<style id="custom">' not in svg
+
+
+# ---------------------------------------------------------------------------
+# Real-fixture render integration (swd_switch)
+# ---------------------------------------------------------------------------
+
+
+def test_swd_switch_has_footprint_lib_attr(board: PcbBoard) -> None:
+    """Rendered SVG should contain data-footprint-lib for real footprints."""
+    svg = render_pcb_svg(board)
+    assert "data-footprint-lib=" in svg
+
+
+def test_swd_switch_metadata_has_lib(board: PcbBoard) -> None:
+    """The pcb-metadata JSON block should include entries with non-empty lib."""
+    svg = render_pcb_svg(board)
+    match = re.search(
+        r'<script type="application/json" id="pcb-metadata">\n(.*?)\n</script>',
+        svg,
+        re.DOTALL,
+    )
+    assert match is not None
+    parsed = json.loads(match.group(1))
+    libs = [v["lib"] for v in parsed.values() if v.get("lib")]
+    assert len(libs) >= 3
+
+
+def test_swd_switch_has_data_value(board: PcbBoard) -> None:
+    """At least some elements should carry data-value for components with values."""
+    svg = render_pcb_svg(board)
+    assert "data-value=" in svg

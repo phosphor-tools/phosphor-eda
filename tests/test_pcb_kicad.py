@@ -3,8 +3,12 @@
 from pathlib import Path
 
 import pytest
+import sexpdata
 
-from phosphor_eda.kicad.pcb_parser import parse_kicad_pcb
+from phosphor_eda.kicad.pcb_parser import (
+    _extract_value,  # pyright: ignore[reportPrivateUsage]
+    parse_kicad_pcb,
+)
 from phosphor_eda.pcb import LayerFunction, PcbBoard
 
 FIXTURE = Path(__file__).parent / "fixtures" / "swd_switch.kicad_pcb"
@@ -338,3 +342,85 @@ def test_kicad5_at_vs_kicad6_offset(orangecrab_board: PcbBoard) -> None:
     for model in u3.models_3d:
         assert model.offset == (0.0, 0.0, 0.0)
         assert model.scale == (1.0, 1.0, 1.0)
+
+
+# ---------------------------------------------------------------------------
+# Value extraction (_extract_value)
+# ---------------------------------------------------------------------------
+
+
+def _make_fp_sexpr(body: str) -> list[object]:
+    """Build a minimal footprint s-expression with given inner body."""
+    raw = f'(footprint "test:Pkg" {body})'
+    parsed = sexpdata.loads(raw)
+    return list(parsed)
+
+
+def test_extract_value_kicad8() -> None:
+    """KiCad 8 format uses (property "Value" "100nF" ...)."""
+    fp = _make_fp_sexpr('(property "Value" "100nF" (at 0 0))')
+    assert _extract_value(fp) == "100nF"
+
+
+def test_extract_value_kicad6() -> None:
+    """KiCad 6 format uses (fp_text value "100nF" ...)."""
+    fp = _make_fp_sexpr('(fp_text value "100nF" (at 0 0))')
+    assert _extract_value(fp) == "100nF"
+
+
+def test_extract_value_missing() -> None:
+    """No value property or fp_text → empty string."""
+    fp = _make_fp_sexpr('(property "Reference" "U1" (at 0 0))')
+    assert _extract_value(fp) == ""
+
+
+# ---------------------------------------------------------------------------
+# footprint_ref threading
+# ---------------------------------------------------------------------------
+
+
+def test_all_pads_have_footprint_ref(board: PcbBoard) -> None:
+    """Every pad should have footprint_ref matching its parent footprint."""
+    for fp in board.footprints:
+        for pad in fp.pads:
+            assert pad.footprint_ref == fp.reference, (
+                f"Pad {pad.number} on {fp.reference} has footprint_ref={pad.footprint_ref!r}"
+            )
+
+
+def test_silkscreen_lines_have_footprint_ref(board: PcbBoard) -> None:
+    """Silkscreen lines from footprints carry the parent's ref."""
+    for fp in board.footprints:
+        for line in fp.silkscreen_lines:
+            assert line.footprint_ref == fp.reference
+
+
+def test_fab_lines_have_footprint_ref(board: PcbBoard) -> None:
+    """Fab lines from footprints carry the parent's ref."""
+    for fp in board.footprints:
+        for line in fp.fab_lines:
+            assert line.footprint_ref == fp.reference
+
+
+# ---------------------------------------------------------------------------
+# footprint_lib and value (real fixture)
+# ---------------------------------------------------------------------------
+
+
+def test_d1_footprint_lib_is_led(board: PcbBoard) -> None:
+    """D1 is an LED — its footprint_lib should contain 'LED'."""
+    d1 = board.footprint_by_ref("D1")
+    assert d1 is not None
+    assert "LED" in d1.footprint_lib
+
+
+def test_d1_has_value(board: PcbBoard) -> None:
+    d1 = board.footprint_by_ref("D1")
+    assert d1 is not None
+    assert d1.value != ""
+
+
+def test_multiple_footprints_have_lib(board: PcbBoard) -> None:
+    """Most footprints should have a non-empty footprint_lib."""
+    with_lib = [fp for fp in board.footprints if fp.footprint_lib]
+    assert len(with_lib) >= 5
