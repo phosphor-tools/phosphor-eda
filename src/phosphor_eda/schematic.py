@@ -36,6 +36,10 @@ class Component:
     pins: list[Pin] = field(default_factory=list)
     pages: list[Page] = field(default_factory=list)
     metadata: dict[str, str] = field(default_factory=dict)
+    x: float | None = None
+    y: float | None = None
+    rotation: float = 0.0
+    mirror: bool = False
 
     def __repr__(self) -> str:
         return f"Component({self.reference!r}, part={self.part!r}, pins={len(self.pins)})"
