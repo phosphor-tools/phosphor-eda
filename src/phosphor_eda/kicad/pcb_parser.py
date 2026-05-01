@@ -1101,6 +1101,17 @@ def parse_kicad_stackup(sexpr: SExpNode) -> Stackup | None:
 # ---------------------------------------------------------------------------
 
 
+def load_kicad_stackup(path: Path) -> Stackup | None:
+    """Parse stackup from a .kicad_pcb file on disk.
+
+    Convenience wrapper around parse_kicad_stackup() that handles file I/O.
+    """
+    text = path.read_text(encoding="utf-8")
+    data: SExpNode = sexpdata.loads(text)
+    sexpr: SExpNode = list(data[1:]) if data else []
+    return parse_kicad_stackup(sexpr)
+
+
 def parse_kicad_pcb(path: Path) -> Pcb:
     """Parse a .kicad_pcb file into the PCB domain model."""
     text = path.read_text(encoding="utf-8")
