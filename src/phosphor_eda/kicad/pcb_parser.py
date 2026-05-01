@@ -19,6 +19,7 @@ from phosphor_eda.pcb import (
     PcbArc,
     PcbCircle,
     PcbFootprint,
+    PcbGraphicText,
     PcbLayer,
     PcbLine,
     PcbModel3D,
@@ -29,7 +30,9 @@ from phosphor_eda.pcb import (
     PcbText,
     PcbTraceArc,
     PcbVia,
+    PcbZone,
 )
+from phosphor_eda.project import Stackup, StackupLayer
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -232,6 +235,16 @@ def _parse_pad(
                 drill = float(v)
                 break
 
+    # Roundrect corner ratio
+    rratio_node = sexp.find(pad_sexpr, "roundrect_rratio")
+    roundrect_rratio = _float_val(rratio_node) if rratio_node else 0.0
+
+    # Pin function and type (KiCad 8+)
+    pinfunc_node = sexp.find(pad_sexpr, "pinfunction")
+    pin_function = sexp.val(pinfunc_node) if pinfunc_node else ""
+    pintype_node = sexp.find(pad_sexpr, "pintype")
+    pin_type = sexp.val(pintype_node) if pintype_node else ""
+
     abs_x, abs_y = _transform_point(local_x, local_y, fp_x, fp_y, fp_rot)
 
     return PcbPad(
@@ -246,6 +259,9 @@ def _parse_pad(
         net_name=net_name,
         footprint_ref=fp_ref,
         drill=drill,
+        roundrect_rratio=roundrect_rratio,
+        pin_function=pin_function,
+        pin_type=pin_type,
     )
 
 
@@ -515,6 +531,28 @@ def _parse_fp_texts(
     return texts
 
 
+_BUILTIN_PROPERTIES = {"Reference", "Value", "Footprint", "Datasheet", "Description"}
+
+
+def _parse_fp_properties(fp_sexpr: SExpNode) -> dict[str, str]:
+    """Extract custom properties beyond Reference/Value from a footprint.
+
+    KiCad 8 stores footprint properties as (property "Key" "Value" ...).
+    Builtin keys (Reference, Value, Footprint, Datasheet, Description) are
+    skipped since they're already captured in dedicated fields.
+    """
+    props: dict[str, str] = {}
+    for item in sexp.find_all(fp_sexpr, "property"):
+        if len(item) < 3:
+            continue
+        key = str(item[1])
+        if key in _BUILTIN_PROPERTIES:
+            continue
+        value = str(item[2])
+        props[key] = value
+    return props
+
+
 def _parse_fp_models(fp_sexpr: SExpNode) -> list[PcbModel3D]:
     """Parse all (model ...) entries from a footprint s-expression."""
     models: list[PcbModel3D] = []
@@ -598,6 +636,9 @@ def _parse_footprint(
 
     bbox = _compute_bbox(pads, court_lines)
 
+    # Custom properties beyond Reference/Value (KiCad 8 format)
+    properties = _parse_fp_properties(fp_sexpr)
+
     fp = PcbFootprint(
         reference=ref,
         footprint_lib=lib_name,
@@ -615,6 +656,7 @@ def _parse_footprint(
         texts=texts,
         models_3d=models,
         bbox=bbox,
+        properties=properties,
     )
     return fp, edge_lines, edge_arcs, fp_polys
 
@@ -844,6 +886,217 @@ def _parse_trace_arc(arc_sexpr: SExpNode) -> PcbTraceArc | None:
 
 
 # ---------------------------------------------------------------------------
+# Graphic text parsing
+# ---------------------------------------------------------------------------
+
+
+def _parse_gr_text(item: SExpNode) -> PcbGraphicText | None:
+    """Parse a (gr_text ...) into a PcbGraphicText."""
+    if len(item) < 2:
+        return None
+    raw_text = str(item[1])
+
+    layer_node = sexp.find(item, "layer")
+    layer = sexp.val(layer_node) if layer_node else ""
+
+    at_node = sexp.find(item, "at")
+    x, y, rot = _at(at_node) if at_node else (0.0, 0.0, 0.0)
+
+    effects = sexp.find(item, "effects")
+    font = sexp.find(effects, "font") if effects else None
+    size_node = sexp.find(font, "size") if font else None
+    font_size = sexp.num(size_node, 1) if size_node else 1.0
+
+    # Justify
+    justify_node = sexp.find(effects, "justify") if effects else None
+    justify = ""
+    if justify_node and len(justify_node) > 1:
+        justify = (
+            justify_node[1].value()
+            if isinstance(justify_node[1], sexpdata.Symbol)
+            else str(justify_node[1])
+        )
+
+    return PcbGraphicText(
+        text=raw_text,
+        x=x,
+        y=y,
+        rotation=rot,
+        layer=layer,
+        font_size=font_size,
+        justify=justify,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Zone boundary parsing
+# ---------------------------------------------------------------------------
+
+
+def _parse_zone_boundary(zone_sexpr: SExpNode) -> PcbZone | None:
+    """Parse a zone's boundary polygon and properties into a PcbZone."""
+    net_node = sexp.find(zone_sexpr, "net")
+    net_num = int(sexp.num(net_node, 1)) if net_node and len(net_node) > 1 else 0
+    net_name_node = sexp.find(zone_sexpr, "net_name")
+    net_name = sexp.val(net_name_node) if net_name_node else ""
+
+    layer_node = sexp.find(zone_sexpr, "layer")
+    layer = sexp.val(layer_node) if layer_node else ""
+
+    # Priority
+    priority_node = sexp.find(zone_sexpr, "priority")
+    priority = int(sexp.num(priority_node, 1)) if priority_node and len(priority_node) > 1 else 0
+
+    # Boundary polygon
+    polygon_node = sexp.find(zone_sexpr, "polygon")
+    if not polygon_node:
+        return None
+    pts_node = sexp.find(polygon_node, "pts")
+    if not pts_node:
+        return None
+    boundary: list[tuple[float, float]] = []
+    for xy_node in sexp.find_all(pts_node, "xy"):
+        boundary.append((sexp.num(xy_node, 1), sexp.num(xy_node, 2)))
+    if not boundary:
+        return None
+
+    # Fill settings
+    fill_node = sexp.find(zone_sexpr, "fill")
+    fill_type = ""
+    thermal_gap = 0.0
+    thermal_bridge = 0.0
+    if fill_node:
+        # (fill yes) or (fill (thermal_gap 0.5) (thermal_bridge_width 0.25))
+        thermal_gap_node = sexp.find(fill_node, "thermal_gap")
+        thermal_gap = _float_val(thermal_gap_node) if thermal_gap_node else 0.0
+        bridge_node = sexp.find(fill_node, "thermal_bridge_width")
+        thermal_bridge = _float_val(bridge_node) if bridge_node else 0.0
+
+    # Min thickness
+    min_thick_node = sexp.find(zone_sexpr, "min_thickness")
+    min_thickness = _float_val(min_thick_node) if min_thick_node else 0.0
+
+    # Connect pads clearance
+    connect_node = sexp.find(zone_sexpr, "connect_pads")
+    connect_clearance = 0.0
+    if connect_node:
+        clr_node = sexp.find(connect_node, "clearance")
+        connect_clearance = _float_val(clr_node) if clr_node else 0.0
+
+    return PcbZone(
+        net_number=net_num,
+        net_name=net_name,
+        layer=layer,
+        boundary=boundary,
+        priority=priority,
+        min_thickness_mm=min_thickness,
+        thermal_gap_mm=thermal_gap,
+        thermal_bridge_width_mm=thermal_bridge,
+        connect_pads_clearance_mm=connect_clearance,
+        fill_type=fill_type,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stackup parsing
+# ---------------------------------------------------------------------------
+
+
+def parse_kicad_stackup(sexpr: SExpNode) -> Stackup | None:
+    """Parse stackup from the (setup (stackup ...)) section of a .kicad_pcb.
+
+    Returns None if the file has no stackup section.
+    """
+    setup_node = sexp.find(sexpr, "setup")
+    if not setup_node:
+        return None
+    stackup_node = sexp.find(setup_node, "stackup")
+    if not stackup_node:
+        return None
+
+    layers: list[StackupLayer] = []
+    copper_finish = ""
+
+    for item in stackup_node[1:]:
+        if not isinstance(item, list) or not item:
+            continue
+        tag = item[0].value() if isinstance(item[0], sexpdata.Symbol) else str(item[0])
+
+        if tag == "copper_finish":
+            copper_finish = str(item[1]) if len(item) > 1 else ""
+            continue
+
+        if tag != "layer":
+            continue
+
+        # (layer "F.Cu" (type "copper") (thickness 0.035) ...)
+        name = str(item[1]) if len(item) > 1 else ""
+        type_node = sexp.find(item, "type")
+        layer_type = sexp.val(type_node) if type_node else ""
+        thickness_node = sexp.find(item, "thickness")
+        thickness = _float_val(thickness_node) if thickness_node else 0.0
+        material_node = sexp.find(item, "material")
+        material = sexp.val(material_node) if material_node else ""
+        epsilon_node = sexp.find(item, "epsilon_r")
+        epsilon_r = _float_val(epsilon_node) if epsilon_node else 0.0
+        loss_node = sexp.find(item, "loss_tangent")
+        loss_tangent = _float_val(loss_node) if loss_node else 0.0
+
+        # Determine side from layer name convention
+        side = ""
+        if name.startswith("F.") or name == "Top":
+            side = "front"
+        elif name.startswith("B.") or name == "Bottom":
+            side = "back"
+
+        layers.append(
+            StackupLayer(
+                name=name,
+                layer_type=layer_type,
+                thickness_mm=thickness,
+                material=material,
+                epsilon_r=epsilon_r,
+                loss_tangent=loss_tangent,
+                side=side,
+            )
+        )
+
+        # Handle sublayers (addsublayer) — appears inside the parent layer node
+        for sub_item in item[2:]:
+            if not isinstance(sub_item, list) or not sub_item:
+                continue
+            first = sub_item[0]
+            sub_tag = first.value() if isinstance(first, sexpdata.Symbol) else str(first)
+            if sub_tag != "addsublayer":
+                continue
+            sub_thickness_node = sexp.find(sub_item, "thickness")
+            sub_thickness = _float_val(sub_thickness_node) if sub_thickness_node else 0.0
+            sub_material_node = sexp.find(sub_item, "material")
+            sub_material = sexp.val(sub_material_node) if sub_material_node else ""
+            sub_epsilon_node = sexp.find(sub_item, "epsilon_r")
+            sub_epsilon = _float_val(sub_epsilon_node) if sub_epsilon_node else 0.0
+            sub_loss_node = sexp.find(sub_item, "loss_tangent")
+            sub_loss = _float_val(sub_loss_node) if sub_loss_node else 0.0
+            layers.append(
+                StackupLayer(
+                    name=f"{name} (sublayer)",
+                    layer_type=layer_type,
+                    thickness_mm=sub_thickness,
+                    material=sub_material,
+                    epsilon_r=sub_epsilon,
+                    loss_tangent=sub_loss,
+                    side=side,
+                )
+            )
+
+    if not layers:
+        return None
+
+    total = sum(ly.thickness_mm for ly in layers)
+    return Stackup(layers=layers, total_thickness_mm=total, copper_finish=copper_finish)
+
+
+# ---------------------------------------------------------------------------
 # Top-level parser
 # ---------------------------------------------------------------------------
 
@@ -880,10 +1133,14 @@ def parse_kicad_pcb(path: Path) -> Pcb:
     segments = [_parse_segment(s) for s in sexp.find_all(sexpr, "segment")]
     vias = [_parse_via(v) for v in sexp.find_all(sexpr, "via")]
 
-    # Zones — extract filled_polygon geometry
+    # Zones — extract filled_polygon geometry + zone boundaries
     polygons: list[PcbPolygon] = []
+    zones: list[PcbZone] = []
     for zone_sexpr in sexp.find_all(sexpr, "zone"):
         polygons.extend(_parse_zone_polygons(zone_sexpr))
+        zone = _parse_zone_boundary(zone_sexpr)
+        if zone:
+            zones.append(zone)
     # Top-level graphic polygons
     for item in sexp.find_all(sexpr, "gr_poly"):
         p = _parse_gr_poly(item)
@@ -913,6 +1170,13 @@ def parse_kicad_pcb(path: Path) -> Pcb:
     outline_lines.extend(edge_lines_from_fps)
     outline_arcs.extend(edge_arcs_from_fps)
 
+    # Graphic texts (board-level, not inside footprints)
+    graphic_texts: list[PcbGraphicText] = []
+    for item in sexp.find_all(sexpr, "gr_text"):
+        gt = _parse_gr_text(item)
+        if gt:
+            graphic_texts.append(gt)
+
     return Pcb(
         name=name,
         nets=nets,
@@ -924,4 +1188,6 @@ def parse_kicad_pcb(path: Path) -> Pcb:
         polygons=polygons,
         trace_arcs=trace_arcs,
         layers=layer_defs,
+        zones=zones,
+        graphic_texts=graphic_texts,
     )
