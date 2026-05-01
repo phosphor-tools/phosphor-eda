@@ -137,6 +137,27 @@ def test_design_metadata(design):
     assert "Raspberry Pi" in design.metadata.get("Organization", "")
 
 
+# --- Component position ---
+
+
+def test_component_position(design):
+    """Components have non-None x/y coordinates from the (at ...) node."""
+    c1 = _find_component(design, "C1")
+    assert c1 is not None
+    assert c1.x is not None
+    assert c1.y is not None
+    assert c1.x == pytest.approx(58.42)
+    assert c1.y == pytest.approx(49.53)
+
+
+def test_component_rotation(design):
+    """Components report rotation from the (at x y angle) node."""
+    # All C1 through C13 happen to be 0° in this fixture, but at least it's set
+    c1 = _find_component(design, "C1")
+    assert c1 is not None
+    assert c1.rotation == 0.0
+
+
 # --- Validation ---
 
 

@@ -1124,6 +1124,10 @@ def _build_components(
             part=comp_rec.lib_reference,
             description="",
             pages=[page],
+            x=float(comp_rec.location[0]),
+            y=float(comp_rec.location[1]),
+            rotation=comp_rec.orientation * 90.0,
+            mirror=comp_rec.is_mirrored,
         )
         _enrich_component_metadata(
             comp,

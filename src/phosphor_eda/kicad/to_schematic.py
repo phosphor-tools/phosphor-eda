@@ -516,6 +516,10 @@ def _build_page(
             description=description,
             pages=[page],
             metadata={},
+            x=comp_x,
+            y=comp_y,
+            rotation=comp_rot,
+            mirror=mirror == "y",
         )
         if value:
             comp.metadata["Value"] = value

@@ -263,11 +263,9 @@ def _build_pages(
             if ds_info is None:
                 continue
 
-            # Skip power/supply symbols and aesthetic parts (frames, fiducials)
-            if ds_info.is_supply:
-                continue
-
             metadata: dict[str, str] = {}
+            if ds_info.is_supply:
+                metadata["is_power_symbol"] = "true"
             if part_info.value:
                 metadata["Value"] = part_info.value
 
