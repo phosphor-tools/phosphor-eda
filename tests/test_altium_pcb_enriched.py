@@ -1,0 +1,251 @@
+"""Tests for enriched Altium PCB parser: rules, classes, diff pairs, stackup, holes.
+
+Uses the Pi.MX8 fixture (CERN-OHL-S-2.0 licensed).
+"""
+
+from pathlib import Path
+
+import pytest
+
+from phosphor_eda.altium.pcb_parser import (
+    _read_text_records,  # pyright: ignore[reportPrivateUsage]
+    parse_altium_classes,
+    parse_altium_diff_pairs,
+    parse_altium_pcb,
+    parse_altium_rules,
+    parse_altium_stackup,
+)
+
+FIXTURE = Path(__file__).parent / "fixtures" / "altium" / "pi-mx8" / "PCB" / "PiMX8MP_r0.3.PcbDoc"
+
+pytestmark = pytest.mark.skipif(not FIXTURE.exists(), reason="Fixture not available")
+
+
+# ---------------------------------------------------------------------------
+# Helpers to read streams
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def ole_streams() -> dict[str, bytes]:
+    """Read relevant OLE streams once for all tests."""
+    import olefile
+
+    ole = olefile.OleFileIO(str(FIXTURE))
+    streams = {
+        "rules": ole.openstream("Rules6/Data").read(),
+        "classes": ole.openstream("Classes6/Data").read(),
+        "diffpairs": ole.openstream("DifferentialPairs6/Data").read(),
+        "board": ole.openstream("Board6/Data").read(),
+    }
+    ole.close()
+    return streams
+
+
+# ---------------------------------------------------------------------------
+# Rules6
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def rules(ole_streams: dict[str, bytes]):
+    return parse_altium_rules(ole_streams["rules"])
+
+
+def test_rules_count(rules) -> None:
+    """Should parse 100+ rules from this complex board."""
+    assert len(rules) >= 100
+
+
+def test_rules_kinds(rules) -> None:
+    """Multiple rule kinds present."""
+    kinds = {r.kind for r in rules}
+    assert "Clearance" in kinds
+    assert "Width" in kinds
+    assert "DiffPairsRouting" in kinds
+
+
+def test_width_rule_values(rules) -> None:
+    """Width rules have min/max/preferred values in mm."""
+    width_rules = [r for r in rules if r.kind == "Width"]
+    assert len(width_rules) == 3
+    # WIDTH_UNDER_BGA: minlimit=3.1496mil → ~0.08mm, preferedwidth=3.937mil → ~0.1mm
+    under_bga = next(r for r in width_rules if r.name == "WIDTH_UNDER_BGA")
+    assert under_bga.min_value_mm == pytest.approx(0.08, abs=0.001)
+    assert under_bga.preferred_value_mm == pytest.approx(0.1, abs=0.001)
+    assert under_bga.max_value_mm is not None
+    assert under_bga.max_value_mm > 1.0
+
+
+def test_clearance_rule_scope(rules) -> None:
+    """Clearance rules preserve scope expressions."""
+    clr = next(r for r in rules if r.name == "CLR_UNDER_BGA")
+    assert "TouchesRoom" in clr.scope1
+    assert clr.scope2 == "All"
+
+
+def test_rule_enabled(rules) -> None:
+    """Rules have enabled flag parsed."""
+    # All rules in this fixture are enabled
+    assert all(r.enabled for r in rules)
+
+
+# ---------------------------------------------------------------------------
+# Classes6
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def classes(ole_streams: dict[str, bytes]):
+    return parse_altium_classes(ole_streams["classes"])
+
+
+def test_classes_count(classes) -> None:
+    """Should parse 64 classes across multiple kinds."""
+    assert len(classes) == 64
+
+
+def test_class_kinds(classes) -> None:
+    """Multiple class kinds present (net=0, component=1, diff pair=6, etc.)."""
+    kinds = {c.kind for c in classes}
+    assert 0 in kinds  # Net classes
+    assert 1 in kinds  # Component classes
+    assert 6 in kinds  # Diff pair classes
+
+
+def test_pmic_class_members(classes) -> None:
+    """PMIC net class has correct members."""
+    pmic = next(c for c in classes if c.name == "PMIC")
+    assert pmic.kind == 0
+    assert len(pmic.members) == 9
+    assert "PMIC_SDA" in pmic.members
+    assert "PMIC_SCL" in pmic.members
+
+
+def test_diff_pair_class(classes) -> None:
+    """DIFF100 class (kind=6) has members."""
+    diff100 = next(c for c in classes if c.name == "DIFF100")
+    assert diff100.kind == 6
+    assert len(diff100.members) >= 40
+
+
+# ---------------------------------------------------------------------------
+# DifferentialPairs6
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def diff_pairs(ole_streams: dict[str, bytes]):
+    return parse_altium_diff_pairs(ole_streams["diffpairs"])
+
+
+def test_diff_pairs_count(diff_pairs) -> None:
+    """Should parse 55 differential pairs."""
+    assert len(diff_pairs) == 55
+
+
+def test_wifi_usb_diff_pair(diff_pairs) -> None:
+    """WIFI_USB pair has correct positive/negative nets."""
+    wifi = next(p for p in diff_pairs if p.name == "WIFI_USB")
+    assert wifi.positive_net == "WIFI_USB_P"
+    assert wifi.negative_net == "WIFI_USB_N"
+
+
+def test_pcie_diff_pair(diff_pairs) -> None:
+    """PCIe differential pairs are present."""
+    pcie_pairs = [p for p in diff_pairs if "PCIe" in p.name]
+    assert len(pcie_pairs) >= 2
+
+
+# ---------------------------------------------------------------------------
+# Stackup
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def stackup(ole_streams: dict[str, bytes]):
+    records = _read_text_records(ole_streams["board"])
+    board_props = records[0] if records else {}
+    return parse_altium_stackup(board_props)
+
+
+def test_stackup_exists(stackup) -> None:
+    """Stackup is parsed successfully."""
+    assert stackup is not None
+
+
+def test_stackup_layer_count(stackup) -> None:
+    """10 copper + 9 dielectric = 19 layers."""
+    assert len(stackup.layers) == 19
+
+
+def test_stackup_copper_layers(stackup) -> None:
+    """10 copper layers present."""
+    copper = [ly for ly in stackup.layers if ly.layer_type == "copper"]
+    assert len(copper) == 10
+
+
+def test_stackup_top_layer(stackup) -> None:
+    """Top layer is first, with correct thickness and side."""
+    top = stackup.layers[0]
+    assert top.name == "Top Layer"
+    assert top.layer_type == "copper"
+    assert top.side == "front"
+    # 1.4173mil → ~0.036mm
+    assert top.thickness_mm == pytest.approx(0.036, abs=0.001)
+
+
+def test_stackup_bottom_layer(stackup) -> None:
+    """Bottom layer is last."""
+    bottom = stackup.layers[-1]
+    assert bottom.name == "Bottom Layer"
+    assert bottom.layer_type == "copper"
+    assert bottom.side == "back"
+
+
+def test_stackup_dielectric_properties(stackup) -> None:
+    """First dielectric has material and epsilon_r."""
+    diel1 = stackup.layers[1]
+    assert diel1.layer_type == "prepreg"
+    assert diel1.material == "PP-1080"
+    assert diel1.epsilon_r == pytest.approx(4.0)
+    # 2.9528mil → ~0.075mm
+    assert diel1.thickness_mm == pytest.approx(0.075, abs=0.001)
+
+
+def test_stackup_core_layer(stackup) -> None:
+    """Core layers have correct type and epsilon_r."""
+    cores = [ly for ly in stackup.layers if ly.layer_type == "core"]
+    assert len(cores) >= 3
+    assert all(c.epsilon_r == pytest.approx(4.6) for c in cores)
+
+
+def test_stackup_total_thickness(stackup) -> None:
+    """Total thickness is sum of all layers."""
+    expected = sum(ly.thickness_mm for ly in stackup.layers)
+    assert stackup.total_thickness_mm == pytest.approx(expected)
+
+
+# ---------------------------------------------------------------------------
+# Polygon holes
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def pcb():
+    return parse_altium_pcb(FIXTURE)
+
+
+def test_polygons_with_holes(pcb) -> None:
+    """Polygons with holes are preserved."""
+    polys_with_holes = [p for p in pcb.polygons if p.holes]
+    assert len(polys_with_holes) >= 50
+
+
+def test_polygon_hole_structure(pcb) -> None:
+    """Each hole is a list of at least 3 coordinate pairs."""
+    poly = next(p for p in pcb.polygons if p.holes)
+    hole = poly.holes[0]
+    assert len(hole) >= 3
+    # Each point is a (float, float) tuple
+    assert len(hole[0]) == 2
