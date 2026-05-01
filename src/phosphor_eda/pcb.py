@@ -140,6 +140,7 @@ class PcbPad:
     net_number: int
     net_name: str
     footprint_ref: str
+    rotation: float = 0.0  # total rotation in board space (degrees)
     drill: float = 0.0  # drill diameter (mm), 0 for SMD pads
     roundrect_rratio: float = 0.0  # corner ratio for roundrect pads
     pin_function: str = ""  # schematic pin name ("K", "A", "VCC")

@@ -213,7 +213,7 @@ def _parse_pad(
     shape = shape_sym.value() if isinstance(shape_sym, sexpdata.Symbol) else str(shape_sym)
 
     at_node = sexp.find(pad_sexpr, "at")
-    local_x, local_y, _pad_rot = _at(at_node) if at_node else (0.0, 0.0, 0.0)
+    local_x, local_y, pad_rot = _at(at_node) if at_node else (0.0, 0.0, 0.0)
 
     size_node = sexp.find(pad_sexpr, "size")
     width = sexp.num(size_node, 1) if size_node else 0.0
@@ -258,6 +258,7 @@ def _parse_pad(
         net_number=net_num,
         net_name=net_name,
         footprint_ref=fp_ref,
+        rotation=fp_rot + pad_rot,
         drill=drill,
         roundrect_rratio=roundrect_rratio,
         pin_function=pin_function,
