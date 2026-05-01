@@ -211,7 +211,7 @@ class PcbNet:
 
 
 @dataclass
-class PcbBoard:
+class Pcb:
     """Complete parsed PCB board."""
 
     name: str

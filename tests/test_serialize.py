@@ -2,7 +2,7 @@
 
 import pytest
 
-from phosphor_eda.schematic import Component, Design, Net, Page, Pin
+from phosphor_eda.schematic import Component, Net, Page, Pin, Schematic
 from phosphor_eda.serialize import (
     filter_components,
     filter_nets,
@@ -54,7 +54,7 @@ def _simple_design():
     page.components = [comp_u7, comp_r1]
     page.nets = [net_sclk, net_gnd]
 
-    return Design(
+    return Schematic(
         name="TEST",
         pages=[page],
         nets=[net_gnd, net_sclk],
@@ -136,7 +136,7 @@ def test_serialize_suppresses_electrical_passive():
     net.pins = [pin_passive, pin_power]
     page.components = [comp]
     page.nets = [net]
-    design = Design(name="T", pages=[page], nets=[net], components=[comp])
+    design = Schematic(name="T", pages=[page], nets=[net], components=[comp])
 
     text = serialize_design(design)
     assert "electrical=passive" not in text
@@ -159,7 +159,7 @@ def test_serialize_pin_metadata_inline():
     net.pins = [pin]
     page.components = [comp]
     page.nets = [net]
-    design = Design(name="T", pages=[page], nets=[net], components=[comp])
+    design = Schematic(name="T", pages=[page], nets=[net], components=[comp])
 
     text = serialize_design(design)
     pin_line = next(line for line in text.splitlines() if "Pin 1" in line)
@@ -183,7 +183,7 @@ def test_passive_metadata_filtered():
     pin = Pin(designator="1", name="", component=comp, net=None, metadata={})
     comp.pins = [pin]
     page.components = [comp]
-    design = Design(name="T", pages=[page], nets=[], components=[comp])
+    design = Schematic(name="T", pages=[page], nets=[], components=[comp])
 
     text = serialize_design(design)
     # value "10k" is already in description "Resistor 10k", so no metadata shown
@@ -204,7 +204,7 @@ def test_passive_value_shown_when_not_in_description():
     pin = Pin(designator="1", name="", component=comp, net=None, metadata={})
     comp.pins = [pin]
     page.components = [comp]
-    design = Design(name="T", pages=[page], nets=[], components=[comp])
+    design = Schematic(name="T", pages=[page], nets=[], components=[comp])
 
     text = serialize_design(design)
     assert "value: 100nF" in text
@@ -230,7 +230,7 @@ def test_ic_metadata_allowlist():
     pin = Pin(designator="1", name="", component=comp, net=None, metadata={})
     comp.pins = [pin]
     page.components = [comp]
-    design = Design(name="T", pages=[page], nets=[], components=[comp])
+    design = Schematic(name="T", pages=[page], nets=[], components=[comp])
 
     text = serialize_design(design)
     assert "mfr: TI" in text
@@ -477,7 +477,7 @@ def _filterable_design():
     all_nets = [spi_clk, spi_clk_b, spi_mosi, p3v3, gnd]
     all_comps = [u1, u2, r1, r2, c1, tp1, vreg]
 
-    return Design(
+    return Schematic(
         name="FILTER_TEST",
         pages=[page_power, page_spi],
         nets=all_nets,

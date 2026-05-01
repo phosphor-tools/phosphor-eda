@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from phosphor_eda.schematic import Component, Design, Net, Page, Pin, merge_pages
+from phosphor_eda.schematic import Component, Net, Page, Pin, Schematic, merge_pages
 from phosphor_eda.text import strip_overline
 
 if TYPE_CHECKING:
     from phosphor_eda.models import ParsedDesign as RawDesign
 
 
-def dsn_to_design(raw: RawDesign, name: str = "") -> Design:
-    """Convert a raw DSN ParsedDesign to a schematic Design."""
+def dsn_to_design(raw: RawDesign, name: str = "") -> Schematic:
+    """Convert a raw DSN ParsedDesign to a Schematic."""
     pin_names_map = raw.symbol_pin_names
     pages: list[Page] = []
 

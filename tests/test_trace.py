@@ -2,7 +2,7 @@
 
 import pytest
 
-from phosphor_eda.schematic import Component, Design, Net, Page, Pin
+from phosphor_eda.schematic import Component, Net, Page, Pin, Schematic
 from phosphor_eda.trace import (
     find_paths,
     is_two_pin_passive,
@@ -24,7 +24,7 @@ def _connect(pin: Pin, net: Net) -> None:
     net.pins.append(pin)
 
 
-def _trace_design() -> Design:
+def _trace_design() -> Schematic:
     """Build a design with known topology for trace testing.
 
     Topology:
@@ -84,7 +84,7 @@ def _trace_design() -> Design:
     page.nets = all_nets
     all_comps = [u1, u2, u3, r1, r2, r3, fb1, c1]
 
-    return Design(name="TRACE_TEST", pages=[page], nets=all_nets, components=all_comps)
+    return Schematic(name="TRACE_TEST", pages=[page], nets=all_nets, components=all_comps)
 
 
 # ---- is_two_pin_passive ----

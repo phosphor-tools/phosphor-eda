@@ -17,7 +17,7 @@ __all__ = ["PASSIVE_PREFIXES", "is_power_net", "ref_prefix"]
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from phosphor_eda.schematic import Component, Design, Net, Page, Pin
+    from phosphor_eda.schematic import Component, Net, Page, Pin, Schematic
 
 _MAJOR_IC_PIN_THRESHOLD = 4
 
@@ -58,7 +58,7 @@ def _pin_net_str(pin: Pin) -> str:
     return pin.net.name
 
 
-def _format_summary(design: Design) -> list[str]:
+def _format_summary(design: Schematic) -> list[str]:
     lines = ["=== DESIGN SUMMARY ==="]
     n_comp = len(design.components)
     n_nets = len(design.nets)
@@ -108,7 +108,7 @@ def _format_summary(design: Design) -> list[str]:
     return lines
 
 
-def _format_components(design: Design) -> list[str]:
+def _format_components(design: Schematic) -> list[str]:
     lines = ["=== COMPONENTS ===", ""]
     for comp in sorted(design.components, key=lambda c: c.reference):
         page_names = ", ".join(p.name for p in comp.pages)
@@ -146,7 +146,7 @@ def _format_components(design: Design) -> list[str]:
     return lines
 
 
-def _format_nets(design: Design) -> list[str]:
+def _format_nets(design: Schematic) -> list[str]:
     lines = ["=== NETS ===", ""]
     for net in sorted(design.nets, key=lambda n: n.name):
         net_pages = sorted({p.name for pin in net.pins for p in pin.component.pages})
@@ -173,7 +173,7 @@ def _format_nets(design: Design) -> list[str]:
     return lines
 
 
-def _format_validation(design: Design) -> list[str]:
+def _format_validation(design: Schematic) -> list[str]:
     findings = validate_design(design)
     if not findings:
         return ["=== VALIDATION ===", "", "No issues found.", ""]
@@ -199,8 +199,8 @@ def _format_validation(design: Design) -> list[str]:
     return lines
 
 
-def serialize_design(design: Design) -> str:
-    """Serialize a Design to a grep-friendly text string."""
+def serialize_design(design: Schematic) -> str:
+    """Serialize a Schematic to a grep-friendly text string."""
     lines: list[str] = []
     lines.extend(_format_summary(design))
     lines.append("")
@@ -212,8 +212,8 @@ def serialize_design(design: Design) -> str:
     return "\n".join(lines)
 
 
-def write_design(design: Design, output_path: Path) -> None:
-    """Write a Design to a text file."""
+def write_design(design: Schematic, output_path: Path) -> None:
+    """Write a Schematic to a text file."""
     output_path.write_text(serialize_design(design), encoding="utf-8")
 
 
@@ -231,7 +231,7 @@ def _net_components(net: Net) -> set[str]:
 
 
 def filter_nets(
-    design: Design,
+    design: Schematic,
     *,
     components: list[str] | None = None,
     pages: list[str] | None = None,
@@ -279,7 +279,7 @@ def filter_nets(
 
 
 def filter_components(
-    design: Design,
+    design: Schematic,
     *,
     pages: list[str] | None = None,
     prefixes: list[str] | None = None,
@@ -315,7 +315,7 @@ def filter_components(
 
 
 def filter_pages(
-    design: Design,
+    design: Schematic,
     *,
     nets: list[str] | None = None,
     components: list[str] | None = None,
@@ -334,7 +334,7 @@ def filter_pages(
     return result
 
 
-def _find_net(design: Design, name: str) -> Net:
+def _find_net(design: Schematic, name: str) -> Net:
     """Find a net by name or alias.  Raises ValueError if not found."""
     for n in design.nets:
         if n.name == name:
@@ -395,7 +395,7 @@ def _trace_destinations(pin: Pin, comp: Component) -> str:
 # ---- Trace command formatter ----
 
 
-def format_trace(design: Design, ref_a: str, ref_b: str) -> str:
+def format_trace(design: Schematic, ref_a: str, ref_b: str) -> str:
     """Format signal paths between two components."""
     from phosphor_eda.trace import find_paths
 
@@ -443,7 +443,7 @@ def _tabulate(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> str:
 
 
 def format_component_table(
-    design: Design,
+    design: Schematic,
     components: list[Component] | None = None,
 ) -> str:
     """Format a table of components: REF | PART | DESCRIPTION | PINS."""
@@ -458,7 +458,7 @@ def format_component_table(
 
 
 def format_net_table(
-    design: Design,
+    design: Schematic,
     nets: list[Net] | None = None,
 ) -> str:
     """Format a table of nets: NET | ALIASES | PINS | PAGES."""
@@ -474,7 +474,7 @@ def format_net_table(
 
 
 def format_page_table(
-    design: Design,
+    design: Schematic,
     pages: list[Page] | None = None,
 ) -> str:
     """Format a table of pages: PAGE | COMPONENTS | NETS."""
@@ -485,7 +485,7 @@ def format_page_table(
     return _tabulate(("PAGE", "COMPONENTS", "NETS"), rows)
 
 
-def format_component_detail(design: Design, ref: str) -> str:
+def format_component_detail(design: Schematic, ref: str) -> str:
     """Format full detail for a single component. Raises ValueError if not found."""
     comp: Component | None = None
     for c in design.components:
@@ -514,7 +514,7 @@ def format_component_detail(design: Design, ref: str) -> str:
     return "\n".join(lines)
 
 
-def format_net_detail(design: Design, name: str) -> str:
+def format_net_detail(design: Schematic, name: str) -> str:
     """Format full detail for a single net. Raises ValueError if not found."""
     net: Net | None = None
     for n in design.nets:
@@ -547,7 +547,7 @@ def format_net_detail(design: Design, name: str) -> str:
     return "\n".join(lines)
 
 
-def format_page_detail(design: Design, page_name: str) -> str:
+def format_page_detail(design: Schematic, page_name: str) -> str:
     """Format full detail for a single page. Raises ValueError if not found."""
     page = None
     for p in design.pages:

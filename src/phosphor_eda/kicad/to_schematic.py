@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 import sexpdata
 
 from phosphor_eda.kicad import sexp
-from phosphor_eda.schematic import Component, Design, Net, Page, Pin, Port, merge_pages
+from phosphor_eda.schematic import Component, Net, Page, Pin, Port, Schematic, merge_pages
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -207,8 +207,8 @@ class _UnionFind:
 # ---------------------------------------------------------------------------
 
 
-def kicad_to_design(path: Path, name: str = "") -> Design:
-    """Parse a KiCad .kicad_sch file and return a Design."""
+def kicad_to_design(path: Path, name: str = "") -> Schematic:
+    """Parse a KiCad .kicad_sch file and return a Schematic."""
     if not name:
         name = path.stem
 

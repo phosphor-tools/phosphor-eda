@@ -15,8 +15,8 @@ import sexpdata
 from phosphor_eda.kicad import sexp
 from phosphor_eda.pcb import (
     LayerFunction,
+    Pcb,
     PcbArc,
-    PcbBoard,
     PcbCircle,
     PcbFootprint,
     PcbLayer,
@@ -848,7 +848,7 @@ def _parse_trace_arc(arc_sexpr: SExpNode) -> PcbTraceArc | None:
 # ---------------------------------------------------------------------------
 
 
-def parse_kicad_pcb(path: Path) -> PcbBoard:
+def parse_kicad_pcb(path: Path) -> Pcb:
     """Parse a .kicad_pcb file into the PCB domain model."""
     text = path.read_text(encoding="utf-8")
     data: SExpNode = sexpdata.loads(text)
@@ -913,7 +913,7 @@ def parse_kicad_pcb(path: Path) -> PcbBoard:
     outline_lines.extend(edge_lines_from_fps)
     outline_arcs.extend(edge_arcs_from_fps)
 
-    return PcbBoard(
+    return Pcb(
         name=name,
         nets=nets,
         footprints=footprints,

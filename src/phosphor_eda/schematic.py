@@ -85,7 +85,7 @@ class Page:
 
 
 @dataclass
-class Design:
+class Schematic:
     """A complete schematic design. The top-level container."""
 
     name: str
@@ -99,8 +99,8 @@ def merge_pages(
     name: str,
     pages: list[Page],
     metadata: dict[str, str] | None = None,
-) -> Design:
-    """Merge per-page sub-graphs into a single resolved Design.
+) -> Schematic:
+    """Merge per-page sub-graphs into a single resolved Schematic.
 
     1. Nets with the same name across pages merge into one Net.
     2. Ports with matching names bridge their respective nets.
@@ -211,7 +211,7 @@ def merge_pages(
             for other in nets_to_unify[1:]:
                 target = _unify_nets(merged_nets, target, other)
 
-    return Design(
+    return Schematic(
         name=name,
         pages=pages,
         nets=sorted(merged_nets.values(), key=lambda n: n.name),

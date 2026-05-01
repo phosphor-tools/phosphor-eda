@@ -34,7 +34,7 @@ from ortools.sat.python import cp_model
 from phosphor_eda.text_metrics import measure_text
 
 if TYPE_CHECKING:
-    from phosphor_eda.pcb import PcbBoard
+    from phosphor_eda.pcb import Pcb
 
 # JSON data from json.loads() is inherently untyped — Any is the correct
 # boundary type for validating external input before converting to dataclasses.
@@ -298,7 +298,7 @@ def _as_dict(val: object, context: str) -> JsonDict:
 
 
 def _resolve_component_target(
-    ref: str, board: PcbBoard
+    ref: str, board: Pcb
 ) -> tuple[tuple[float, float], tuple[float, float, float, float]]:
     """Resolve a component ref to (center, bbox).
 
@@ -316,7 +316,7 @@ def _resolve_component_target(
     return (fp.x, fp.y), (fp.x - 1, fp.y - 1, fp.x + 1, fp.y + 1)
 
 
-def _resolve_pad_target(ref_pad: str, board: PcbBoard) -> tuple[float, float]:
+def _resolve_pad_target(ref_pad: str, board: Pcb) -> tuple[float, float]:
     """Resolve "U7.10" → pad center coordinates.
 
     Raises ``ValueError`` if the component or pad is not found.
@@ -337,7 +337,7 @@ def _resolve_pad_target(ref_pad: str, board: PcbBoard) -> tuple[float, float]:
     raise ValueError(msg)
 
 
-def _resolve_net_target(net_name: str, near_ref: str, board: PcbBoard) -> tuple[float, float]:
+def _resolve_net_target(net_name: str, near_ref: str, board: Pcb) -> tuple[float, float]:
     """Find the pad on ``near_ref`` that connects to ``net_name``.
 
     Raises ``ValueError`` if no matching pad is found.
@@ -805,7 +805,7 @@ def _measure_legend(
 
 def resolve_annotations(
     spec: AnnotationSpec,
-    board: PcbBoard,
+    board: Pcb,
     side: str,
     width_px: int = 800,
 ) -> ResolvedAnnotations:

@@ -9,7 +9,7 @@ import pytest
 from phosphor_eda.kicad.pcb_parser import parse_kicad_pcb
 from phosphor_eda.pcb import (
     LayerFunction,
-    PcbBoard,
+    Pcb,
     PcbFootprint,
     PcbLayer,
     PcbLine,
@@ -34,12 +34,12 @@ ORANGECRAB_FIXTURE = Path(__file__).parent / "fixtures" / "orangecrab.kicad_pcb"
 
 
 @pytest.fixture(scope="module")
-def board() -> PcbBoard:
+def board() -> Pcb:
     return parse_kicad_pcb(FIXTURE)
 
 
 @pytest.fixture(scope="module")
-def orangecrab_board() -> PcbBoard:
+def orangecrab_board() -> Pcb:
     return parse_kicad_pcb(ORANGECRAB_FIXTURE)
 
 
@@ -48,40 +48,40 @@ def orangecrab_board() -> PcbBoard:
 # ---------------------------------------------------------------------------
 
 
-def test_valid_svg(board: PcbBoard) -> None:
+def test_valid_svg(board: Pcb) -> None:
     svg = render_pcb_svg(board)
     assert svg.startswith("<svg")
     assert svg.strip().endswith("</svg>")
 
 
-def test_has_theme_style(board: PcbBoard) -> None:
+def test_has_theme_style(board: Pcb) -> None:
     svg = render_pcb_svg(board)
     assert '<style id="theme">' in svg
 
 
-def test_has_board_clip(board: PcbBoard) -> None:
+def test_has_board_clip(board: Pcb) -> None:
     svg = render_pcb_svg(board)
     assert "board-clip" in svg
 
 
-def test_has_drill_clip(board: PcbBoard) -> None:
+def test_has_drill_clip(board: Pcb) -> None:
     svg = render_pcb_svg(board)
     assert "drill-clip" in svg
 
 
-def test_has_copper_layer_groups(board: PcbBoard) -> None:
+def test_has_copper_layer_groups(board: Pcb) -> None:
     svg = render_pcb_svg(board)
     assert 'data-layer="F.Cu"' in svg
     assert 'data-layer="B.Cu"' in svg
 
 
-def test_layer_paint_order(board: PcbBoard) -> None:
+def test_layer_paint_order(board: Pcb) -> None:
     """B.Cu should appear before F.Cu in document order (painter's model)."""
     svg = render_pcb_svg(board)
     assert svg.index('data-layer="B.Cu"') < svg.index('data-layer="F.Cu"')
 
 
-def test_silk_after_copper(board: PcbBoard) -> None:
+def test_silk_after_copper(board: Pcb) -> None:
     """Silkscreen layer group appears after copper layer groups."""
     svg = render_pcb_svg(board)
     fcu_pos = svg.index('data-layer="F.Cu"')
@@ -100,7 +100,7 @@ def test_silk_after_copper(board: PcbBoard) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_pad_attributes(board: PcbBoard) -> None:
+def test_pad_attributes(board: Pcb) -> None:
     svg = render_pcb_svg(board)
     assert 'data-type="pad"' in svg
     assert "data-component=" in svg
@@ -108,26 +108,26 @@ def test_pad_attributes(board: PcbBoard) -> None:
     assert "data-net=" in svg
 
 
-def test_trace_attributes(board: PcbBoard) -> None:
+def test_trace_attributes(board: Pcb) -> None:
     """All traces are always present (visibility controlled via CSS)."""
     svg = render_pcb_svg(board)
     assert 'data-type="trace"' in svg
     assert "data-net-number=" in svg
 
 
-def test_via_attributes(board: PcbBoard) -> None:
+def test_via_attributes(board: Pcb) -> None:
     svg = render_pcb_svg(board)
     assert 'data-type="via"' in svg
     assert 'class="via"' in svg
 
 
-def test_zone_attributes(board: PcbBoard) -> None:
+def test_zone_attributes(board: Pcb) -> None:
     """swd_switch has zones on inner copper layers."""
     svg = render_pcb_svg(board)
     assert 'data-type="zone"' in svg
 
 
-def test_component_body_attributes(board: PcbBoard) -> None:
+def test_component_body_attributes(board: Pcb) -> None:
     svg = render_pcb_svg(board)
     assert 'data-type="body"' in svg
 
@@ -137,31 +137,31 @@ def test_component_body_attributes(board: PcbBoard) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_highlight_adds_style(board: PcbBoard) -> None:
+def test_highlight_adds_style(board: Pcb) -> None:
     svg = render_pcb_svg(board, highlight_nets=["VCC"])
     assert '<style id="highlight">' in svg
 
 
-def test_highlight_css_targets_net(board: PcbBoard) -> None:
+def test_highlight_css_targets_net(board: Pcb) -> None:
     """Highlight CSS should contain data-net-number selector for VCC (net 1)."""
     svg = render_pcb_svg(board, highlight_nets=["VCC"])
     assert 'data-net-number="1"' in svg
 
 
-def test_highlight_component_restores_by_ref(board: PcbBoard) -> None:
+def test_highlight_component_restores_by_ref(board: Pcb) -> None:
     """Component highlight CSS restores elements by data-component, not net."""
     svg = render_pcb_svg(board, highlight_components=["TP3"])
     assert 'data-component="TP3"' in svg
     assert "Restore highlighted components" in svg
 
 
-def test_highlight_component_does_not_highlight_nets(board: PcbBoard) -> None:
+def test_highlight_component_does_not_highlight_nets(board: Pcb) -> None:
     """-c alone should not produce net-number restore rules."""
     svg = render_pcb_svg(board, highlight_components=["TP3"])
     assert "Restore highlighted nets" not in svg
 
 
-def test_no_highlight_without_args(board: PcbBoard) -> None:
+def test_no_highlight_without_args(board: Pcb) -> None:
     svg = render_pcb_svg(board)
     assert '<style id="highlight">' not in svg
 
@@ -171,12 +171,12 @@ def test_no_highlight_without_args(board: PcbBoard) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_back_mirror(board: PcbBoard) -> None:
+def test_back_mirror(board: Pcb) -> None:
     svg = render_pcb_svg(board, side="back")
     assert "scale(-1" in svg
 
 
-def test_front_no_mirror(board: PcbBoard) -> None:
+def test_front_no_mirror(board: Pcb) -> None:
     svg = render_pcb_svg(board, side="front")
     assert "scale(-1" not in svg
 
@@ -186,17 +186,17 @@ def test_front_no_mirror(board: PcbBoard) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_unknown_net_no_error(board: PcbBoard) -> None:
+def test_unknown_net_no_error(board: Pcb) -> None:
     svg = render_pcb_svg(board, highlight_nets=["NONEXISTENT_NET_XYZ"])
     assert svg.startswith("<svg")
 
 
-def test_unknown_component_no_error(board: PcbBoard) -> None:
+def test_unknown_component_no_error(board: Pcb) -> None:
     svg = render_pcb_svg(board, highlight_components=["NONEXISTENT"])
     assert svg.startswith("<svg")
 
 
-def test_both_highlight_types(board: PcbBoard) -> None:
+def test_both_highlight_types(board: Pcb) -> None:
     svg = render_pcb_svg(board, highlight_nets=["GND"], highlight_components=["TP3"])
     assert svg.startswith("<svg")
     assert "TP3" in svg
@@ -208,13 +208,13 @@ def test_both_highlight_types(board: PcbBoard) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_orangecrab_renders(orangecrab_board: PcbBoard) -> None:
+def test_orangecrab_renders(orangecrab_board: Pcb) -> None:
     svg = render_pcb_svg(orangecrab_board)
     assert svg.startswith("<svg")
     assert svg.strip().endswith("</svg>")
 
 
-def test_orangecrab_has_zones(orangecrab_board: PcbBoard) -> None:
+def test_orangecrab_has_zones(orangecrab_board: Pcb) -> None:
     svg = render_pcb_svg(orangecrab_board)
     assert 'data-type="zone"' in svg
 
@@ -247,7 +247,7 @@ def _make_board_with_models(
     models: list[PcbModel3D],
     *,
     fab_lines: list[PcbLine] | None = None,
-) -> PcbBoard:
+) -> Pcb:
     """Create a minimal board with one footprint carrying the given models."""
     fp = PcbFootprint(
         reference="U1",
@@ -259,7 +259,7 @@ def _make_board_with_models(
         models_3d=models,
         fab_lines=fab_lines or [],
     )
-    return PcbBoard(
+    return Pcb(
         name="test",
         nets={0: PcbNet(0, "")},
         footprints=[fp],
@@ -354,7 +354,7 @@ def _make_board_with_component(
     ref: str = "U1",
     lib: str = "Package_SO:SOIC-8",
     value: str = "SN74LVC2G66",
-) -> PcbBoard:
+) -> Pcb:
     """Board with one footprint that has lib/value metadata and a pad + fab line."""
     from phosphor_eda.pcb import PcbPad
 
@@ -391,7 +391,7 @@ def _make_board_with_component(
         ],
         texts=[],
     )
-    return PcbBoard(
+    return Pcb(
         name="test",
         nets={0: PcbNet(0, ""), 1: PcbNet(1, "VCC")},
         footprints=[fp],
@@ -523,13 +523,13 @@ def test_custom_css_not_present_when_empty() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_swd_switch_has_footprint_lib_attr(board: PcbBoard) -> None:
+def test_swd_switch_has_footprint_lib_attr(board: Pcb) -> None:
     """Rendered SVG should contain data-footprint-lib for real footprints."""
     svg = render_pcb_svg(board)
     assert "data-footprint-lib=" in svg
 
 
-def test_swd_switch_metadata_has_lib(board: PcbBoard) -> None:
+def test_swd_switch_metadata_has_lib(board: Pcb) -> None:
     """The pcb-metadata JSON block should include entries with non-empty lib."""
     svg = render_pcb_svg(board)
     match = re.search(
@@ -543,7 +543,7 @@ def test_swd_switch_metadata_has_lib(board: PcbBoard) -> None:
     assert len(libs) >= 3
 
 
-def test_swd_switch_has_data_value(board: PcbBoard) -> None:
+def test_swd_switch_has_data_value(board: Pcb) -> None:
     """At least some elements should carry data-value for components with values."""
     svg = render_pcb_svg(board)
     assert "data-value=" in svg
@@ -760,7 +760,7 @@ def test_no_foreign_object() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_swd_switch_annotation_end_to_end(board: PcbBoard) -> None:
+def test_swd_switch_annotation_end_to_end(board: Pcb) -> None:
     """Full annotation pipeline on a real board: parse → resolve → render."""
     from phosphor_eda.pcb_annotations import parse_annotations, resolve_annotations
 

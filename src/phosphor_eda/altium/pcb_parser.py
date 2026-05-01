@@ -35,8 +35,8 @@ from phosphor_eda.altium.pcb_records import (
 from phosphor_eda.altium.record_parser import parse_record_payload
 from phosphor_eda.pcb import (
     LayerFunction,
+    Pcb,
     PcbArc,
-    PcbBoard,
     PcbFootprint,
     PcbLayer,
     PcbLine,
@@ -983,7 +983,7 @@ def _read_stream(ole: olefile.OleFileIO, name: str) -> bytes:
 def parse_altium_pcb(
     path: Path,
     ctx: ParseContext | None = None,
-) -> PcbBoard:
+) -> Pcb:
     """Parse an Altium .PcbDoc file into the PCB domain model."""
     if ctx is None:
         ctx = ParseContext()
@@ -1097,7 +1097,7 @@ def parse_altium_pcb(
 
     polygons = fills + regions + sb_board_polys
 
-    return PcbBoard(
+    return Pcb(
         name=board_name,
         nets=nets,
         footprints=footprints,

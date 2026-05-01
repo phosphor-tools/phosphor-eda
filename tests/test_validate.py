@@ -1,6 +1,6 @@
 """Tests for schematic validation smoke checks."""
 
-from phosphor_eda.schematic import Component, Design, Net, Page, Pin, Port
+from phosphor_eda.schematic import Component, Net, Page, Pin, Port, Schematic
 from phosphor_eda.validate import Category, Severity, validate_design
 
 
@@ -16,8 +16,8 @@ def _simple_design(
     nets: list[Net] | None = None,
     components: list[Component] | None = None,
     pages: list[Page] | None = None,
-) -> Design:
-    return Design(
+) -> Schematic:
+    return Schematic(
         name="test",
         nets=nets or [],
         components=components or [],

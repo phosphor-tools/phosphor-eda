@@ -1,7 +1,7 @@
 """Schematic loading and project detection.
 
 Dispatches on file extension to parse schematics from Altium, KiCad,
-OrCAD, and Eagle into a unified Design model.
+OrCAD, and Eagle into a unified Schematic model.
 """
 
 from __future__ import annotations
@@ -21,30 +21,30 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-    from phosphor_eda.schematic import Design
+    from phosphor_eda.schematic import Schematic
 
 # Matches "Sheetfile" "<value>" in KiCad S-expression text.
 _SHEETFILE_RE = re.compile(r'"Sheetfile"\s+"([^"]+)"')
 
 
-def _load_altium(path: Path) -> Design:
+def _load_altium(path: Path) -> Schematic:
     return altium_to_design(path, name=path.stem)
 
 
-def _load_dsn(path: Path) -> Design:
+def _load_dsn(path: Path) -> Schematic:
     raw = parse_dsn(path)
     return dsn_to_design(raw, name=path.stem)
 
 
-def _load_eagle(path: Path) -> Design:
+def _load_eagle(path: Path) -> Schematic:
     return eagle_to_design(path, name=path.stem)
 
 
-def _load_kicad(path: Path) -> Design:
+def _load_kicad(path: Path) -> Schematic:
     return kicad_to_design(path, name=path.stem)
 
 
-_DESIGN_LOADERS: dict[str, Callable[[Path], Design]] = {
+_DESIGN_LOADERS: dict[str, Callable[[Path], Schematic]] = {
     ".schdoc": _load_altium,
     ".prjpcb": _load_altium,
     ".dsn": _load_dsn,
@@ -132,8 +132,8 @@ def _find_kicad_root(sch: Path) -> Path | None:
     return None
 
 
-def load_design(path: Path) -> Design:
-    """Parse a schematic file into a Design (no serialization)."""
+def load_design(path: Path) -> Schematic:
+    """Parse a schematic file into a Schematic (no serialization)."""
     ext = path.suffix.lower()
     loader = _DESIGN_LOADERS.get(ext)
     if loader is None:

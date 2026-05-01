@@ -1,4 +1,4 @@
-"""Smoke-test validation for a merged schematic Design.
+"""Smoke-test validation for a merged Schematic.
 
 Checks for structural anomalies that indicate parser bugs or unresolved
 connections — things that should never (or rarely) appear in a correctly
@@ -21,7 +21,7 @@ from enum import StrEnum, auto
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from phosphor_eda.schematic import Design
+    from phosphor_eda.schematic import Schematic
 
 # ---------------------------------------------------------------------------
 # Finding data types
@@ -98,7 +98,7 @@ _HIGH_UNCONNECTED_FRACTION = 0.80
 _BAD_NAME_RE = re.compile(r"[\\~\x00-\x1f\x7f-\x9f]")
 
 
-def _check_nets(design: Design, findings: list[Finding]) -> None:
+def _check_nets(design: Schematic, findings: list[Finding]) -> None:
     """Check net-level anomalies."""
     for net in design.nets:
         # Empty net name
@@ -170,7 +170,7 @@ def _check_nets(design: Design, findings: list[Finding]) -> None:
             seen.add(key)
 
 
-def _check_components(design: Design, findings: list[Finding]) -> None:
+def _check_components(design: Schematic, findings: list[Finding]) -> None:
     """Check component-level anomalies."""
     for comp in design.components:
         n_pins = len(comp.pins)
@@ -252,7 +252,7 @@ def _check_components(design: Design, findings: list[Finding]) -> None:
                 )
 
 
-def _check_pin_names(design: Design, findings: list[Finding]) -> None:
+def _check_pin_names(design: Schematic, findings: list[Finding]) -> None:
     """Check for residual markup in pin/component names."""
     for comp in design.components:
         for pin in comp.pins:
@@ -269,7 +269,7 @@ def _check_pin_names(design: Design, findings: list[Finding]) -> None:
                 )
 
 
-def _check_ports(design: Design, findings: list[Finding]) -> None:
+def _check_ports(design: Schematic, findings: list[Finding]) -> None:
     """Check port-level anomalies."""
     # Count how many distinct pages each port name appears on
     port_pages: dict[str, set[str]] = {}
@@ -295,8 +295,8 @@ def _check_ports(design: Design, findings: list[Finding]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def validate_design(design: Design) -> list[Finding]:
-    """Run all smoke-test checks on a merged Design.
+def validate_design(design: Schematic) -> list[Finding]:
+    """Run all smoke-test checks on a merged Schematic.
 
     Returns a list of findings sorted by severity (errors first),
     then by category, then by message.

@@ -3,7 +3,7 @@
 import pytest
 
 from phosphor_eda.pcb import (
-    PcbBoard,
+    Pcb,
     PcbFootprint,
     PcbLine,
     PcbNet,
@@ -34,7 +34,7 @@ from phosphor_eda.pcb_annotations import (
 # ---------------------------------------------------------------------------
 
 
-def _make_test_board() -> PcbBoard:
+def _make_test_board() -> Pcb:
     """Board with two footprints (U1, U2) and a shared net for target resolution tests."""
     u1_pads = [
         PcbPad(
@@ -122,7 +122,7 @@ def _make_test_board() -> PcbBoard:
         ],
         bbox=(29.0, 9.0, 33.0, 11.0),
     )
-    return PcbBoard(
+    return Pcb(
         name="test",
         nets={
             0: PcbNet(0, ""),
@@ -144,7 +144,7 @@ def _make_test_board() -> PcbBoard:
 
 
 @pytest.fixture()
-def board() -> PcbBoard:
+def board() -> Pcb:
     return _make_test_board()
 
 
@@ -253,35 +253,35 @@ class TestParseAnnotations:
 
 
 class TestResolveTargets:
-    def test_resolve_component_target(self, board: PcbBoard) -> None:
+    def test_resolve_component_target(self, board: Pcb) -> None:
         center, bbox = _resolve_component_target("U1", board)
         assert center == pytest.approx((11.0, 10.0), abs=0.1)
         assert bbox == (9.0, 9.0, 13.0, 11.0)
 
-    def test_resolve_component_unknown_raises(self, board: PcbBoard) -> None:
+    def test_resolve_component_unknown_raises(self, board: Pcb) -> None:
         with pytest.raises(ValueError, match="U99"):
             _resolve_component_target("U99", board)
 
-    def test_resolve_pad_target(self, board: PcbBoard) -> None:
+    def test_resolve_pad_target(self, board: Pcb) -> None:
         x, y = _resolve_pad_target("U1.2", board)
         assert x == pytest.approx(12.0)
         assert y == pytest.approx(10.0)
 
-    def test_resolve_pad_unknown_ref_raises(self, board: PcbBoard) -> None:
+    def test_resolve_pad_unknown_ref_raises(self, board: Pcb) -> None:
         with pytest.raises(ValueError, match="U99"):
             _resolve_pad_target("U99.1", board)
 
-    def test_resolve_pad_unknown_number_raises(self, board: PcbBoard) -> None:
+    def test_resolve_pad_unknown_number_raises(self, board: Pcb) -> None:
         with pytest.raises(ValueError, match="99"):
             _resolve_pad_target("U1.99", board)
 
-    def test_resolve_net_target(self, board: PcbBoard) -> None:
+    def test_resolve_net_target(self, board: Pcb) -> None:
         """SPI_CLK on U2 → pad 1 at (30, 10)."""
         x, y = _resolve_net_target("SPI_CLK", "U2", board)
         assert x == pytest.approx(30.0)
         assert y == pytest.approx(10.0)
 
-    def test_resolve_net_target_not_on_component(self, board: PcbBoard) -> None:
+    def test_resolve_net_target_not_on_component(self, board: Pcb) -> None:
         """SPI_MOSI is only on U2, not U1."""
         with pytest.raises(ValueError, match="SPI_MOSI.*U1"):
             _resolve_net_target("SPI_MOSI", "U1", board)
@@ -428,7 +428,7 @@ def test_font_size_constant_for_huge_board() -> None:
 
 
 class TestResolveAnnotations:
-    def test_box_and_pointer(self, board: PcbBoard) -> None:
+    def test_box_and_pointer(self, board: Pcb) -> None:
         spec = AnnotationSpec(
             boxes=[BoxSpec(targets=["U1", "U2"], label="SPI bus")],
             pointers=[PointerSpec(target="U1.2", label="Clock pin")],
@@ -444,7 +444,7 @@ class TestResolveAnnotations:
         assert box.x * scale <= 9.0  # U1 left edge in board mm
         assert (box.x + box.width) * scale >= 33.0  # U2 right edge
 
-    def test_content_bbox_encompasses_annotations(self, board: PcbBoard) -> None:
+    def test_content_bbox_encompasses_annotations(self, board: Pcb) -> None:
         spec = AnnotationSpec(
             boxes=[BoxSpec(targets=["U1"], label="MCU")],
             pointers=[],
@@ -461,7 +461,7 @@ class TestResolveAnnotations:
         assert cx2 >= (box.x + box.width) * s
         assert cy2 >= (box.y + box.height) * s
 
-    def test_legend_resolved(self, board: PcbBoard) -> None:
+    def test_legend_resolved(self, board: Pcb) -> None:
         spec = AnnotationSpec(
             boxes=[],
             pointers=[],
@@ -475,7 +475,7 @@ class TestResolveAnnotations:
         assert resolved.legend is not None
         assert resolved.legend.title == "Signals"
 
-    def test_label_with_connector(self, board: PcbBoard) -> None:
+    def test_label_with_connector(self, board: Pcb) -> None:
         """Labels targeting a component should get a connector path."""
         spec = AnnotationSpec(
             boxes=[],
@@ -489,7 +489,7 @@ class TestResolveAnnotations:
         # On-board labels get a connector path to the target
         assert len(label.connector_path) >= 2
 
-    def test_label_without_target_no_connector(self, board: PcbBoard) -> None:
+    def test_label_without_target_no_connector(self, board: Pcb) -> None:
         """Labels without a target should have no connector."""
         spec = AnnotationSpec(
             boxes=[],
@@ -500,7 +500,7 @@ class TestResolveAnnotations:
         label = resolved.labels[0]
         assert label.connector_path == []
 
-    def test_net_pointer(self, board: PcbBoard) -> None:
+    def test_net_pointer(self, board: Pcb) -> None:
         """Pointer via target_net + target_near resolves to the correct pad."""
         spec = AnnotationSpec(
             boxes=[],
@@ -521,7 +521,7 @@ class TestResolveAnnotations:
         assert ptr.target_x * s == pytest.approx(30.0)
         assert ptr.target_y * s == pytest.approx(10.0)
 
-    def test_empty_spec_returns_empty(self, board: PcbBoard) -> None:
+    def test_empty_spec_returns_empty(self, board: Pcb) -> None:
         spec = AnnotationSpec(boxes=[], pointers=[], labels=[])
         resolved = resolve_annotations(spec, board, "front")
         assert resolved.boxes == []
@@ -529,7 +529,7 @@ class TestResolveAnnotations:
         assert resolved.labels == []
         assert resolved.legend is None
 
-    def test_box_label_in_margin(self, board: PcbBoard) -> None:
+    def test_box_label_in_margin(self, board: Pcb) -> None:
         """Box labels should be placed in a margin outside the board."""
         spec = AnnotationSpec(
             boxes=[BoxSpec(targets=["U1"], label="MCU")],
@@ -553,7 +553,7 @@ class TestResolveAnnotations:
         )
         assert outside, f"Label at ({lx}, {ly}) should be outside board"
 
-    def test_box_label_has_connector(self, board: PcbBoard) -> None:
+    def test_box_label_has_connector(self, board: Pcb) -> None:
         """Box labels should have an orthogonal connector path."""
         spec = AnnotationSpec(
             boxes=[BoxSpec(targets=["U1"], label="MCU")],
@@ -564,7 +564,7 @@ class TestResolveAnnotations:
         box = resolved.boxes[0]
         assert len(box.connector_path) >= 2
 
-    def test_label_dimensions_populated(self, board: PcbBoard) -> None:
+    def test_label_dimensions_populated(self, board: Pcb) -> None:
         """Resolved labels should have positive width and height."""
         spec = AnnotationSpec(
             boxes=[],
@@ -576,7 +576,7 @@ class TestResolveAnnotations:
         assert ptr.label_width > 0
         assert ptr.label_height > 0
 
-    def test_no_label_overlap(self, board: PcbBoard) -> None:
+    def test_no_label_overlap(self, board: Pcb) -> None:
         """Multiple labels in the same margin should not overlap."""
         spec = AnnotationSpec(
             boxes=[],
@@ -600,7 +600,7 @@ class TestResolveAnnotations:
             v_overlap = a.label_y < b_b and b.label_y < a_b
             assert not (h_overlap and v_overlap), "Labels overlap"
 
-    def test_font_size_stored(self, board: PcbBoard) -> None:
+    def test_font_size_stored(self, board: Pcb) -> None:
         """Resolved annotations should include the computed font size."""
         spec = AnnotationSpec(boxes=[], pointers=[], labels=[])
         resolved = resolve_annotations(spec, board, "front")
