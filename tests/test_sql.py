@@ -186,3 +186,66 @@ class TestJetsonSchematic:
     def test_net_summary_view(self, jetson_db: duckdb.DuckDBPyConnection) -> None:
         rows = jetson_db.execute("SELECT * FROM net_summary LIMIT 5").fetchall()
         assert len(rows) > 0
+
+
+# ---------------------------------------------------------------------------
+# CLI command tests
+# ---------------------------------------------------------------------------
+
+
+class TestCLI:
+    def test_basic_query(self) -> None:
+        from click.testing import CliRunner
+
+        from phosphor_eda.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main, ["sql", str(SWD_SWITCH_PCB), "SELECT count(*) FROM footprints"]
+        )
+        assert result.exit_code == 0
+        assert "28" in result.output
+
+    def test_schema_flag(self) -> None:
+        from click.testing import CliRunner
+
+        from phosphor_eda.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["sql", str(SWD_SWITCH_PCB), "--schema"])
+        assert result.exit_code == 0
+        assert "CREATE TABLE footprints" in result.output
+
+    def test_no_query_error(self) -> None:
+        from click.testing import CliRunner
+
+        from phosphor_eda.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["sql", str(SWD_SWITCH_PCB)])
+        assert result.exit_code != 0
+
+    def test_invalid_query(self) -> None:
+        from click.testing import CliRunner
+
+        from phosphor_eda.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["sql", str(SWD_SWITCH_PCB), "SELECT * FROM nonexistent"])
+        assert result.exit_code != 0
+        assert "error" in result.output.lower()
+
+    def test_spatial_query(self) -> None:
+        from click.testing import CliRunner
+
+        from phosphor_eda.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(
+            main, ["sql", str(SWD_SWITCH_PCB), "SELECT ST_Area(geom) FROM footprints LIMIT 1"]
+        )
+        assert result.exit_code == 0
+        # Should contain a numeric value (the area)
+        lines = result.output.strip().split("\n")
+        # Header + separator + 1 data row + "(1 row)" footer
+        assert len(lines) >= 3
