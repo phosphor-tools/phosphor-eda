@@ -10,11 +10,26 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from phosphor_eda.altium.pcb_parser import (
+    parse_altium_classes,
+    parse_altium_diff_pairs,
+    parse_altium_pcb,
+    parse_altium_rules,
+    parse_altium_stackup,
+    read_text_records,
+)
 from phosphor_eda.altium.project import parse_prjpcb_file
 from phosphor_eda.altium.to_schematic import altium_to_design
 from phosphor_eda.dsn.parser import parse_dsn
 from phosphor_eda.dsn.to_schematic import dsn_to_design
 from phosphor_eda.eagle.to_schematic import eagle_to_design
+from phosphor_eda.kicad.dru_parser import parse_kicad_dru
+from phosphor_eda.kicad.pcb_parser import (
+    parse_kicad_pcb_from_sexpr,
+    parse_kicad_stackup,
+    read_kicad_pcb_sexpr,
+)
+from phosphor_eda.kicad.pro_parser import parse_kicad_pro
 from phosphor_eda.kicad.to_schematic import kicad_to_design
 from phosphor_eda.project import Project
 from phosphor_eda.serialize import serialize_design
@@ -182,10 +197,6 @@ def load_project(path: Path) -> Project:
 
 def _load_kicad_project(entry: Path) -> Project:
     """Assemble a KiCad project from any entry file."""
-    from phosphor_eda.kicad.dru_parser import parse_kicad_dru
-    from phosphor_eda.kicad.pcb_parser import load_kicad_stackup, parse_kicad_pcb
-    from phosphor_eda.kicad.pro_parser import parse_kicad_pro
-
     # Determine stem and directory
     stem = entry.stem
     parent = entry.parent
@@ -196,11 +207,13 @@ def _load_kicad_project(entry: Path) -> Project:
     dru_path = parent / f"{stem}.kicad_dru"
     sch_path = parent / f"{stem}.kicad_sch"
 
-    # Parse PCB
-    pcb = parse_kicad_pcb(pcb_path) if pcb_path.exists() else None
-
-    # Parse stackup from PCB file
-    stackup = load_kicad_stackup(pcb_path) if pcb_path.exists() else None
+    # Parse PCB and stackup from a single read of the .kicad_pcb file
+    pcb = None
+    stackup = None
+    if pcb_path.exists():
+        sexpr = read_kicad_pcb_sexpr(pcb_path)
+        pcb = parse_kicad_pcb_from_sexpr(sexpr, default_name=stem)
+        stackup = parse_kicad_stackup(sexpr)
 
     # Parse net classes from .kicad_pro
     net_classes = parse_kicad_pro(pro_path) if pro_path.exists() else []
@@ -224,17 +237,6 @@ def _load_kicad_project(entry: Path) -> Project:
 def _load_altium_project_from_pcb(pcb_path: Path) -> Project:
     """Load an Altium project starting from a .PcbDoc file."""
     import olefile
-
-    from phosphor_eda.altium.pcb_parser import (
-        _read_text_records as read_text_records,  # pyright: ignore[reportPrivateUsage]
-    )
-    from phosphor_eda.altium.pcb_parser import (
-        parse_altium_classes,
-        parse_altium_diff_pairs,
-        parse_altium_pcb,
-        parse_altium_rules,
-        parse_altium_stackup,
-    )
 
     pcb = parse_altium_pcb(pcb_path)
 

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 import duckdb
 from shapely import LineString, Point
 
+from phosphor_eda.pcb import PcbPolygon
 from phosphor_eda.sql.geometry import (
     arc_center_from_three_points,
     arc_sweep_angle,
@@ -244,8 +245,6 @@ def _load_polygons(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
 
 
 def _load_zones(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
-    from phosphor_eda.pcb import PcbPolygon
-
     for zone in pcb.zones:
         # Build boundary polygon from zone.boundary points
         boundary_poly = polygon_geometry(PcbPolygon(points=zone.boundary, layer=zone.layer))

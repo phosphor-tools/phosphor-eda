@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from phosphor_eda.convert import load_project
+from phosphor_eda.project import Project
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -20,32 +21,32 @@ SWD_SWITCH_PCB = FIXTURES / "swd_switch.kicad_pcb"
 
 
 @pytest.fixture(scope="module")
-def kicad_project():
+def kicad_project() -> Project:
     if not JETSON_ORIN_PCB.exists():
         pytest.skip("Fixture not available")
     return load_project(JETSON_ORIN_PCB)
 
 
-def test_kicad_project_has_pcb(kicad_project) -> None:
+def test_kicad_project_has_pcb(kicad_project: Project) -> None:
     assert kicad_project.pcb is not None
 
 
-def test_kicad_project_has_stackup(kicad_project) -> None:
+def test_kicad_project_has_stackup(kicad_project: Project) -> None:
     assert kicad_project.stackup is not None
     # 8-layer board → copper + dielectric layers
     copper = [ly for ly in kicad_project.stackup.layers if ly.layer_type == "copper"]
     assert len(copper) == 8
 
 
-def test_kicad_project_has_net_classes(kicad_project) -> None:
+def test_kicad_project_has_net_classes(kicad_project: Project) -> None:
     assert len(kicad_project.net_classes) == 8
 
 
-def test_kicad_project_has_design_rules(kicad_project) -> None:
+def test_kicad_project_has_design_rules(kicad_project: Project) -> None:
     assert len(kicad_project.design_rules) >= 15
 
 
-def test_kicad_project_has_schematic(kicad_project) -> None:
+def test_kicad_project_has_schematic(kicad_project: Project) -> None:
     assert kicad_project.schematic is not None
     assert len(kicad_project.schematic.components) > 0
 
@@ -56,13 +57,13 @@ def test_kicad_project_has_schematic(kicad_project) -> None:
 
 
 @pytest.fixture(scope="module")
-def kicad_project_from_pro():
+def kicad_project_from_pro() -> Project:
     if not JETSON_ORIN_PRO.exists():
         pytest.skip("Fixture not available")
     return load_project(JETSON_ORIN_PRO)
 
 
-def test_kicad_pro_same_result(kicad_project_from_pro) -> None:
+def test_kicad_pro_same_result(kicad_project_from_pro: Project) -> None:
     """Loading from .kicad_pro gives same data as loading from .kicad_pcb."""
     p = kicad_project_from_pro
     assert p.pcb is not None
@@ -77,31 +78,31 @@ def test_kicad_pro_same_result(kicad_project_from_pro) -> None:
 
 
 @pytest.fixture(scope="module")
-def altium_project():
+def altium_project() -> Project:
     if not PI_MX8_PCB.exists():
         pytest.skip("Fixture not available")
     return load_project(PI_MX8_PCB)
 
 
-def test_altium_project_has_pcb(altium_project) -> None:
+def test_altium_project_has_pcb(altium_project: Project) -> None:
     assert altium_project.pcb is not None
 
 
-def test_altium_project_has_stackup(altium_project) -> None:
+def test_altium_project_has_stackup(altium_project: Project) -> None:
     assert altium_project.stackup is not None
     copper = [ly for ly in altium_project.stackup.layers if ly.layer_type == "copper"]
     assert len(copper) == 10
 
 
-def test_altium_project_has_net_classes(altium_project) -> None:
+def test_altium_project_has_net_classes(altium_project: Project) -> None:
     assert len(altium_project.net_classes) == 64
 
 
-def test_altium_project_has_design_rules(altium_project) -> None:
+def test_altium_project_has_design_rules(altium_project: Project) -> None:
     assert len(altium_project.design_rules) >= 100
 
 
-def test_altium_project_has_diff_pairs(altium_project) -> None:
+def test_altium_project_has_diff_pairs(altium_project: Project) -> None:
     assert len(altium_project.diff_pairs) == 55
 
 
@@ -111,22 +112,22 @@ def test_altium_project_has_diff_pairs(altium_project) -> None:
 
 
 @pytest.fixture(scope="module")
-def simple_project():
+def simple_project() -> Project:
     if not SWD_SWITCH_PCB.exists():
         pytest.skip("Fixture not available")
     return load_project(SWD_SWITCH_PCB)
 
 
-def test_simple_project_has_pcb(simple_project) -> None:
+def test_simple_project_has_pcb(simple_project: Project) -> None:
     assert simple_project.pcb is not None
 
 
-def test_simple_project_empty_rules(simple_project) -> None:
+def test_simple_project_empty_rules(simple_project: Project) -> None:
     """No .kicad_dru → empty design rules."""
     assert simple_project.design_rules == []
 
 
-def test_simple_project_empty_classes(simple_project) -> None:
+def test_simple_project_empty_classes(simple_project: Project) -> None:
     """No .kicad_pro → empty net classes."""
     assert simple_project.net_classes == []
 
@@ -136,6 +137,6 @@ def test_simple_project_empty_classes(simple_project) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_unsupported_extension():
+def test_unsupported_extension() -> None:
     with pytest.raises(ValueError, match="Unsupported project entry point"):
         load_project(Path("foo.txt"))

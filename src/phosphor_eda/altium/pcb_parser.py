@@ -135,7 +135,7 @@ _PAD_SHAPE_ALT_ROUNDRECT = 9
 # ---------------------------------------------------------------------------
 
 
-def _read_text_records(data: bytes) -> list[dict[str, str]]:
+def read_text_records(data: bytes) -> list[dict[str, str]]:
     """Read pipe-delimited text records with a 4-byte LE length prefix."""
     records: list[dict[str, str]] = []
     pos = 0
@@ -342,7 +342,7 @@ def _parse_nets(data: bytes) -> dict[int, PcbNet]:
     Nets are numbered starting at 1 (index+1 in the stream order).
     Net 0 is reserved for "unconnected".
     """
-    records = _read_text_records(data)
+    records = read_text_records(data)
     nets: dict[int, PcbNet] = {0: PcbNet(number=0, name="")}
     for i, rec in enumerate(records):
         num = i + 1
@@ -360,7 +360,7 @@ def _parse_components(data: bytes, layer_map: dict[int, PcbLayer]) -> list[PcbFo
     Component records are text-based and contain position, pattern,
     layer, rotation, and designator.  Pads and geometry are added later.
     """
-    records = _read_text_records(data)
+    records = read_text_records(data)
     footprints: list[PcbFootprint] = []
     front_name = _layer_name(1, layer_map) or "Top Layer"
     back_name = _layer_name(32, layer_map) or "Bottom Layer"
@@ -933,7 +933,7 @@ def _parse_component_bodies(data: bytes) -> dict[int, list[PcbModel3D]]:
     - ``MODEL.3D.ROTX/Y/Z``: rotation in degrees
     - ``MODEL.3D.DZ``: Z offset in mil
     """
-    records = _read_text_records(data)
+    records = read_text_records(data)
     result: dict[int, list[PcbModel3D]] = {}
 
     for rec in records:
@@ -1115,7 +1115,7 @@ def _rule_value_mm(props: dict[str, str], *keys: str) -> float | None:
 
 def parse_altium_classes(data: bytes) -> list[NetClass]:
     """Parse Altium Classes6 stream into NetClass objects."""
-    records = _read_text_records(data)
+    records = read_text_records(data)
     classes: list[NetClass] = []
     for props in records:
         name = props.get("name", "")
@@ -1136,7 +1136,7 @@ def parse_altium_classes(data: bytes) -> list[NetClass]:
 
 def parse_altium_diff_pairs(data: bytes) -> list[DiffPair]:
     """Parse Altium DifferentialPairs6 stream into DiffPair objects."""
-    records = _read_text_records(data)
+    records = read_text_records(data)
     pairs: list[DiffPair] = []
     for props in records:
         name = props.get("name", "")
@@ -1278,7 +1278,7 @@ def parse_altium_pcb(
     # Build layer map from Board6 metadata + static defaults
     board_props: dict[str, str] = {}
     if board_data:
-        board_records = _read_text_records(board_data)
+        board_records = read_text_records(board_data)
         if board_records:
             board_props = board_records[0]
     layer_map = _build_layer_map(board_props)

@@ -8,12 +8,12 @@ from pathlib import Path
 import pytest
 
 from phosphor_eda.altium.pcb_parser import (
-    _read_text_records,  # pyright: ignore[reportPrivateUsage]
     parse_altium_classes,
     parse_altium_diff_pairs,
     parse_altium_pcb,
     parse_altium_rules,
     parse_altium_stackup,
+    read_text_records,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "altium" / "pi-mx8" / "PCB" / "PiMX8MP_r0.3.PcbDoc"
@@ -164,7 +164,7 @@ def test_pcie_diff_pair(diff_pairs) -> None:
 
 @pytest.fixture(scope="module")
 def stackup(ole_streams: dict[str, bytes]):
-    records = _read_text_records(ole_streams["board"])
+    records = read_text_records(ole_streams["board"])
     board_props = records[0] if records else {}
     return parse_altium_stackup(board_props)
 

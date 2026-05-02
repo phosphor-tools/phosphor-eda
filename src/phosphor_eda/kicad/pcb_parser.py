@@ -1115,17 +1115,26 @@ def load_kicad_stackup(path: Path) -> Stackup | None:
 
 def parse_kicad_pcb(path: Path) -> Pcb:
     """Parse a .kicad_pcb file into the PCB domain model."""
+    sexpr = read_kicad_pcb_sexpr(path)
+    return parse_kicad_pcb_from_sexpr(sexpr, default_name=path.stem)
+
+
+def read_kicad_pcb_sexpr(path: Path) -> SExpNode:
+    """Read a .kicad_pcb file and return the top-level S-expression list."""
     text = path.read_text(encoding="utf-8")
     data: SExpNode = sexpdata.loads(text)
-    sexpr: SExpNode = list(data[1:]) if data else []
+    return list(data[1:]) if data else []
 
+
+def parse_kicad_pcb_from_sexpr(sexpr: SExpNode, *, default_name: str = "") -> Pcb:
+    """Parse a PCB from an already-loaded S-expression list."""
     # Layer definitions
     layer_defs = _parse_layer_defs(sexpr)
 
     # Title for the board name
     title_block = sexp.find(sexpr, "title_block")
     title_node = sexp.find(title_block, "title") if title_block else None
-    name = sexp.val(title_node) if title_node else path.stem
+    name = sexp.val(title_node) if title_node else default_name
 
     nets = _parse_nets(sexpr)
 
