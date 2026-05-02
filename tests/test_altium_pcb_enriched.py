@@ -15,6 +15,7 @@ from phosphor_eda.altium.pcb_parser import (
     parse_altium_stackup,
     read_text_records,
 )
+from phosphor_eda.project import Stackup
 
 FIXTURE = Path(__file__).parent / "fixtures" / "altium" / "pi-mx8" / "PCB" / "PiMX8MP_r0.3.PcbDoc"
 
@@ -163,10 +164,12 @@ def test_pcie_diff_pair(diff_pairs) -> None:
 
 
 @pytest.fixture(scope="module")
-def stackup(ole_streams: dict[str, bytes]):
+def stackup(ole_streams: dict[str, bytes]) -> Stackup:
     records = read_text_records(ole_streams["board"])
     board_props = records[0] if records else {}
-    return parse_altium_stackup(board_props)
+    result = parse_altium_stackup(board_props)
+    assert result is not None, "parse_altium_stackup returned None"
+    return result
 
 
 def test_stackup_exists(stackup) -> None:

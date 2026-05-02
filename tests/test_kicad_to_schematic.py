@@ -152,10 +152,14 @@ def test_component_position(design):
 
 def test_component_rotation(design):
     """Components report rotation from the (at x y angle) node."""
-    # All C1 through C13 happen to be 0° in this fixture, but at least it's set
     c1 = _find_component(design, "C1")
     assert c1 is not None
     assert c1.rotation == 0.0
+
+    # R1 is at 270° in this fixture — verifies angle is actually parsed
+    r1 = _find_component(design, "R1")
+    assert r1 is not None
+    assert r1.rotation == 270.0
 
 
 # --- Validation ---

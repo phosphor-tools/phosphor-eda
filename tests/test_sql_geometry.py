@@ -37,25 +37,27 @@ def _make_pad(
     height: float = 1.0,
     rotation: float = 0.0,
     roundrect_rratio: float = 0.25,
-    **kwargs: object,
+    number: str = "1",
+    x: float = 0.0,
+    y: float = 0.0,
+    layers: list[str] | None = None,
+    net_number: int = 1,
+    net_name: str = "VCC",
+    footprint_ref: str = "U1",
 ) -> PcbPad:
-    defaults: dict[str, object] = {
-        "number": "1",
-        "x": 0.0,
-        "y": 0.0,
-        "layers": ["F.Cu"],
-        "net_number": 1,
-        "net_name": "VCC",
-        "footprint_ref": "U1",
-    }
-    defaults.update(kwargs)
     return PcbPad(
         shape=shape,
         width=width,
         height=height,
         rotation=rotation,
         roundrect_rratio=roundrect_rratio,
-        **defaults,  # type: ignore[arg-type]
+        number=number,
+        x=x,
+        y=y,
+        layers=layers if layers is not None else ["F.Cu"],
+        net_number=net_number,
+        net_name=net_name,
+        footprint_ref=footprint_ref,
     )
 
 

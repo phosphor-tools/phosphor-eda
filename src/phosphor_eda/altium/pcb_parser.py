@@ -728,11 +728,11 @@ def _parse_polygon_pours(
     pour_net_map: dict[int, int] = {}
 
     for rec in records:
-        pourindex = int(rec.get("pourindex", "-1"))
+        pourindex = int(rec.get("pourindex", "-1") or "-1")
 
         # Resolve net: text records store 0-based Nets6 index,
         # apply _net_number() to convert to 1-based pcb.nets key
-        net_raw = int(rec.get("net", str(_NET_UNCONNECTED)))
+        net_raw = int(rec.get("net", str(_NET_UNCONNECTED)) or str(_NET_UNCONNECTED))
         net_num = _net_number(net_raw)
         net_obj = nets.get(net_num)
         net_name = net_obj.name if net_obj else ""
@@ -841,7 +841,7 @@ def _parse_regions(
         if resolved_num in _COPPER_LAYERS:
             if region.net == _NET_UNCONNECTED and pour_net_map:
                 # Inherit from parent polygon pour via subpolyindex
-                subpoly = int(region.properties.get("subpolyindex", "-1"))
+                subpoly = int(region.properties.get("subpolyindex", "-1") or "-1")
                 net_num = pour_net_map.get(subpoly, 0)
             else:
                 net_num = _net_number(region.net)

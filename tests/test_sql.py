@@ -172,7 +172,7 @@ class TestJetsonNetClasses:
 
 class TestJetsonDesignRules:
     def test_count(self, jetson_db: duckdb.DuckDBPyConnection) -> None:
-        assert _count(jetson_db, "SELECT count(*) FROM design_rules") == 32
+        assert _count(jetson_db, "SELECT count(*) FROM design_rules") == 33
 
 
 class TestJetsonSchematic:

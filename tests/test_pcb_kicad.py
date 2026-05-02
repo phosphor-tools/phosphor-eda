@@ -8,8 +8,10 @@ import sexpdata
 from phosphor_eda.kicad.pcb_parser import (
     _extract_value,  # pyright: ignore[reportPrivateUsage]
     parse_kicad_pcb,
+    parse_kicad_stackup,
 )
 from phosphor_eda.pcb import LayerFunction, Pcb
+from phosphor_eda.project import Stackup
 
 FIXTURE = Path(__file__).parent / "fixtures" / "swd_switch.kicad_pcb"
 
@@ -545,13 +547,11 @@ JETSON_ORIN_FIXTURE = (
 
 
 @pytest.fixture(scope="module")
-def jetson_orin_stackup():
+def jetson_orin_stackup() -> Stackup:
     """Parse just the stackup from the large jetson-orin board."""
     import re
 
     import sexpdata as _sexpdata
-
-    from phosphor_eda.kicad.pcb_parser import parse_kicad_stackup
 
     text = JETSON_ORIN_FIXTURE.read_text(encoding="utf-8")
     # Extract just the (setup ...) section for performance
@@ -569,23 +569,24 @@ def jetson_orin_stackup():
                 end = i + 1
                 break
     setup_expr = _sexpdata.loads(text[start:end])
-    return parse_kicad_stackup([setup_expr])
+    result = parse_kicad_stackup([setup_expr])
+    assert result is not None, "parse_kicad_stackup returned None"
+    return result
 
 
 @pytest.mark.skipif(not JETSON_ORIN_FIXTURE.exists(), reason="Jetson Orin fixture not available")
-def test_jetson_orin_stackup_layers(jetson_orin_stackup) -> None:
-    assert jetson_orin_stackup is not None
+def test_jetson_orin_stackup_layers(jetson_orin_stackup: Stackup) -> None:
     copper_layers = [ly for ly in jetson_orin_stackup.layers if ly.layer_type == "copper"]
     assert len(copper_layers) == 8
 
 
 @pytest.mark.skipif(not JETSON_ORIN_FIXTURE.exists(), reason="Jetson Orin fixture not available")
-def test_jetson_orin_stackup_finish(jetson_orin_stackup) -> None:
+def test_jetson_orin_stackup_finish(jetson_orin_stackup: Stackup) -> None:
     assert jetson_orin_stackup.copper_finish == "ENIG"
 
 
 @pytest.mark.skipif(not JETSON_ORIN_FIXTURE.exists(), reason="Jetson Orin fixture not available")
-def test_jetson_orin_stackup_prepreg(jetson_orin_stackup) -> None:
+def test_jetson_orin_stackup_prepreg(jetson_orin_stackup: Stackup) -> None:
     """Prepreg layers have epsilon_r and material."""
     prepreg = [ly for ly in jetson_orin_stackup.layers if ly.layer_type == "prepreg"]
     assert len(prepreg) >= 4
@@ -594,7 +595,7 @@ def test_jetson_orin_stackup_prepreg(jetson_orin_stackup) -> None:
 
 
 @pytest.mark.skipif(not JETSON_ORIN_FIXTURE.exists(), reason="Jetson Orin fixture not available")
-def test_jetson_orin_stackup_core(jetson_orin_stackup) -> None:
+def test_jetson_orin_stackup_core(jetson_orin_stackup: Stackup) -> None:
     """Core layers have epsilon_r."""
     core = [ly for ly in jetson_orin_stackup.layers if ly.layer_type == "core"]
     assert len(core) >= 2
