@@ -272,7 +272,7 @@ VIEW_DDL: dict[str, str] = {
         FROM segments s
         JOIN net_class_members ncm ON ncm.net_name = s.net_name
         JOIN net_classes nc ON nc.name = ncm.net_class
-        WHERE s.width_mm != nc.trace_width_mm
+        WHERE ABS(s.width_mm - nc.trace_width_mm) > 1e-6
     """,
     "drill_histogram": """
         CREATE VIEW drill_histogram AS

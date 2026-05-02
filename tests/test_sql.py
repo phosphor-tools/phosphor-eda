@@ -1,5 +1,6 @@
 """Integration tests for the DuckDB SQL loader and CLI command."""
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import duckdb
@@ -26,9 +27,13 @@ def _count(db: duckdb.DuckDBPyConnection, sql: str) -> int:
 
 
 @pytest.fixture(scope="module")
-def db() -> duckdb.DuckDBPyConnection:
+def db() -> Iterator[duckdb.DuckDBPyConnection]:
     project = load_project(SWD_SWITCH_PCB)
-    return load_database(project)
+    con = load_database(project)
+    try:
+        yield con
+    finally:
+        con.close()
 
 
 class TestFootprints:
@@ -136,6 +141,7 @@ class TestViews:
         # Should have both via and pad sources
         sources = {r[2] for r in rows}
         assert "via" in sources
+        assert "pad" in sources
 
     def test_spatial_distance_query(self, db: duckdb.DuckDBPyConnection) -> None:
         """ST_Distance between two footprints returns a plausible value."""
@@ -158,11 +164,15 @@ class TestViews:
 
 
 @pytest.fixture(scope="module")
-def jetson_db() -> duckdb.DuckDBPyConnection:
+def jetson_db() -> Iterator[duckdb.DuckDBPyConnection]:
     if not JETSON_ORIN_PRO.exists():
         pytest.skip("Jetson Orin fixture not available")
     project = load_project(JETSON_ORIN_PRO)
-    return load_database(project)
+    con = load_database(project)
+    try:
+        yield con
+    finally:
+        con.close()
 
 
 class TestJetsonNetClasses:

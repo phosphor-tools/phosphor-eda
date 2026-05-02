@@ -90,7 +90,7 @@ def test_pad_oval_major_axis() -> None:
     pad = _make_pad(shape="oval", width=3.0, height=1.0)
     geom = pad_polygon(pad)
     minx, _, maxx, _ = geom.bounds
-    # Oval 3×1: capsule shape, total width ≈ 3.0
+    # Oval 3x1: capsule shape, total width ~= 3.0
     assert maxx - minx == pytest.approx(3.0, abs=0.01)
 
 
@@ -114,7 +114,7 @@ def test_segment_corridor_width() -> None:
     seg = PcbSegment(
         start_x=0.0, start_y=0.0, end_x=10.0, end_y=0.0, width=0.3, layer="F.Cu", net_number=1
     )
-    centerline, corridor = segment_geometry(seg)
+    _centerline, corridor = segment_geometry(seg)
     # Corridor bounds should extend width/2 above and below centerline
     _, miny, _, maxy = corridor.bounds
     assert maxy - miny == pytest.approx(0.3, abs=0.001)
@@ -143,7 +143,7 @@ def test_arc_center_known_values() -> None:
 
 def test_arc_center_degenerate() -> None:
     # Collinear points — should return a fallback (midpoint as center, large radius)
-    cx, cy, r = arc_center_from_three_points(0.0, 0.0, 1.0, 0.0, 2.0, 0.0)
+    cx, cy, _r = arc_center_from_three_points(0.0, 0.0, 1.0, 0.0, 2.0, 0.0)
     # Should not raise; returns some result
     assert math.isfinite(cx) and math.isfinite(cy)
 
@@ -305,4 +305,4 @@ def test_footprint_bbox_from_bbox_field() -> None:
     )
     geom = footprint_bbox_polygon(fp)
     assert geom is not None
-    assert geom.area == pytest.approx(4.0, abs=0.001)  # 2×2
+    assert geom.area == pytest.approx(4.0, abs=0.001)  # 2x2
