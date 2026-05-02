@@ -48,6 +48,7 @@ from phosphor_eda.pcb import (
     PcbText,
     PcbTraceArc,
     PcbVia,
+    PcbZone,
 )
 from phosphor_eda.project import DesignRule, DiffPair, NetClass, Stackup, StackupLayer
 from phosphor_eda.text import strip_overline
@@ -711,8 +712,89 @@ def _parse_fills(
     return fills
 
 
+def _parse_polygon_pours(
+    data: bytes,
+    nets: dict[int, PcbNet],
+    layer_map: dict[int, PcbLayer],
+) -> tuple[list[PcbZone], dict[int, int]]:
+    """Parse Polygons6/Data → zone definitions and pour-to-net mapping.
+
+    Returns (zones, pour_net_map) where pour_net_map maps pourindex → net_number
+    in the pcb.nets 1-based numbering. This mapping is needed by _parse_regions
+    to inherit net assignments for filled copper regions.
+    """
+    records = read_text_records(data)
+    zones: list[PcbZone] = []
+    pour_net_map: dict[int, int] = {}
+
+    for rec in records:
+        pourindex = int(rec.get("pourindex", "-1"))
+
+        # Resolve net: text records store 0-based Nets6 index,
+        # apply _net_number() to convert to 1-based pcb.nets key
+        net_raw = int(rec.get("net", str(_NET_UNCONNECTED)))
+        net_num = _net_number(net_raw)
+        net_obj = nets.get(net_num)
+        net_name = net_obj.name if net_obj else ""
+
+        # Store pour → net mapping for Regions6 inheritance
+        if pourindex >= 0:
+            pour_net_map[pourindex] = net_num
+
+        # Resolve layer from V7 layer name
+        layer_id = rec.get("layer", "").upper()
+        layer_num = _V7_NAME_TO_NUM.get(layer_id)
+        if layer_num is None:
+            continue
+        layer = _layer_name(layer_num, layer_map)
+        if not layer:
+            continue
+
+        # Extract boundary vertices (vx0..vxN, vy0..vyN in mils)
+        boundary: list[tuple[float, float]] = []
+        i = 0
+        while True:
+            vx_key = f"vx{i}"
+            vy_key = f"vy{i}"
+            if vx_key not in rec or vy_key not in rec:
+                break
+            x_mm = _parse_mil(rec[vx_key])
+            y_mm = -_parse_mil(rec[vy_key])  # Altium Y is inverted
+            boundary.append((x_mm, y_mm))
+            i += 1
+
+        if len(boundary) < 3:
+            continue
+
+        # Fill type from hatchstyle
+        hatchstyle = rec.get("hatchstyle", "").lower()
+        fill_type = "solid" if hatchstyle == "solid" else "hatch" if hatchstyle else ""
+
+        # Track width (min thickness within pour)
+        trackwidth_str = rec.get("trackwidth", "")
+        min_thickness = _parse_mil(trackwidth_str) if trackwidth_str else 0.0
+
+        zones.append(
+            PcbZone(
+                net_number=net_num,
+                net_name=net_name,
+                layer=layer,
+                boundary=boundary,
+                priority=pourindex,
+                min_thickness_mm=min_thickness,
+                fill_type=fill_type,
+            )
+        )
+
+    return zones, pour_net_map
+
+
 def _parse_regions(
-    data: bytes, nets: dict[int, PcbNet], layer_map: dict[int, PcbLayer], ctx: ParseContext
+    data: bytes,
+    nets: dict[int, PcbNet],
+    layer_map: dict[int, PcbLayer],
+    ctx: ParseContext,
+    pour_net_map: dict[int, int] | None = None,
 ) -> list[PcbPolygon]:
     """Parse Regions6/Data → list of PcbPolygon.
 
@@ -720,6 +802,9 @@ def _parse_regions(
     (pairs of float64 in Altium internal units).  All layers are included —
     copper regions carry net info, non-copper regions (silkscreen fills,
     paste openings, etc.) have net_number 0.
+
+    When pour_net_map is provided, regions with net=0xFFFF (inherit) and
+    a valid subpolyindex will inherit the net from their parent polygon pour.
     """
     records = _read_binary_records(data)
     polygons: list[PcbPolygon] = []
@@ -752,7 +837,17 @@ def _parse_regions(
             if len(h_pts) >= 3:
                 holes.append(h_pts)
 
-        net_num = _net_number(region.net) if resolved_num in _COPPER_LAYERS else 0
+        # Net resolution: use direct net if assigned, otherwise inherit from pour
+        if resolved_num in _COPPER_LAYERS:
+            if region.net == _NET_UNCONNECTED and pour_net_map:
+                # Inherit from parent polygon pour via subpolyindex
+                subpoly = int(region.properties.get("subpolyindex", "-1"))
+                net_num = pour_net_map.get(subpoly, 0)
+            else:
+                net_num = _net_number(region.net)
+        else:
+            net_num = 0
+
         net_obj = nets.get(net_num)
         net_name = net_obj.name if net_obj else ""
 
@@ -1269,6 +1364,7 @@ def parse_altium_pcb(
         texts_data = _read_stream(ole, "Texts6/Data")
         fills_data = _read_stream(ole, "Fills6/Data")
         regions_data = _read_stream(ole, "Regions6/Data")
+        polygons6_data = _read_stream(ole, "Polygons6/Data")
         sb_regions_data = _read_stream(ole, "ShapeBasedRegions6/Data")
         comp_bodies_data = _read_stream(ole, "ComponentBodies6/Data")
         board_data = _read_stream(ole, "Board6/Data")
@@ -1294,7 +1390,8 @@ def parse_altium_pcb(
     raw_pads = _parse_pads(pads_data, nets, layer_map, ctx)
     raw_texts = _parse_texts(texts_data, layer_map, ctx)
     fills = _parse_fills(fills_data, layer_map, ctx)
-    regions = _parse_regions(regions_data, nets, layer_map, ctx)
+    zones, pour_net_map = _parse_polygon_pours(polygons6_data, nets, layer_map)
+    regions = _parse_regions(regions_data, nets, layer_map, ctx, pour_net_map)
     sb_board_polys, sb_comp_polys = _parse_shape_based_regions(
         sb_regions_data, nets, layer_map, ctx
     )
@@ -1378,4 +1475,5 @@ def parse_altium_pcb(
         polygons=polygons,
         trace_arcs=trace_arcs,
         layers=list(layer_map.values()),
+        zones=zones,
     )
