@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET
 
-from phosphor_eda.schematic import Component, Design, Net, Page, Pin, merge_pages
+from phosphor_eda.schematic import Component, Net, Page, Pin, Schematic, merge_pages
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -263,11 +263,9 @@ def _build_pages(
             if ds_info is None:
                 continue
 
-            # Skip power/supply symbols and aesthetic parts (frames, fiducials)
-            if ds_info.is_supply:
-                continue
-
             metadata: dict[str, str] = {}
+            if ds_info.is_supply:
+                metadata["is_power_symbol"] = "true"
             if part_info.value:
                 metadata["Value"] = part_info.value
 
@@ -338,8 +336,8 @@ def _build_pages(
 # ---------------------------------------------------------------------------
 
 
-def eagle_to_design(path: Path, name: str = "") -> Design:
-    """Parse an Eagle .sch schematic and return a Design."""
+def eagle_to_design(path: Path, name: str = "") -> Schematic:
+    """Parse an Eagle .sch schematic and return a Schematic."""
     if not name:
         name = path.stem
 
@@ -349,17 +347,17 @@ def eagle_to_design(path: Path, name: str = "") -> Design:
     # Navigate to <eagle><drawing><schematic>
     drawing = root.find("drawing")
     if drawing is None:
-        return Design(name=name)
+        return Schematic(name=name)
 
     schematic = drawing.find("schematic")
     if schematic is None:
-        return Design(name=name)
+        return Schematic(name=name)
 
     libraries = _parse_libraries(schematic)
     parts = _parse_parts(schematic)
     pages = _build_pages(schematic, libraries, parts)
 
     if not pages:
-        return Design(name=name)
+        return Schematic(name=name)
 
     return merge_pages(name, pages)

@@ -16,7 +16,7 @@ from phosphor_eda.altium.sheet_builder import (
     load_sheet,
     resolve_nets,
 )
-from phosphor_eda.schematic import Design, Page, merge_pages
+from phosphor_eda.schematic import Page, Schematic, merge_pages
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -62,8 +62,8 @@ def load_project_sheets(
     return sheets
 
 
-def altium_to_design(path: Path, name: str = "") -> Design:
-    """Convert an Altium .PrjPcb or single .SchDoc to a schematic Design.
+def altium_to_design(path: Path, name: str = "") -> Schematic:
+    """Convert an Altium .PrjPcb or single .SchDoc to a Schematic.
 
     This is the single entry point for Altium schematic conversion.  It
     handles project file dispatch, sheet loading, net resolution, harness

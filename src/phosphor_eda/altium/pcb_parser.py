@@ -35,8 +35,8 @@ from phosphor_eda.altium.pcb_records import (
 from phosphor_eda.altium.record_parser import parse_record_payload
 from phosphor_eda.pcb import (
     LayerFunction,
+    Pcb,
     PcbArc,
-    PcbBoard,
     PcbFootprint,
     PcbLayer,
     PcbLine,
@@ -48,7 +48,9 @@ from phosphor_eda.pcb import (
     PcbText,
     PcbTraceArc,
     PcbVia,
+    PcbZone,
 )
+from phosphor_eda.project import DesignRule, DiffPair, NetClass, Stackup, StackupLayer
 from phosphor_eda.text import strip_overline
 
 if TYPE_CHECKING:
@@ -134,7 +136,7 @@ _PAD_SHAPE_ALT_ROUNDRECT = 9
 # ---------------------------------------------------------------------------
 
 
-def _read_text_records(data: bytes) -> list[dict[str, str]]:
+def read_text_records(data: bytes) -> list[dict[str, str]]:
     """Read pipe-delimited text records with a 4-byte LE length prefix."""
     records: list[dict[str, str]] = []
     pos = 0
@@ -341,7 +343,7 @@ def _parse_nets(data: bytes) -> dict[int, PcbNet]:
     Nets are numbered starting at 1 (index+1 in the stream order).
     Net 0 is reserved for "unconnected".
     """
-    records = _read_text_records(data)
+    records = read_text_records(data)
     nets: dict[int, PcbNet] = {0: PcbNet(number=0, name="")}
     for i, rec in enumerate(records):
         num = i + 1
@@ -359,7 +361,7 @@ def _parse_components(data: bytes, layer_map: dict[int, PcbLayer]) -> list[PcbFo
     Component records are text-based and contain position, pattern,
     layer, rotation, and designator.  Pads and geometry are added later.
     """
-    records = _read_text_records(data)
+    records = read_text_records(data)
     footprints: list[PcbFootprint] = []
     front_name = _layer_name(1, layer_map) or "Top Layer"
     back_name = _layer_name(32, layer_map) or "Bottom Layer"
@@ -710,8 +712,89 @@ def _parse_fills(
     return fills
 
 
+def _parse_polygon_pours(
+    data: bytes,
+    nets: dict[int, PcbNet],
+    layer_map: dict[int, PcbLayer],
+) -> tuple[list[PcbZone], dict[int, int]]:
+    """Parse Polygons6/Data → zone definitions and pour-to-net mapping.
+
+    Returns (zones, pour_net_map) where pour_net_map maps pourindex → net_number
+    in the pcb.nets 1-based numbering. This mapping is needed by _parse_regions
+    to inherit net assignments for filled copper regions.
+    """
+    records = read_text_records(data)
+    zones: list[PcbZone] = []
+    pour_net_map: dict[int, int] = {}
+
+    for rec in records:
+        pourindex = int(rec.get("pourindex", "-1") or "-1")
+
+        # Resolve net: text records store 0-based Nets6 index,
+        # apply _net_number() to convert to 1-based pcb.nets key
+        net_raw = int(rec.get("net", str(_NET_UNCONNECTED)) or str(_NET_UNCONNECTED))
+        net_num = _net_number(net_raw)
+        net_obj = nets.get(net_num)
+        net_name = net_obj.name if net_obj else ""
+
+        # Store pour → net mapping for Regions6 inheritance
+        if pourindex >= 0:
+            pour_net_map[pourindex] = net_num
+
+        # Resolve layer from V7 layer name
+        layer_id = rec.get("layer", "").upper()
+        layer_num = _V7_NAME_TO_NUM.get(layer_id)
+        if layer_num is None:
+            continue
+        layer = _layer_name(layer_num, layer_map)
+        if not layer:
+            continue
+
+        # Extract boundary vertices (vx0..vxN, vy0..vyN in mils)
+        boundary: list[tuple[float, float]] = []
+        i = 0
+        while True:
+            vx_key = f"vx{i}"
+            vy_key = f"vy{i}"
+            if vx_key not in rec or vy_key not in rec:
+                break
+            x_mm = _parse_mil(rec[vx_key])
+            y_mm = -_parse_mil(rec[vy_key])  # Altium Y is inverted
+            boundary.append((x_mm, y_mm))
+            i += 1
+
+        if len(boundary) < 3:
+            continue
+
+        # Fill type from hatchstyle
+        hatchstyle = rec.get("hatchstyle", "").lower()
+        fill_type = "solid" if hatchstyle == "solid" else "hatch" if hatchstyle else ""
+
+        # Track width (min thickness within pour)
+        trackwidth_str = rec.get("trackwidth", "")
+        min_thickness = _parse_mil(trackwidth_str) if trackwidth_str else 0.0
+
+        zones.append(
+            PcbZone(
+                net_number=net_num,
+                net_name=net_name,
+                layer=layer,
+                boundary=boundary,
+                priority=pourindex,
+                min_thickness_mm=min_thickness,
+                fill_type=fill_type,
+            )
+        )
+
+    return zones, pour_net_map
+
+
 def _parse_regions(
-    data: bytes, nets: dict[int, PcbNet], layer_map: dict[int, PcbLayer], ctx: ParseContext
+    data: bytes,
+    nets: dict[int, PcbNet],
+    layer_map: dict[int, PcbLayer],
+    ctx: ParseContext,
+    pour_net_map: dict[int, int] | None = None,
 ) -> list[PcbPolygon]:
     """Parse Regions6/Data → list of PcbPolygon.
 
@@ -719,6 +802,9 @@ def _parse_regions(
     (pairs of float64 in Altium internal units).  All layers are included —
     copper regions carry net info, non-copper regions (silkscreen fills,
     paste openings, etc.) have net_number 0.
+
+    When pour_net_map is provided, regions with net=0xFFFF (inherit) and
+    a valid subpolyindex will inherit the net from their parent polygon pour.
     """
     records = _read_binary_records(data)
     polygons: list[PcbPolygon] = []
@@ -744,7 +830,24 @@ def _parse_regions(
         if len(points) < 3:
             continue
 
-        net_num = _net_number(region.net) if resolved_num in _COPPER_LAYERS else 0
+        # Convert hole vertices
+        holes: list[list[tuple[float, float]]] = []
+        for hole_verts in region.holes:
+            h_pts = [(_int_to_mm(int(vx)), -_int_to_mm(int(vy))) for vx, vy in hole_verts]
+            if len(h_pts) >= 3:
+                holes.append(h_pts)
+
+        # Net resolution: use direct net if assigned, otherwise inherit from pour
+        if resolved_num in _COPPER_LAYERS:
+            if region.net == _NET_UNCONNECTED and pour_net_map:
+                # Inherit from parent polygon pour via subpolyindex
+                subpoly = int(region.properties.get("subpolyindex", "-1") or "-1")
+                net_num = pour_net_map.get(subpoly, 0)
+            else:
+                net_num = _net_number(region.net)
+        else:
+            net_num = 0
+
         net_obj = nets.get(net_num)
         net_name = net_obj.name if net_obj else ""
 
@@ -754,6 +857,7 @@ def _parse_regions(
                 layer=layer,
                 net_number=net_num,
                 net_name=net_name,
+                holes=holes,
             )
         )
 
@@ -799,6 +903,13 @@ def _parse_shape_based_regions(
         if len(points) < 3:
             continue
 
+        # Convert hole vertices (stored as f64 in internal units)
+        holes: list[list[tuple[float, float]]] = []
+        for hole_verts in region.holes:
+            h_pts = [(_int_to_mm(int(vx)), -_int_to_mm(int(vy))) for vx, vy in hole_verts]
+            if len(h_pts) >= 3:
+                holes.append(h_pts)
+
         net_num = _net_number(region.net) if resolved_num in _COPPER_LAYERS else 0
         net_obj = nets.get(net_num)
         net_name = net_obj.name if net_obj else ""
@@ -808,6 +919,7 @@ def _parse_shape_based_regions(
             layer=layer,
             net_number=net_num,
             net_name=net_name,
+            holes=holes,
         )
 
         if region.component == _COMPONENT_NONE:
@@ -916,7 +1028,7 @@ def _parse_component_bodies(data: bytes) -> dict[int, list[PcbModel3D]]:
     - ``MODEL.3D.ROTX/Y/Z``: rotation in degrees
     - ``MODEL.3D.DZ``: Z offset in mil
     """
-    records = _read_text_records(data)
+    records = read_text_records(data)
     result: dict[int, list[PcbModel3D]] = {}
 
     for rec in records:
@@ -969,6 +1081,375 @@ def _compute_bbox(
 
 
 # ---------------------------------------------------------------------------
+# Project-level data: rules, classes, diff pairs, stackup
+# ---------------------------------------------------------------------------
+
+
+def _read_rules6_records(data: bytes) -> list[dict[str, str]]:
+    """Read Rules6 stream records (2-byte header + 4-byte LE length framing)."""
+    records: list[dict[str, str]] = []
+    pos = 0
+    while pos + 6 <= len(data):
+        # 2-byte header (type + padding) + 4-byte LE length
+        length = u32(data, pos + 2)
+        pos += 6
+        if length == 0 or pos + length > len(data):
+            break
+        payload = data[pos : pos + length]
+        pos += length
+        props = parse_record_payload(payload)
+        if props:
+            records.append(props)
+    return records
+
+
+def parse_altium_rules(data: bytes) -> list[DesignRule]:
+    """Parse Altium Rules6 stream into DesignRule objects."""
+    records = _read_rules6_records(data)
+    rules: list[DesignRule] = []
+    for props in records:
+        name = props.get("name", "")
+        kind = props.get("rulekind", "")
+        enabled = props.get("enabled", "TRUE").upper() == "TRUE"
+        priority = int(props.get("priority", "0") or "0")
+        scope1 = props.get("scope1expression", "")
+        scope2 = props.get("scope2expression", "")
+
+        # Extract numeric values (may be in mils, convert to mm).
+        # Different rule kinds use different property names for their values.
+        min_val = _rule_value_mm(
+            props,
+            "minlimit",
+            "gap",
+            "genericclearance",
+            "clearance",
+            "minimumring",
+            "minsoldermaskwidth",
+            "minsilkscreentomaskgap",
+            "minwidth",
+            "minholewidth",
+            "minheight",
+            "minsize",
+        )
+        max_val = _rule_value_mm(
+            props,
+            "maxlimit",
+            "maxwidth",
+            "maxholewidth",
+            "maxheight",
+            "maxsize",
+            "maxuncoupledlength",
+            "tolerance",
+            "limit",
+        )
+        pref_val = _rule_value_mm(
+            props,
+            "preferedwidth",
+            "preferredwidth",
+            "expansion",
+            "prefheight",
+            "preferedsize",
+            "toplayer_prefwidth",
+        )
+
+        # Collect remaining properties
+        skip_keys = {
+            "name",
+            "rulekind",
+            "enabled",
+            "priority",
+            "scope1expression",
+            "scope2expression",
+            "selection",
+            "layer",
+            "locked",
+            "polygonoutline",
+            "userrouted",
+            "keepout",
+            "unionindex",
+            "netscope",
+            "layerkind",
+            "superclass",
+        }
+        extra: dict[str, str] = {}
+        for k, v in props.items():
+            if k not in skip_keys and v:
+                extra[k] = v
+
+        rules.append(
+            DesignRule(
+                name=name,
+                kind=kind,
+                enabled=enabled,
+                priority=priority,
+                scope1=scope1,
+                scope2=scope2,
+                min_value_mm=min_val,
+                max_value_mm=max_val,
+                preferred_value_mm=pref_val,
+                properties=extra,
+            )
+        )
+    return rules
+
+
+def _rule_value_mm(props: dict[str, str], *keys: str) -> float | None:
+    """Extract a rule value in mm from property keys (values stored in mils).
+
+    Values may have a "mil" suffix that must be stripped before conversion.
+    """
+    for key in keys:
+        val_str = props.get(key, "")
+        if val_str:
+            try:
+                return float(_strip_mil(val_str)) * _MIL_TO_MM
+            except ValueError:
+                continue
+    return None
+
+
+def parse_altium_classes(data: bytes) -> list[NetClass]:
+    """Parse Altium Classes6 stream into NetClass objects."""
+    records = read_text_records(data)
+    classes: list[NetClass] = []
+    for props in records:
+        name = props.get("name", "")
+        kind = int(props.get("kind", "0") or "0")
+        # Extract members (M0, M1, M2, ...)
+        members: list[str] = []
+        i = 0
+        while True:
+            key = f"m{i}"
+            if key in props:
+                members.append(props[key])
+                i += 1
+            else:
+                break
+        classes.append(NetClass(name=name, kind=kind, members=members))
+    return classes
+
+
+def parse_altium_diff_pairs(data: bytes) -> list[DiffPair]:
+    """Parse Altium DifferentialPairs6 stream into DiffPair objects."""
+    records = read_text_records(data)
+    pairs: list[DiffPair] = []
+    for props in records:
+        name = props.get("name", "")
+        pos_net = props.get("positivenetname", "")
+        neg_net = props.get("negativenetname", "")
+        if name and pos_net and neg_net:
+            pairs.append(DiffPair(name=name, positive_net=pos_net, negative_net=neg_net))
+    return pairs
+
+
+def parse_altium_stackup(board_props: dict[str, str]) -> Stackup | None:
+    """Extract PCB stackup from Board6 properties.
+
+    Prefers the v9 stackup format (v9_stack_layerN_*) which stores explicit
+    layer names, correct physical ordering, and separate core/prepreg entries.
+    Falls back to the legacy format (layerN + next-pointer chain) for older files.
+    """
+    stackup = _parse_v9_stackup(board_props)
+    if stackup:
+        return stackup
+    return _parse_legacy_stackup(board_props)
+
+
+def _parse_v9_stackup(board_props: dict[str, str]) -> Stackup | None:
+    """Parse the v9 stackup format (Altium Designer 19+).
+
+    v9 layers are stored as v9_stack_layer{N}_* in physical order from top
+    to bottom. Includes solder mask, copper, prepreg, and core layers with
+    explicit user-assigned names.
+    """
+    # Discover which v9 layer indices exist
+    layer_indices: list[int] = []
+    for key in board_props:
+        if key.startswith("v9_stack_layer") and key.endswith("_name"):
+            try:
+                idx = int(key[len("v9_stack_layer") : -len("_name")])
+                layer_indices.append(idx)
+            except ValueError:
+                continue
+
+    if not layer_indices:
+        return None
+
+    layer_indices.sort()
+
+    layers: list[StackupLayer] = []
+    # Track whether we've seen the first and last copper to determine sides
+    copper_indices: list[int] = []
+    for idx in layer_indices:
+        copthick = board_props.get(f"v9_stack_layer{idx}_copthick", "")
+        if copthick:
+            copper_indices.append(idx)
+
+    first_copper = copper_indices[0] if copper_indices else -1
+    last_copper = copper_indices[-1] if copper_indices else -1
+
+    for idx in layer_indices:
+        prefix = f"v9_stack_layer{idx}_"
+        name = board_props.get(f"{prefix}name", "")
+        if not name:
+            continue
+
+        copthick_str = _strip_mil(board_props.get(f"{prefix}copthick", ""))
+        diel_type_raw = board_props.get(f"{prefix}dieltype", "")
+        diel_height_str = _strip_mil(board_props.get(f"{prefix}dielheight", ""))
+        diel_const_str = board_props.get(f"{prefix}dielconst", "")
+        diel_material = board_props.get(f"{prefix}dielmaterial", "").strip()
+        diel_loss_str = board_props.get(f"{prefix}diellosstangent", "")
+        copper_orient = board_props.get(f"{prefix}copperorientation", "")
+
+        if copthick_str:
+            # Copper layer
+            cop_thick_mm = float(copthick_str) * _MIL_TO_MM
+
+            side = ""
+            if idx == first_copper:
+                side = "front"
+            elif idx == last_copper:
+                side = "back"
+
+            orientation = ""
+            if copper_orient == "1":
+                orientation = "reversed"
+            elif copper_orient == "0" or (copper_orient == "" and copthick_str):
+                orientation = "normal"
+
+            layers.append(
+                StackupLayer(
+                    name=name,
+                    layer_type="copper",
+                    thickness_mm=cop_thick_mm,
+                    side=side,
+                    copper_orientation=orientation,
+                )
+            )
+        elif diel_height_str:
+            # Dielectric layer (prepreg, core, or solder mask)
+            thickness_mm = float(diel_height_str) * _MIL_TO_MM
+            epsilon_r = float(diel_const_str) if diel_const_str else 0.0
+            loss_tangent = float(diel_loss_str) if diel_loss_str else 0.0
+
+            # dieltype: 0=unspecified, 1=core, 2=prepreg, 3=solder_mask
+            diel_type_map = {"1": "core", "2": "prepreg", "3": "solder_mask"}
+            layer_type = diel_type_map.get(diel_type_raw, "prepreg")
+
+            layers.append(
+                StackupLayer(
+                    name=name,
+                    layer_type=layer_type,
+                    thickness_mm=thickness_mm,
+                    material=diel_material,
+                    epsilon_r=epsilon_r,
+                    loss_tangent=loss_tangent,
+                )
+            )
+        # Skip non-physical layers (paste, overlay) that have neither
+        # copper thickness nor dielectric height
+
+    if not layers:
+        return None
+
+    total = sum(ly.thickness_mm for ly in layers)
+    return Stackup(layers=layers, total_thickness_mm=total)
+
+
+def _parse_legacy_stackup(board_props: dict[str, str]) -> Stackup | None:
+    """Parse the legacy layerN + next-pointer stackup format.
+
+    Used by older Altium files that lack v9_stack_layer data. Follows the
+    layer{N}next chain starting at layer 1. Dielectrics are numbered
+    sequentially by traversal position.
+    """
+    layers: list[StackupLayer] = []
+
+    # Follow the next-pointer chain starting at layer 1
+    i = 1
+    visited: set[int] = set()
+    diel_counter = 0
+    while i > 0 and i not in visited:
+        visited.add(i)
+        prefix = f"layer{i}"
+        name = board_props.get(f"{prefix}name", "")
+        if not name:
+            break
+
+        # Copper thickness (value may have "mil" suffix)
+        cop_thick_str = _strip_mil(board_props.get(f"{prefix}copthick", ""))
+        cop_thick_mm = float(cop_thick_str) * _MIL_TO_MM if cop_thick_str else 0.0
+
+        # Dielectric properties
+        diel_type_raw = board_props.get(f"{prefix}dieltype", "")
+        diel_const_str = board_props.get(f"{prefix}dielconst", "")
+        diel_height_str = _strip_mil(board_props.get(f"{prefix}dielheight", ""))
+        diel_material = board_props.get(f"{prefix}dielmaterial", "").strip()
+        diel_loss_str = board_props.get(f"{prefix}diellosstangent", "")
+
+        epsilon_r = float(diel_const_str) if diel_const_str else 0.0
+        diel_height_mm = float(diel_height_str) * _MIL_TO_MM if diel_height_str else 0.0
+        loss_tangent = float(diel_loss_str) if diel_loss_str else 0.0
+
+        # Dielectric type mapping
+        diel_type_map = {"0": "prepreg", "1": "core", "2": "prepreg"}
+        diel_type = diel_type_map.get(diel_type_raw, "prepreg")
+
+        # Determine side
+        side = ""
+        name_lower = name.lower()
+        if "top" in name_lower:
+            side = "front"
+        elif "bottom" in name_lower or "bot" in name_lower:
+            side = "back"
+
+        # Add copper layer
+        layers.append(
+            StackupLayer(
+                name=name,
+                layer_type="copper",
+                thickness_mm=cop_thick_mm,
+                side=side,
+            )
+        )
+
+        # Follow next pointer
+        next_str = board_props.get(f"{prefix}next", "0")
+        next_layer = int(next_str) if next_str else 0
+
+        # Add dielectric layer between this copper and the next (skip after last)
+        if diel_height_mm > 0 and next_layer > 0:
+            diel_counter += 1
+            layers.append(
+                StackupLayer(
+                    name=f"Dielectric {diel_counter}",
+                    layer_type=diel_type,
+                    thickness_mm=diel_height_mm,
+                    material=diel_material,
+                    epsilon_r=epsilon_r,
+                    loss_tangent=loss_tangent,
+                )
+            )
+
+        i = next_layer
+
+    if not layers:
+        return None
+
+    total = sum(ly.thickness_mm for ly in layers)
+    return Stackup(layers=layers, total_thickness_mm=total)
+
+
+def _strip_mil(s: str) -> str:
+    """Strip 'mil' suffix from an Altium dimension string."""
+    s = s.strip()
+    if s.lower().endswith("mil"):
+        return s[:-3]
+    return s
+
+
+# ---------------------------------------------------------------------------
 # Top-level entry point
 # ---------------------------------------------------------------------------
 
@@ -983,7 +1464,7 @@ def _read_stream(ole: olefile.OleFileIO, name: str) -> bytes:
 def parse_altium_pcb(
     path: Path,
     ctx: ParseContext | None = None,
-) -> PcbBoard:
+) -> Pcb:
     """Parse an Altium .PcbDoc file into the PCB domain model."""
     if ctx is None:
         ctx = ParseContext()
@@ -999,6 +1480,7 @@ def parse_altium_pcb(
         texts_data = _read_stream(ole, "Texts6/Data")
         fills_data = _read_stream(ole, "Fills6/Data")
         regions_data = _read_stream(ole, "Regions6/Data")
+        polygons6_data = _read_stream(ole, "Polygons6/Data")
         sb_regions_data = _read_stream(ole, "ShapeBasedRegions6/Data")
         comp_bodies_data = _read_stream(ole, "ComponentBodies6/Data")
         board_data = _read_stream(ole, "Board6/Data")
@@ -1008,7 +1490,7 @@ def parse_altium_pcb(
     # Build layer map from Board6 metadata + static defaults
     board_props: dict[str, str] = {}
     if board_data:
-        board_records = _read_text_records(board_data)
+        board_records = read_text_records(board_data)
         if board_records:
             board_props = board_records[0]
     layer_map = _build_layer_map(board_props)
@@ -1024,7 +1506,8 @@ def parse_altium_pcb(
     raw_pads = _parse_pads(pads_data, nets, layer_map, ctx)
     raw_texts = _parse_texts(texts_data, layer_map, ctx)
     fills = _parse_fills(fills_data, layer_map, ctx)
-    regions = _parse_regions(regions_data, nets, layer_map, ctx)
+    zones, pour_net_map = _parse_polygon_pours(polygons6_data, nets, layer_map)
+    regions = _parse_regions(regions_data, nets, layer_map, ctx, pour_net_map)
     sb_board_polys, sb_comp_polys = _parse_shape_based_regions(
         sb_regions_data, nets, layer_map, ctx
     )
@@ -1097,7 +1580,7 @@ def parse_altium_pcb(
 
     polygons = fills + regions + sb_board_polys
 
-    return PcbBoard(
+    return Pcb(
         name=board_name,
         nets=nets,
         footprints=footprints,
@@ -1108,4 +1591,5 @@ def parse_altium_pcb(
         polygons=polygons,
         trace_arcs=trace_arcs,
         layers=list(layer_map.values()),
+        zones=zones,
     )

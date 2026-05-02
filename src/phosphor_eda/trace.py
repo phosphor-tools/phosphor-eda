@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from phosphor_eda.classify import PASSIVE_PREFIXES, is_power_net, ref_prefix
 
 if TYPE_CHECKING:
-    from phosphor_eda.schematic import Component, Design, Net, Pin
+    from phosphor_eda.schematic import Component, Net, Pin, Schematic
 
 
 @dataclass
@@ -192,7 +192,7 @@ def other_pin(comp: Component, pin: Pin) -> Pin:
     raise ValueError(f"{comp.reference} does not have a second pin")
 
 
-def find_paths(design: Design, ref_a: str, ref_b: str) -> list[ConnectionPath]:
+def find_paths(design: Schematic, ref_a: str, ref_b: str) -> list[ConnectionPath]:
     """Find all signal paths between two components, tracing through passives.
 
     Returns one :class:`ConnectionPath` per signal-level connection between
@@ -239,7 +239,7 @@ def find_paths(design: Design, ref_a: str, ref_b: str) -> list[ConnectionPath]:
     return sorted(paths, key=lambda p: p.left_pin.designator)
 
 
-def _find_component(design: Design, ref: str) -> Component:
+def _find_component(design: Schematic, ref: str) -> Component:
     for c in design.components:
         if c.reference == ref:
             return c

@@ -1,4 +1,4 @@
-"""Render a PcbBoard as layered SVG with CSS theming.
+"""Render a Pcb as layered SVG with CSS theming.
 
 Emits an SVG with layer groups, data-* attributes on every element, and
 a <style> block for theming.  Highlights, layer visibility, and colors
@@ -22,8 +22,8 @@ from phosphor_eda.text_metrics import BASELINE_CENTER_OFFSET, INTER_REGULAR_BASE
 
 if TYPE_CHECKING:
     from phosphor_eda.pcb import (
+        Pcb,
         PcbArc,
-        PcbBoard,
         PcbCircle,
         PcbFootprint,
         PcbLine,
@@ -412,7 +412,7 @@ def _layer_class(layer: str) -> str:
     return "layer-" + _CSS_SANITIZE_RE.sub("-", layer)
 
 
-def _net_name(board: PcbBoard, net_num: int) -> str:
+def _net_name(board: Pcb, net_num: int) -> str:
     """Look up a net name, returning '' for unknown nets."""
     net = board.nets.get(net_num)
     return net.name if net else ""
@@ -1107,7 +1107,7 @@ def _render_legend(svg: _Svg, legend: ResolvedLegend, font_size: float) -> None:
 
 
 def render_pcb_svg(
-    board: PcbBoard,
+    board: Pcb,
     *,
     side: str = "front",
     highlight_nets: list[str] | None = None,
@@ -1117,7 +1117,7 @@ def render_pcb_svg(
     custom_css: str = "",
     annotations: ResolvedAnnotations | None = None,
 ) -> str:
-    """Render a PcbBoard as a layered SVG string with CSS theming.
+    """Render a Pcb as a layered SVG string with CSS theming.
 
     Parameters
     ----------

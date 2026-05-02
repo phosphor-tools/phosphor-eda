@@ -10,6 +10,7 @@ class AltiumProject:
 
     hierarchy_mode: int = 1
     schematic_paths: list[str] = field(default_factory=list)
+    pcb_paths: list[str] = field(default_factory=list)
 
 
 def parse_prjpcb(content: str) -> AltiumProject:
@@ -27,8 +28,11 @@ def parse_prjpcb(content: str) -> AltiumProject:
     for section in sections:
         if section.startswith("Document"):
             doc_path = parser.get(section, "DocumentPath", fallback="")
-            if doc_path.lower().endswith(".schdoc"):
+            lower = doc_path.lower()
+            if lower.endswith(".schdoc"):
                 project.schematic_paths.append(doc_path)
+            elif lower.endswith(".pcbdoc"):
+                project.pcb_paths.append(doc_path)
 
     return project
 

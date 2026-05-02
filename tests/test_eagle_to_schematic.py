@@ -58,11 +58,13 @@ def test_bme280_has_pins(design):
     assert len(u1.pins) == 8
 
 
-def test_power_symbols_filtered(design):
-    """GND and SUPPLY power symbols should not appear as components."""
-    for c in design.components:
-        assert not c.reference.startswith("GND"), f"power symbol {c.reference} in components"
-        assert not c.reference.startswith("SUPPLY"), f"supply symbol {c.reference} in components"
+def test_power_symbols_included_with_marker(design):
+    """Power symbols are included but marked with is_power_symbol metadata."""
+    power_comps = [c for c in design.components if c.metadata.get("is_power_symbol") == "true"]
+    assert len(power_comps) > 0, "Expected power symbols in components"
+    # GND/SUPPLY symbols should be among the marked ones
+    power_refs = {c.reference for c in power_comps}
+    assert any(r.startswith("GND") or r.startswith("SUPPLY") for r in power_refs)
 
 
 def test_component_value_metadata(design):

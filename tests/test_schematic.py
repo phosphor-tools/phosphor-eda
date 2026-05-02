@@ -1,6 +1,6 @@
 """Tests for the schematic domain model."""
 
-from phosphor_eda.schematic import Component, Design, Net, Page, Pin, Port
+from phosphor_eda.schematic import Component, Net, Page, Pin, Port, Schematic
 
 
 def test_pin_defaults():
@@ -75,7 +75,7 @@ def test_page_holds_components_and_nets():
 
 
 def test_design_holds_pages():
-    design = Design(name="TEST", pages=[], nets=[], components=[], metadata={})
+    design = Schematic(name="TEST", pages=[], nets=[], components=[], metadata={})
     assert design.name == "TEST"
     assert design.pages == []
 

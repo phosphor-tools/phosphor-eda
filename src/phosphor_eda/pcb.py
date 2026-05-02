@@ -108,6 +108,7 @@ class PcbPolygon:
     net_number: int = 0
     net_name: str = ""
     footprint_ref: str = ""
+    holes: list[list[tuple[float, float]]] = field(default_factory=list)
 
 
 @dataclass
@@ -139,7 +140,21 @@ class PcbPad:
     net_number: int
     net_name: str
     footprint_ref: str
+    rotation: float = 0.0  # total rotation in board space (degrees)
     drill: float = 0.0  # drill diameter (mm), 0 for SMD pads
+    roundrect_rratio: float = 0.0  # corner ratio for roundrect pads
+    pin_function: str = ""  # schematic pin name ("K", "A", "VCC")
+    pin_type: str = ""  # electrical type ("passive", "input", "power")
+    # Altium multi-layer pad sizes
+    mid_width: float | None = None
+    mid_height: float | None = None
+    bot_width: float | None = None
+    bot_height: float | None = None
+    mid_shape: str = ""
+    bot_shape: str = ""
+    # Mask overrides
+    mask_expansion: float | None = None  # solder mask expansion override (mm)
+    paste_expansion: float | None = None  # paste mask expansion override (mm)
 
 
 @dataclass
@@ -175,6 +190,7 @@ class PcbFootprint:
     texts: list[PcbText] = field(default_factory=list)
     models_3d: list[PcbModel3D] = field(default_factory=list)
     bbox: tuple[float, float, float, float] | None = None  # min_x, min_y, max_x, max_y
+    properties: dict[str, str] = field(default_factory=dict)  # custom properties (MPN, DKPN, etc.)
 
 
 @dataclass
@@ -200,6 +216,50 @@ class PcbVia:
     drill: float
     layers: list[str]
     net_number: int
+    via_mode: str = ""  # "simple", "full_stack", "microvia"
+
+
+@dataclass
+class PcbZone:
+    """A copper zone (fill area) with properties."""
+
+    net_number: int
+    net_name: str
+    layer: str
+    boundary: list[tuple[float, float]]
+    priority: int = 0
+    min_thickness_mm: float = 0.0
+    thermal_gap_mm: float = 0.0
+    thermal_bridge_width_mm: float = 0.0
+    connect_pads_clearance_mm: float = 0.0
+    fill_type: str = ""  # "solid", "hatch"
+
+
+@dataclass
+class PcbGraphicText:
+    """A board-level graphic text (not inside a footprint)."""
+
+    text: str
+    x: float
+    y: float
+    rotation: float
+    layer: str
+    font_size: float
+    justify: str = ""  # "left", "center", "right"
+
+
+@dataclass
+class PcbDimension:
+    """A measurement dimension annotation on the board."""
+
+    kind: str  # "aligned", "orthogonal", "leader", "center"
+    value_mm: float
+    layer: str
+    start_x: float
+    start_y: float
+    end_x: float
+    end_y: float
+    text: str = ""
 
 
 @dataclass
@@ -211,7 +271,7 @@ class PcbNet:
 
 
 @dataclass
-class PcbBoard:
+class Pcb:
     """Complete parsed PCB board."""
 
     name: str
@@ -224,6 +284,9 @@ class PcbBoard:
     polygons: list[PcbPolygon] = field(default_factory=list)
     trace_arcs: list[PcbTraceArc] = field(default_factory=list)
     layers: list[PcbLayer] = field(default_factory=list)
+    zones: list[PcbZone] = field(default_factory=list)
+    graphic_texts: list[PcbGraphicText] = field(default_factory=list)
+    dimensions: list[PcbDimension] = field(default_factory=list)
 
     # -- Layer helpers --------------------------------------------------------
 
