@@ -41,6 +41,7 @@ class StackupLayer:
     loss_tangent: float = 0.0
     copper_weight_oz: float = 0.0
     side: str = ""  # "front", "back", or "" for inner
+    copper_orientation: str = ""  # "normal" or "reversed" (foil roughness side)
 
 
 @dataclass

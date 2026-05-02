@@ -341,7 +341,7 @@ def _load_layers(con: duckdb.DuckDBPyConnection, pcb: Pcb, stackup: Stackup | No
             side = pcb_layer.side if pcb_layer else sl.side
             number = pcb_layer.number if pcb_layer else None
             con.execute(
-                "INSERT INTO layers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO layers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     i,
                     sl.name,
@@ -353,6 +353,7 @@ def _load_layers(con: duckdb.DuckDBPyConnection, pcb: Pcb, stackup: Stackup | No
                     sl.epsilon_r if sl.epsilon_r else None,
                     sl.loss_tangent if sl.loss_tangent else None,
                     sl.layer_type,
+                    sl.copper_orientation or None,
                 ],
             )
 
@@ -361,13 +362,14 @@ def _load_layers(con: duckdb.DuckDBPyConnection, pcb: Pcb, stackup: Stackup | No
         if pl.name in stackup_map:
             continue  # Already inserted from stackup
         con.execute(
-            "INSERT INTO layers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO layers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 None,
                 pl.name,
                 pl.function.value,
                 pl.side,
                 pl.number,
+                None,
                 None,
                 None,
                 None,

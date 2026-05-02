@@ -1245,16 +1245,131 @@ def parse_altium_diff_pairs(data: bytes) -> list[DiffPair]:
 def parse_altium_stackup(board_props: dict[str, str]) -> Stackup | None:
     """Extract PCB stackup from Board6 properties.
 
-    Altium stores stackup as layer{N}name, layer{N}copthick, etc. (no underscore).
-    Values with "mil" suffix need stripping before conversion.
-    We follow the next-pointer chain (layer{N}next) starting from layer 1
-    to include only physically used layers.
+    Prefers the v9 stackup format (v9_stack_layerN_*) which stores explicit
+    layer names, correct physical ordering, and separate core/prepreg entries.
+    Falls back to the legacy format (layerN + next-pointer chain) for older files.
+    """
+    stackup = _parse_v9_stackup(board_props)
+    if stackup:
+        return stackup
+    return _parse_legacy_stackup(board_props)
+
+
+def _parse_v9_stackup(board_props: dict[str, str]) -> Stackup | None:
+    """Parse the v9 stackup format (Altium Designer 19+).
+
+    v9 layers are stored as v9_stack_layer{N}_* in physical order from top
+    to bottom. Includes solder mask, copper, prepreg, and core layers with
+    explicit user-assigned names.
+    """
+    # Discover which v9 layer indices exist
+    layer_indices: list[int] = []
+    for key in board_props:
+        if key.startswith("v9_stack_layer") and key.endswith("_name"):
+            try:
+                idx = int(key[len("v9_stack_layer") : -len("_name")])
+                layer_indices.append(idx)
+            except ValueError:
+                continue
+
+    if not layer_indices:
+        return None
+
+    layer_indices.sort()
+
+    layers: list[StackupLayer] = []
+    # Track whether we've seen the first and last copper to determine sides
+    copper_indices: list[int] = []
+    for idx in layer_indices:
+        copthick = board_props.get(f"v9_stack_layer{idx}_copthick", "")
+        if copthick:
+            copper_indices.append(idx)
+
+    first_copper = copper_indices[0] if copper_indices else -1
+    last_copper = copper_indices[-1] if copper_indices else -1
+
+    for idx in layer_indices:
+        prefix = f"v9_stack_layer{idx}_"
+        name = board_props.get(f"{prefix}name", "")
+        if not name:
+            continue
+
+        copthick_str = _strip_mil(board_props.get(f"{prefix}copthick", ""))
+        diel_type_raw = board_props.get(f"{prefix}dieltype", "")
+        diel_height_str = _strip_mil(board_props.get(f"{prefix}dielheight", ""))
+        diel_const_str = board_props.get(f"{prefix}dielconst", "")
+        diel_material = board_props.get(f"{prefix}dielmaterial", "").strip()
+        diel_loss_str = board_props.get(f"{prefix}diellosstangent", "")
+        copper_orient = board_props.get(f"{prefix}copperorientation", "")
+
+        if copthick_str:
+            # Copper layer
+            cop_thick_mm = float(copthick_str) * _MIL_TO_MM
+
+            side = ""
+            if idx == first_copper:
+                side = "front"
+            elif idx == last_copper:
+                side = "back"
+
+            orientation = ""
+            if copper_orient == "1":
+                orientation = "reversed"
+            elif copper_orient == "0" or (copper_orient == "" and copthick_str):
+                orientation = "normal"
+
+            layers.append(
+                StackupLayer(
+                    name=name,
+                    layer_type="copper",
+                    thickness_mm=cop_thick_mm,
+                    side=side,
+                    copper_orientation=orientation,
+                )
+            )
+        elif diel_height_str:
+            # Dielectric layer (prepreg, core, or solder mask)
+            thickness_mm = float(diel_height_str) * _MIL_TO_MM
+            epsilon_r = float(diel_const_str) if diel_const_str else 0.0
+            loss_tangent = float(diel_loss_str) if diel_loss_str else 0.0
+
+            # dieltype: 0=unspecified, 1=core, 2=prepreg, 3=solder_mask
+            diel_type_map = {"1": "core", "2": "prepreg", "3": "solder_mask"}
+            layer_type = diel_type_map.get(diel_type_raw, "prepreg")
+
+            layers.append(
+                StackupLayer(
+                    name=name,
+                    layer_type=layer_type,
+                    thickness_mm=thickness_mm,
+                    material=diel_material,
+                    epsilon_r=epsilon_r,
+                    loss_tangent=loss_tangent,
+                )
+            )
+        # Skip non-physical layers (paste, overlay) that have neither
+        # copper thickness nor dielectric height
+
+    if not layers:
+        return None
+
+    total = sum(ly.thickness_mm for ly in layers)
+    return Stackup(layers=layers, total_thickness_mm=total)
+
+
+def _parse_legacy_stackup(board_props: dict[str, str]) -> Stackup | None:
+    """Parse the legacy layerN + next-pointer stackup format.
+
+    Used by older Altium files that lack v9_stack_layer data. Follows the
+    layer{N}next chain starting at layer 1. Dielectrics are numbered
+    sequentially by traversal position.
     """
     layers: list[StackupLayer] = []
 
     # Follow the next-pointer chain starting at layer 1
     i = 1
     visited: set[int] = set()
+    diel_counter = 0
     while i > 0 and i not in visited:
         visited.add(i)
         prefix = f"layer{i}"
@@ -1305,9 +1420,10 @@ def parse_altium_stackup(board_props: dict[str, str]) -> Stackup | None:
 
         # Add dielectric layer between this copper and the next (skip after last)
         if diel_height_mm > 0 and next_layer > 0:
+            diel_counter += 1
             layers.append(
                 StackupLayer(
-                    name=f"Dielectric {i}",
+                    name=f"Dielectric {diel_counter}",
                     layer_type=diel_type,
                     thickness_mm=diel_height_mm,
                     material=diel_material,

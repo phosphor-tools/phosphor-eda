@@ -175,8 +175,8 @@ def test_stackup_exists(stackup) -> None:
 
 
 def test_stackup_layer_count(stackup) -> None:
-    """10 copper + 9 dielectric = 19 layers."""
-    assert len(stackup.layers) == 19
+    """v9 stackup: 10 copper + 2 solder mask + 8 prepreg + 3 core = 23 layers."""
+    assert len(stackup.layers) == 23
 
 
 def test_stackup_copper_layers(stackup) -> None:
@@ -185,27 +185,34 @@ def test_stackup_copper_layers(stackup) -> None:
     assert len(copper) == 10
 
 
+def test_stackup_solder_mask_layers(stackup) -> None:
+    """Top and bottom solder masks included from v9 format."""
+    masks = [ly for ly in stackup.layers if ly.layer_type == "solder_mask"]
+    assert len(masks) == 2
+    assert masks[0].name == "Top Solder"
+    assert masks[1].name == "Bottom Solder"
+
+
 def test_stackup_top_layer(stackup) -> None:
-    """Top layer is first, with correct thickness and side."""
-    top = stackup.layers[0]
+    """Top copper layer has correct thickness and side."""
+    # First layer is solder mask, second is top copper
+    top = next(ly for ly in stackup.layers if ly.layer_type == "copper" and ly.side == "front")
     assert top.name == "Top Layer"
-    assert top.layer_type == "copper"
-    assert top.side == "front"
     # 1.4173mil → ~0.036mm
     assert top.thickness_mm == pytest.approx(0.036, abs=0.001)
 
 
 def test_stackup_bottom_layer(stackup) -> None:
-    """Bottom layer is last."""
-    bottom = stackup.layers[-1]
+    """Bottom copper layer is last copper and has correct side."""
+    copper = [ly for ly in stackup.layers if ly.layer_type == "copper"]
+    bottom = copper[-1]
     assert bottom.name == "Bottom Layer"
-    assert bottom.layer_type == "copper"
     assert bottom.side == "back"
 
 
 def test_stackup_dielectric_properties(stackup) -> None:
-    """First dielectric has material and epsilon_r."""
-    diel1 = stackup.layers[1]
+    """First prepreg (Dielectric 1) has material and epsilon_r."""
+    diel1 = next(ly for ly in stackup.layers if ly.name == "Dielectric 1")
     assert diel1.layer_type == "prepreg"
     assert diel1.material == "PP-1080"
     assert diel1.epsilon_r == pytest.approx(4.0)
@@ -216,8 +223,16 @@ def test_stackup_dielectric_properties(stackup) -> None:
 def test_stackup_core_layer(stackup) -> None:
     """Core layers have correct type and epsilon_r."""
     cores = [ly for ly in stackup.layers if ly.layer_type == "core"]
-    assert len(cores) >= 3
+    assert len(cores) == 3
     assert all(c.epsilon_r == pytest.approx(4.6) for c in cores)
+
+
+def test_stackup_copper_orientation(stackup) -> None:
+    """Copper orientation is parsed (normal vs reversed foil)."""
+    copper = [ly for ly in stackup.layers if ly.layer_type == "copper"]
+    # Top layers have normal orientation, inner layers 5-8 have reversed
+    assert copper[0].copper_orientation == "normal"  # Top Layer
+    assert copper[-1].copper_orientation == "reversed"  # Bottom Layer
 
 
 def test_stackup_total_thickness(stackup) -> None:

@@ -138,7 +138,8 @@ TABLE_DDL: dict[str, str] = {
             material VARCHAR,
             epsilon_r DOUBLE,
             loss_tangent DOUBLE,
-            layer_type VARCHAR
+            layer_type VARCHAR,
+            copper_orientation VARCHAR
         )
     """,
     "board": """
