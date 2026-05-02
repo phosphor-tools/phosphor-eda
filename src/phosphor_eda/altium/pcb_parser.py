@@ -1020,10 +1020,42 @@ def parse_altium_rules(data: bytes) -> list[DesignRule]:
         scope1 = props.get("scope1expression", "")
         scope2 = props.get("scope2expression", "")
 
-        # Extract numeric values (may be in mils, convert to mm)
-        min_val = _rule_value_mm(props, "minlimit", "gap", "genericclearance")
-        max_val = _rule_value_mm(props, "maxlimit")
-        pref_val = _rule_value_mm(props, "preferedwidth", "preferredwidth")
+        # Extract numeric values (may be in mils, convert to mm).
+        # Different rule kinds use different property names for their values.
+        min_val = _rule_value_mm(
+            props,
+            "minlimit",
+            "gap",
+            "genericclearance",
+            "clearance",
+            "minimumring",
+            "minsoldermaskwidth",
+            "minsilkscreentomaskgap",
+            "minwidth",
+            "minholewidth",
+            "minheight",
+            "minsize",
+        )
+        max_val = _rule_value_mm(
+            props,
+            "maxlimit",
+            "maxwidth",
+            "maxholewidth",
+            "maxheight",
+            "maxsize",
+            "maxuncoupledlength",
+            "tolerance",
+            "limit",
+        )
+        pref_val = _rule_value_mm(
+            props,
+            "preferedwidth",
+            "preferredwidth",
+            "expansion",
+            "prefheight",
+            "preferedsize",
+            "toplayer_prefwidth",
+        )
 
         # Collect remaining properties
         skip_keys = {
