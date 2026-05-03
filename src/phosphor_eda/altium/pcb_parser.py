@@ -254,12 +254,15 @@ def _arc_to_three_point(
 ) -> tuple[float, float, float, float, float, float]:
     """Convert a center/radius/angle arc to (sx, sy, mx, my, ex, ey).
 
-    Altium angles are in degrees counter-clockwise from the X-axis.
-    Y is negated in the caller so we just use standard trig here.
+    The arc goes **counter-clockwise** from ``start_deg`` to ``end_deg``.
+    When ``end_deg < start_deg`` the arc wraps past 360°.
+
+    Callers that negate Y should use original (non-negated) angles here,
+    then negate the Y coordinates of the returned points.
     """
     sa = math.radians(start_deg)
     ea = math.radians(end_deg)
-    # Mid-angle: halfway around the arc from start to end.
+    # Mid-angle: halfway around the CCW arc from start to end.
     if end_deg >= start_deg:
         ma = (sa + ea) / 2
     else:
@@ -504,14 +507,15 @@ def _parse_arcs(
             continue
 
         cx = _int_to_mm(arc.center[0])
-        cy = -_int_to_mm(arc.center[1])
+        cy_orig = _int_to_mm(arc.center[1])
         radius = _int_to_mm(arc.radius)
         width = _int_to_mm(arc.width)
 
-        # Y is already negated in cy; negate angles to flip arc direction.
+        # Compute arc CCW in original Altium coords, then negate Y.
         sx, sy, mx, my, ex, ey = _arc_to_three_point(
-            cx, cy, radius, -arc.start_angle, -arc.end_angle
+            cx, cy_orig, radius, arc.start_angle, arc.end_angle
         )
+        sy, my, ey = -sy, -my, -ey
 
         if arc.component == _COMPONENT_NONE and arc.layer in _COPPER_LAYERS:
             trace_arcs.append(
@@ -995,13 +999,15 @@ def _parse_board_outline(
                 continue
 
             cx = _int_to_mm(arc.center[0])
-            cy = -_int_to_mm(arc.center[1])
+            cy_orig = _int_to_mm(arc.center[1])
             radius = _int_to_mm(arc.radius)
             width = _int_to_mm(arc.width)
 
+            # Compute arc CCW in original Altium coords, then negate Y.
             sx, sy, mx, my, ex, ey = _arc_to_three_point(
-                cx, cy, radius, -arc.start_angle, -arc.end_angle
+                cx, cy_orig, radius, arc.start_angle, arc.end_angle
             )
+            sy, my, ey = -sy, -my, -ey
             outline_arcs.append(
                 PcbArc(
                     start_x=sx,
