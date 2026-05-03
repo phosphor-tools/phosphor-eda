@@ -455,25 +455,21 @@ def _auto_assign_margin(
 ) -> str:
     """Pick which margin to place a label in based on target position.
 
-    Places the label in the margin that faces away from the board center,
-    so connectors don't cross the board.
+    Routes the label to the nearest board edge so connectors are short and
+    don't cross the board interior.  Ties (equal distance to two edges)
+    prefer horizontal edges (right/left) over vertical, matching the
+    natural reading direction for labels.
     """
     bx1, by1, bx2, by2 = board_bbox
-    cx = (bx1 + bx2) / 2
-    cy = (by1 + by2) / 2
 
-    dx = target_x - cx
-    dy = target_y - cy
+    distances = {
+        "right": bx2 - target_x,
+        "left": target_x - bx1,
+        "bottom": by2 - target_y,
+        "top": target_y - by1,
+    }
 
-    # Normalize by board dimensions
-    bw = max(bx2 - bx1, 0.1)
-    bh = max(by2 - by1, 0.1)
-    ndx = dx / bw
-    ndy = dy / bh
-
-    if abs(ndx) >= abs(ndy):
-        return "right" if ndx >= 0 else "left"
-    return "bottom" if ndy >= 0 else "top"
+    return min(distances, key=distances.__getitem__)
 
 
 # ---------------------------------------------------------------------------

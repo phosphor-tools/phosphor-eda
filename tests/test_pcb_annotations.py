@@ -293,6 +293,9 @@ class TestResolveTargets:
 
 
 class TestMarginAssignment:
+    """_auto_assign_margin uses nearest-edge: the label goes to whichever
+    board edge the target is physically closest to."""
+
     def test_target_right_of_center(self) -> None:
         board_bbox = (0.0, 0.0, 40.0, 20.0)
         margin = _auto_assign_margin(35.0, 10.0, board_bbox)
@@ -312,6 +315,30 @@ class TestMarginAssignment:
         board_bbox = (0.0, 0.0, 40.0, 20.0)
         margin = _auto_assign_margin(20.0, 2.0, board_bbox)
         assert margin == "top"
+
+    def test_nearest_edge_beats_center_quadrant(self) -> None:
+        """Target at (36, 3) is 4mm from right but only 3mm from top.
+        Nearest-edge picks top even though the center-quadrant approach
+        would pick right (larger normalized horizontal offset)."""
+        board_bbox = (0.0, 0.0, 40.0, 20.0)
+        margin = _auto_assign_margin(36.0, 3.0, board_bbox)
+        assert margin == "top"
+
+    def test_corner_target_picks_closest_edge(self) -> None:
+        """Target near a corner goes to whichever edge is closer."""
+        board_bbox = (0.0, 0.0, 40.0, 20.0)
+        # 2mm from right, 3mm from bottom
+        assert _auto_assign_margin(38.0, 17.0, board_bbox) == "right"
+        # 1mm from bottom, 3mm from right
+        assert _auto_assign_margin(37.0, 19.0, board_bbox) == "bottom"
+
+    def test_square_board_symmetry(self) -> None:
+        """On a square board, nearest-edge is unambiguous for off-center."""
+        board_bbox = (0.0, 0.0, 20.0, 20.0)
+        assert _auto_assign_margin(18.0, 10.0, board_bbox) == "right"
+        assert _auto_assign_margin(2.0, 10.0, board_bbox) == "left"
+        assert _auto_assign_margin(10.0, 18.0, board_bbox) == "bottom"
+        assert _auto_assign_margin(10.0, 2.0, board_bbox) == "top"
 
 
 # ---------------------------------------------------------------------------

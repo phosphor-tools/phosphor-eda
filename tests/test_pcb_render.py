@@ -15,6 +15,9 @@ from phosphor_eda.pcb import (
     PcbLine,
     PcbModel3D,
     PcbNet,
+    PcbPad,
+    PcbSegment,
+    PcbVia,
 )
 from phosphor_eda.pcb_annotations import (
     LegendEntry,
@@ -25,7 +28,9 @@ from phosphor_eda.pcb_annotations import (
     ResolvedPointer,
 )
 from phosphor_eda.pcb_render import (
+    HighlightSpec,
     _fmt_attrs,  # pyright: ignore[reportPrivateUsage]
+    parse_render_settings,
     render_pcb_svg,
 )
 
@@ -121,6 +126,56 @@ def test_via_attributes(board: Pcb) -> None:
     assert 'class="via"' in svg
 
 
+def test_via_annular_ring_uses_size() -> None:
+    """Annular ring radius should be via.size / 2, not drill / 2 + constant."""
+    fp = PcbFootprint(
+        reference="U1",
+        footprint_lib="test",
+        x=5.0,
+        y=5.0,
+        rotation=0.0,
+        layer="F.Cu",
+        pads=[
+            PcbPad(
+                number="1",
+                x=5.0,
+                y=5.0,
+                width=1.0,
+                height=1.0,
+                shape="rect",
+                layers=["F.Cu"],
+                net_number=1,
+                net_name="SIG",
+                footprint_ref="U1",
+            )
+        ],
+        fab_lines=[PcbLine(4, 4, 6, 4, "F.Fab", 0.1)],
+    )
+    board = Pcb(
+        name="via-size-test",
+        nets={0: PcbNet(0, ""), 1: PcbNet(1, "SIG")},
+        footprints=[fp],
+        segments=[PcbSegment(5.0, 5.0, 10.0, 5.0, 0.25, "F.Cu", 1)],
+        vias=[PcbVia(10.0, 5.0, size=0.8, drill=0.4, layers=["F.Cu", "B.Cu"], net_number=1)],
+        outline_lines=[
+            PcbLine(0, 0, 15, 0, "Edge.Cuts", 0.1),
+            PcbLine(15, 0, 15, 10, "Edge.Cuts", 0.1),
+            PcbLine(15, 10, 0, 10, "Edge.Cuts", 0.1),
+            PcbLine(0, 10, 0, 0, "Edge.Cuts", 0.1),
+        ],
+        outline_arcs=[],
+        layers=[
+            PcbLayer("F.Cu", LayerFunction.COPPER, side="front"),
+            PcbLayer("B.Cu", LayerFunction.COPPER, side="back"),
+            PcbLayer("F.Fab", LayerFunction.FAB, side="front"),
+        ],
+    )
+    svg = render_pcb_svg(board)
+    # Annular ring radius should be size/2 = 0.4, not drill/2 + 0.05 = 0.25
+    assert 'r="0.4000"' in svg
+    assert 'r="0.2500"' not in svg  # old hardcoded formula
+
+
 def test_zone_attributes(board: Pcb) -> None:
     """swd_switch has zones on inner copper layers."""
     svg = render_pcb_svg(board)
@@ -164,6 +219,117 @@ def test_highlight_component_does_not_highlight_nets(board: Pcb) -> None:
 def test_no_highlight_without_args(board: Pcb) -> None:
     svg = render_pcb_svg(board)
     assert '<style id="highlight">' not in svg
+
+
+# ---------------------------------------------------------------------------
+# Highlight + inner-layer visibility
+# ---------------------------------------------------------------------------
+
+
+def _make_board_with_inner_layers() -> Pcb:
+    """Board with front, inner, and back copper plus traces on all three."""
+    fp = PcbFootprint(
+        reference="U1",
+        footprint_lib="test",
+        x=5.0,
+        y=10.0,
+        rotation=0.0,
+        layer="F.Cu",
+        pads=[
+            PcbPad(
+                number="1",
+                x=5.0,
+                y=10.0,
+                width=1.0,
+                height=1.0,
+                shape="rect",
+                layers=["F.Cu"],
+                net_number=1,
+                net_name="SIG",
+                footprint_ref="U1",
+            ),
+        ],
+        fab_lines=[
+            PcbLine(4, 9, 6, 9, "F.Fab", 0.1),
+            PcbLine(6, 9, 6, 11, "F.Fab", 0.1),
+            PcbLine(6, 11, 4, 11, "F.Fab", 0.1),
+            PcbLine(4, 11, 4, 9, "F.Fab", 0.1),
+        ],
+    )
+    return Pcb(
+        name="inner-test",
+        nets={0: PcbNet(0, ""), 1: PcbNet(1, "SIG")},
+        footprints=[fp],
+        segments=[
+            PcbSegment(5.0, 10.0, 10.0, 10.0, 0.25, "F.Cu", 1),
+            PcbSegment(10.0, 10.0, 15.0, 10.0, 0.25, "In1.Cu", 1),
+            PcbSegment(15.0, 10.0, 15.0, 5.0, 0.25, "B.Cu", 1),
+        ],
+        vias=[
+            PcbVia(10.0, 10.0, 0.6, 0.3, ["F.Cu", "In1.Cu"], 1),
+        ],
+        outline_lines=[
+            PcbLine(0, 0, 20, 0, "Edge.Cuts", 0.1),
+            PcbLine(20, 0, 20, 20, "Edge.Cuts", 0.1),
+            PcbLine(20, 20, 0, 20, "Edge.Cuts", 0.1),
+            PcbLine(0, 20, 0, 0, "Edge.Cuts", 0.1),
+        ],
+        outline_arcs=[],
+        layers=[
+            PcbLayer("F.Cu", LayerFunction.COPPER, side="front"),
+            PcbLayer("In1.Cu", LayerFunction.COPPER, side="", number=1),
+            PcbLayer("B.Cu", LayerFunction.COPPER, side="back"),
+            PcbLayer("F.SilkS", LayerFunction.SILKSCREEN, side="front"),
+            PcbLayer("F.Fab", LayerFunction.FAB, side="front"),
+        ],
+    )
+
+
+def test_review_theme_hides_inner_copper() -> None:
+    """Review theme hides inner copper layers when no highlights are active."""
+    board = _make_board_with_inner_layers()
+    svg = render_pcb_svg(board, theme="review")
+    assert "g.layer-In1-Cu { display: none; }" in svg
+
+
+def test_review_highlight_restores_inner_layer_visibility() -> None:
+    """Highlighting a net in review theme overrides display:none on inner layers."""
+    board = _make_board_with_inner_layers()
+    svg = render_pcb_svg(board, theme="review", highlight_nets=["SIG"])
+    assert "display: inline !important" in svg
+    assert "g.layer-In1-Cu { display: inline !important; }" in svg
+
+
+def test_clean_highlight_restores_all_copper_visibility() -> None:
+    """Highlighting a net in clean theme restores all copper and via groups."""
+    board = _make_board_with_inner_layers()
+    svg = render_pcb_svg(board, theme="clean", highlight_nets=["SIG"])
+    assert "g.layer-F-Cu { display: inline !important; }" in svg
+    assert "g.layer-In1-Cu { display: inline !important; }" in svg
+    assert "g.layer-B-Cu { display: inline !important; }" in svg
+    assert "g.layer-vias { display: inline !important; }" in svg
+
+
+def test_clean_highlight_component_restores_copper() -> None:
+    """Component highlight in clean theme still restores copper for pads."""
+    board = _make_board_with_inner_layers()
+    svg = render_pcb_svg(board, theme="clean", highlight_components=["U1"])
+    assert "g.layer-F-Cu { display: inline !important; }" in svg
+
+
+def test_design_highlight_no_visibility_override() -> None:
+    """Design theme never hides copper, so highlights don't need overrides."""
+    board = _make_board_with_inner_layers()
+    svg = render_pcb_svg(board, theme="design", highlight_nets=["SIG"])
+    assert "display: inline !important" not in svg
+
+
+def test_no_visibility_override_without_highlights() -> None:
+    """Without highlights, no display overrides are emitted for any theme."""
+    board = _make_board_with_inner_layers()
+    for theme in ("design", "review", "clean"):
+        svg = render_pcb_svg(board, theme=theme)
+        assert "display: inline !important" not in svg, f"theme={theme}"
 
 
 # ---------------------------------------------------------------------------
@@ -356,8 +522,6 @@ def _make_board_with_component(
     value: str = "SN74LVC2G66",
 ) -> Pcb:
     """Board with one footprint that has lib/value metadata and a pad + fab line."""
-    from phosphor_eda.pcb import PcbPad
-
     fp = PcbFootprint(
         reference=ref,
         footprint_lib=lib,
@@ -775,3 +939,215 @@ def test_swd_switch_annotation_end_to_end(board: Pcb) -> None:
     assert "Status LED" in svg
     assert "annotation-connector" in svg
     assert "SWD Enable" in svg
+
+
+# ---------------------------------------------------------------------------
+# parse_render_settings
+# ---------------------------------------------------------------------------
+
+
+class TestParseRenderSettings:
+    def test_empty_object(self) -> None:
+        settings = parse_render_settings({})
+        assert settings.theme == ""
+        assert settings.side == ""
+        assert settings.width == 0
+        assert settings.highlights == []
+        assert settings.annotations == {}
+        assert settings.custom_css == ""
+
+    def test_all_fields(self) -> None:
+        data = {
+            "theme": "review",
+            "side": "back",
+            "width": 1200,
+            "highlights": [
+                {"net": "VBUS", "color": "#ff0000"},
+                {"component": "U1"},
+            ],
+            "annotations": {"boxes": [{"targets": ["U1"], "label": "MCU"}]},
+            "custom_css": ".board-fill { fill: red; }",
+        }
+        settings = parse_render_settings(data)
+        assert settings.theme == "review"
+        assert settings.side == "back"
+        assert settings.width == 1200
+        assert len(settings.highlights) == 2
+        assert settings.highlights[0].net == "VBUS"
+        assert settings.highlights[0].color == "#ff0000"
+        assert settings.highlights[1].component == "U1"
+        assert settings.highlights[1].color == ""
+        assert settings.annotations == data["annotations"]
+        assert settings.custom_css == ".board-fill { fill: red; }"
+
+    def test_invalid_theme(self) -> None:
+        with pytest.raises(ValueError, match="theme"):
+            parse_render_settings({"theme": "neon"})
+
+    def test_invalid_side(self) -> None:
+        with pytest.raises(ValueError, match="side"):
+            parse_render_settings({"side": "top"})
+
+    def test_invalid_width(self) -> None:
+        with pytest.raises(ValueError, match="width"):
+            parse_render_settings({"width": -10})
+
+    def test_highlight_missing_net_and_component(self) -> None:
+        with pytest.raises(ValueError, match="must have 'net' or 'component'"):
+            parse_render_settings({"highlights": [{"color": "#ff0000"}]})
+
+    def test_highlight_both_net_and_component(self) -> None:
+        with pytest.raises(ValueError, match="cannot have both"):
+            parse_render_settings({"highlights": [{"net": "GND", "component": "U1"}]})
+
+    def test_highlights_not_array(self) -> None:
+        with pytest.raises(ValueError, match="highlights must be an array"):
+            parse_render_settings({"highlights": "GND"})
+
+    def test_annotations_not_object(self) -> None:
+        with pytest.raises(ValueError, match="annotations must be an object"):
+            parse_render_settings({"annotations": "bad"})
+
+    def test_custom_css_not_string(self) -> None:
+        with pytest.raises(ValueError, match="custom_css must be a string"):
+            parse_render_settings({"custom_css": 42})
+
+
+# ---------------------------------------------------------------------------
+# Highlight colors
+# ---------------------------------------------------------------------------
+
+
+def test_highlight_net_with_color() -> None:
+    """A highlight spec with a color applies that color to traces and pads."""
+    board = _make_board_with_inner_layers()
+    svg = render_pcb_svg(
+        board,
+        theme="review",
+        highlight_specs=[HighlightSpec(net="SIG", color="#d4a843")],
+    )
+    assert 'style id="highlight"' in svg
+    # The custom color should appear in the CSS
+    assert "#d4a843" in svg
+    # Traces and pads with the net should get the custom color
+    assert "stroke: #d4a843 !important" in svg
+    assert "fill: #d4a843 !important" in svg
+
+
+def test_highlight_net_without_color_uses_layer_defaults() -> None:
+    """A highlight spec without color falls back to per-layer copper colors."""
+    board = _make_board_with_inner_layers()
+    svg = render_pcb_svg(
+        board,
+        theme="review",
+        highlight_specs=[HighlightSpec(net="SIG")],
+    )
+    assert 'style id="highlight"' in svg
+    # Should have copper color rules, not a custom color
+    assert "Restore vibrant copper colors" in svg
+
+
+def test_highlight_mixed_colors_and_defaults() -> None:
+    """Nets with colors get per-net rules; nets without get per-layer rules."""
+    fp = PcbFootprint(
+        reference="U1",
+        footprint_lib="test",
+        x=5.0,
+        y=10.0,
+        rotation=0.0,
+        layer="F.Cu",
+        pads=[
+            PcbPad(
+                number="1",
+                x=5.0,
+                y=10.0,
+                width=1.0,
+                height=1.0,
+                shape="rect",
+                layers=["F.Cu"],
+                net_number=1,
+                net_name="NET_A",
+                footprint_ref="U1",
+            ),
+            PcbPad(
+                number="2",
+                x=7.0,
+                y=10.0,
+                width=1.0,
+                height=1.0,
+                shape="rect",
+                layers=["F.Cu"],
+                net_number=2,
+                net_name="NET_B",
+                footprint_ref="U1",
+            ),
+        ],
+        fab_lines=[
+            PcbLine(4, 9, 8, 9, "F.Fab", 0.1),
+            PcbLine(8, 9, 8, 11, "F.Fab", 0.1),
+            PcbLine(8, 11, 4, 11, "F.Fab", 0.1),
+            PcbLine(4, 11, 4, 9, "F.Fab", 0.1),
+        ],
+    )
+    board = Pcb(
+        name="mixed-test",
+        nets={0: PcbNet(0, ""), 1: PcbNet(1, "NET_A"), 2: PcbNet(2, "NET_B")},
+        footprints=[fp],
+        segments=[
+            PcbSegment(5.0, 10.0, 10.0, 10.0, 0.25, "F.Cu", 1),
+            PcbSegment(7.0, 10.0, 12.0, 10.0, 0.25, "F.Cu", 2),
+        ],
+        vias=[],
+        outline_lines=[
+            PcbLine(0, 0, 20, 0, "Edge.Cuts", 0.1),
+            PcbLine(20, 0, 20, 20, "Edge.Cuts", 0.1),
+            PcbLine(20, 20, 0, 20, "Edge.Cuts", 0.1),
+            PcbLine(0, 20, 0, 0, "Edge.Cuts", 0.1),
+        ],
+        outline_arcs=[],
+        layers=[
+            PcbLayer("F.Cu", LayerFunction.COPPER, side="front"),
+            PcbLayer("B.Cu", LayerFunction.COPPER, side="back"),
+            PcbLayer("F.Fab", LayerFunction.FAB, side="front"),
+        ],
+    )
+    svg = render_pcb_svg(
+        board,
+        theme="review",
+        highlight_specs=[
+            HighlightSpec(net="NET_A", color="#ff0000"),
+            HighlightSpec(net="NET_B"),
+        ],
+    )
+    # NET_A gets per-net color
+    assert "stroke: #ff0000 !important" in svg
+    # NET_B gets per-layer copper color rules
+    assert "Restore vibrant copper colors" in svg
+
+
+def test_highlight_component_with_color() -> None:
+    """Component highlight with color applies to pads and body."""
+    board = _make_board_with_inner_layers()
+    svg = render_pcb_svg(
+        board,
+        theme="review",
+        highlight_specs=[HighlightSpec(component="U1", color="#5b8abf")],
+    )
+    assert 'style id="highlight"' in svg
+    assert "#5b8abf" in svg
+    assert "fill: #5b8abf !important" in svg
+    assert "stroke: #5b8abf !important" in svg
+
+
+def test_highlight_specs_merge_with_flags() -> None:
+    """highlight_specs merge with highlight_nets/highlight_components."""
+    board = _make_board_with_inner_layers()
+    svg = render_pcb_svg(
+        board,
+        theme="review",
+        highlight_nets=["SIG"],
+        highlight_specs=[HighlightSpec(component="U1")],
+    )
+    # Both net and component should be highlighted
+    assert "Restore highlighted nets" in svg
+    assert "Restore highlighted components" in svg
