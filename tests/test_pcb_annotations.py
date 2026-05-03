@@ -340,6 +340,14 @@ class TestMarginAssignment:
         assert _auto_assign_margin(10.0, 18.0, board_bbox) == "bottom"
         assert _auto_assign_margin(10.0, 2.0, board_bbox) == "top"
 
+    def test_tie_prefers_horizontal_edge(self) -> None:
+        """Equal horizontal/vertical distance should prefer horizontal (right/left)."""
+        board_bbox = (0.0, 0.0, 20.0, 20.0)
+        # (15, 5): right=5, top=5 — tie, prefer right
+        assert _auto_assign_margin(15.0, 5.0, board_bbox) == "right"
+        # (5, 15): left=5, bottom=5 — tie, prefer left
+        assert _auto_assign_margin(5.0, 15.0, board_bbox) == "left"
+
 
 # ---------------------------------------------------------------------------
 # Connector paths

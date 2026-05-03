@@ -1012,6 +1012,14 @@ class TestParseRenderSettings:
         with pytest.raises(ValueError, match="custom_css must be a string"):
             parse_render_settings({"custom_css": 42})
 
+    def test_width_rejects_bool(self) -> None:
+        with pytest.raises(ValueError, match="width must be a positive integer"):
+            parse_render_settings({"width": True})
+
+    def test_highlight_field_rejects_non_string(self) -> None:
+        with pytest.raises(ValueError, match=r"highlights\[0\]\.net must be a string"):
+            parse_render_settings({"highlights": [{"net": 42}]})
+
 
 # ---------------------------------------------------------------------------
 # Highlight colors

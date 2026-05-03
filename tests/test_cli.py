@@ -388,6 +388,20 @@ def test_cli_render_settings_invalid_json(tmp_path: Path) -> None:
     assert "Invalid render settings JSON" in result.output
 
 
+def test_cli_render_settings_non_object(tmp_path: Path) -> None:
+    """Non-object JSON (array, scalar) in render settings produces a clear error."""
+    settings_file = tmp_path / "array.json"
+    settings_file.write_text("[]")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file)],
+    )
+    assert result.exit_code != 0
+    assert "must be an object" in result.output
+
+
 def test_cli_render_settings_invalid_theme(tmp_path: Path) -> None:
     """Invalid theme in render settings produces a clear error."""
     settings_file = tmp_path / "bad.json"

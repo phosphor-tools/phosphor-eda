@@ -71,7 +71,7 @@ class RenderSettings:
     custom_css: str = ""
 
 
-def _is_json_dict(v: object) -> TypeGuard[dict[str, object]]:
+def is_json_dict(v: object) -> TypeGuard[dict[str, object]]:
     """Narrow an object to ``dict[str, object]``.
 
     ``isinstance(x, dict)`` narrows to ``dict[Unknown, Unknown]`` in
@@ -80,8 +80,8 @@ def _is_json_dict(v: object) -> TypeGuard[dict[str, object]]:
     return isinstance(v, dict)
 
 
-def _is_json_list(v: object) -> TypeGuard[list[object]]:
-    """Narrow an object to ``list[object]`` (see ``_is_json_dict``)."""
+def is_json_list(v: object) -> TypeGuard[list[object]]:
+    """Narrow an object to ``list[object]`` (see ``is_json_dict``)."""
     return isinstance(v, list)
 
 
@@ -108,30 +108,35 @@ def parse_render_settings(data: dict[str, Any]) -> RenderSettings:
 
     if "width" in data:
         width = data["width"]
-        if not isinstance(width, int) or width <= 0:
+        if not isinstance(width, int) or isinstance(width, bool) or width <= 0:
             msg = f"width must be a positive integer, got {width!r}"
             raise ValueError(msg)
         settings.width = width
 
     if "highlights" in data:
         raw_highlights = data["highlights"]
-        if not _is_json_list(raw_highlights):
+        if not is_json_list(raw_highlights):
             msg = "highlights must be an array"
             raise ValueError(msg)
         for i, item in enumerate(raw_highlights):
-            if not _is_json_dict(item):
+            if not is_json_dict(item):
                 msg = f"highlights[{i}] must be an object"
                 raise ValueError(msg)
-            has_net = "net" in item and item["net"]
-            has_comp = "component" in item and item["component"]
+            # Validate field types before extracting
+            for field in ("net", "component", "color"):
+                if field in item and not isinstance(item[field], str):
+                    msg = f"highlights[{i}].{field} must be a string"
+                    raise ValueError(msg)
+            net = str(item.get("net", ""))
+            component = str(item.get("component", ""))
+            has_net = bool(net)
+            has_comp = bool(component)
             if not has_net and not has_comp:
                 msg = f"highlights[{i}] must have 'net' or 'component'"
                 raise ValueError(msg)
             if has_net and has_comp:
                 msg = f"highlights[{i}] cannot have both 'net' and 'component'"
                 raise ValueError(msg)
-            net = str(item.get("net", ""))
-            component = str(item.get("component", ""))
             color = str(item.get("color", ""))
             settings.highlights.append(HighlightSpec(net=net, component=component, color=color))
 
@@ -958,12 +963,18 @@ def _highlight_css(
             for ref in sorted(colored_refs):
                 color = _component_colors[ref]
                 rules.append(f'.pad[data-component="{ref}"] {{ fill: {color} !important; }}')
+                # Stroke for outline-only body geometry
                 rules.append(
                     f'.body[data-component="{ref}"], '
                     f'.body-circle[data-component="{ref}"], '
-                    f'.body-circle-filled[data-component="{ref}"], '
                     f'.body-arc[data-component="{ref}"] '
                     f"{{ stroke: {color} !important; }}"
+                )
+                # Fill for filled body geometry
+                rules.append(
+                    f'.body[data-component="{ref}"], '
+                    f'.body-circle-filled[data-component="{ref}"] '
+                    f"{{ fill: {color} !important; }}"
                 )
 
     return "\n".join(rules)
@@ -1318,7 +1329,7 @@ def render_pcb_svg(
     highlight_components: list[str] | None = None,
     highlight_specs: list[HighlightSpec] | None = None,
     width_px: int = 800,
-    theme: str = "design",
+    theme: str = "review",
     custom_css: str = "",
     annotations: ResolvedAnnotations | None = None,
 ) -> str:
