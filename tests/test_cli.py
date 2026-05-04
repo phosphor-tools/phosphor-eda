@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -297,3 +298,119 @@ def test_cli_kicad_root_not_rejected():
     )
     assert result.exit_code == 0
     assert "PAGE" in result.output
+
+
+# ---- pcb render --render-settings CLI tests ----
+
+PCB_FILE = str(FIXTURES / "swd_switch.kicad_pcb")
+
+
+def test_cli_render_settings_from_file(tmp_path: Path) -> None:
+    """--render-settings loads theme, highlights, and annotations from a JSON file."""
+    settings = {
+        "theme": "review",
+        "highlights": [{"net": "SWDIO"}],
+        "annotations": {
+            "pointers": [{"target": "TP3", "label": "SWD"}],
+        },
+    }
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps(settings))
+    out_file = tmp_path / "out.svg"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file), "-o", str(out_file)],
+    )
+    assert result.exit_code == 0, result.output
+    svg = out_file.read_text()
+    assert svg.startswith("<svg")
+    assert 'style id="highlight"' in svg
+    assert "SWD" in svg
+
+
+def test_cli_render_settings_from_stdin(tmp_path: Path) -> None:
+    """--render-settings - reads JSON from stdin."""
+    settings = {
+        "theme": "review",
+        "highlights": [{"net": "SWDIO"}],
+    }
+    out_file = tmp_path / "out.svg"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["pcb", "render", PCB_FILE, "--render-settings", "-", "-o", str(out_file)],
+        input=json.dumps(settings),
+    )
+    assert result.exit_code == 0, result.output
+    svg = out_file.read_text()
+    assert svg.startswith("<svg")
+    assert 'style id="highlight"' in svg
+
+
+def test_cli_render_settings_with_highlight_colors(tmp_path: Path) -> None:
+    """Highlight colors from render settings appear in the SVG CSS."""
+    settings = {
+        "theme": "review",
+        "highlights": [
+            {"net": "SWDIO", "color": "#d4a843"},
+            {"net": "SWDCLK", "color": "#5b8abf"},
+        ],
+    }
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps(settings))
+    out_file = tmp_path / "out.svg"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file), "-o", str(out_file)],
+    )
+    assert result.exit_code == 0, result.output
+    svg = out_file.read_text()
+    assert "#d4a843" in svg
+    assert "#5b8abf" in svg
+
+
+def test_cli_render_settings_invalid_json(tmp_path: Path) -> None:
+    """Invalid JSON in render settings file produces a clear error."""
+    settings_file = tmp_path / "bad.json"
+    settings_file.write_text("not json")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file)],
+    )
+    assert result.exit_code != 0
+    assert "Invalid render settings JSON" in result.output
+
+
+def test_cli_render_settings_non_object(tmp_path: Path) -> None:
+    """Non-object JSON (array, scalar) in render settings produces a clear error."""
+    settings_file = tmp_path / "array.json"
+    settings_file.write_text("[]")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file)],
+    )
+    assert result.exit_code != 0
+    assert "must be an object" in result.output
+
+
+def test_cli_render_settings_invalid_theme(tmp_path: Path) -> None:
+    """Invalid theme in render settings produces a clear error."""
+    settings_file = tmp_path / "bad.json"
+    settings_file.write_text(json.dumps({"theme": "neon"}))
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file)],
+    )
+    assert result.exit_code != 0
+    assert "Render settings error" in result.output

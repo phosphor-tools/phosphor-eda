@@ -14,7 +14,8 @@ import math
 import re
 from collections import defaultdict
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, TypeGuard
 from xml.sax.saxutils import escape as xml_escape
 
 from phosphor_eda.pcb import LayerFunction, PcbLayer
@@ -39,6 +40,122 @@ if TYPE_CHECKING:
         ResolvedLegend,
         ResolvedPointer,
     )
+
+# ---------------------------------------------------------------------------
+# Render settings
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class HighlightSpec:
+    """A single net or component to highlight, with an optional color."""
+
+    net: str = ""
+    component: str = ""
+    color: str = ""
+
+
+@dataclass
+class RenderSettings:
+    """Unified render configuration — theme, highlights, annotations, CSS.
+
+    Parsed from the ``--render-settings`` JSON file.  All fields are optional;
+    omitted fields fall back to CLI defaults.
+    """
+
+    theme: str = ""
+    side: str = ""
+    width: int = 0
+    highlights: list[HighlightSpec] = field(default_factory=list)
+    annotations: dict[str, Any] = field(default_factory=dict)
+    custom_css: str = ""
+
+
+def is_json_dict(v: object) -> TypeGuard[dict[str, object]]:
+    """Narrow an object to ``dict[str, object]``.
+
+    ``isinstance(x, dict)`` narrows to ``dict[Unknown, Unknown]`` in
+    basedpyright strict.  This TypeGuard gives a properly-typed dict.
+    """
+    return isinstance(v, dict)
+
+
+def is_json_list(v: object) -> TypeGuard[list[object]]:
+    """Narrow an object to ``list[object]`` (see ``is_json_dict``)."""
+    return isinstance(v, list)
+
+
+def parse_render_settings(data: dict[str, Any]) -> RenderSettings:
+    """Parse a render-settings JSON dict into a ``RenderSettings`` object.
+
+    Raises ``ValueError`` on invalid input.
+    """
+    settings = RenderSettings()
+
+    if "theme" in data:
+        theme = data["theme"]
+        if not isinstance(theme, str) or theme not in ("design", "review", "clean"):
+            msg = f"theme must be 'design', 'review', or 'clean', got {theme!r}"
+            raise ValueError(msg)
+        settings.theme = theme
+
+    if "side" in data:
+        side = data["side"]
+        if not isinstance(side, str) or side not in ("front", "back"):
+            msg = f"side must be 'front' or 'back', got {side!r}"
+            raise ValueError(msg)
+        settings.side = side
+
+    if "width" in data:
+        width = data["width"]
+        if not isinstance(width, int) or isinstance(width, bool) or width <= 0:
+            msg = f"width must be a positive integer, got {width!r}"
+            raise ValueError(msg)
+        settings.width = width
+
+    if "highlights" in data:
+        raw_highlights = data["highlights"]
+        if not is_json_list(raw_highlights):
+            msg = "highlights must be an array"
+            raise ValueError(msg)
+        for i, item in enumerate(raw_highlights):
+            if not is_json_dict(item):
+                msg = f"highlights[{i}] must be an object"
+                raise ValueError(msg)
+            # Validate field types before extracting
+            for field in ("net", "component", "color"):
+                if field in item and not isinstance(item[field], str):
+                    msg = f"highlights[{i}].{field} must be a string"
+                    raise ValueError(msg)
+            net = str(item.get("net", ""))
+            component = str(item.get("component", ""))
+            has_net = bool(net)
+            has_comp = bool(component)
+            if not has_net and not has_comp:
+                msg = f"highlights[{i}] must have 'net' or 'component'"
+                raise ValueError(msg)
+            if has_net and has_comp:
+                msg = f"highlights[{i}] cannot have both 'net' and 'component'"
+                raise ValueError(msg)
+            color = str(item.get("color", ""))
+            settings.highlights.append(HighlightSpec(net=net, component=component, color=color))
+
+    if "annotations" in data:
+        ann = data["annotations"]
+        if not isinstance(ann, dict):
+            msg = "annotations must be an object"
+            raise ValueError(msg)
+        settings.annotations = ann
+
+    if "custom_css" in data:
+        css = data["custom_css"]
+        if not isinstance(css, str):
+            msg = "custom_css must be a string"
+            raise ValueError(msg)
+        settings.custom_css = css
+
+    return settings
+
 
 # ---------------------------------------------------------------------------
 # SVG builder
@@ -185,34 +302,44 @@ def _arc_svg_params(
     ex: float,
     ey: float,
 ) -> tuple[float, int, int]:
-    """Compute (radius, large_arc_flag, sweep_flag) for an SVG arc command."""
-    _, _, r = _circumcircle(sx, sy, mx, my, ex, ey)
+    """Compute (radius, large_arc_flag, sweep_flag) for an SVG arc command.
+
+    Derives sweep direction and arc size from the midpoint — the arc from
+    start to end that passes through mid.  SVG's ``sweep-flag=1`` means
+    the arc advances in the positive-angle (clockwise in screen coords)
+    direction.
+    """
+    ccx, ccy, r = _circumcircle(sx, sy, mx, my, ex, ey)
     if r > 1e5:
         return (r, 0, 0)
-    ccx, ccy, _ = _circumcircle(sx, sy, mx, my, ex, ey)
-    dx1 = mx - sx
-    dy1 = my - sy
-    dx2 = ex - sx
-    dy2 = ey - sy
-    cross = dx1 * dy2 - dy1 * dx2
-    sweep = 1 if cross > 0 else 0
-    angle_start = math.atan2(sy - ccy, sx - ccx)
-    angle_mid = math.atan2(my - ccy, mx - ccx)
-    angle_end = math.atan2(ey - ccy, ex - ccx)
 
-    def _norm(a: float, ref: float) -> float:
-        dd = a - ref
-        while dd < -math.pi:
-            dd += 2 * math.pi
-        while dd > math.pi:
-            dd -= 2 * math.pi
-        return dd
+    a_s = math.atan2(sy - ccy, sx - ccx)
+    a_m = math.atan2(my - ccy, mx - ccx)
+    a_e = math.atan2(ey - ccy, ex - ccx)
 
-    d_mid = _norm(angle_mid, angle_start)
-    d_end = _norm(angle_end, angle_start)
-    large_arc = 1 if abs(d_end) > math.pi else 0
-    if (d_mid > 0) != (d_end > 0):
-        large_arc = 1
+    # Compute the angular travel from start→mid and start→end going in
+    # the positive-angle (CW in screen coords) direction.
+    def _pos(a: float, ref: float) -> float:
+        """Angle from *ref* to *a* in [0, 2π) going positive."""
+        d = a - ref
+        return d % (2 * math.pi)
+
+    cw_to_mid = _pos(a_m, a_s)
+    cw_to_end = _pos(a_e, a_s)
+
+    # The arc passes through mid.  If the CW distance to mid is less
+    # than the CW distance to end, the arc goes CW (sweep=1).
+    # Otherwise it goes CCW (sweep=0).
+    if cw_to_mid < cw_to_end:
+        # CW path: start → mid → end, total span = cw_to_end
+        sweep = 1
+        span = cw_to_end
+    else:
+        # CCW path: start → mid → end, total span = 2π - cw_to_end
+        sweep = 0
+        span = 2 * math.pi - cw_to_end
+
+    large_arc = 1 if span > math.pi else 0
     return (r, large_arc, sweep)
 
 
@@ -701,19 +828,65 @@ def _theme_css(theme: str, side: str, layers: list[PcbLayer]) -> str:
     return fn(side, layers)
 
 
+def _theme_hidden_layer_classes(theme: str, side: str, copper_layers: list[PcbLayer]) -> set[str]:
+    """Return CSS class names for layer groups hidden by the theme.
+
+    Themes hide copper (and sometimes via) groups with ``display: none``.
+    When highlights are active the highlight CSS must override that to make
+    highlighted traces visible — even on inner or opposite-side layers.
+    """
+    opposite = "back" if side == "front" else "front"
+    if theme == "review":
+        # Review hides opposite-side and inner copper.
+        return {
+            _layer_class(lyr.name) for lyr in copper_layers if lyr.side == opposite or not lyr.side
+        }
+    if theme == "clean":
+        # Clean hides all copper and vias.
+        hidden = {_layer_class(lyr.name) for lyr in copper_layers}
+        hidden.add("layer-vias")
+        return hidden
+    return set()
+
+
 def _highlight_css(
     hl_net_nums: set[int],
     hl_refs: set[str],
     copper_layers: list[PcbLayer],
+    hidden_layer_classes: set[str] | None = None,
+    net_colors: dict[int, str] | None = None,
+    component_colors: dict[str, str] | None = None,
 ) -> str:
     """Return CSS that dims non-highlighted elements and brightens highlighted.
 
-    Net highlights (``-n``) restore traces, pads, and vias on matching nets.
-    Component highlights (``-c``) restore pads, bodies, and ref text for
+    Net highlights restore traces, pads, and vias on matching nets.
+    Component highlights restore pads, bodies, and ref text for
     matching components.  The two are independent — specify both to see
     a component *and* its connected traces.
+
+    ``hidden_layer_classes`` lists CSS class names for layer ``<g>`` groups
+    that the theme hides with ``display: none``.  The highlight block must
+    override that to make highlighted content visible — a child's
+    ``opacity: 1 !important`` has no effect when the parent is hidden.
+
+    ``net_colors`` maps net numbers to CSS colors.  Nets with an entry get
+    that color for traces and pads; nets without fall back to the layer's
+    default copper color.
+
+    ``component_colors`` maps component refs to CSS colors.  Components with
+    an entry get that color on pads and body elements.
     """
     rules: list[str] = []
+    _net_colors = net_colors or {}
+    _component_colors = component_colors or {}
+
+    # -- Restore visibility on layer groups hidden by the theme ----------------
+    if hidden_layer_classes:
+        rules.append("/* Restore visibility on theme-hidden layer groups */")
+        for cls in sorted(hidden_layer_classes):
+            rules.append(f"g.{cls} {{ display: inline !important; }}")
+        rules.append("")
+
     rules.append("/* Dim non-highlighted elements */")
     rules.append("g[data-layer] .trace, g[data-layer] .trace-arc { opacity: 0.12; }")
     rules.append("g[data-layer] .pad { opacity: 0.2; }")
@@ -736,24 +909,44 @@ def _highlight_css(
         # Keep highlighted zones less dominant so they don't flood the view
         zone_sel = ", ".join(f'.zone[data-net-number="{nn}"]' for nn in sorted(hl_net_nums))
         rules.append(f"{zone_sel} {{ opacity: 0.25 !important; }}")
-        rules.append("")
-        rules.append("/* Restore vibrant copper colors for highlighted traces and pads */")
-        inner_idx = 0
-        for layer in copper_layers:
-            color = _copper_color(layer, inner_idx)
-            if not layer.side:
-                inner_idx += 1
-            cls = _layer_class(layer.name)
-            trace_sel = ", ".join(
-                f'g.{cls} .trace[data-net-number="{nn}"], '
-                f'g.{cls} .trace-arc[data-net-number="{nn}"]'
-                for nn in sorted(hl_net_nums)
-            )
-            rules.append(f"{trace_sel} {{ stroke: {color} !important; }}")
-            pad_sel = ", ".join(
-                f'g.{cls} .pad[data-net-number="{nn}"]' for nn in sorted(hl_net_nums)
-            )
-            rules.append(f"{pad_sel} {{ fill: {color} !important; }}")
+
+        # Split into nets with explicit colors vs those using layer defaults
+        colored_nets = {nn for nn in hl_net_nums if nn in _net_colors}
+        default_nets = hl_net_nums - colored_nets
+
+        # Nets with explicit colors — same color regardless of copper layer
+        if colored_nets:
+            rules.append("")
+            rules.append("/* Per-net highlight colors */")
+            for nn in sorted(colored_nets):
+                color = _net_colors[nn]
+                rules.append(
+                    f'.trace[data-net-number="{nn}"], '
+                    f'.trace-arc[data-net-number="{nn}"] '
+                    f"{{ stroke: {color} !important; }}"
+                )
+                rules.append(f'.pad[data-net-number="{nn}"] {{ fill: {color} !important; }}')
+
+        # Nets without colors — restore per-layer copper colors
+        if default_nets:
+            rules.append("")
+            rules.append("/* Restore vibrant copper colors for highlighted traces and pads */")
+            inner_idx = 0
+            for layer in copper_layers:
+                color = _copper_color(layer, inner_idx)
+                if not layer.side:
+                    inner_idx += 1
+                cls = _layer_class(layer.name)
+                trace_sel = ", ".join(
+                    f'g.{cls} .trace[data-net-number="{nn}"], '
+                    f'g.{cls} .trace-arc[data-net-number="{nn}"]'
+                    for nn in sorted(default_nets)
+                )
+                rules.append(f"{trace_sel} {{ stroke: {color} !important; }}")
+                pad_sel = ", ".join(
+                    f'g.{cls} .pad[data-net-number="{nn}"]' for nn in sorted(default_nets)
+                )
+                rules.append(f"{pad_sel} {{ fill: {color} !important; }}")
 
     # -- Restore highlighted components (pads, bodies, ref text) ---------------
     if hl_refs:
@@ -761,6 +954,28 @@ def _highlight_css(
         rules.append("/* Restore highlighted components */")
         ref_sel = ", ".join(f'[data-component="{ref}"]' for ref in sorted(hl_refs))
         rules.append(f"{ref_sel} {{ opacity: 1 !important; }}")
+
+        # Per-component colors
+        colored_refs = {ref for ref in hl_refs if ref in _component_colors}
+        if colored_refs:
+            rules.append("")
+            rules.append("/* Per-component highlight colors */")
+            for ref in sorted(colored_refs):
+                color = _component_colors[ref]
+                rules.append(f'.pad[data-component="{ref}"] {{ fill: {color} !important; }}')
+                # Stroke for outline-only body geometry
+                rules.append(
+                    f'.body[data-component="{ref}"], '
+                    f'.body-circle[data-component="{ref}"], '
+                    f'.body-arc[data-component="{ref}"] '
+                    f"{{ stroke: {color} !important; }}"
+                )
+                # Fill for filled body geometry
+                rules.append(
+                    f'.body[data-component="{ref}"], '
+                    f'.body-circle-filled[data-component="{ref}"] '
+                    f"{{ fill: {color} !important; }}"
+                )
 
     return "\n".join(rules)
 
@@ -1112,8 +1327,9 @@ def render_pcb_svg(
     side: str = "front",
     highlight_nets: list[str] | None = None,
     highlight_components: list[str] | None = None,
+    highlight_specs: list[HighlightSpec] | None = None,
     width_px: int = 800,
-    theme: str = "design",
+    theme: str = "review",
     custom_css: str = "",
     annotations: ResolvedAnnotations | None = None,
 ) -> str:
@@ -1129,6 +1345,9 @@ def render_pcb_svg(
         Net names to highlight (case-insensitive substring match).
     highlight_components:
         Component references to highlight (footprint only, not nets).
+    highlight_specs:
+        Structured highlights with optional per-net/component colors.
+        Merged with ``highlight_nets``/``highlight_components``.
     width_px:
         Pixel width of the SVG.
     theme:
@@ -1136,14 +1355,16 @@ def render_pcb_svg(
         "clean" (documentation — hides copper/passives).
     custom_css:
         Extra CSS injected after the theme and highlight styles.
-        Overrides any built-in rule.  Useful for per-net colors,
-        board mask recoloring, layer visibility, etc.
+        Overrides any built-in rule.  Useful for board mask recoloring,
+        layer visibility, etc.
     annotations:
         Resolved annotations to overlay on the board.
     """
     # -- Resolve highlights ------------------------------------------------
     hl_net_nums: set[int] = set()
     hl_refs: set[str] = set()
+    net_colors: dict[int, str] = {}
+    component_colors: dict[str, str] = {}
 
     if highlight_nets:
         for name in highlight_nets:
@@ -1154,6 +1375,21 @@ def render_pcb_svg(
             fp = board.footprint_by_ref(ref)
             if fp:
                 hl_refs.add(fp.reference)
+
+    if highlight_specs:
+        for spec in highlight_specs:
+            if spec.net:
+                nums = board.net_numbers_by_name(spec.net)
+                hl_net_nums |= nums
+                if spec.color:
+                    for nn in nums:
+                        net_colors[nn] = spec.color
+            if spec.component:
+                fp = board.footprint_by_ref(spec.component)
+                if fp:
+                    hl_refs.add(fp.reference)
+                    if spec.color:
+                        component_colors[fp.reference] = spec.color
 
     has_hl = bool(hl_net_nums) or bool(hl_refs)
 
@@ -1268,8 +1504,18 @@ def render_pcb_svg(
     svg.raw("</style>")
 
     if has_hl:
+        hidden = _theme_hidden_layer_classes(theme, side, copper_layers)
         svg.raw('<style id="highlight">')
-        svg.raw(_highlight_css(hl_net_nums, hl_refs, copper_layers))
+        svg.raw(
+            _highlight_css(
+                hl_net_nums,
+                hl_refs,
+                copper_layers,
+                hidden,
+                net_colors=net_colors or None,
+                component_colors=component_colors or None,
+            )
+        )
         svg.raw("</style>")
 
     if custom_css:
@@ -1404,7 +1650,7 @@ def render_pcb_svg(
     svg.group_start(attrs={"data-layer": "vias", "class": "layer-vias"})
     for via in board.vias:
         net_nm = _net_name(board, via.net_number)
-        r_annular = via.drill / 2 + 0.05
+        r_annular = via.size / 2
         via_attrs_base = {
             "data-type": "via",
             "data-net": net_nm,
