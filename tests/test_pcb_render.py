@@ -318,11 +318,11 @@ def test_clean_highlight_component_restores_copper() -> None:
     assert "g.layer-F-Cu { display: inline !important; }" in svg
 
 
-def test_design_highlight_no_visibility_override() -> None:
-    """Design theme never hides copper, so highlights don't need overrides."""
+def test_design_highlight_restores_fab_visibility() -> None:
+    """Design theme hides fab groups; highlights restore them."""
     board = _make_board_with_inner_layers()
     svg = render_pcb_svg(board, theme="design", highlight_nets=["SIG"])
-    assert "display: inline !important" not in svg
+    assert "g.layer-F-Fab { display: inline !important; }" in svg
 
 
 def test_no_visibility_override_without_highlights() -> None:

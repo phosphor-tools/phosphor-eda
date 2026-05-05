@@ -855,11 +855,11 @@ def _theme_css(theme: str, side: str, layers: list[PcbLayer]) -> str:
 
 
 def _theme_hidden_layer_classes(theme: str, side: str, layers: list[PcbLayer]) -> set[str]:
-    """Return CSS class names for layer groups hidden by the theme.
+    """Return CSS class names for groups hidden by the theme via ``display: none``.
 
-    Themes hide copper, silk, and fab groups with ``display: none``.
-    When highlights are active the highlight CSS must override that to make
-    highlighted content visible — even on opposite-side or inner layers.
+    Includes layer groups, passive-prefix groups, and any other elements
+    the theme hides.  The highlight CSS emits ``display: inline !important``
+    for each returned class to make highlighted content visible.
     """
     opposite = "back" if side == "front" else "front"
     copper = [lyr for lyr in layers if lyr.function == LayerFunction.COPPER]
@@ -868,11 +868,9 @@ def _theme_hidden_layer_classes(theme: str, side: str, layers: list[PcbLayer]) -
 
     if theme == "review":
         hidden: set[str] = set()
-        # Opposite-side and inner copper
         for lyr in copper:
             if lyr.side == opposite or not lyr.side:
                 hidden.add(_layer_class(lyr.name))
-        # Opposite-side silk and fab
         for lyr in silk + fab:
             if lyr.side == opposite:
                 hidden.add(_layer_class(lyr.name))
@@ -885,6 +883,17 @@ def _theme_hidden_layer_classes(theme: str, side: str, layers: list[PcbLayer]) -
         for lyr in fab:
             if lyr.side == opposite:
                 hidden.add(_layer_class(lyr.name))
+        # Passive body groups and ref-text are hidden via pfx-* classes
+        for prefix in _PASSIVE_PREFIXES:
+            hidden.add(f"pfx-{prefix}")
+        return hidden
+    if theme == "design":
+        hidden = set[str]()
+        for lyr in silk:
+            if lyr.side == opposite:
+                hidden.add(_layer_class(lyr.name))
+        for lyr in fab:
+            hidden.add(_layer_class(lyr.name))
         return hidden
     return set()
 
@@ -920,11 +929,14 @@ def _highlight_css(
     _net_colors = net_colors or {}
     _component_colors = component_colors or {}
 
-    # -- Restore visibility on layer groups hidden by the theme ----------------
+    # -- Restore visibility on groups hidden by the theme ----------------------
     if hidden_layer_classes:
-        rules.append("/* Restore visibility on theme-hidden layer groups */")
+        rules.append("/* Restore visibility on theme-hidden groups */")
         for cls in sorted(hidden_layer_classes):
             rules.append(f"g.{cls} {{ display: inline !important; }}")
+            # Passive-prefix classes also hide ref-text elements
+            if cls.startswith("pfx-"):
+                rules.append(f".ref-text.{cls} {{ display: inline !important; }}")
         rules.append("")
 
     rules.append("/* Dim non-highlighted elements */")
