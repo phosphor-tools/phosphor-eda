@@ -29,6 +29,8 @@ from phosphor_eda.pcb_annotations import (
 )
 from phosphor_eda.pcb_render import (
     HighlightSpec,
+    _cmp_class,  # pyright: ignore[reportPrivateUsage]
+    _css_safe,  # pyright: ignore[reportPrivateUsage]
     _fmt_attrs,  # pyright: ignore[reportPrivateUsage]
     parse_render_settings,
     render_pcb_svg,
@@ -1325,3 +1327,20 @@ class TestClassBasedSelectors:
         assert 'data-net-number="1"' in svg
         assert 'data-component="U1"' in svg
         assert 'data-layer="F.Cu"' in svg
+
+    def test_css_safe_identity_for_simple_refs(self) -> None:
+        """Simple alphanumeric refs pass through unchanged."""
+        assert _css_safe("R1") == "R1"
+        assert _css_safe("U3A") == "U3A"
+        assert _css_safe("C_10") == "C_10"
+
+    def test_css_safe_encodes_special_chars(self) -> None:
+        """Characters invalid in CSS class names are hex-escaped."""
+        assert _css_safe("R?") == "R_3f"
+        assert _css_safe("J1/SHIELD") == "J1_2fSHIELD"
+        assert _css_safe("U1:A") == "U1_3aA"
+
+    def test_cmp_class_uses_sanitized_ref(self) -> None:
+        """_cmp_class produces valid CSS class tokens for special refs."""
+        assert _cmp_class("R1") == "cmp-R1"
+        assert _cmp_class("J1/SHIELD") == "cmp-J1_2fSHIELD"

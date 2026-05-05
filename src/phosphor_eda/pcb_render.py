@@ -582,9 +582,17 @@ def _nn_class(net_number: int) -> str:
     return f"nn-{net_number}"
 
 
+_CSS_SAFE_RE = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def _css_safe(s: str) -> str:
+    """Replace chars that aren't valid in CSS class names with _XX hex."""
+    return _CSS_SAFE_RE.sub(lambda m: f"_{ord(m.group()):02x}", s)
+
+
 def _cmp_class(ref: str) -> str:
-    """CSS class for a component reference: cmp-{ref}."""
-    return f"cmp-{ref}"
+    """CSS class for a component reference: cmp-{sanitized_ref}."""
+    return f"cmp-{_css_safe(ref)}"
 
 
 def _pfx_class(ref: str) -> str | None:
