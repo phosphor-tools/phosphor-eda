@@ -301,13 +301,14 @@ def test_review_highlight_restores_inner_layer_visibility() -> None:
 
 
 def test_clean_highlight_restores_all_copper_visibility() -> None:
-    """Highlighting a net in clean theme restores all copper and via groups."""
+    """Highlighting a net in clean theme restores all copper, via, and silk groups."""
     board = _make_board_with_inner_layers()
     svg = render_pcb_svg(board, theme="clean", highlight_nets=["SIG"])
     assert "g.layer-F-Cu { display: inline !important; }" in svg
     assert "g.layer-In1-Cu { display: inline !important; }" in svg
     assert "g.layer-B-Cu { display: inline !important; }" in svg
     assert "g.layer-vias { display: inline !important; }" in svg
+    assert "g.layer-F-SilkS { display: inline !important; }" in svg
 
 
 def test_clean_highlight_component_restores_copper() -> None:

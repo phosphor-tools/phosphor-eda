@@ -854,23 +854,37 @@ def _theme_css(theme: str, side: str, layers: list[PcbLayer]) -> str:
     return fn(side, layers)
 
 
-def _theme_hidden_layer_classes(theme: str, side: str, copper_layers: list[PcbLayer]) -> set[str]:
+def _theme_hidden_layer_classes(theme: str, side: str, layers: list[PcbLayer]) -> set[str]:
     """Return CSS class names for layer groups hidden by the theme.
 
-    Themes hide copper (and sometimes via) groups with ``display: none``.
+    Themes hide copper, silk, and fab groups with ``display: none``.
     When highlights are active the highlight CSS must override that to make
-    highlighted traces visible — even on inner or opposite-side layers.
+    highlighted content visible — even on opposite-side or inner layers.
     """
     opposite = "back" if side == "front" else "front"
+    copper = [lyr for lyr in layers if lyr.function == LayerFunction.COPPER]
+    silk = [lyr for lyr in layers if lyr.function == LayerFunction.SILKSCREEN]
+    fab = [lyr for lyr in layers if lyr.function == LayerFunction.FAB]
+
     if theme == "review":
-        # Review hides opposite-side and inner copper.
-        return {
-            _layer_class(lyr.name) for lyr in copper_layers if lyr.side == opposite or not lyr.side
-        }
+        hidden: set[str] = set()
+        # Opposite-side and inner copper
+        for lyr in copper:
+            if lyr.side == opposite or not lyr.side:
+                hidden.add(_layer_class(lyr.name))
+        # Opposite-side silk and fab
+        for lyr in silk + fab:
+            if lyr.side == opposite:
+                hidden.add(_layer_class(lyr.name))
+        return hidden
     if theme == "clean":
-        # Clean hides all copper and vias.
-        hidden = {_layer_class(lyr.name) for lyr in copper_layers}
+        hidden = {_layer_class(lyr.name) for lyr in copper}
         hidden.add("layer-vias")
+        for lyr in silk:
+            hidden.add(_layer_class(lyr.name))
+        for lyr in fab:
+            if lyr.side == opposite:
+                hidden.add(_layer_class(lyr.name))
         return hidden
     return set()
 
@@ -1531,7 +1545,7 @@ def render_pcb_svg(
     svg.raw("</style>")
 
     if has_hl:
-        hidden = _theme_hidden_layer_classes(theme, side, copper_layers)
+        hidden = _theme_hidden_layer_classes(theme, side, board.layers)
         svg.raw('<style id="highlight">')
         svg.raw(
             _highlight_css(
