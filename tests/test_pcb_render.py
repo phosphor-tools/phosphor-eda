@@ -123,7 +123,7 @@ def test_trace_attributes(board: Pcb) -> None:
 def test_via_attributes(board: Pcb) -> None:
     svg = render_pcb_svg(board)
     assert 'data-type="via"' in svg
-    assert 'class="via"' in svg
+    assert re.search(r'class="via\b', svg)
 
 
 def test_via_annular_ring_uses_size() -> None:
@@ -198,13 +198,13 @@ def test_highlight_adds_style(board: Pcb) -> None:
 
 
 def test_highlight_css_targets_net(board: Pcb) -> None:
-    """Highlight CSS should contain data-net-number selector for VCC (net 1)."""
+    """VCC elements have data-net-number="1" attr (CSS uses .nn-1 class)."""
     svg = render_pcb_svg(board, highlight_nets=["VCC"])
     assert 'data-net-number="1"' in svg
 
 
 def test_highlight_component_restores_by_ref(board: Pcb) -> None:
-    """Component highlight CSS restores elements by data-component, not net."""
+    """Component highlight restores elements by cmp-{ref} class."""
     svg = render_pcb_svg(board, highlight_components=["TP3"])
     assert 'data-component="TP3"' in svg
     assert "Restore highlighted components" in svg
@@ -589,7 +589,7 @@ def test_silk_has_footprint_lib() -> None:
     board = _make_board_with_component()
     svg = render_pcb_svg(board)
     # Silk lines should have component attrs
-    silk_pattern = re.compile(r'class="silk"[^/]*data-footprint-lib="Package_SO:SOIC-8"')
+    silk_pattern = re.compile(r'class="silk[^"]*"[^/]*data-footprint-lib="Package_SO:SOIC-8"')
     assert silk_pattern.search(svg)
 
 
@@ -620,7 +620,7 @@ def test_ref_text_has_lib_and_value() -> None:
         )
     )
     svg = render_pcb_svg(board)
-    ref_pattern = re.compile(r'class="ref-text"[^>]*data-footprint-lib="Package_SO:SOIC-8"')
+    ref_pattern = re.compile(r'class="ref-text[^"]*"[^>]*data-footprint-lib="Package_SO:SOIC-8"')
     assert ref_pattern.search(svg)
 
 
@@ -1159,3 +1159,168 @@ def test_highlight_specs_merge_with_flags() -> None:
     # Both net and component should be highlighted
     assert "Restore highlighted nets" in svg
     assert "Restore highlighted components" in svg
+
+
+# ---------------------------------------------------------------------------
+# Class-based CSS selectors (no attribute selectors in <style>)
+# ---------------------------------------------------------------------------
+
+
+class TestClassBasedSelectors:
+    """CSS uses class selectors (.nn-X, .cmp-X, .pfx-X, .lyr) instead of
+    attribute selectors ([data-net-number="X"]) for O(1) rasterization."""
+
+    def test_no_attribute_selectors_in_style(self, board: Pcb) -> None:
+        """No attribute selectors should appear in any <style> block."""
+        svg = render_pcb_svg(board, theme="review", highlight_nets=["VCC"])
+        # Extract all <style> blocks
+        style_blocks = re.findall(r"<style[^>]*>(.*?)</style>", svg, re.DOTALL)
+        css = "\n".join(style_blocks)
+        # No attribute selectors of the form [data-...]
+        assert "[data-" not in css, f"Found attribute selector in CSS: {css}"
+
+    def test_nn_class_on_traces(self) -> None:
+        """Traces get nn-{number} class alongside data-net-number attr."""
+        board = _make_board_with_inner_layers()
+        svg = render_pcb_svg(board)
+        # Net 1 = SIG. Traces should have class="trace nn-1"
+        assert re.search(r'class="trace nn-1"', svg)
+
+    def test_nn_class_on_pads(self) -> None:
+        """Pads get nn-{number} class."""
+        board = _make_board_with_inner_layers()
+        svg = render_pcb_svg(board)
+        assert re.search(r'class="pad[^"]*\bnn-1\b', svg)
+
+    def test_nn_class_on_zones(self, board: Pcb) -> None:
+        """Zone polygons get nn-{number} class."""
+        svg = render_pcb_svg(board)
+        assert re.search(r'class="zone nn-\d+"', svg)
+
+    def test_nn_class_on_vias(self) -> None:
+        """Via groups get nn-{number} class."""
+        board = _make_board_with_inner_layers()
+        svg = render_pcb_svg(board)
+        assert re.search(r'class="via nn-1"', svg)
+
+    def test_nn_class_on_trace_arcs(self) -> None:
+        """Trace arcs get nn-{number} class."""
+        from phosphor_eda.pcb import PcbTraceArc
+
+        board = _make_board_with_inner_layers()
+        board.trace_arcs.append(PcbTraceArc(5.0, 10.0, 7.5, 8.0, 10.0, 10.0, 0.25, "F.Cu", 1))
+        svg = render_pcb_svg(board)
+        assert re.search(r'class="trace-arc nn-1"', svg)
+
+    def test_cmp_class_on_pads(self) -> None:
+        """Pads get cmp-{ref} class."""
+        board = _make_board_with_component()
+        svg = render_pcb_svg(board)
+        assert re.search(r'class="pad[^"]*\bcmp-U1\b', svg)
+
+    def test_cmp_class_on_body(self) -> None:
+        """Body group gets cmp-{ref} class."""
+        board = _make_board_with_component()
+        svg = render_pcb_svg(board)
+        assert re.search(r'class="[^"]*\bcmp-U1\b', svg)
+
+    def test_cmp_class_on_ref_text(self) -> None:
+        """Ref text gets cmp-{ref} class."""
+        from phosphor_eda.pcb import PcbText
+
+        board = _make_board_with_component()
+        board.footprints[0].texts.append(
+            PcbText(
+                text="U1",
+                x=10.0,
+                y=8.0,
+                rotation=0.0,
+                layer="F.Fab",
+                font_size=0.5,
+                kind="reference",
+                footprint_ref="U1",
+            )
+        )
+        svg = render_pcb_svg(board)
+        assert re.search(r'class="ref-text[^"]*\bcmp-U1\b', svg)
+
+    def test_cmp_class_on_silk(self) -> None:
+        """Silk lines with a footprint ref get cmp-{ref} class."""
+        board = _make_board_with_component()
+        svg = render_pcb_svg(board)
+        assert re.search(r'class="silk[^"]*\bcmp-U1\b', svg)
+
+    def test_pfx_class_on_passive_components(self) -> None:
+        """Components with R/C/L/TP prefix get pfx-{prefix} class."""
+        board = _make_board_with_component(ref="R1", lib="Resistor_SMD:R_0402", value="10k")
+        svg = render_pcb_svg(board)
+        assert re.search(r'class="[^"]*\bpfx-R\b', svg)
+
+    def test_pfx_class_not_on_ics(self) -> None:
+        """IC components (U prefix) don't get a pfx- class."""
+        board = _make_board_with_component(ref="U1")
+        svg = render_pcb_svg(board)
+        assert "pfx-U" not in svg
+
+    def test_lyr_class_on_layer_groups(self) -> None:
+        """Layer <g> groups get the lyr class."""
+        board = _make_board_with_inner_layers()
+        svg = render_pcb_svg(board)
+        assert re.search(r'class="layer-F-Cu lyr"', svg)
+        assert re.search(r'class="layer-vias lyr"', svg)
+
+    def test_highlight_css_uses_nn_class(self) -> None:
+        """Highlight CSS uses .nn-X selectors, not [data-net-number]."""
+        board = _make_board_with_inner_layers()
+        svg = render_pcb_svg(board, highlight_nets=["SIG"])
+        style_blocks = re.findall(r"<style[^>]*>(.*?)</style>", svg, re.DOTALL)
+        css = "\n".join(style_blocks)
+        assert ".nn-1" in css
+        assert "[data-net-number" not in css
+
+    def test_highlight_css_uses_cmp_class(self) -> None:
+        """Component highlight CSS uses .cmp-X selectors."""
+        board = _make_board_with_inner_layers()
+        svg = render_pcb_svg(board, highlight_components=["U1"])
+        style_blocks = re.findall(r"<style[^>]*>(.*?)</style>", svg, re.DOTALL)
+        css = "\n".join(style_blocks)
+        assert ".cmp-U1" in css
+        assert "[data-component" not in css
+
+    def test_dim_css_uses_lyr_class(self) -> None:
+        """Dim rules use g.lyr selector to match theme specificity."""
+        board = _make_board_with_inner_layers()
+        svg = render_pcb_svg(board, highlight_nets=["SIG"])
+        style_blocks = re.findall(r"<style[^>]*>(.*?)</style>", svg, re.DOTALL)
+        css = "\n".join(style_blocks)
+        assert "g.lyr .trace" in css
+        assert "g[data-layer]" not in css
+
+    def test_dim_css_uses_paint_opacity(self) -> None:
+        """Dim/restore rules use stroke-opacity/fill-opacity, not opacity."""
+        board = _make_board_with_inner_layers()
+        svg = render_pcb_svg(board, highlight_nets=["SIG"])
+        style_blocks = re.findall(r"<style[^>]*>(.*?)</style>", svg, re.DOTALL)
+        highlight_css = style_blocks[1] if len(style_blocks) > 1 else ""
+        assert "stroke-opacity:" in highlight_css
+        assert "fill-opacity:" in highlight_css
+        # No bare "opacity:" — only stroke-opacity/fill-opacity
+        bare = re.findall(r"(?<![-\w])opacity:", highlight_css)
+        assert bare == [], f"bare opacity found: {bare}"
+
+    def test_clean_theme_uses_pfx_class(self) -> None:
+        """Clean theme hides passives via .pfx-R etc., not [data-component^=]."""
+        board = _make_board_with_component(ref="R1", lib="R_0402", value="10k")
+        svg = render_pcb_svg(board, theme="clean")
+        style_blocks = re.findall(r"<style[^>]*>(.*?)</style>", svg, re.DOTALL)
+        css = "\n".join(style_blocks)
+        assert ".pfx-R" in css
+        assert '[data-component^="R"]' not in css
+
+    def test_data_attrs_still_present(self) -> None:
+        """data-* attributes are preserved on elements for query/tooling use."""
+        board = _make_board_with_inner_layers()
+        svg = render_pcb_svg(board)
+        assert 'data-net-number="1"' in svg
+        assert 'data-component="U1"' in svg
+        assert 'data-layer="F.Cu"' in svg
