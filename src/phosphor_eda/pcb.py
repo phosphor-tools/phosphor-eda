@@ -319,9 +319,9 @@ class Pcb:
         return {p.net_number for p in fp.pads if p.net_number != 0}
 
     def net_numbers_by_name(self, name: str) -> set[int]:
-        """Return net numbers matching *name* (case-insensitive substring)."""
+        """Return net numbers matching *name* (case-insensitive exact match)."""
         needle = name.upper()
-        return {n.number for n in self.nets.values() if n.name and needle in n.name.upper()}
+        return {n.number for n in self.nets.values() if n.name and n.name.upper() == needle}
 
     def bbox(self) -> tuple[float, float, float, float]:
         """Board bounding box from outline geometry."""
