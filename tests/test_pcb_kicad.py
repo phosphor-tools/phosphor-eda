@@ -187,9 +187,10 @@ def test_nets_for_component(board: Pcb) -> None:
 def test_net_numbers_by_name(board: Pcb) -> None:
     vcc = board.net_numbers_by_name("VCC")
     assert 1 in vcc
-    # Substring match
-    swd = board.net_numbers_by_name("SWD")
-    assert len(swd) >= 2  # Multiple SWD-related nets
+    # Exact match — does not return substring matches
+    swd = board.net_numbers_by_name("/SWDIO_TMS")
+    assert len(swd) == 1
+    assert board.net_numbers_by_name("SWD") == set()
 
 
 def test_footprint_bbox(board: Pcb) -> None:

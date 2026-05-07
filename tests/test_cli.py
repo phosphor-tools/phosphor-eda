@@ -309,7 +309,7 @@ def test_cli_render_settings_from_file(tmp_path: Path) -> None:
     """--render-settings loads theme, highlights, and annotations from a JSON file."""
     settings = {
         "theme": "review",
-        "highlights": [{"net": "SWDIO"}],
+        "highlights": [{"net": "/SWDIO_TMS"}],
         "annotations": {
             "pointers": [{"target": "TP3", "label": "SWD"}],
         },
@@ -334,7 +334,7 @@ def test_cli_render_settings_from_stdin(tmp_path: Path) -> None:
     """--render-settings - reads JSON from stdin."""
     settings = {
         "theme": "review",
-        "highlights": [{"net": "SWDIO"}],
+        "highlights": [{"net": "/SWDIO_TMS"}],
     }
     out_file = tmp_path / "out.svg"
 
@@ -355,8 +355,8 @@ def test_cli_render_settings_with_highlight_colors(tmp_path: Path) -> None:
     settings = {
         "theme": "review",
         "highlights": [
-            {"net": "SWDIO", "color": "#d4a843"},
-            {"net": "SWDCLK", "color": "#5b8abf"},
+            {"net": "/SWDIO_TMS", "color": "#d4a843"},
+            {"net": "/SWDCLK_TCK", "color": "#5b8abf"},
         ],
     }
     settings_file = tmp_path / "settings.json"

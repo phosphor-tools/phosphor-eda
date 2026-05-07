@@ -571,6 +571,39 @@ def _copper_paint_order(layer: PcbLayer) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Class helpers — O(1) class selectors replace O(n) attribute selectors
+# ---------------------------------------------------------------------------
+
+_PASSIVE_PREFIXES = ("R", "C", "L", "TP")
+
+
+def _nn_class(net_number: int) -> str:
+    """CSS class for a net number: nn-{number}."""
+    return f"nn-{net_number}"
+
+
+_CSS_SAFE_RE = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def _css_safe(s: str) -> str:
+    """Replace chars that aren't valid in CSS class names with _XX hex."""
+    return _CSS_SAFE_RE.sub(lambda m: f"_{ord(m.group()):02x}", s)
+
+
+def _cmp_class(ref: str) -> str:
+    """CSS class for a component reference: cmp-{sanitized_ref}."""
+    return f"cmp-{_css_safe(ref)}"
+
+
+def _pfx_class(ref: str) -> str | None:
+    """CSS class for component type prefix, or None for non-passive refs."""
+    for prefix in _PASSIVE_PREFIXES:
+        if ref.startswith(prefix):
+            return f"pfx-{prefix}"
+    return None
+
+
+# ---------------------------------------------------------------------------
 # CSS theme
 # ---------------------------------------------------------------------------
 
@@ -642,7 +675,7 @@ def _design_theme_css(side: str, layers: list[PcbLayer]) -> str:
             f"g.{cls} .trace-arc {{ stroke: {color}; stroke-linecap: round; fill: none; }}"
         )
         rules.append(f"g.{cls} .pad {{ fill: {color}; }}")
-        rules.append(f"g.{cls} .zone {{ fill: {color}; opacity: 0.35; }}")
+        rules.append(f"g.{cls} .zone {{ fill: {color}; fill-opacity: 0.35; }}")
 
     rules.append("")
     rules.append("/* Vias */")
@@ -713,10 +746,10 @@ def _review_theme_css(side: str, layers: list[PcbLayer]) -> str:
         cls = _layer_class(layer.name)
         rules.append(
             f"g.{cls} .trace, g.{cls} .trace-arc "
-            f"{{ stroke: #145222; stroke-linecap: round; fill: none; opacity: 0.6; }}"
+            f"{{ stroke: #145222; stroke-linecap: round; fill: none; stroke-opacity: 0.6; }}"
         )
         rules.append(f"g.{cls} .pad {{ fill: #b87333; }}")
-        rules.append(f"g.{cls} .zone {{ fill: #145222; opacity: 0.3; }}")
+        rules.append(f"g.{cls} .zone {{ fill: #145222; fill-opacity: 0.3; }}")
 
     rules.append("")
     rules.append("/* Vias */")
@@ -787,9 +820,10 @@ def _clean_theme_css(side: str, layers: list[PcbLayer]) -> str:
 
     rules.append("")
     rules.append("/* Hide passive component bodies and labels */")
-    for prefix in ("R", "C", "L", "TP"):
-        rules.append(f'g[data-component^="{prefix}"] {{ display: none; }}')
-        rules.append(f'.ref-text[data-component^="{prefix}"] {{ display: none; }}')
+    for prefix in _PASSIVE_PREFIXES:
+        pfx = f"pfx-{prefix}"
+        rules.append(f"g.{pfx} {{ display: none; }}")
+        rules.append(f".ref-text.{pfx} {{ display: none; }}")
 
     rules.append("")
     rules.append("/* Component bodies — dark */")
@@ -828,23 +862,46 @@ def _theme_css(theme: str, side: str, layers: list[PcbLayer]) -> str:
     return fn(side, layers)
 
 
-def _theme_hidden_layer_classes(theme: str, side: str, copper_layers: list[PcbLayer]) -> set[str]:
-    """Return CSS class names for layer groups hidden by the theme.
+def _theme_hidden_layer_classes(theme: str, side: str, layers: list[PcbLayer]) -> set[str]:
+    """Return CSS class names for groups hidden by the theme via ``display: none``.
 
-    Themes hide copper (and sometimes via) groups with ``display: none``.
-    When highlights are active the highlight CSS must override that to make
-    highlighted traces visible — even on inner or opposite-side layers.
+    Includes layer groups, passive-prefix groups, and any other elements
+    the theme hides.  The highlight CSS emits ``display: inline !important``
+    for each returned class to make highlighted content visible.
     """
     opposite = "back" if side == "front" else "front"
+    copper = [lyr for lyr in layers if lyr.function == LayerFunction.COPPER]
+    silk = [lyr for lyr in layers if lyr.function == LayerFunction.SILKSCREEN]
+    fab = [lyr for lyr in layers if lyr.function == LayerFunction.FAB]
+
     if theme == "review":
-        # Review hides opposite-side and inner copper.
-        return {
-            _layer_class(lyr.name) for lyr in copper_layers if lyr.side == opposite or not lyr.side
-        }
+        hidden: set[str] = set()
+        for lyr in copper:
+            if lyr.side == opposite or not lyr.side:
+                hidden.add(_layer_class(lyr.name))
+        for lyr in silk + fab:
+            if lyr.side == opposite:
+                hidden.add(_layer_class(lyr.name))
+        return hidden
     if theme == "clean":
-        # Clean hides all copper and vias.
-        hidden = {_layer_class(lyr.name) for lyr in copper_layers}
+        hidden = {_layer_class(lyr.name) for lyr in copper}
         hidden.add("layer-vias")
+        for lyr in silk:
+            hidden.add(_layer_class(lyr.name))
+        for lyr in fab:
+            if lyr.side == opposite:
+                hidden.add(_layer_class(lyr.name))
+        # Passive body groups and ref-text are hidden via pfx-* classes
+        for prefix in _PASSIVE_PREFIXES:
+            hidden.add(f"pfx-{prefix}")
+        return hidden
+    if theme == "design":
+        hidden = set[str]()
+        for lyr in silk:
+            if lyr.side == opposite:
+                hidden.add(_layer_class(lyr.name))
+        for lyr in fab:
+            hidden.add(_layer_class(lyr.name))
         return hidden
     return set()
 
@@ -880,35 +937,46 @@ def _highlight_css(
     _net_colors = net_colors or {}
     _component_colors = component_colors or {}
 
-    # -- Restore visibility on layer groups hidden by the theme ----------------
+    # -- Restore visibility on groups hidden by the theme ----------------------
     if hidden_layer_classes:
-        rules.append("/* Restore visibility on theme-hidden layer groups */")
+        rules.append("/* Restore visibility on theme-hidden groups */")
         for cls in sorted(hidden_layer_classes):
             rules.append(f"g.{cls} {{ display: inline !important; }}")
+            # Passive-prefix classes also hide ref-text elements
+            if cls.startswith("pfx-"):
+                rules.append(f".ref-text.{cls} {{ display: inline !important; }}")
         rules.append("")
 
     rules.append("/* Dim non-highlighted elements */")
-    rules.append("g[data-layer] .trace, g[data-layer] .trace-arc { opacity: 0.12; }")
-    rules.append("g[data-layer] .pad { opacity: 0.2; }")
-    rules.append("g[data-layer] .zone { opacity: 0.08; }")
-    rules.append("g.layer-vias .via { opacity: 0.15; }")
-    rules.append("g[data-layer] .silk { opacity: 0.3; }")
+    rules.append("g.lyr .trace, g.lyr .trace-arc { stroke-opacity: 0.12; fill-opacity: 0.12; }")
+    rules.append("g.lyr .pad { stroke-opacity: 0.2; fill-opacity: 0.2; }")
+    rules.append("g.lyr .zone { stroke-opacity: 0.08; fill-opacity: 0.08; }")
+    rules.append("g.layer-vias .via { stroke-opacity: 0.15; fill-opacity: 0.15; }")
+    rules.append("g.lyr .silk { stroke-opacity: 0.3; fill-opacity: 0.3; }")
     rules.append(
-        "g[data-layer] .body, g[data-layer] .body-circle, "
-        "g[data-layer] .body-circle-filled, g[data-layer] .body-arc "
-        "{ opacity: 0.3; }"
+        "g.lyr .body, g.lyr .body-circle, g.lyr .body-circle-filled, g.lyr .body-arc"
+        " { stroke-opacity: 0.3; fill-opacity: 0.3; }"
     )
-    rules.append(".ref-text { opacity: 0.3; }")
+    rules.append(".ref-text { stroke-opacity: 0.3; fill-opacity: 0.3; }")
 
     # -- Restore highlighted nets (traces, pads, vias) -------------------------
     if hl_net_nums:
         rules.append("")
         rules.append("/* Restore highlighted nets */")
-        nn_sel = ", ".join(f'[data-net-number="{nn}"]' for nn in sorted(hl_net_nums))
-        rules.append(f"{nn_sel} {{ opacity: 1 !important; }}")
-        # Keep highlighted zones less dominant so they don't flood the view
-        zone_sel = ", ".join(f'.zone[data-net-number="{nn}"]' for nn in sorted(hl_net_nums))
-        rules.append(f"{zone_sel} {{ opacity: 0.25 !important; }}")
+        nn_sel = ", ".join(f".{_nn_class(nn)}" for nn in sorted(hl_net_nums))
+        rules.append(f"{nn_sel} {{ stroke-opacity: 1 !important; fill-opacity: 1 !important; }}")
+        # Dim highlighted zones in normal layer groups so they don't flood
+        # the view; the overlay copy renders at full opacity on top.
+        zone_sel = ", ".join(f".zone.{_nn_class(nn)}" for nn in sorted(hl_net_nums))
+        rules.append(
+            f"{zone_sel} {{ stroke-opacity: 0.25 !important; fill-opacity: 0.25 !important; }}"
+        )
+        overlay_zone_sel = ", ".join(
+            f".highlight-overlay .zone.{_nn_class(nn)}" for nn in sorted(hl_net_nums)
+        )
+        rules.append(
+            f"{overlay_zone_sel} {{ stroke-opacity: 1 !important; fill-opacity: 1 !important; }}"
+        )
 
         # Split into nets with explicit colors vs those using layer defaults
         colored_nets = {nn for nn in hl_net_nums if nn in _net_colors}
@@ -920,12 +988,12 @@ def _highlight_css(
             rules.append("/* Per-net highlight colors */")
             for nn in sorted(colored_nets):
                 color = _net_colors[nn]
+                nn_cls = _nn_class(nn)
                 rules.append(
-                    f'.trace[data-net-number="{nn}"], '
-                    f'.trace-arc[data-net-number="{nn}"] '
-                    f"{{ stroke: {color} !important; }}"
+                    f".trace.{nn_cls}, .trace-arc.{nn_cls} {{ stroke: {color} !important; }}"
                 )
-                rules.append(f'.pad[data-net-number="{nn}"] {{ fill: {color} !important; }}')
+                rules.append(f".pad.{nn_cls} {{ fill: {color} !important; }}")
+                rules.append(f".zone.{nn_cls} {{ fill: {color} !important; }}")
 
         # Nets without colors — restore per-layer copper colors
         if default_nets:
@@ -938,22 +1006,23 @@ def _highlight_css(
                     inner_idx += 1
                 cls = _layer_class(layer.name)
                 trace_sel = ", ".join(
-                    f'g.{cls} .trace[data-net-number="{nn}"], '
-                    f'g.{cls} .trace-arc[data-net-number="{nn}"]'
+                    f"g.{cls} .trace.{_nn_class(nn)}, g.{cls} .trace-arc.{_nn_class(nn)}"
                     for nn in sorted(default_nets)
                 )
                 rules.append(f"{trace_sel} {{ stroke: {color} !important; }}")
-                pad_sel = ", ".join(
-                    f'g.{cls} .pad[data-net-number="{nn}"]' for nn in sorted(default_nets)
-                )
+                pad_sel = ", ".join(f"g.{cls} .pad.{_nn_class(nn)}" for nn in sorted(default_nets))
                 rules.append(f"{pad_sel} {{ fill: {color} !important; }}")
+                zone_sel = ", ".join(
+                    f"g.{cls} .zone.{_nn_class(nn)}" for nn in sorted(default_nets)
+                )
+                rules.append(f"{zone_sel} {{ fill: {color} !important; }}")
 
     # -- Restore highlighted components (pads, bodies, ref text) ---------------
     if hl_refs:
         rules.append("")
         rules.append("/* Restore highlighted components */")
-        ref_sel = ", ".join(f'[data-component="{ref}"]' for ref in sorted(hl_refs))
-        rules.append(f"{ref_sel} {{ opacity: 1 !important; }}")
+        ref_sel = ", ".join(f".{_cmp_class(ref)}" for ref in sorted(hl_refs))
+        rules.append(f"{ref_sel} {{ stroke-opacity: 1 !important; fill-opacity: 1 !important; }}")
 
         # Per-component colors
         colored_refs = {ref for ref in hl_refs if ref in _component_colors}
@@ -962,19 +1031,18 @@ def _highlight_css(
             rules.append("/* Per-component highlight colors */")
             for ref in sorted(colored_refs):
                 color = _component_colors[ref]
-                rules.append(f'.pad[data-component="{ref}"] {{ fill: {color} !important; }}')
+                cmp = _cmp_class(ref)
+                rules.append(f".pad.{cmp} {{ fill: {color} !important; }}")
                 # Stroke for outline-only body geometry
                 rules.append(
-                    f'.body[data-component="{ref}"], '
-                    f'.body-circle[data-component="{ref}"], '
-                    f'.body-arc[data-component="{ref}"] '
+                    f".body.{cmp}, "
+                    f".body-circle.{cmp}, "
+                    f".body-arc.{cmp} "
                     f"{{ stroke: {color} !important; }}"
                 )
                 # Fill for filled body geometry
                 rules.append(
-                    f'.body[data-component="{ref}"], '
-                    f'.body-circle-filled[data-component="{ref}"] '
-                    f"{{ fill: {color} !important; }}"
+                    f".body.{cmp}, .body-circle-filled.{cmp} {{ fill: {color} !important; }}"
                 )
 
     return "\n".join(rules)
@@ -1342,7 +1410,7 @@ def render_pcb_svg(
     side:
         "front" or "back".  Back view mirrors horizontally.
     highlight_nets:
-        Net names to highlight (case-insensitive substring match).
+        Net names to highlight (case-insensitive exact match).
     highlight_components:
         Component references to highlight (footprint only, not nets).
     highlight_specs:
@@ -1397,6 +1465,11 @@ def render_pcb_svg(
     fp_meta: dict[str, tuple[str, str]] = {}
     for fp in board.footprints:
         fp_meta[fp.reference] = (fp.footprint_lib, fp.value)
+
+    def _component_class_tokens(ref: str) -> str:
+        """Return space-separated class tokens for a component ref."""
+        pfx = _pfx_class(ref)
+        return f"{_cmp_class(ref)} {pfx}" if pfx else _cmp_class(ref)
 
     def _component_attrs(ref: str) -> dict[str, str]:
         """Build data-component/data-footprint-lib/data-value for a ref."""
@@ -1504,7 +1577,7 @@ def render_pcb_svg(
     svg.raw("</style>")
 
     if has_hl:
-        hidden = _theme_hidden_layer_classes(theme, side, copper_layers)
+        hidden = _theme_hidden_layer_classes(theme, side, board.layers)
         svg.raw('<style id="highlight">')
         svg.raw(
             _highlight_css(
@@ -1589,7 +1662,7 @@ def render_pcb_svg(
     for cu_layer in copper_layers:
         layer = cu_layer.name
         cls = _layer_class(layer)
-        svg.group_start(attrs={"data-layer": layer, "class": cls})
+        svg.group_start(attrs={"data-layer": layer, "class": f"{cls} lyr"})
 
         # Zones
         for poly in zones_by_layer.get(layer, []):
@@ -1597,7 +1670,7 @@ def render_pcb_svg(
             svg.polygon(
                 poly.points,
                 attrs={
-                    "class": "zone",
+                    "class": f"zone {_nn_class(poly.net_number)}",
                     "data-type": "zone",
                     "data-net": net_nm,
                     "data-net-number": str(poly.net_number),
@@ -1614,7 +1687,7 @@ def render_pcb_svg(
                 seg.end_y,
                 seg.width,
                 attrs={
-                    "class": "trace",
+                    "class": f"trace {_nn_class(seg.net_number)}",
                     "data-type": "trace",
                     "data-net": net_nm,
                     "data-net-number": str(seg.net_number),
@@ -1624,18 +1697,20 @@ def render_pcb_svg(
         # Trace arcs
         for ta in tarcs_by_layer.get(layer, []):
             net_nm = _net_name(board, ta.net_number)
+            nn = _nn_class(ta.net_number)
             d = _svg_arc_path_d(ta.start_x, ta.start_y, ta.mid_x, ta.mid_y, ta.end_x, ta.end_y)
             svg.raw(
                 f'<path d="{d}" stroke-width="{ta.width:.4f}" '
-                f'class="trace-arc" data-type="trace" '
+                f'class="trace-arc {nn}" data-type="trace" '
                 f'data-net="{xml_escape(net_nm)}" data-net-number="{ta.net_number}"/>'
             )
 
         # Pads
         for pad, fp_ref in pads_by_layer.get(layer, []):
             net_nm = pad.net_name or _net_name(board, pad.net_number)
+            cmp_tokens = _component_class_tokens(fp_ref)
             pad_attrs = {
-                "class": "pad",
+                "class": f"pad {_nn_class(pad.net_number)} {cmp_tokens}",
                 "data-type": "pad",
                 **_component_attrs(fp_ref),
                 "data-pad": pad.number,
@@ -1647,16 +1722,17 @@ def render_pcb_svg(
         svg.group_end()
 
     # -- Vias (span layers, get their own group) ---------------------------
-    svg.group_start(attrs={"data-layer": "vias", "class": "layer-vias"})
+    svg.group_start(attrs={"data-layer": "vias", "class": "layer-vias lyr"})
     for via in board.vias:
         net_nm = _net_name(board, via.net_number)
         r_annular = via.size / 2
+        nn = _nn_class(via.net_number)
         via_attrs_base = {
             "data-type": "via",
             "data-net": net_nm,
             "data-net-number": str(via.net_number),
         }
-        svg.group_start(attrs={**via_attrs_base, "class": "via"})
+        svg.group_start(attrs={**via_attrs_base, "class": f"via {nn}"})
         svg.circle(via.x, via.y, r_annular, attrs={"class": "annular"})
         svg.circle(via.x, via.y, via.drill / 2, attrs={"class": "drill"})
         svg.group_end()
@@ -1665,9 +1741,12 @@ def render_pcb_svg(
     # -- Silkscreen layer groups -------------------------------------------
     for silk_layer in sorted(silk_by_layer.keys()):
         cls = _layer_class(silk_layer)
-        svg.group_start(attrs={"data-layer": silk_layer, "class": cls})
+        svg.group_start(attrs={"data-layer": silk_layer, "class": f"{cls} lyr"})
         for ln in silk_by_layer[silk_layer]:
-            attrs: dict[str, str] = {"class": "silk"}
+            silk_cls = "silk"
+            if ln.footprint_ref:
+                silk_cls = f"silk {_component_class_tokens(ln.footprint_ref)}"
+            attrs: dict[str, str] = {"class": silk_cls}
             if ln.footprint_ref:
                 attrs.update(_component_attrs(ln.footprint_ref))
             svg.line(
@@ -1702,9 +1781,11 @@ def render_pcb_svg(
             continue
 
         cls = _layer_class(fab_layer)
-        svg.group_start(attrs={"data-layer": fab_layer, "class": cls})
+        svg.group_start(attrs={"data-layer": fab_layer, "class": f"{cls} lyr"})
         for fp, fab_lines, fab_circles, fab_arcs in fab_content:
             body_attrs = _body_group_attrs(fp, _component_attrs)
+            cmp_tokens = _component_class_tokens(fp.reference)
+            body_attrs["class"] = cmp_tokens
             svg.group_start(attrs=body_attrs)
             emitted_refs.add(fp.reference)
             ref = fp.reference
@@ -1712,7 +1793,7 @@ def render_pcb_svg(
             # Try to build filled polygon from fab lines
             poly = _chain_lines_to_polygon(fab_lines)
             if poly:
-                svg.polygon(poly, attrs={"class": "body", **comp_attrs})
+                svg.polygon(poly, attrs={"class": f"body {cmp_tokens}", **comp_attrs})
             # Circles
             for circ in fab_circles:
                 if circ.fill:
@@ -1720,7 +1801,7 @@ def render_pcb_svg(
                         circ.cx,
                         circ.cy,
                         circ.radius,
-                        attrs={"class": "body-circle-filled", **comp_attrs},
+                        attrs={"class": f"body-circle-filled {cmp_tokens}", **comp_attrs},
                     )
                 else:
                     svg.circle(
@@ -1728,7 +1809,7 @@ def render_pcb_svg(
                         circ.cy,
                         circ.radius,
                         attrs={
-                            "class": "body-circle",
+                            "class": f"body-circle {cmp_tokens}",
                             **comp_attrs,
                             "stroke-width": f"{max(circ.width, 0.08):.4f}",
                         },
@@ -1745,7 +1826,7 @@ def render_pcb_svg(
                 )
                 svg.raw(
                     f'<path d="{d}" stroke-width="{max(arc.width, 0.08):.4f}"'
-                    f' class="body-arc"{_fmt_attrs(comp_attrs)}/>'
+                    f' class="body-arc {cmp_tokens}"{_fmt_attrs(comp_attrs)}/>'
                 )
             svg.group_end()
         svg.group_end()
@@ -1760,7 +1841,9 @@ def render_pcb_svg(
     if model_only_fps:
         svg.group_start(attrs={"data-layer": "models", "class": "models"})
         for fp in model_only_fps:
-            svg.group_start(attrs=_body_group_attrs(fp, _component_attrs))
+            model_attrs = _body_group_attrs(fp, _component_attrs)
+            model_attrs["class"] = _component_class_tokens(fp.reference)
+            svg.group_start(attrs=model_attrs)
             svg.group_end()
         svg.group_end()
 
@@ -1797,6 +1880,104 @@ def render_pcb_svg(
                 )
             )
 
+    # -- Highlight overlay (paints above zones, solder mask, and silk) -----
+    # Re-render highlighted net traces, pads, and vias in a group at the
+    # end of the SVG so they aren't obscured by zones or other content
+    # from higher copper layers. Each copper layer gets a sub-group with
+    # the same layer class so existing per-layer color rules apply.
+    if hl_net_nums:
+        svg.group_start(attrs={"class": "highlight-overlay"})
+
+        for cu_layer in copper_layers:
+            layer = cu_layer.name
+            cls = _layer_class(layer)
+
+            hl_zones = [z for z in zones_by_layer.get(layer, []) if z.net_number in hl_net_nums]
+            hl_segs = [s for s in segs_by_layer.get(layer, []) if s.net_number in hl_net_nums]
+            hl_arcs = [a for a in tarcs_by_layer.get(layer, []) if a.net_number in hl_net_nums]
+            hl_pads = [
+                (p, r) for p, r in pads_by_layer.get(layer, []) if p.net_number in hl_net_nums
+            ]
+            if not hl_zones and not hl_segs and not hl_arcs and not hl_pads:
+                continue
+
+            svg.group_start(attrs={"class": f"{cls} lyr"})
+
+            for poly in hl_zones:
+                net_nm = poly.net_name or _net_name(board, poly.net_number)
+                svg.polygon(
+                    poly.points,
+                    attrs={
+                        "class": f"zone {_nn_class(poly.net_number)}",
+                        "data-type": "zone",
+                        "data-net": net_nm,
+                        "data-net-number": str(poly.net_number),
+                    },
+                )
+
+            for seg in hl_segs:
+                net_nm = _net_name(board, seg.net_number)
+                svg.line(
+                    seg.start_x,
+                    seg.start_y,
+                    seg.end_x,
+                    seg.end_y,
+                    seg.width,
+                    attrs={
+                        "class": f"trace {_nn_class(seg.net_number)}",
+                        "data-type": "trace",
+                        "data-net": net_nm,
+                        "data-net-number": str(seg.net_number),
+                    },
+                )
+
+            for ta in hl_arcs:
+                net_nm = _net_name(board, ta.net_number)
+                nn = _nn_class(ta.net_number)
+                d = _svg_arc_path_d(ta.start_x, ta.start_y, ta.mid_x, ta.mid_y, ta.end_x, ta.end_y)
+                svg.raw(
+                    f'<path d="{d}" stroke-width="{ta.width:.4f}" '
+                    f'class="trace-arc {nn}" data-type="trace" '
+                    f'data-net="{xml_escape(net_nm)}" data-net-number="{ta.net_number}"/>'
+                )
+
+            for pad, fp_ref in hl_pads:
+                net_nm = pad.net_name or _net_name(board, pad.net_number)
+                cmp_tokens = _component_class_tokens(fp_ref)
+                pad_attrs = {
+                    "class": f"pad {_nn_class(pad.net_number)} {cmp_tokens}",
+                    "data-type": "pad",
+                    **_component_attrs(fp_ref),
+                    "data-pad": pad.number,
+                    "data-net": net_nm,
+                    "data-net-number": str(pad.net_number),
+                }
+                _draw_pad(svg, pad, pad_attrs)
+
+            svg.group_end()
+
+        hl_vias = [v for v in board.vias if v.net_number in hl_net_nums]
+        if hl_vias:
+            svg.group_start(attrs={"class": "layer-vias lyr"})
+            for via in hl_vias:
+                net_nm = _net_name(board, via.net_number)
+                r_annular = via.size / 2
+                nn = _nn_class(via.net_number)
+                svg.group_start(
+                    attrs={
+                        "class": f"via {nn}",
+                        "data-type": "via",
+                        "data-net": net_nm,
+                        "data-net-number": str(via.net_number),
+                    }
+                )
+                svg.circle(via.x, via.y, r_annular, attrs={"class": "annular"})
+                svg.circle(via.x, via.y, via.drill / 2, attrs={"class": "drill"})
+                svg.group_end()
+            svg.group_end()
+
+        svg.group_end()
+
     # -- Close content clip group ------------------------------------------
     svg.group_end()
 
@@ -1816,7 +1997,7 @@ def render_pcb_svg(
             tsize,
             rotation=trot,
             attrs={
-                "class": "ref-text",
+                "class": f"ref-text {_component_class_tokens(ttext)}",
                 **_component_attrs(ttext),
             },
         )
