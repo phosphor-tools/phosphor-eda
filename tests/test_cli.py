@@ -1,4 +1,5 @@
 import json
+from importlib.metadata import version
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -13,7 +14,7 @@ def test_cli_version():
     runner = CliRunner()
     result = runner.invoke(main, ["--version"])
     assert result.exit_code == 0
-    assert "0.1.0" in result.output
+    assert version("phosphor-eda") in result.output
 
 
 # ---- schematic list/show CLI tests ----
