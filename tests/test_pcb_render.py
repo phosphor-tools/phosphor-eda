@@ -68,6 +68,14 @@ def test_has_theme_style(board: Pcb) -> None:
     assert '<style id="theme">' in svg
 
 
+def test_print_theme_css_is_print_friendly(board: Pcb) -> None:
+    svg = render_pcb_svg(board, theme="print")
+    assert ".board-fill { fill: transparent" in svg
+    assert "stroke: #444" in svg
+    assert ".annotation-label-text" in svg
+    assert ".annotation-pill, .annotation-dot { display: none" in svg
+
+
 def test_has_board_clip(board: Pcb) -> None:
     svg = render_pcb_svg(board)
     assert "board-clip" in svg
@@ -1044,6 +1052,10 @@ class TestParseRenderSettings:
         assert settings.annotations == {}
         assert settings.custom_css == ""
 
+    def test_accepts_print_theme(self) -> None:
+        settings = parse_render_settings({"theme": "print"})
+        assert settings.theme == "print"
+
     def test_all_fields(self) -> None:
         data = {
             "theme": "review",
@@ -1399,7 +1411,7 @@ class TestClassBasedSelectors:
     def test_theme_css_uses_paint_opacity(self) -> None:
         """Theme CSS must use stroke-opacity/fill-opacity, not bare opacity."""
         board = _make_board_with_inner_layers()
-        for theme in ("design", "review", "clean"):
+        for theme in ("design", "review", "clean", "print"):
             svg = render_pcb_svg(board, theme=theme)
             style_blocks = re.findall(r"<style[^>]*>(.*?)</style>", svg, re.DOTALL)
             theme_css = style_blocks[0]

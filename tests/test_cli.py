@@ -336,6 +336,14 @@ def test_cli_render_custom_css_file_option_is_removed() -> None:
     assert "No such option: --custom-css-file" in result.output
 
 
+def test_cli_render_accepts_print_theme() -> None:
+    runner = CliRunner()
+    result = runner.invoke(main, ["pcb", "render", "--theme", "print", PCB_FILE])
+
+    assert result.exit_code == 0, result.output
+    assert ".board-fill { fill: transparent" in result.output
+
+
 def test_cli_render_settings_inline_custom_css_is_injected(tmp_path: Path) -> None:
     settings = {"custom_css": ".board-fill { fill: rgb(1, 2, 3); }"}
     settings_file = tmp_path / "settings.json"

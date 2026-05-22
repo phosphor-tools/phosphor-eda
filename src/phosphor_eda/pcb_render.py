@@ -94,8 +94,9 @@ def parse_render_settings(data: dict[str, Any]) -> RenderSettings:
 
     if "theme" in data:
         theme = data["theme"]
-        if not isinstance(theme, str) or theme not in ("design", "review", "clean"):
-            msg = f"theme must be 'design', 'review', or 'clean', got {theme!r}"
+        if not isinstance(theme, str) or theme not in THEME_NAMES:
+            allowed = "', '".join(THEME_NAMES)
+            msg = f"theme must be one of '{allowed}', got {theme!r}"
             raise ValueError(msg)
         settings.theme = theme
 
@@ -159,10 +160,6 @@ def parse_render_settings(data: dict[str, Any]) -> RenderSettings:
 
 def render_settings_schema() -> dict[str, object]:
     """Return the JSON Schema for ``pcb render`` settings."""
-    theme_names = [*THEME_NAMES]
-    if "print" not in theme_names:
-        theme_names.append("print")
-
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "phosphor-eda pcb render settings",
@@ -171,7 +168,7 @@ def render_settings_schema() -> dict[str, object]:
         "properties": {
             "theme": {
                 "type": "string",
-                "enum": theme_names,
+                "enum": THEME_NAMES,
             },
             "side": {
                 "type": "string",
@@ -917,12 +914,79 @@ def _clean_theme_css(side: str, layers: list[PcbLayer]) -> str:
     return "\n".join(rules)
 
 
+def _print_theme_css(side: str, layers: list[PcbLayer]) -> str:
+    """Return a paper-friendly high-contrast CSS theme for the SVG."""
+    copper = [lyr for lyr in layers if lyr.function == LayerFunction.COPPER]
+    silk = [lyr for lyr in layers if lyr.function == LayerFunction.SILKSCREEN]
+    fab = [lyr for lyr in layers if lyr.function == LayerFunction.FAB]
+    opposite = "back" if side == "front" else "front"
+
+    rules: list[str] = []
+
+    rules.append("/* Board — paper-friendly outline */")
+    rules.append(".board-fill { fill: transparent; stroke: #444; stroke-width: 0.12; }")
+    rules.append("")
+
+    rules.append("/* Copper — high contrast grayscale */")
+    for layer in copper:
+        cls = _layer_class(layer.name)
+        rules.append(f"g.{cls} .trace {{ stroke: #222; stroke-linecap: round; fill: none; }}")
+        rules.append(f"g.{cls} .trace-arc {{ stroke: #222; stroke-linecap: round; fill: none; }}")
+        rules.append(f"g.{cls} .pad {{ fill: #111; stroke: #fff; stroke-width: 0.03; }}")
+        rules.append(f"g.{cls} .zone {{ fill: #777; fill-opacity: 0.18; }}")
+
+    rules.append("")
+    rules.append("/* Vias */")
+    rules.append(".via .annular { fill: #222; }")
+    rules.append(".via .drill { fill: #fff; }")
+
+    rules.append("")
+    rules.append("/* Silkscreen */")
+    for layer in silk:
+        cls = _layer_class(layer.name)
+        rules.append(f"g.{cls} .silk {{ stroke: #444; stroke-linecap: round; fill: none; }}")
+
+    rules.append("")
+    rules.append("/* Component bodies */")
+    for layer in fab:
+        cls = _layer_class(layer.name)
+        rules.append(
+            f"g.{cls} .body {{ fill: none; stroke: #444; "
+            f"stroke-width: 0.08; stroke-linejoin: round; }}"
+        )
+        rules.append(f"g.{cls} .body-circle {{ fill: none; stroke: #444; }}")
+        rules.append(f"g.{cls} .body-circle-filled {{ fill: #555; }}")
+        rules.append(f"g.{cls} .body-arc {{ fill: none; stroke: #444; stroke-linecap: round; }}")
+    rules.append(".ref-text { fill: #222; }")
+
+    rules.append("")
+    rules.append("/* Print annotations — text-first, no filled pills/dots */")
+    rules.append(".annotation-label-text { fill: #111; }")
+    rules.append(".annotation-connector, .annotation-box { stroke: #111; }")
+    rules.append(".annotation-pill, .annotation-dot { display: none; }")
+
+    rules.append("")
+    rules.append("/* Layer visibility — single side + fab */")
+    for layer in copper:
+        if layer.side == opposite or not layer.side:
+            rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
+    for layer in silk:
+        if layer.side == opposite:
+            rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
+    for layer in fab:
+        if layer.side == opposite:
+            rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
+
+    return "\n".join(rules)
+
+
 _ThemeFn = Callable[[str, list[PcbLayer]], str]
 
 _THEME_CSS_FN: dict[str, _ThemeFn] = {
     "design": _design_theme_css,
     "review": _review_theme_css,
     "clean": _clean_theme_css,
+    "print": _print_theme_css,
 }
 
 THEME_NAMES: list[str] = list(_THEME_CSS_FN.keys())
@@ -946,7 +1010,7 @@ def _theme_hidden_layer_classes(theme: str, side: str, layers: list[PcbLayer]) -
     silk = [lyr for lyr in layers if lyr.function == LayerFunction.SILKSCREEN]
     fab = [lyr for lyr in layers if lyr.function == LayerFunction.FAB]
 
-    if theme == "review":
+    if theme in {"review", "print"}:
         hidden: set[str] = set()
         for lyr in copper:
             if lyr.side == opposite or not lyr.side:
@@ -1492,7 +1556,8 @@ def render_pcb_svg(
         Pixel width of the SVG.
     theme:
         CSS theme: "design" (EDA view), "review" (realistic), or
-        "clean" (documentation — hides copper/passives).
+        "clean" (documentation — hides copper/passives), or "print"
+        (paper-friendly high contrast).
     custom_css:
         Extra CSS injected after the theme and highlight styles.
         Overrides any built-in rule.  Useful for board mask recoloring,
