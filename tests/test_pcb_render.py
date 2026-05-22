@@ -35,6 +35,7 @@ from phosphor_eda.pcb_render import (
     _fmt_attrs,  # pyright: ignore[reportPrivateUsage]
     parse_render_settings,
     render_pcb_svg,
+    render_settings_schema,
 )
 
 FIXTURE = Path(__file__).parent / "fixtures" / "swd_switch.kicad_pcb"
@@ -1026,6 +1027,14 @@ def test_swd_switch_annotation_end_to_end(board: Pcb) -> None:
 
 
 class TestParseRenderSettings:
+    def test_render_settings_schema_is_json_schema_object(self) -> None:
+        schema = render_settings_schema()
+        assert isinstance(schema["$schema"], str)
+        assert schema["$schema"].startswith("https://json-schema.org/")
+        assert schema["type"] == "object"
+        assert schema["additionalProperties"] is False
+        assert schema["properties"]["custom_css"]["type"] == "string"
+
     def test_empty_object(self) -> None:
         settings = parse_render_settings({})
         assert settings.theme == ""

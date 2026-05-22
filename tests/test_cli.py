@@ -306,6 +306,28 @@ def test_cli_kicad_root_not_rejected():
 PCB_FILE = str(FIXTURES / "swd_switch.kicad_pcb")
 
 
+def test_cli_render_settings_schema_outputs_json_without_file() -> None:
+    runner = CliRunner()
+    result = runner.invoke(main, ["pcb", "render", "--render-settings-schema"])
+
+    assert result.exit_code == 0, result.output
+    schema = json.loads(result.output)
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert "print" in schema["properties"]["theme"]["enum"]
+    assert "font_size" in schema["properties"]
+    assert "pad" in json.dumps(schema["properties"]["highlights"])
+    assert schema["examples"]
+
+
+def test_cli_render_without_file_reports_missing_file() -> None:
+    runner = CliRunner()
+    result = runner.invoke(main, ["pcb", "render"])
+
+    assert result.exit_code != 0
+    assert "missing FILE" in result.output
+
+
 def test_cli_render_settings_from_file(tmp_path: Path) -> None:
     """--render-settings loads theme, highlights, and annotations from a JSON file."""
     settings = {

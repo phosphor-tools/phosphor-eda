@@ -157,6 +157,78 @@ def parse_render_settings(data: dict[str, Any]) -> RenderSettings:
     return settings
 
 
+def render_settings_schema() -> dict[str, object]:
+    """Return the JSON Schema for ``pcb render`` settings."""
+    theme_names = [*THEME_NAMES]
+    if "print" not in theme_names:
+        theme_names.append("print")
+
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "phosphor-eda pcb render settings",
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "theme": {
+                "type": "string",
+                "enum": theme_names,
+            },
+            "side": {
+                "type": "string",
+                "enum": ["front", "back"],
+            },
+            "width": {
+                "type": "integer",
+                "minimum": 1,
+            },
+            "font_size": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 500,
+                "description": "Annotation label font size in display pixels.",
+            },
+            "highlights": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "net": {"type": "string"},
+                        "component": {"type": "string"},
+                        "pad": {
+                            "type": "string",
+                            "pattern": r"^[^.]+\..+$",
+                        },
+                        "color": {"type": "string"},
+                    },
+                    "oneOf": [
+                        {"required": ["net"]},
+                        {"required": ["component"]},
+                        {"required": ["pad"]},
+                    ],
+                },
+            },
+            "annotations": {
+                "type": "object",
+            },
+            "custom_css": {
+                "type": "string",
+            },
+        },
+        "examples": [
+            {
+                "theme": "print",
+                "width": 3000,
+                "font_size": 100,
+                "highlights": [{"pad": "CN11.30", "color": "#c00000"}],
+                "annotations": {
+                    "pointers": [{"target": "CN11.30", "label": "PA1 / REF_CLK"}],
+                },
+            },
+        ],
+    }
+
+
 # ---------------------------------------------------------------------------
 # SVG builder
 # ---------------------------------------------------------------------------
