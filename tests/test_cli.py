@@ -328,6 +328,32 @@ def test_cli_render_without_file_reports_missing_file() -> None:
     assert "missing FILE" in result.output
 
 
+def test_cli_render_custom_css_file_option_is_removed() -> None:
+    runner = CliRunner()
+    result = runner.invoke(main, ["pcb", "render", "--custom-css-file", "theme.css", PCB_FILE])
+
+    assert result.exit_code != 0
+    assert "No such option: --custom-css-file" in result.output
+
+
+def test_cli_render_settings_inline_custom_css_is_injected(tmp_path: Path) -> None:
+    settings = {"custom_css": ".board-fill { fill: rgb(1, 2, 3); }"}
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps(settings))
+    out_file = tmp_path / "out.svg"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file), "-o", str(out_file)],
+    )
+
+    assert result.exit_code == 0, result.output
+    svg = out_file.read_text()
+    assert '<style id="custom">' in svg
+    assert "rgb(1, 2, 3)" in svg
+
+
 def test_cli_render_settings_from_file(tmp_path: Path) -> None:
     """--render-settings loads theme, highlights, and annotations from a JSON file."""
     settings = {
