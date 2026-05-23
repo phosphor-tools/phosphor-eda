@@ -2,6 +2,7 @@ import json
 from importlib.metadata import version
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from phosphor_eda.cli import main
@@ -352,6 +353,77 @@ def test_cli_render_supports_highlight_pad() -> None:
     assert 'class="highlight-overlay"' in result.output
     assert 'data-component="TP3"' in result.output
     assert 'data-pad="1"' in result.output
+
+
+def test_cli_render_prjpcb_resolves_single_existing_pcbdoc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board_dir = tmp_path / "boards"
+    board_dir.mkdir()
+    pcbdoc = board_dir / "Board.PcbDoc"
+    pcbdoc.write_text("")
+    prjpcb = tmp_path / "Project.PrjPcb"
+    prjpcb.write_text(
+        "[Design]\nHierarchyMode=1\n\n[Document1]\nDocumentPath=boards\\Board.PcbDoc\n"
+    )
+    parsed_board = object()
+    parsed_paths: list[Path] = []
+
+    def fake_parse_altium_pcb(path: Path) -> object:
+        parsed_paths.append(path)
+        return parsed_board
+
+    def fake_render_pcb_svg(board: object, **_kwargs: object) -> str:
+        assert board is parsed_board
+        return "<svg></svg>"
+
+    monkeypatch.setattr("phosphor_eda.altium.pcb_parser.parse_altium_pcb", fake_parse_altium_pcb)
+    monkeypatch.setattr("phosphor_eda.pcb_render.render_pcb_svg", fake_render_pcb_svg)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["pcb", "render", str(prjpcb)])
+
+    assert result.exit_code == 0, result.output
+    assert parsed_paths == [pcbdoc]
+    assert "<svg></svg>" in result.output
+
+
+def test_cli_render_prjpcb_without_existing_pcbdoc_reports_clear_error(tmp_path: Path) -> None:
+    prjpcb = tmp_path / "Project.PrjPcb"
+    prjpcb.write_text(
+        "[Design]\nHierarchyMode=1\n\n[Document1]\nDocumentPath=boards\\Missing.PcbDoc\n"
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["pcb", "render", str(prjpcb)])
+
+    assert result.exit_code != 0
+    assert ".PcbDoc" in result.output
+
+
+def test_cli_render_prjpcb_with_multiple_existing_pcbdocs_reports_clear_error(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "First.PcbDoc"
+    second = tmp_path / "Second.PcbDoc"
+    first.write_text("")
+    second.write_text("")
+    prjpcb = tmp_path / "Project.PrjPcb"
+    prjpcb.write_text(
+        "[Design]\n"
+        "HierarchyMode=1\n\n"
+        "[Document1]\n"
+        "DocumentPath=First.PcbDoc\n\n"
+        "[Document2]\n"
+        "DocumentPath=Second.PcbDoc\n"
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["pcb", "render", str(prjpcb)])
+
+    assert result.exit_code != 0
+    assert "multiple" in result.output.lower()
+    assert ".PcbDoc" in result.output
 
 
 def test_cli_render_settings_inline_custom_css_is_injected(tmp_path: Path) -> None:
