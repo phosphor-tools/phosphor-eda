@@ -344,6 +344,16 @@ def test_cli_render_accepts_print_theme() -> None:
     assert ".board-fill { fill: transparent" in result.output
 
 
+def test_cli_render_supports_highlight_pad() -> None:
+    runner = CliRunner()
+    result = runner.invoke(main, ["pcb", "render", "--highlight-pad", "TP3.1", PCB_FILE])
+
+    assert result.exit_code == 0, result.output
+    assert 'class="highlight-overlay"' in result.output
+    assert 'data-component="TP3"' in result.output
+    assert 'data-pad="1"' in result.output
+
+
 def test_cli_render_settings_inline_custom_css_is_injected(tmp_path: Path) -> None:
     settings = {"custom_css": ".board-fill { fill: rgb(1, 2, 3); }"}
     settings_file = tmp_path / "settings.json"

@@ -48,10 +48,11 @@ if TYPE_CHECKING:
 
 @dataclass
 class HighlightSpec:
-    """A single net or component to highlight, with an optional color."""
+    """A single net, component, or pad to highlight, with an optional color."""
 
     net: str = ""
     component: str = ""
+    pad: str = ""
     color: str = ""
 
 
@@ -138,22 +139,26 @@ def parse_render_settings(data: dict[str, Any]) -> RenderSettings:
                 msg = f"highlights[{i}] must be an object"
                 raise ValueError(msg)
             # Validate field types before extracting
-            for field in ("net", "component", "color"):
+            for field in ("net", "component", "pad", "color"):
                 if field in item and not isinstance(item[field], str):
                     msg = f"highlights[{i}].{field} must be a string"
                     raise ValueError(msg)
             net = str(item.get("net", ""))
             component = str(item.get("component", ""))
+            pad = str(item.get("pad", ""))
             has_net = bool(net)
             has_comp = bool(component)
-            if not has_net and not has_comp:
-                msg = f"highlights[{i}] must have 'net' or 'component'"
+            has_pad = bool(pad)
+            if sum((has_net, has_comp, has_pad)) != 1:
+                msg = f"highlights[{i}] must have exactly one of 'net', 'component', or 'pad'"
                 raise ValueError(msg)
-            if has_net and has_comp:
-                msg = f"highlights[{i}] cannot have both 'net' and 'component'"
+            if has_pad and not _is_pad_target(pad):
+                msg = f"highlights[{i}].pad must be '<component>.<pad>', got {pad!r}"
                 raise ValueError(msg)
             color = str(item.get("color", ""))
-            settings.highlights.append(HighlightSpec(net=net, component=component, color=color))
+            settings.highlights.append(
+                HighlightSpec(net=net, component=component, pad=pad, color=color)
+            )
 
     if "annotations" in data:
         ann = data["annotations"]
@@ -204,10 +209,11 @@ def render_settings_schema() -> dict[str, object]:
                     "type": "object",
                     "additionalProperties": False,
                     "properties": {
-                        "net": {"type": "string"},
-                        "component": {"type": "string"},
+                        "net": {"type": "string", "minLength": 1},
+                        "component": {"type": "string", "minLength": 1},
                         "pad": {
                             "type": "string",
+                            "minLength": 3,
                             "pattern": r"^[^.]+\..+$",
                         },
                         "color": {"type": "string"},
@@ -666,6 +672,8 @@ def _nn_class(net_number: int) -> str:
 
 
 _CSS_SAFE_RE = re.compile(r"[^A-Za-z0-9_-]")
+_PAD_TARGET_RE = re.compile(r"^[^.]+\..+$")
+_DEFAULT_PAD_HIGHLIGHT_COLOR = "#eab308"
 
 
 def _css_safe(s: str) -> str:
@@ -676,6 +684,22 @@ def _css_safe(s: str) -> str:
 def _cmp_class(ref: str) -> str:
     """CSS class for a component reference: cmp-{sanitized_ref}."""
     return f"cmp-{_css_safe(ref)}"
+
+
+def _pad_class(ref: str, pad_number: str) -> str:
+    """CSS class for a component pad target: padref-{sanitized_ref.pad}."""
+    return f"padref-{_css_safe(f'{ref}.{pad_number}')}"
+
+
+def _is_pad_target(target: str) -> bool:
+    """Return True when a pad target has '<component>.<pad>' shape."""
+    return bool(_PAD_TARGET_RE.fullmatch(target))
+
+
+def _split_pad_target(target: str) -> tuple[str, str]:
+    """Split a validated '<component>.<pad>' target."""
+    component, pad = target.split(".", 1)
+    return component, pad
 
 
 def _pfx_class(ref: str) -> str | None:
@@ -1059,10 +1083,12 @@ def _theme_hidden_layer_classes(theme: str, side: str, layers: list[PcbLayer]) -
 def _highlight_css(
     hl_net_nums: set[int],
     hl_refs: set[str],
+    hl_pads: set[tuple[str, str]],
     copper_layers: list[PcbLayer],
     hidden_layer_classes: set[str] | None = None,
     net_colors: dict[int, str] | None = None,
     component_colors: dict[str, str] | None = None,
+    pad_colors: dict[tuple[str, str], str] | None = None,
 ) -> str:
     """Return CSS that dims non-highlighted elements and brightens highlighted.
 
@@ -1082,10 +1108,13 @@ def _highlight_css(
 
     ``component_colors`` maps component refs to CSS colors.  Components with
     an entry get that color on pads and body elements.
+
+    ``pad_colors`` maps ``(component, pad)`` targets to CSS colors.
     """
     rules: list[str] = []
     _net_colors = net_colors or {}
     _component_colors = component_colors or {}
+    _pad_colors = pad_colors or {}
 
     # -- Restore visibility on groups hidden by the theme ----------------------
     if hidden_layer_classes:
@@ -1194,6 +1223,22 @@ def _highlight_css(
                 rules.append(
                     f".body.{cmp}, .body-circle-filled.{cmp} {{ fill: {color} !important; }}"
                 )
+
+    # -- Restore highlighted pads --------------------------------------------
+    if hl_pads:
+        rules.append("")
+        rules.append("/* Restore highlighted pads */")
+        pad_sel = ", ".join(f".{_pad_class(ref, pad)}" for ref, pad in sorted(hl_pads))
+        rules.append(f"{pad_sel} {{ stroke-opacity: 1 !important; fill-opacity: 1 !important; }}")
+
+        rules.append("")
+        rules.append("/* Per-pad highlight colors */")
+        for ref, pad in sorted(hl_pads):
+            color = _pad_colors.get((ref, pad), _DEFAULT_PAD_HIGHLIGHT_COLOR)
+            pad_cls = _pad_class(ref, pad)
+            rules.append(
+                f".pad.{pad_cls} {{ fill: {color} !important; stroke: {color} !important; }}"
+            )
 
     return "\n".join(rules)
 
@@ -1582,8 +1627,10 @@ def render_pcb_svg(
     # -- Resolve highlights ------------------------------------------------
     hl_net_nums: set[int] = set()
     hl_refs: set[str] = set()
+    hl_pad_targets: set[tuple[str, str]] = set()
     net_colors: dict[int, str] = {}
     component_colors: dict[str, str] = {}
+    pad_colors: dict[tuple[str, str], str] = {}
 
     if highlight_nets:
         for name in highlight_nets:
@@ -1609,8 +1656,17 @@ def render_pcb_svg(
                     hl_refs.add(fp.reference)
                     if spec.color:
                         component_colors[fp.reference] = spec.color
+            if spec.pad:
+                ref, pad_number = _split_pad_target(spec.pad)
+                fp = board.footprint_by_ref(ref)
+                if fp:
+                    for pad in fp.pads:
+                        if pad.number == pad_number:
+                            target = (fp.reference, pad.number)
+                            hl_pad_targets.add(target)
+                            pad_colors[target] = spec.color or _DEFAULT_PAD_HIGHLIGHT_COLOR
 
-    has_hl = bool(hl_net_nums) or bool(hl_refs)
+    has_hl = bool(hl_net_nums) or bool(hl_refs) or bool(hl_pad_targets)
 
     # -- Component metadata lookup (ref → lib, value) ----------------------
     fp_meta: dict[str, tuple[str, str]] = {}
@@ -1734,10 +1790,12 @@ def render_pcb_svg(
             _highlight_css(
                 hl_net_nums,
                 hl_refs,
+                hl_pad_targets,
                 copper_layers,
                 hidden,
                 net_colors=net_colors or None,
                 component_colors=component_colors or None,
+                pad_colors=pad_colors or None,
             )
         )
         svg.raw("</style>")
@@ -1860,8 +1918,9 @@ def render_pcb_svg(
         for pad, fp_ref in pads_by_layer.get(layer, []):
             net_nm = pad.net_name or _net_name(board, pad.net_number)
             cmp_tokens = _component_class_tokens(fp_ref)
+            pad_cls = _pad_class(fp_ref, pad.number)
             pad_attrs = {
-                "class": f"pad {_nn_class(pad.net_number)} {cmp_tokens}",
+                "class": f"pad {_nn_class(pad.net_number)} {cmp_tokens} {pad_cls}",
                 "data-type": "pad",
                 **_component_attrs(fp_ref),
                 "data-pad": pad.number,
@@ -2032,11 +2091,12 @@ def render_pcb_svg(
             )
 
     # -- Highlight overlay (paints above zones, solder mask, and silk) -----
-    # Re-render highlighted net traces, pads, and vias in a group at the
+    # Re-render highlighted net traces, pads, vias, and individually
+    # highlighted pads in a group at the
     # end of the SVG so they aren't obscured by zones or other content
     # from higher copper layers. Each copper layer gets a sub-group with
     # the same layer class so existing per-layer color rules apply.
-    if hl_net_nums:
+    if hl_net_nums or hl_pad_targets:
         svg.group_start(attrs={"class": "highlight-overlay"})
 
         for cu_layer in copper_layers:
@@ -2046,10 +2106,12 @@ def render_pcb_svg(
             hl_zones = [z for z in zones_by_layer.get(layer, []) if z.net_number in hl_net_nums]
             hl_segs = [s for s in segs_by_layer.get(layer, []) if s.net_number in hl_net_nums]
             hl_arcs = [a for a in tarcs_by_layer.get(layer, []) if a.net_number in hl_net_nums]
-            hl_pads = [
-                (p, r) for p, r in pads_by_layer.get(layer, []) if p.net_number in hl_net_nums
+            hl_layer_pads = [
+                (p, r)
+                for p, r in pads_by_layer.get(layer, [])
+                if p.net_number in hl_net_nums or (r, p.number) in hl_pad_targets
             ]
-            if not hl_zones and not hl_segs and not hl_arcs and not hl_pads:
+            if not hl_zones and not hl_segs and not hl_arcs and not hl_layer_pads:
                 continue
 
             svg.group_start(attrs={"class": f"{cls} lyr"})
@@ -2092,11 +2154,16 @@ def render_pcb_svg(
                     f'data-net="{xml_escape(net_nm)}" data-net-number="{ta.net_number}"/>'
                 )
 
-            for pad, fp_ref in hl_pads:
+            for pad, fp_ref in hl_layer_pads:
                 net_nm = pad.net_name or _net_name(board, pad.net_number)
                 cmp_tokens = _component_class_tokens(fp_ref)
+                pad_target = (fp_ref, pad.number)
+                highlight_pad_class = " highlight-pad" if pad_target in hl_pad_targets else ""
                 pad_attrs = {
-                    "class": f"pad {_nn_class(pad.net_number)} {cmp_tokens}",
+                    "class": (
+                        f"pad {_nn_class(pad.net_number)} {cmp_tokens} "
+                        f"{_pad_class(fp_ref, pad.number)}{highlight_pad_class}"
+                    ),
                     "data-type": "pad",
                     **_component_attrs(fp_ref),
                     "data-pad": pad.number,

@@ -1080,6 +1080,7 @@ class TestParseRenderSettings:
             "highlights": [
                 {"net": "VBUS", "color": "#ff0000"},
                 {"component": "U1"},
+                {"pad": "CN11.30", "color": "#00ff00"},
             ],
             "annotations": {"boxes": [{"targets": ["U1"], "label": "MCU"}]},
             "custom_css": ".board-fill { fill: red; }",
@@ -1089,11 +1090,13 @@ class TestParseRenderSettings:
         assert settings.side == "back"
         assert settings.width == 1200
         assert settings.font_size == 24.0
-        assert len(settings.highlights) == 2
+        assert len(settings.highlights) == 3
         assert settings.highlights[0].net == "VBUS"
         assert settings.highlights[0].color == "#ff0000"
         assert settings.highlights[1].component == "U1"
         assert settings.highlights[1].color == ""
+        assert settings.highlights[2].pad == "CN11.30"
+        assert settings.highlights[2].color == "#00ff00"
         assert settings.annotations == data["annotations"]
         assert settings.custom_css == ".board-fill { fill: red; }"
 
@@ -1125,12 +1128,20 @@ class TestParseRenderSettings:
             parse_render_settings({"font_size": font_size})
 
     def test_highlight_missing_net_and_component(self) -> None:
-        with pytest.raises(ValueError, match="must have 'net' or 'component'"):
+        with pytest.raises(ValueError, match="exactly one of 'net', 'component', or 'pad'"):
             parse_render_settings({"highlights": [{"color": "#ff0000"}]})
 
     def test_highlight_both_net_and_component(self) -> None:
-        with pytest.raises(ValueError, match="cannot have both"):
+        with pytest.raises(ValueError, match="exactly one of 'net', 'component', or 'pad'"):
             parse_render_settings({"highlights": [{"net": "GND", "component": "U1"}]})
+
+    def test_highlight_rejects_multiple_targets_including_pad(self) -> None:
+        with pytest.raises(ValueError, match="exactly one of 'net', 'component', or 'pad'"):
+            parse_render_settings({"highlights": [{"component": "U1", "pad": "U1.1"}]})
+
+    def test_highlight_rejects_invalid_pad_target(self) -> None:
+        with pytest.raises(ValueError, match=r"highlights\[0\]\.pad must be '<component>\.<pad>'"):
+            parse_render_settings({"highlights": [{"pad": "U1"}]})
 
     def test_highlights_not_array(self) -> None:
         with pytest.raises(ValueError, match="highlights must be an array"):
@@ -1151,6 +1162,9 @@ class TestParseRenderSettings:
     def test_highlight_field_rejects_non_string(self) -> None:
         with pytest.raises(ValueError, match=r"highlights\[0\]\.net must be a string"):
             parse_render_settings({"highlights": [{"net": 42}]})
+
+        with pytest.raises(ValueError, match=r"highlights\[0\]\.pad must be a string"):
+            parse_render_settings({"highlights": [{"pad": 42}]})
 
 
 # ---------------------------------------------------------------------------
@@ -1277,6 +1291,26 @@ def test_highlight_component_with_color() -> None:
     assert "#5b8abf" in svg
     assert "fill: #5b8abf !important" in svg
     assert "stroke: #5b8abf !important" in svg
+
+
+def test_highlight_pad_with_color_renders_top_overlay() -> None:
+    """Pad highlight re-renders the target pad above normal board artwork."""
+    board = _make_board_with_inner_layers()
+    svg = render_pcb_svg(
+        board,
+        theme="review",
+        highlight_specs=[HighlightSpec(pad="U1.1", color="#e0115f")],
+    )
+
+    assert '<style id="highlight">' in svg
+    assert "#e0115f" in svg
+    overlay_start = svg.index('class="highlight-overlay"')
+    content_clip_end = svg.rindex("</g>", 0, svg.rindex("</svg>"))
+    assert overlay_start < content_clip_end
+    overlay = svg[overlay_start:content_clip_end]
+    assert 'data-component="U1"' in overlay
+    assert 'data-pad="1"' in overlay
+    assert "highlight-pad" in overlay
 
 
 def test_highlight_specs_merge_with_flags() -> None:
