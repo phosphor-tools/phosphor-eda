@@ -556,6 +556,45 @@ class TestResolveAnnotations:
         assert ptr.target_x * s == pytest.approx(30.0)
         assert ptr.target_y * s == pytest.approx(10.0)
 
+    def test_back_side_auto_margin_uses_rendered_view(self, board: Pcb) -> None:
+        """Back-side automatic placement uses the mirrored rendered target position."""
+        spec = AnnotationSpec(
+            boxes=[],
+            pointers=[PointerSpec(target="U1.1", label="Pin 1")],
+            labels=[],
+        )
+        front = resolve_annotations(spec, board, "front", width_px=800)
+        back = resolve_annotations(spec, board, "back", width_px=800)
+
+        assert front.pointers[0].label_x < front.pointers[0].target_x
+        assert back.pointers[0].label_x > back.pointers[0].target_x
+
+    def test_back_side_position_hint_is_rendered_view(self, board: Pcb) -> None:
+        """Back-side explicit position hints are interpreted in rendered-view space."""
+        spec = AnnotationSpec(
+            boxes=[],
+            pointers=[PointerSpec(target="U1.1", label="Pin 1", position="right")],
+            labels=[],
+        )
+        resolved = resolve_annotations(spec, board, "back", width_px=800)
+        ptr = resolved.pointers[0]
+
+        assert ptr.label_x > ptr.target_x
+
+    def test_back_side_pointer_target_uses_rendered_pad_location(self, board: Pcb) -> None:
+        """Back-side connector endpoints point to the mirrored rendered pad location."""
+        spec = AnnotationSpec(
+            boxes=[],
+            pointers=[PointerSpec(target="U1.1", label="Pin 1", position="right")],
+            labels=[],
+        )
+        resolved = resolve_annotations(spec, board, "back", width_px=800)
+        ptr = resolved.pointers[0]
+
+        assert ptr.target_x * resolved.px_scale == pytest.approx(30.0)
+        assert ptr.target_y * resolved.px_scale == pytest.approx(10.0)
+        assert ptr.connector_path[-1] == pytest.approx((ptr.target_x, ptr.target_y))
+
     def test_empty_spec_returns_empty(self, board: Pcb) -> None:
         spec = AnnotationSpec(boxes=[], pointers=[], labels=[])
         resolved = resolve_annotations(spec, board, "front")

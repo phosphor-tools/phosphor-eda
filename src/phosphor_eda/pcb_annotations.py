@@ -411,6 +411,29 @@ def _px_scale(
     return bw / width_px if width_px > 0 else 1.0
 
 
+def _to_rendered_view_x(
+    x_mm: float,
+    board_bbox: tuple[float, float, float, float],
+    side: str,
+) -> float:
+    """Convert a physical board x-coordinate to rendered-view x-coordinate."""
+    if side == "back":
+        return board_bbox[0] + board_bbox[2] - x_mm
+    return x_mm
+
+
+def _to_rendered_view_bbox(
+    bbox: tuple[float, float, float, float],
+    board_bbox: tuple[float, float, float, float],
+    side: str,
+) -> tuple[float, float, float, float]:
+    """Convert a physical board bbox to rendered-view coordinates."""
+    x1, y1, x2, y2 = bbox
+    rx1 = _to_rendered_view_x(x2, board_bbox, side)
+    rx2 = _to_rendered_view_x(x1, board_bbox, side)
+    return (min(rx1, rx2), y1, max(rx1, rx2), y2)
+
+
 def _measure_label(text: str, font_size: float) -> tuple[float, float]:
     """Measure a label pill including padding.
 
@@ -848,7 +871,7 @@ def resolve_annotations(
         max_y = float("-inf")
         for ref in box_spec.targets:
             _center, bbox = _resolve_component_target(ref, board)
-            bx1, by1, bx2, by2 = bbox
+            bx1, by1, bx2, by2 = _to_rendered_view_bbox(bbox, board_bbox, side)
             min_x = min(min_x, bx1 / scale)
             min_y = min(min_y, by1 / scale)
             max_x = max(max_x, bx2 / scale)
@@ -883,6 +906,7 @@ def resolve_annotations(
                 tx_mm, ty_mm = center
         else:
             tx_mm, ty_mm = _resolve_net_target(ptr_spec.target_net, ptr_spec.target_near, board)
+        tx_mm = _to_rendered_view_x(tx_mm, board_bbox, side)
         tx = tx_mm / scale
         ty = ty_mm / scale
         color = ptr_spec.color or "rgba(255,107,53,0.9)"
@@ -901,7 +925,7 @@ def resolve_annotations(
     for i, label_spec in enumerate(spec.labels):
         if label_spec.target:
             center, _bbox = _resolve_component_target(label_spec.target, board)
-            tx = center[0] / scale
+            tx = _to_rendered_view_x(center[0], board_bbox, side) / scale
             ty = center[1] / scale
         else:
             tx = (board_bbox[0] + board_bbox[2]) / 2 / scale
