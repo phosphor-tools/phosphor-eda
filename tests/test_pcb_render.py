@@ -19,6 +19,7 @@ from phosphor_eda.pcb import (
     PcbPad,
     PcbPolygon,
     PcbSegment,
+    PcbText,
     PcbVia,
 )
 from phosphor_eda.pcb_annotations import (
@@ -399,11 +400,43 @@ def test_highlight_overlay_includes_zones() -> None:
     assert "zone" in overlay
 
 
-def test_no_highlight_overlay_without_net_highlights() -> None:
-    """No overlay when only component highlights are active."""
+def test_component_highlight_overlay_renders_pads_on_top() -> None:
+    """Component highlights re-render matching pads in the top overlay."""
     board = _make_board_with_inner_layers()
     svg = render_pcb_svg(board, theme="review", highlight_components=["U1"])
-    assert "highlight-overlay" not in svg
+    overlay_start = svg.index('class="highlight-overlay"')
+    last_fab = svg.rindex('data-layer="F.Fab"')
+    assert overlay_start > last_fab
+
+    content_clip_end = svg.rindex("</g>", 0, svg.rindex("</svg>"))
+    overlay = svg[overlay_start:content_clip_end]
+    assert 'data-type="pad"' in overlay
+    assert 'data-component="U1"' in overlay
+    assert 'data-pad="1"' in overlay
+    assert 'data-type="body"' not in overlay
+
+
+def test_component_highlight_overlay_renders_after_ref_text() -> None:
+    """Component highlight overlay paints after normal board ref text labels."""
+    board = _make_board_with_inner_layers()
+    board.footprints[0].texts.append(
+        PcbText(
+            text="U1",
+            x=5.0,
+            y=8.0,
+            rotation=0.0,
+            layer="F.Fab",
+            font_size=0.5,
+            kind="reference",
+            footprint_ref="U1",
+        )
+    )
+
+    svg = render_pcb_svg(board, theme="review", highlight_components=["U1"])
+
+    ref_text_start = svg.index('class="ref-text')
+    overlay_start = svg.index('class="highlight-overlay"')
+    assert overlay_start > ref_text_start
 
 
 def test_no_highlight_overlay_without_highlights() -> None:

@@ -2090,13 +2090,41 @@ def render_pcb_svg(
                 )
             )
 
-    # -- Highlight overlay (paints above zones, solder mask, and silk) -----
-    # Re-render highlighted net traces, pads, vias, and individually
-    # highlighted pads in a group at the
-    # end of the SVG so they aren't obscured by zones or other content
-    # from higher copper layers. Each copper layer gets a sub-group with
-    # the same layer class so existing per-layer color rules apply.
-    if hl_net_nums or hl_pad_targets:
+    # -- Close content clip group ------------------------------------------
+    svg.group_end()
+
+    # -- Close mirror group ------------------------------------------------
+    if side == "back":
+        svg.group_end()
+
+    # -- Text labels (outside mirror so they read correctly) ---------------
+    for tx, ty, ttext, tsize, trot in deferred_texts:
+        if side == "back":
+            tx = (bx0 + bx1) - tx
+            trot = 180.0 - trot
+        svg.text(
+            tx,
+            ty,
+            ttext,
+            tsize,
+            rotation=trot,
+            attrs={
+                "class": f"ref-text {_component_class_tokens(ttext)}",
+                **_component_attrs(ttext),
+            },
+        )
+
+    # -- Highlight overlay (paints above all normal board artwork) ---------
+    # Re-render highlighted net traces, pads, vias, component pads, and
+    # individually highlighted pads after deferred ref labels so the overlay
+    # is above every normal board element. It remains clipped to the board;
+    # back-side renders get their own mirror wrapper because labels are emitted
+    # outside the main mirrored board group.
+    if hl_net_nums or hl_refs or hl_pad_targets:
+        if side == "back":
+            svg.group_start(transform=f"translate({bx0 + bx1:.4f}, 0) scale(-1, 1)")
+
+        svg.raw(f'<g clip-path="url(#{active_clip})">')
         svg.group_start(attrs={"class": "highlight-overlay"})
 
         for cu_layer in copper_layers:
@@ -2109,7 +2137,7 @@ def render_pcb_svg(
             hl_layer_pads = [
                 (p, r)
                 for p, r in pads_by_layer.get(layer, [])
-                if p.net_number in hl_net_nums or (r, p.number) in hl_pad_targets
+                if p.net_number in hl_net_nums or r in hl_refs or (r, p.number) in hl_pad_targets
             ]
             if not hl_zones and not hl_segs and not hl_arcs and not hl_layer_pads:
                 continue
@@ -2195,30 +2223,10 @@ def render_pcb_svg(
             svg.group_end()
 
         svg.group_end()
-
-    # -- Close content clip group ------------------------------------------
-    svg.group_end()
-
-    # -- Close mirror group ------------------------------------------------
-    if side == "back":
         svg.group_end()
 
-    # -- Text labels (outside mirror so they read correctly) ---------------
-    for tx, ty, ttext, tsize, trot in deferred_texts:
         if side == "back":
-            tx = (bx0 + bx1) - tx
-            trot = 180.0 - trot
-        svg.text(
-            tx,
-            ty,
-            ttext,
-            tsize,
-            rotation=trot,
-            attrs={
-                "class": f"ref-text {_component_class_tokens(ttext)}",
-                **_component_attrs(ttext),
-            },
-        )
+            svg.group_end()
 
     # -- Annotations (outside clip and mirror, always read left-to-right) ---
     if annotations is not None:
