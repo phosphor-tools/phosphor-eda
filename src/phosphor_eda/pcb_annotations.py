@@ -804,6 +804,7 @@ def resolve_annotations(
     board: Pcb,
     side: str,
     width_px: int = 800,
+    font_size: float = ANNOTATION_FONT_PX,
 ) -> ResolvedAnnotations:
     """Resolve annotation spec to concrete pixel-space coordinates.
 
@@ -816,7 +817,6 @@ def resolve_annotations(
     """
     board_bbox = board.bbox()
     scale = _px_scale(board_bbox, width_px)
-    font_size = ANNOTATION_FONT_PX
     margin_gap = _MARGIN_GAP_PX
     box_pad = _BOX_PAD_PX
 

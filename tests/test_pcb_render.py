@@ -1,6 +1,7 @@
 """Tests for the PCB SVG renderer — structural and CSS assertions."""
 
 import json
+import math
 import re
 from pathlib import Path
 
@@ -1029,6 +1030,19 @@ def test_swd_switch_annotation_end_to_end(board: Pcb) -> None:
     assert "SWD Enable" in svg
 
 
+def test_resolve_annotations_uses_requested_font_size(board: Pcb) -> None:
+    """Annotation resolution should size label layout from requested display px."""
+    from phosphor_eda.pcb_annotations import parse_annotations, resolve_annotations
+
+    spec = parse_annotations({"pointers": [{"target": "TP3", "label": "SWD"}]})
+    default_annotations = resolve_annotations(spec, board, "front")
+    large_annotations = resolve_annotations(spec, board, "front", font_size=24)
+
+    assert default_annotations.font_size == 10.0
+    assert large_annotations.font_size == 24.0
+    assert large_annotations.pointers[0].label_width > default_annotations.pointers[0].label_width
+
+
 # ---------------------------------------------------------------------------
 # parse_render_settings
 # ---------------------------------------------------------------------------
@@ -1048,6 +1062,7 @@ class TestParseRenderSettings:
         assert settings.theme == ""
         assert settings.side == ""
         assert settings.width == 0
+        assert settings.font_size == 0.0
         assert settings.highlights == []
         assert settings.annotations == {}
         assert settings.custom_css == ""
@@ -1061,6 +1076,7 @@ class TestParseRenderSettings:
             "theme": "review",
             "side": "back",
             "width": 1200,
+            "font_size": 24,
             "highlights": [
                 {"net": "VBUS", "color": "#ff0000"},
                 {"component": "U1"},
@@ -1072,6 +1088,7 @@ class TestParseRenderSettings:
         assert settings.theme == "review"
         assert settings.side == "back"
         assert settings.width == 1200
+        assert settings.font_size == 24.0
         assert len(settings.highlights) == 2
         assert settings.highlights[0].net == "VBUS"
         assert settings.highlights[0].color == "#ff0000"
@@ -1091,6 +1108,21 @@ class TestParseRenderSettings:
     def test_invalid_width(self) -> None:
         with pytest.raises(ValueError, match="width"):
             parse_render_settings({"width": -10})
+
+    def test_invalid_font_size(self) -> None:
+        with pytest.raises(ValueError, match="font_size"):
+            parse_render_settings({"font_size": 0})
+
+        with pytest.raises(ValueError, match="font_size"):
+            parse_render_settings({"font_size": True})
+
+        with pytest.raises(ValueError, match="font_size"):
+            parse_render_settings({"font_size": 501})
+
+    @pytest.mark.parametrize("font_size", [math.nan, math.inf, -math.inf])
+    def test_invalid_font_size_must_be_finite(self, font_size: float) -> None:
+        with pytest.raises(ValueError, match="font_size"):
+            parse_render_settings({"font_size": font_size})
 
     def test_highlight_missing_net_and_component(self) -> None:
         with pytest.raises(ValueError, match="must have 'net' or 'component'"):

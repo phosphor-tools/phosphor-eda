@@ -387,6 +387,61 @@ def test_cli_render_settings_from_file(tmp_path: Path) -> None:
     assert "SWD" in svg
 
 
+def test_cli_render_settings_font_size_sets_annotation_size(tmp_path: Path) -> None:
+    settings = {
+        "font_size": 24,
+        "annotations": {
+            "pointers": [{"target": "TP3", "label": "SWD"}],
+        },
+    }
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps(settings))
+    out_file = tmp_path / "out.svg"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file), "-o", str(out_file)],
+    )
+
+    assert result.exit_code == 0, result.output
+    svg = out_file.read_text()
+    assert "font-size: 24.0px" in svg
+
+
+def test_cli_font_size_overrides_render_settings(tmp_path: Path) -> None:
+    settings = {
+        "font_size": 12,
+        "annotations": {
+            "pointers": [{"target": "TP3", "label": "SWD"}],
+        },
+    }
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps(settings))
+    out_file = tmp_path / "out.svg"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "pcb",
+            "render",
+            PCB_FILE,
+            "--render-settings",
+            str(settings_file),
+            "--font-size",
+            "24",
+            "-o",
+            str(out_file),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    svg = out_file.read_text()
+    assert "font-size: 24.0px" in svg
+    assert "font-size: 12.0px" not in svg
+
+
 def test_cli_render_settings_from_stdin(tmp_path: Path) -> None:
     """--render-settings - reads JSON from stdin."""
     settings = {

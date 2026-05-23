@@ -66,6 +66,7 @@ class RenderSettings:
     theme: str = ""
     side: str = ""
     width: int = 0
+    font_size: float = 0.0
     highlights: list[HighlightSpec] = field(default_factory=list)
     annotations: dict[str, Any] = field(default_factory=dict)
     custom_css: str = ""
@@ -113,6 +114,19 @@ def parse_render_settings(data: dict[str, Any]) -> RenderSettings:
             msg = f"width must be a positive integer, got {width!r}"
             raise ValueError(msg)
         settings.width = width
+
+    if "font_size" in data:
+        font_size = data["font_size"]
+        if (
+            not isinstance(font_size, int | float)
+            or isinstance(font_size, bool)
+            or not math.isfinite(font_size)
+            or font_size < 1
+            or font_size > 500
+        ):
+            msg = f"font_size must be a number from 1 to 500, got {font_size!r}"
+            raise ValueError(msg)
+        settings.font_size = float(font_size)
 
     if "highlights" in data:
         raw_highlights = data["highlights"]
