@@ -1429,6 +1429,7 @@ def _render_pill_label(
     text: str,
     font_size: float,
     color: str,
+    text_anchor: str = "middle",
     css_class: str = "annotation-pill",
 ) -> None:
     """Render a pill-shaped label with solid color fill and contrast text."""
@@ -1454,7 +1455,7 @@ def _render_pill_label(
     for i, line in enumerate(lines):
         ty = start_y + i * line_height
         svg.raw(
-            f'<text x="{cx:.4f}" y="{ty:.4f}" text-anchor="middle" '
+            f'<text x="{cx:.4f}" y="{ty:.4f}" text-anchor="{text_anchor}" '
             f'class="annotation-label-text" fill="{text_color}">'
             f"{xml_escape(line)}</text>"
         )
@@ -1482,6 +1483,7 @@ def _render_box(svg: _Svg, box: ResolvedBox, font_size: float) -> None:
             box.label_text,
             font_size,
             color=box.color,
+            text_anchor=box.text_anchor,
         )
 
 
@@ -1498,6 +1500,7 @@ def _render_pointer(svg: _Svg, pointer: ResolvedPointer, font_size: float) -> No
             pointer.label_text,
             font_size,
             color=pointer.color,
+            text_anchor=pointer.text_anchor,
         )
     elif pointer.connector_path:
         _render_connector(svg, pointer.connector_path, pointer.color)
@@ -1517,6 +1520,7 @@ def _render_label(svg: _Svg, label: ResolvedLabel, font_size: float) -> None:
             label.label_text,
             font_size,
             color="rgba(60,60,80,0.9)",
+            text_anchor=label.text_anchor,
             css_class="annotation-pill annotation-pill--muted",
         )
 

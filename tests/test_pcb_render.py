@@ -851,6 +851,7 @@ def _make_resolved_box() -> ResolvedBox:
         label_y=9.5,
         label_width=6.0,
         label_height=2.0,
+        text_anchor="start",
         connector_path=[(25.0, 10.5), (22.0, 10.5), (22.0, 11.0), (11.0, 11.0)],
         color="rgba(255,107,53,0.9)",
     )
@@ -865,6 +866,7 @@ def _make_resolved_pointer() -> ResolvedPointer:
         label_y=13.0,
         label_width=7.0,
         label_height=2.0,
+        text_anchor="end",
         connector_path=[(25.0, 14.0), (22.0, 14.0), (22.0, 10.0), (10.0, 10.0)],
         color="rgba(255,107,53,0.9)",
     )
@@ -901,6 +903,7 @@ def _make_annotations(
                 label_y=16.0,
                 label_width=8.0,
                 label_height=2.0,
+                text_anchor="start",
                 connector_path=[(25.0, 17.0), (22.0, 17.0), (22.0, 10.0), (10.0, 10.0)],
             )
         ]
@@ -920,6 +923,7 @@ def test_annotation_box_rendered() -> None:
     assert 'class="annotation-box"' in svg
     assert "annotation-pill" in svg
     assert "MCU" in svg
+    assert 'text-anchor="start"' in svg
 
 
 def test_annotation_pointer_rendered() -> None:
@@ -928,6 +932,7 @@ def test_annotation_pointer_rendered() -> None:
     annotations = _make_annotations(pointers=True)
     svg = render_pcb_svg(board, annotations=annotations)
     assert "annotation-connector" in svg
+    assert 'text-anchor="end"' in svg
     assert "annotation-dot" in svg
     assert "Clock" in svg
 
@@ -980,6 +985,7 @@ def test_annotation_label_with_connector() -> None:
     annotations = _make_annotations(labels=True)
     svg = render_pcb_svg(board, annotations=annotations)
     assert "annotation-connector" in svg
+    assert 'text-anchor="start"' in svg
     assert "Main MCU" in svg
 
 

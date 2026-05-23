@@ -638,6 +638,39 @@ class TestResolveAnnotations:
         box = resolved.boxes[0]
         assert len(box.connector_path) >= 2
 
+    def test_box_label_anchor_comes_from_margin(self, board: Pcb) -> None:
+        """Left margin box labels should right-align their text inside the pill."""
+        spec = AnnotationSpec(
+            boxes=[BoxSpec(targets=["U1"], label="MCU", label_position="left")],
+            pointers=[],
+            labels=[],
+        )
+        resolved = resolve_annotations(spec, board, "front")
+
+        assert resolved.boxes[0].text_anchor == "end"
+
+    def test_pointer_label_anchor_comes_from_margin(self, board: Pcb) -> None:
+        """Right margin pointer labels should left-align their text inside the pill."""
+        spec = AnnotationSpec(
+            boxes=[],
+            pointers=[PointerSpec(target="U1", label="MCU", position="right")],
+            labels=[],
+        )
+        resolved = resolve_annotations(spec, board, "front")
+
+        assert resolved.pointers[0].text_anchor == "start"
+
+    def test_label_anchor_comes_from_margin(self, board: Pcb) -> None:
+        """Top/bottom margin labels should keep centered text."""
+        spec = AnnotationSpec(
+            boxes=[],
+            pointers=[],
+            labels=[LabelSpec(target="U1", content="Main MCU", position="top")],
+        )
+        resolved = resolve_annotations(spec, board, "front")
+
+        assert resolved.labels[0].text_anchor == "middle"
+
     def test_label_dimensions_populated(self, board: Pcb) -> None:
         """Resolved labels should have positive width and height."""
         spec = AnnotationSpec(

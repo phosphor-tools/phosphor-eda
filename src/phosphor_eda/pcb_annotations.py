@@ -128,6 +128,7 @@ class ResolvedBox:
     label_height: float
     connector_path: list[tuple[float, float]]
     color: str
+    text_anchor: str = "middle"
 
 
 @dataclass
@@ -147,6 +148,7 @@ class ResolvedPointer:
     label_height: float
     connector_path: list[tuple[float, float]]
     color: str
+    text_anchor: str = "middle"
 
 
 @dataclass
@@ -163,6 +165,7 @@ class ResolvedLabel:
     label_width: float
     label_height: float
     connector_path: list[tuple[float, float]]
+    text_anchor: str = "middle"
 
 
 @dataclass
@@ -493,6 +496,15 @@ def _auto_assign_margin(
     }
 
     return min(distances, key=distances.__getitem__)
+
+
+def _text_anchor_for_margin(margin: str) -> str:
+    """Return SVG text-anchor for text inside a pill placed in a board margin."""
+    if margin == "left":
+        return "end"
+    if margin == "right":
+        return "start"
+    return "middle"
 
 
 # ---------------------------------------------------------------------------
@@ -1010,6 +1022,7 @@ def resolve_annotations(
                     label_height=item.label_height,
                     connector_path=connector,
                     color=color,
+                    text_anchor=_text_anchor_for_margin(item.margin),
                 )
             )
             all_xs.extend([bx, bx + bw, result.label_x, result.label_x + item.label_width])
@@ -1028,6 +1041,7 @@ def resolve_annotations(
                     label_height=0,
                     connector_path=[],
                     color=color,
+                    text_anchor="middle",
                 )
             )
             all_xs.extend([bx, bx + bw])
@@ -1061,6 +1075,7 @@ def resolve_annotations(
                     label_height=item.label_height,
                     connector_path=connector,
                     color=color,
+                    text_anchor=_text_anchor_for_margin(item.margin),
                 )
             )
             all_xs.extend([tx, result.label_x, result.label_x + item.label_width])
@@ -1077,6 +1092,7 @@ def resolve_annotations(
                     label_height=0,
                     connector_path=[],
                     color=color,
+                    text_anchor="middle",
                 )
             )
             all_xs.append(tx)
@@ -1112,6 +1128,7 @@ def resolve_annotations(
                     label_width=item.label_width,
                     label_height=item.label_height,
                     connector_path=connector,
+                    text_anchor=_text_anchor_for_margin(item.margin),
                 )
             )
             all_xs.extend([result.label_x, result.label_x + item.label_width])
@@ -1125,6 +1142,7 @@ def resolve_annotations(
                     label_width=0,
                     label_height=0,
                     connector_path=[],
+                    text_anchor="middle",
                 )
             )
 
