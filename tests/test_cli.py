@@ -315,8 +315,11 @@ def test_cli_render_settings_schema_outputs_json_without_file() -> None:
     schema = json.loads(result.output)
     assert schema["type"] == "object"
     assert schema["additionalProperties"] is False
-    assert "print" in schema["properties"]["theme"]["enum"]
-    assert "font_size" in schema["properties"]
+    assert "theme" not in schema["properties"]
+    assert "font_size" not in schema["properties"]
+    assert "font_size_px" in schema["properties"]
+    assert "include" in schema["properties"]
+    assert "style_rules" in schema["properties"]
     assert "pad" in json.dumps(schema["properties"]["highlights"])
     assert schema["examples"]
 
@@ -490,7 +493,7 @@ def test_cli_render_settings_font_size_sets_annotation_size(tmp_path: Path) -> N
     assert "font-size: 24.0px" in svg
 
 
-def test_cli_render_settings_rejects_old_packaged_settings_until_v2(tmp_path: Path) -> None:
+def test_cli_render_settings_accepts_packaged_v2_settings(tmp_path: Path) -> None:
     settings = {
         "extends": "phosphor:print-callout",
         "font_size_px": 64,
@@ -508,9 +511,10 @@ def test_cli_render_settings_rejects_old_packaged_settings_until_v2(tmp_path: Pa
         ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file), "-o", str(out_file)],
     )
 
-    assert result.exit_code != 0
-    assert "Render settings error:" in result.output
-    assert "font_size" in result.output or "theme" in result.output
+    assert result.exit_code == 0, result.output
+    svg = out_file.read_text()
+    assert svg.startswith("<svg")
+    assert "SWD" in svg
 
 
 def test_cli_font_size_overrides_render_settings(tmp_path: Path) -> None:

@@ -21,9 +21,13 @@ from xml.sax.saxutils import escape as xml_escape
 
 from phosphor_eda.pcb import LayerFunction, PcbLayer
 from phosphor_eda.pcb_render_settings import (
+    INCLUDE_STATES,
+    LAYER_ROLES,
+    LAYER_SIDES,
     HighlightSpec,
     RenderSettings,
     is_json_dict,
+    is_json_list,
     parse_render_settings,
 )
 from phosphor_eda.text_metrics import BASELINE_CENTER_OFFSET, INTER_REGULAR_BASE64
@@ -163,9 +167,111 @@ def _merge_render_settings_data(
         elif key == "custom_css":
             css_parts = [css for css in (parent_css, child_css) if isinstance(css, str) and css]
             merged[key] = "\n".join(css_parts)
+        elif key == "highlight_behavior" and is_json_dict(existing) and is_json_dict(value):
+            merged[key] = _deep_merge_json_dicts(existing, value)
+        elif key == "include" and is_json_dict(existing) and is_json_dict(value):
+            merged[key] = _merge_include_data(existing, value)
+        elif key == "style_rules" and is_json_list(existing) and is_json_list(value):
+            merged[key] = [*existing, *value]
         else:
             merged[key] = value
     return merged
+
+
+def _merge_include_data(
+    parent: dict[str, object],
+    child: dict[str, object],
+) -> dict[str, object]:
+    merged = dict(parent)
+    parent_layers = parent.get("layers")
+    child_layers = child.get("layers")
+
+    for key, value in child.items():
+        if key != "layers":
+            merged[key] = value
+
+    if is_json_list(parent_layers) and is_json_list(child_layers):
+        merged["layers"] = _merge_include_layers(parent_layers, child_layers)
+    elif "layers" in child:
+        merged["layers"] = child_layers
+
+    return merged
+
+
+def _merge_include_layers(
+    parent_layers: list[object],
+    child_layers: list[object],
+) -> list[object]:
+    merged_layers: list[object] = [
+        dict(layer) if is_json_dict(layer) else layer for layer in parent_layers
+    ]
+    layer_index = {
+        _include_layer_key(layer): index
+        for index, layer in enumerate(merged_layers)
+        if is_json_dict(layer)
+    }
+
+    for child_layer in child_layers:
+        if not is_json_dict(child_layer):
+            merged_layers.append(child_layer)
+            continue
+
+        key = _include_layer_key(child_layer)
+        existing_index = layer_index.get(key)
+        if existing_index is None:
+            layer_index[key] = len(merged_layers)
+            merged_layers.append(dict(child_layer))
+            continue
+
+        existing_layer = merged_layers[existing_index]
+        if is_json_dict(existing_layer):
+            merged_layers[existing_index] = _merge_include_layer(existing_layer, child_layer)
+
+    return merged_layers
+
+
+def _include_layer_key(layer: dict[str, object]) -> tuple[str, str, str]:
+    role = layer.get("role", "")
+    side = layer.get("side", "any")
+    name = layer.get("name", "")
+    return (
+        role if isinstance(role, str) else "",
+        side if isinstance(side, str) else "any",
+        name if isinstance(name, str) else "",
+    )
+
+
+def _merge_include_layer(
+    parent: dict[str, object],
+    child: dict[str, object],
+) -> dict[str, object]:
+    merged = dict(parent)
+    for key, value in child.items():
+        if key != "objects":
+            merged[key] = value
+
+    parent_objects = parent.get("objects")
+    child_objects = child.get("objects")
+    if "objects" in child:
+        merged["objects"] = _merge_include_layer_objects(parent_objects, child_objects)
+
+    return merged
+
+
+def _merge_include_layer_objects(parent: object, child: object) -> object:
+    parent_objects = _include_layer_objects_dict(parent)
+    child_objects = _include_layer_objects_dict(child)
+    if parent_objects is None or child_objects is None:
+        return child
+    return {**parent_objects, **child_objects}
+
+
+def _include_layer_objects_dict(value: object) -> dict[str, object] | None:
+    if isinstance(value, str):
+        return {"*": value}
+    if is_json_dict(value):
+        return value
+    return None
 
 
 def _deep_merge_json_dicts(
@@ -197,10 +303,6 @@ def render_settings_schema() -> dict[str, object]:
                     "for bundled settings or a relative/absolute JSON path."
                 ),
             },
-            "theme": {
-                "type": "string",
-                "enum": THEME_NAMES,
-            },
             "side": {
                 "type": "string",
                 "enum": ["front", "back"],
@@ -209,7 +311,7 @@ def render_settings_schema() -> dict[str, object]:
                 "type": "integer",
                 "minimum": 1,
             },
-            "font_size": {
+            "font_size_px": {
                 "type": "number",
                 "minimum": 1,
                 "maximum": 500,
@@ -240,20 +342,99 @@ def render_settings_schema() -> dict[str, object]:
             "annotations": {
                 "type": "object",
             },
+            "include": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "board_outline": {"$ref": "#/$defs/include_state"},
+                    "drills": {"$ref": "#/$defs/include_state"},
+                    "vias": {"$ref": "#/$defs/include_state"},
+                    "layers": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "role": {"type": "string", "enum": list(LAYER_ROLES)},
+                                "side": {"type": "string", "enum": list(LAYER_SIDES)},
+                                "name": {"type": "string"},
+                                "objects": {
+                                    "oneOf": [
+                                        {"$ref": "#/$defs/include_state"},
+                                        {
+                                            "type": "object",
+                                            "additionalProperties": {
+                                                "$ref": "#/$defs/include_state",
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+            "highlight_behavior": {
+                "type": "object",
+            },
+            "style_rules": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "match": {"type": "object"},
+                        "style": {"type": "object"},
+                    },
+                },
+            },
             "custom_css": {
                 "type": "string",
+            },
+        },
+        "$defs": {
+            "include_state": {
+                "type": "string",
+                "enum": list(INCLUDE_STATES),
             },
         },
         "examples": [
             {
                 "extends": "phosphor:print-callout",
-                "theme": "print",
                 "width": 3000,
-                "font_size": 100,
+                "font_size_px": 100,
+                "include": {
+                    "vias": "when-highlighted",
+                    "layers": [
+                        {
+                            "role": "copper",
+                            "side": "active",
+                            "objects": {
+                                "pads": "visible",
+                                "traces": "when-highlighted",
+                                "zones": "hidden",
+                            },
+                        },
+                    ],
+                },
+                "highlight_behavior": {
+                    "overlay": True,
+                    "dim_unhighlighted": False,
+                },
                 "highlights": [{"pad": "CN11.30", "color": "#c00000"}],
+                "style_rules": [
+                    {
+                        "match": {"annotation": "label"},
+                        "style": {
+                            "text_halo": "#fff",
+                            "text_halo_width_px": 6,
+                        },
+                    },
+                ],
                 "annotations": {
                     "pointers": [{"target": "CN11.30", "label": "PA1 / REF_CLK"}],
                 },
+                "custom_css": "",
             },
         ],
     }

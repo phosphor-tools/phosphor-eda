@@ -36,6 +36,7 @@ from phosphor_eda.pcb_render import (
     _css_safe,  # pyright: ignore[reportPrivateUsage]
     _fmt_attrs,  # pyright: ignore[reportPrivateUsage]
     load_render_settings_file,
+    load_render_settings_json,
     parse_render_settings,
     render_pcb_svg,
     render_settings_schema,
@@ -1097,6 +1098,23 @@ class TestParseRenderSettings:
         assert schema["additionalProperties"] is False
         assert schema["properties"]["custom_css"]["type"] == "string"
 
+    def test_render_settings_schema_is_v2_without_theme(self) -> None:
+        schema = render_settings_schema()
+        props = schema["properties"]
+        assert "theme" not in props
+        assert "font_size" not in props
+        assert "font_size_px" in props
+        assert "include" in props
+        assert "highlight_behavior" in props
+        assert "style_rules" in props
+        assert "custom_css" in props
+        assert "phosphor:print-callout" in json.dumps(schema["examples"])
+        example = schema["examples"][0]
+        assert "include" in example
+        assert "highlight_behavior" in example
+        assert "style_rules" in example
+        assert "custom_css" in example
+
     def test_empty_object(self) -> None:
         settings = parse_render_settings({})
         assert settings.side == ""
@@ -1359,8 +1377,162 @@ def test_load_render_settings_file_extends_packaged_settings(tmp_path: Path) -> 
         )
     )
 
-    with pytest.raises(ValueError, match="theme|font_size"):
-        load_render_settings_file(child)
+    settings = load_render_settings_file(child)
+
+    assert settings.font_size == 72
+    assert settings.custom_css == ".annotation-connector { stroke-width: 6; }"
+    assert settings.include.vias == "when-highlighted"
+    assert settings.style_rules
+
+
+def test_bundled_print_callout_uses_v2_settings(tmp_path: Path) -> None:
+    child = tmp_path / "child.json"
+    child.write_text(json.dumps({"extends": "phosphor:print-callout"}))
+
+    settings = load_render_settings_file(child)
+
+    assert settings.font_size == 80
+    assert settings.include.layers
+    assert settings.include.vias == "when-highlighted"
+    assert settings.style_rules
+
+
+@pytest.mark.parametrize("name", ["print", "print-callout", "review-callout"])
+def test_bundled_render_settings_use_v2_settings(name: str) -> None:
+    settings = load_render_settings_json(json.dumps({"extends": f"phosphor:{name}"}))
+
+    assert settings.theme == ""
+    assert settings.include.layers
+    assert settings.style_rules
+
+
+def test_print_callout_extends_print_style_rules() -> None:
+    settings = load_render_settings_json('{"extends": "phosphor:print-callout"}')
+
+    assert settings.style_rules[0].match == {"object": "board_outline"}
+    assert settings.style_rules[0].style["stroke"] == "#444"
+    assert settings.style_rules[1].match == {"annotation": "label"}
+    assert settings.style_rules[2].match == {"annotation": "connector"}
+
+
+def test_render_settings_extends_merges_v2_policy(tmp_path: Path) -> None:
+    base = tmp_path / "base.json"
+    base.write_text(
+        json.dumps(
+            {
+                "include": {
+                    "board_outline": "visible",
+                    "drills": "visible",
+                    "vias": "visible",
+                    "layers": [
+                        {
+                            "role": "copper",
+                            "side": "active",
+                            "objects": {
+                                "pads": "visible",
+                                "traces": "visible",
+                                "zones": "visible",
+                            },
+                        },
+                        {"role": "silkscreen", "side": "active", "objects": "visible"},
+                    ],
+                },
+                "highlight_behavior": {"overlay": False, "palette": {"default": "#111"}},
+                "style_rules": [
+                    {"match": {"object": "board_outline"}, "style": {"stroke": "#444"}}
+                ],
+            }
+        )
+    )
+    child = tmp_path / "child.json"
+    child.write_text(
+        json.dumps(
+            {
+                "extends": "./base.json",
+                "include": {
+                    "vias": "when-highlighted",
+                    "layers": [
+                        {
+                            "role": "copper",
+                            "side": "active",
+                            "objects": {
+                                "traces": "when-highlighted",
+                                "zones": "hidden",
+                            },
+                        },
+                        {"role": "fabrication", "side": "active", "objects": "visible"},
+                    ],
+                },
+                "highlight_behavior": {"overlay": True, "palette": {"warning": "#c00"}},
+                "style_rules": [{"match": {"annotation": "label"}, "style": {"fill": "#000"}}],
+            }
+        )
+    )
+
+    settings = load_render_settings_file(child)
+
+    assert settings.include.board_outline == "visible"
+    assert settings.include.vias == "when-highlighted"
+    assert settings.include.layers[0].objects == {
+        "pads": "visible",
+        "traces": "when-highlighted",
+        "zones": "hidden",
+    }
+    assert settings.include.layers[1].role == "silkscreen"
+    assert settings.include.layers[2].role == "fabrication"
+    assert settings.highlight_behavior == {
+        "overlay": True,
+        "palette": {"default": "#111", "warning": "#c00"},
+    }
+    assert [rule.match for rule in settings.style_rules] == [
+        {"object": "board_outline"},
+        {"annotation": "label"},
+    ]
+
+
+def test_render_settings_extends_merges_include_layer_object_scalar_defaults(
+    tmp_path: Path,
+) -> None:
+    base = tmp_path / "base.json"
+    base.write_text(
+        json.dumps(
+            {
+                "include": {
+                    "layers": [
+                        {
+                            "role": "silkscreen",
+                            "side": "active",
+                            "objects": "visible",
+                        }
+                    ]
+                }
+            }
+        )
+    )
+    child = tmp_path / "child.json"
+    child.write_text(
+        json.dumps(
+            {
+                "extends": "./base.json",
+                "include": {
+                    "layers": [
+                        {
+                            "role": "silkscreen",
+                            "side": "active",
+                            "objects": {"reference_text": "hidden"},
+                        }
+                    ]
+                },
+            }
+        )
+    )
+
+    settings = load_render_settings_file(child)
+
+    assert settings.include.layers[0].objects == {
+        "*": "visible",
+        "reference_text": "hidden",
+    }
 
 
 def test_load_render_settings_file_detects_extend_cycles(tmp_path: Path) -> None:

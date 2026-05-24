@@ -1,5 +1,17 @@
 {
-  "theme": "review",
-  "font_size": 80,
-  "custom_css": ".annotation-label-text { font-weight: 700; } .annotation-connector { stroke-width: 4; }"
+  "extends": "phosphor:print-callout",
+  "style_rules": [
+    {
+      "match": { "annotation": "label" },
+      "style": {
+        "font_weight": 700
+      }
+    },
+    {
+      "match": { "annotation": "connector" },
+      "style": {
+        "stroke_width_px": 4
+      }
+    }
+  ]
 }

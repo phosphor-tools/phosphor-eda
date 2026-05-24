@@ -1,5 +1,50 @@
 {
   "extends": "phosphor:print",
-  "font_size": 80,
-  "custom_css": ".annotation-label-text { fill: #000; paint-order: stroke fill; stroke: #fff; stroke-linejoin: round; font-weight: 700; } .annotation-connector { stroke: #333; stroke-width: 4; }"
+  "font_size_px": 80,
+  "include": {
+    "vias": "when-highlighted",
+    "layers": [
+      {
+        "role": "copper",
+        "side": "active",
+        "objects": {
+          "pads": "visible",
+          "traces": "when-highlighted",
+          "zones": "hidden"
+        }
+      },
+      {
+        "role": "silkscreen",
+        "side": "active",
+        "objects": "visible"
+      },
+      {
+        "role": "fabrication",
+        "side": "active",
+        "objects": "visible"
+      }
+    ]
+  },
+  "highlight_behavior": {
+    "overlay": true,
+    "dim_unhighlighted": false
+  },
+  "style_rules": [
+    {
+      "match": { "annotation": "label" },
+      "style": {
+        "fill": "#000",
+        "text_halo": "#fff",
+        "text_halo_width_px": 6,
+        "font_weight": 700
+      }
+    },
+    {
+      "match": { "annotation": "connector" },
+      "style": {
+        "stroke": "#333",
+        "stroke_width_px": 4
+      }
+    }
+  ]
 }
