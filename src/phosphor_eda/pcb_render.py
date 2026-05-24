@@ -14,12 +14,28 @@ import math
 import re
 from collections import defaultdict
 from collections.abc import Callable
+from dataclasses import replace
 from importlib.resources import files
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from xml.sax.saxutils import escape as xml_escape
 
-from phosphor_eda.pcb import LayerFunction, PcbLayer
+from phosphor_eda.pcb import (
+    LayerFunction,
+    PcbLayer,
+    PcbPad,
+    PcbPolygon,
+    PcbSegment,
+    PcbTraceArc,
+    PcbVia,
+    PcbZone,
+)
+from phosphor_eda.pcb_render_plan import (
+    EmittedGeometry,
+    GeometryKind,
+    PcbRenderPlan,
+    build_render_plan,
+)
 from phosphor_eda.pcb_render_settings import (
     INCLUDE_STATES,
     LAYER_ROLES,
@@ -39,10 +55,6 @@ if TYPE_CHECKING:
         PcbCircle,
         PcbFootprint,
         PcbLine,
-        PcbPad,
-        PcbPolygon,
-        PcbSegment,
-        PcbTraceArc,
     )
     from phosphor_eda.pcb_annotations import (
         ResolvedAnnotations,
@@ -1451,6 +1463,208 @@ def _draw_pad(svg: _Svg, pad: PcbPad, attrs: dict[str, str]) -> None:
         svg.rect(pad.x - hw, pad.y - hh, pad.width, pad.height, attrs=attrs)
 
 
+def render_pcb_svg_from_plan(plan: PcbRenderPlan) -> str:
+    """Serialize a render plan to SVG for the initial print-callout slice."""
+    svg = _Svg()
+    view_box = plan.view_box
+    svg.raw(
+        f'<svg xmlns="http://www.w3.org/2000/svg" '
+        f'width="{plan.width_px}" height="{plan.height_px}" '
+        f'viewBox="{view_box.x:.4f} {view_box.y:.4f} {view_box.width:.4f} {view_box.height:.4f}">'
+    )
+    svg.raw('<style id="theme">')
+    svg.raw(_plan_svg_css())
+    svg.raw("</style>")
+    if plan.custom_css:
+        svg.raw('<style id="custom">')
+        svg.raw(plan.custom_css)
+        svg.raw("</style>")
+    if plan.annotations is not None:
+        annotations = cast("ResolvedAnnotations", plan.annotations)
+        svg.raw('<style id="annotations">')
+        svg.raw(_annotation_css(annotations.font_size))
+        svg.raw("</style>")
+
+    active_clip = "board-clip"
+    if plan.clip is not None:
+        svg.raw("<defs>")
+        svg.raw(f'<clipPath id="board-clip"><path d="{plan.clip.board_path_d}"/></clipPath>')
+        if plan.clip.drill_path_d:
+            cover_d = (
+                f"M {view_box.x:.4f} {view_box.y:.4f} "
+                f"L {view_box.x + view_box.width:.4f} {view_box.y:.4f} "
+                f"L {view_box.x + view_box.width:.4f} {view_box.y + view_box.height:.4f} "
+                f"L {view_box.x:.4f} {view_box.y + view_box.height:.4f} Z"
+            )
+            svg.raw(
+                '<clipPath id="drill-clip" clip-path="url(#board-clip)">'
+                f'<path d="{cover_d}{plan.clip.drill_path_d}" clip-rule="evenodd"/>'
+                "</clipPath>"
+            )
+            active_clip = "drill-clip"
+        svg.raw("</defs>")
+
+    board_outline = next(
+        (item for item in plan.base if item.kind is GeometryKind.BOARD_OUTLINE),
+        None,
+    )
+    bx0, by0, bx1, by1 = plan.board_bbox
+    if plan.clip is not None:
+        svg.raw(f'<g clip-path="url(#{active_clip})">')
+        svg.raw(f'<path d="{plan.clip.board_path_d}" class="board-fill"/>')
+        svg.group_end()
+    elif board_outline is not None:
+        svg.polygon(
+            [(point.x, point.y) for point in board_outline.points],
+            attrs={"class": "board-fill", **board_outline.attrs},
+        )
+    else:
+        svg.rect(bx0, by0, bx1 - bx0, by1 - by0, attrs={"class": "board-fill"})
+
+    svg.raw(f'<g clip-path="url(#{active_clip})">')
+    _render_plan_geometry(svg, plan.base, overlay=False)
+    svg.group_end()
+
+    if plan.overlay:
+        svg.raw(f'<g clip-path="url(#{active_clip})">')
+        svg.group_start(attrs={"class": "highlight-overlay"})
+        _render_plan_geometry(svg, plan.overlay, overlay=True)
+        svg.group_end()
+        svg.group_end()
+
+    if plan.annotations is not None:
+        annotations = cast("ResolvedAnnotations", plan.annotations)
+        _render_annotations(svg, annotations, annotations.font_size)
+
+    svg.raw("</svg>")
+    return svg.build()
+
+
+def _plan_svg_css() -> str:
+    return """
+.board-fill { fill: transparent; stroke: #111; stroke-width: 0.12; }
+.pad { fill: #111; stroke: #fff; stroke-width: 0.03; }
+.via .annular { fill: #111; stroke: #fff; stroke-width: 0.03; }
+.via .drill { fill: #fff; stroke: none; }
+.zone { fill: #ddd; stroke: none; }
+.trace, .trace-arc { stroke: #111; fill: none; stroke-linecap: round; }
+.highlight-overlay .pad,
+.highlight-overlay .via .annular { fill: #c00000; stroke: #111; }
+.highlight-overlay .trace,
+.highlight-overlay .trace-arc { stroke: #c00000; fill: none; stroke-linecap: round; }
+.highlight-overlay .zone { fill: #c00000; }
+""".strip()
+
+
+def _render_plan_geometry(
+    svg: _Svg,
+    geometry: list[EmittedGeometry],
+    *,
+    overlay: bool,
+) -> None:
+    current_layer = ""
+    layer_open = False
+    for item in geometry:
+        if item.kind is GeometryKind.BOARD_OUTLINE:
+            continue
+        layer = item.layer
+        if layer != current_layer:
+            if layer_open:
+                svg.group_end()
+            current_layer = layer
+            layer_open = True
+            svg.group_start(attrs={"data-layer": layer, "class": f"{_layer_class(layer)} lyr"})
+        _render_plan_item(svg, item, overlay=overlay)
+    if layer_open:
+        svg.group_end()
+
+
+def _render_plan_item(svg: _Svg, item: EmittedGeometry, *, overlay: bool) -> None:
+    if item.kind is GeometryKind.PAD:
+        pad = cast("PcbPad", item.source)
+        _draw_pad(svg, pad, _plan_attrs(item, "pad", overlay=overlay))
+    elif item.kind is GeometryKind.TRACE:
+        segment = cast("PcbSegment", item.source)
+        svg.line(
+            segment.start_x,
+            segment.start_y,
+            segment.end_x,
+            segment.end_y,
+            segment.width,
+            attrs=_plan_attrs(item, "trace", overlay=overlay),
+        )
+    elif item.kind is GeometryKind.TRACE_ARC:
+        trace_arc = cast("PcbTraceArc", item.source)
+        d = _svg_arc_path_d(
+            trace_arc.start_x,
+            trace_arc.start_y,
+            trace_arc.mid_x,
+            trace_arc.mid_y,
+            trace_arc.end_x,
+            trace_arc.end_y,
+        )
+        svg.path(
+            d,
+            attrs={
+                **_plan_attrs(item, "trace-arc", overlay=overlay),
+                "stroke-width": f"{trace_arc.width:.4f}",
+            },
+        )
+    elif item.kind is GeometryKind.ZONE:
+        zone = cast("PcbPolygon | PcbZone", item.source)
+        points = zone.points if isinstance(zone, PcbPolygon) else zone.boundary
+        svg.polygon(points, attrs=_plan_attrs(item, "zone", overlay=overlay))
+    elif item.kind is GeometryKind.VIA:
+        via = cast("PcbVia", item.source)
+        svg.group_start(attrs=_plan_attrs(item, "via", overlay=overlay))
+        svg.circle(via.x, via.y, via.size / 2, attrs={"class": "annular"})
+        svg.circle(via.x, via.y, via.drill / 2, attrs={"class": "drill"})
+        svg.group_end()
+
+
+def _plan_attrs(item: EmittedGeometry, class_name: str, *, overlay: bool) -> dict[str, str]:
+    attrs = dict(item.attrs)
+    net_number = attrs.get("data-net-number", "")
+    classes = [class_name]
+    if net_number:
+        classes.append(_nn_class(int(net_number)))
+    if overlay:
+        classes.append("highlight")
+    attrs["class"] = " ".join(classes)
+    return attrs
+
+
+def _render_settings_uses_plan(render_settings: RenderSettings | None) -> bool:
+    return render_settings is not None and bool(render_settings.include.layers)
+
+
+def _settings_for_plan(
+    render_settings: RenderSettings,
+    *,
+    highlight_nets: list[str] | None,
+    highlight_components: list[str] | None,
+    highlight_specs: list[HighlightSpec] | None,
+    custom_css: str,
+) -> RenderSettings:
+    highlights = list(render_settings.highlights)
+    for net in highlight_nets or []:
+        highlight = HighlightSpec(net=net)
+        if highlight not in highlights:
+            highlights.append(highlight)
+    for component in highlight_components or []:
+        highlight = HighlightSpec(component=component)
+        if highlight not in highlights:
+            highlights.append(highlight)
+    for highlight in highlight_specs or []:
+        if highlight not in highlights:
+            highlights.append(highlight)
+    return replace(
+        render_settings,
+        highlights=highlights,
+        custom_css=custom_css or render_settings.custom_css,
+    )
+
+
 def _body_group_attrs(
     fp: PcbFootprint,
     component_attrs_fn: Callable[[str], dict[str, str]] | None = None,
@@ -1787,6 +2001,7 @@ def render_pcb_svg(
     theme: str = "review",
     custom_css: str = "",
     annotations: ResolvedAnnotations | None = None,
+    render_settings: RenderSettings | None = None,
 ) -> str:
     """Render a Pcb as a layered SVG string with CSS theming.
 
@@ -1816,6 +2031,18 @@ def render_pcb_svg(
     annotations:
         Resolved annotations to overlay on the board.
     """
+    if render_settings is not None and _render_settings_uses_plan(render_settings):
+        plan_settings = _settings_for_plan(
+            render_settings,
+            highlight_nets=highlight_nets,
+            highlight_components=highlight_components,
+            highlight_specs=highlight_specs,
+            custom_css=custom_css,
+        )
+        plan = build_render_plan(board, settings=plan_settings, side=side, width_px=width_px)
+        plan.annotations = annotations
+        return render_pcb_svg_from_plan(plan)
+
     # -- Resolve highlights ------------------------------------------------
     hl_net_nums: set[int] = set()
     hl_refs: set[str] = set()

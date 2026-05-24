@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import phosphor_eda.pcb_render as pcb_render_module
 from phosphor_eda.kicad.pcb_parser import parse_kicad_pcb
 from phosphor_eda.pcb import (
     LayerFunction,
@@ -32,6 +33,7 @@ from phosphor_eda.pcb_annotations import (
 )
 from phosphor_eda.pcb_render import (
     HighlightSpec,
+    RenderSettings,
     _cmp_class,  # pyright: ignore[reportPrivateUsage]
     _css_safe,  # pyright: ignore[reportPrivateUsage]
     _fmt_attrs,  # pyright: ignore[reportPrivateUsage]
@@ -201,6 +203,68 @@ def test_zone_attributes(board: Pcb) -> None:
 def test_component_body_attributes(board: Pcb) -> None:
     svg = render_pcb_svg(board)
     assert 'data-type="body"' in svg
+
+
+def test_print_callout_svg_omits_unhighlighted_traces(board: Pcb) -> None:
+    settings = load_render_settings_json('{"extends": "phosphor:print-callout"}')
+    svg = render_pcb_svg(
+        board,
+        side="front",
+        width_px=1200,
+        render_settings=settings,
+    )
+    assert 'class="trace ' not in svg
+    assert 'class="zone ' not in svg
+    assert 'data-type="pad"' in svg
+
+
+def test_print_callout_svg_keeps_highlighted_trace_overlay(board: Pcb) -> None:
+    settings = load_render_settings_json(
+        '{"extends": "phosphor:print-callout", '
+        '"highlights": [{"net": "/SWDIO_TMS", "color": "#c00000"}]}'
+    )
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+    assert 'class="highlight-overlay"' in svg
+    assert 'data-net="/SWDIO_TMS"' in svg
+
+
+def test_render_settings_plan_path_does_not_duplicate_settings_highlights(
+    board: Pcb,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = load_render_settings_json(
+        '{"extends": "phosphor:print-callout", '
+        '"highlights": [{"net": "/SWDIO_TMS", "color": "#c00000"}]}'
+    )
+    captured_highlights: list[list[HighlightSpec]] = []
+    original_build_render_plan = pcb_render_module.build_render_plan
+
+    def capture_build_render_plan(
+        board_arg: Pcb,
+        *,
+        settings: RenderSettings,
+        side: str,
+        width_px: int,
+    ) -> pcb_render_module.PcbRenderPlan:
+        captured_highlights.append(list(settings.highlights))
+        return original_build_render_plan(
+            board_arg,
+            settings=settings,
+            side=side,
+            width_px=width_px,
+        )
+
+    monkeypatch.setattr(pcb_render_module, "build_render_plan", capture_build_render_plan)
+
+    _ = render_pcb_svg(
+        board,
+        side="front",
+        width_px=1200,
+        render_settings=settings,
+        highlight_specs=settings.highlights,
+    )
+
+    assert captured_highlights == [settings.highlights]
 
 
 # ---------------------------------------------------------------------------
