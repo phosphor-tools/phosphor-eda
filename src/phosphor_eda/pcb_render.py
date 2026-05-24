@@ -1482,7 +1482,7 @@ def render_pcb_svg_from_plan(plan: PcbRenderPlan) -> str:
     if plan.annotations is not None:
         annotations = cast("ResolvedAnnotations", plan.annotations)
         svg.raw('<style id="annotations">')
-        svg.raw(_annotation_css(annotations.font_size))
+        svg.raw(_annotation_css(annotations.font_size, annotation_style=plan.annotation_style))
         svg.raw("</style>")
 
     active_clip = "board-clip"
@@ -1534,7 +1534,12 @@ def render_pcb_svg_from_plan(plan: PcbRenderPlan) -> str:
 
     if plan.annotations is not None:
         annotations = cast("ResolvedAnnotations", plan.annotations)
-        _render_annotations(svg, annotations, annotations.font_size)
+        _render_annotations(
+            svg,
+            annotations,
+            annotations.font_size,
+            annotation_style=plan.annotation_style,
+        )
 
     svg.raw("</svg>")
     return svg.build()
@@ -1796,7 +1801,11 @@ def _contrast_text_color(bg_color: str) -> str:
     return "#000" if luminance > 140 else "#fff"
 
 
-def _annotation_css(font_size: float) -> str:
+def _annotation_css(
+    font_size: float,
+    *,
+    annotation_style: dict[str, object] | None = None,
+) -> str:
     """CSS for pure-SVG annotation elements.
 
     Embeds a subset of Inter-Regular via @font-face so the rendered
@@ -1805,16 +1814,45 @@ def _annotation_css(font_size: float) -> str:
     onto the SVG viewBox, so all sizes here are in display pixels.
     """
     ff = _ANNOTATION_FONT_FAMILY
+    label_style = _annotation_part_style(annotation_style, "label")
+    connector_style = _annotation_part_style(annotation_style, "connector")
+    label_rules = [
+        f"font-family: {ff}",
+        f"font-weight: {_css_style_value(label_style.get('font_weight'), '500')}",
+        f"font-size: {font_size:.1f}px",
+    ]
+    label_fill = label_style.get("fill")
+    if isinstance(label_fill, str):
+        label_rules.append(f"fill: {label_fill}")
+    text_halo = label_style.get("text_halo")
+    if isinstance(text_halo, str):
+        label_rules.append(f"stroke: {text_halo}")
+        halo_width = _css_px_value(label_style.get("text_halo_width_px"))
+        if halo_width:
+            label_rules.append(f"stroke-width: {halo_width}")
+        label_rules.append("stroke-linejoin: round")
+        label_rules.append("paint-order: stroke fill")
+    pill_rules = ["stroke: none"]
+    if label_style.get("pill_visible") is False:
+        pill_rules.append("display: none")
+    connector_rules = ["fill: none", "stroke-linejoin: round"]
+    connector_stroke = connector_style.get("stroke")
+    if isinstance(connector_stroke, str):
+        connector_rules.append(f"stroke: {connector_stroke}")
+    connector_width = _css_px_value(connector_style.get("stroke_width_px"))
+    connector_rules.append(f"stroke-width: {connector_width or '2'}")
+    dot_rules: list[str] = []
+    if connector_style.get("dot_visible") is False:
+        dot_rules.append("display: none")
     return f"""\
 @font-face {{ font-family: "InterEmbed"; font-weight: 400;
   src: url("data:font/truetype;base64,{INTER_REGULAR_BASE64}") format("truetype"); }}
-.annotation-connector {{ stroke-width: 2; fill: none; }}
+.annotation-connector {{ {"; ".join(connector_rules)}; }}
 .annotation-box {{ stroke-width: 2; }}
-.annotation-pill {{ stroke: none; }}
-.annotation-pill--muted {{ stroke: none; }}
-.annotation-label-text {{ font-family: {ff};
-  font-weight: 500; font-size: {font_size:.1f}px; }}
-.annotation-dot {{}}
+.annotation-pill {{ {"; ".join(pill_rules)}; }}
+.annotation-pill--muted {{ {"; ".join(pill_rules)}; }}
+.annotation-label-text {{ {"; ".join(label_rules)}; }}
+.annotation-dot {{ {"; ".join(dot_rules)}; }}
 .legend-bg {{ fill: rgba(12,12,20,0.85); stroke: rgba(255,255,255,0.15);
   stroke-width: 4; paint-order: stroke fill; }}
 .legend-title-text {{ fill: #f0f0f0; font-family: {ff};
@@ -1824,10 +1862,36 @@ def _annotation_css(font_size: float) -> str:
   font-weight: 500; font-size: {font_size:.1f}px; }}"""
 
 
+def _annotation_part_style(
+    annotation_style: dict[str, object] | None,
+    part: str,
+) -> dict[str, object]:
+    if annotation_style is None:
+        return {}
+    style = annotation_style.get(part)
+    if not is_json_dict(style):
+        return {}
+    return dict(style)
+
+
+def _css_px_value(value: object) -> str:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"{float(value):.1f}px"
+    return value if isinstance(value, str) else ""
+
+
+def _css_style_value(value: object, default: str) -> str:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return f"{float(value):g}"
+    return value if isinstance(value, str) else default
+
+
 def _render_annotations(
     svg: _Svg,
     annotations: ResolvedAnnotations,
     font_size: float,
+    *,
+    annotation_style: dict[str, object] | None = None,
 ) -> None:
     """Emit all annotation elements as pure SVG.
 
@@ -1840,12 +1904,26 @@ def _render_annotations(
         attrs={"class": "annotations"},
         transform=f"scale({s:.6f})",
     )
+    connector_style = _annotation_part_style(annotation_style, "connector")
+    label_style = _annotation_part_style(annotation_style, "label")
     for box in annotations.boxes:
-        _render_box(svg, box, font_size)
+        _render_box(svg, box, font_size, connector_style=connector_style, label_style=label_style)
     for pointer in annotations.pointers:
-        _render_pointer(svg, pointer, font_size)
+        _render_pointer(
+            svg,
+            pointer,
+            font_size,
+            connector_style=connector_style,
+            label_style=label_style,
+        )
     for label in annotations.labels:
-        _render_label(svg, label, font_size)
+        _render_label(
+            svg,
+            label,
+            font_size,
+            connector_style=connector_style,
+            label_style=label_style,
+        )
     if annotations.legend is not None:
         _render_legend(svg, annotations.legend, font_size)
     svg.group_end()
@@ -1867,16 +1945,24 @@ def _render_connector(
     color: str,
     *,
     dot: bool = True,
+    connector_style: dict[str, object] | None = None,
 ) -> None:
     """Render an orthogonal connector path with an optional dot at the end."""
     if len(path) < 2:
         return
     d = _connector_path_d(path)
-    svg.path(d, attrs={"class": "annotation-connector", "style": f"stroke: {color}"})
+    stroke = connector_style.get("stroke") if connector_style is not None else None
+    stroke_color = stroke if isinstance(stroke, str) else color
+    svg.path(d, attrs={"class": "annotation-connector", "style": f"stroke: {stroke_color}"})
     if dot:
         tx, ty = path[-1]
         dot_r = 2.5  # pixels
-        svg.circle(tx, ty, dot_r, attrs={"class": "annotation-dot", "style": f"fill: {color}"})
+        svg.circle(
+            tx,
+            ty,
+            dot_r,
+            attrs={"class": "annotation-dot", "style": f"fill: {stroke_color}"},
+        )
 
 
 def _split_label_lines(text: str) -> list[str]:
@@ -1896,6 +1982,7 @@ def _render_pill_label(
     color: str,
     text_anchor: str = "middle",
     css_class: str = "annotation-pill",
+    label_style: dict[str, object] | None = None,
 ) -> None:
     """Render a pill-shaped label with solid color fill and contrast text."""
     rx = height / 2
@@ -1919,14 +2006,23 @@ def _render_pill_label(
 
     for i, line in enumerate(lines):
         ty = start_y + i * line_height
+        fill = label_style.get("fill") if label_style is not None else None
+        fill_attr = fill if isinstance(fill, str) else text_color
         svg.raw(
             f'<text x="{cx:.4f}" y="{ty:.4f}" text-anchor="{text_anchor}" '
-            f'class="annotation-label-text" fill="{text_color}">'
+            f'class="annotation-label-text" fill="{fill_attr}">'
             f"{xml_escape(line)}</text>"
         )
 
 
-def _render_box(svg: _Svg, box: ResolvedBox, font_size: float) -> None:
+def _render_box(
+    svg: _Svg,
+    box: ResolvedBox,
+    font_size: float,
+    *,
+    connector_style: dict[str, object],
+    label_style: dict[str, object],
+) -> None:
     """Render a solid box with semi-transparent fill and a margin label."""
     r, g, b = _parse_rgb(box.color)
     fill = f"rgba({r},{g},{b},0.15)"
@@ -1938,7 +2034,13 @@ def _render_box(svg: _Svg, box: ResolvedBox, font_size: float) -> None:
         attrs={"class": "annotation-box", "style": f"stroke: {box.color}; fill: {fill}"},
     )
     if box.label_text:
-        _render_connector(svg, box.connector_path, box.color, dot=False)
+        _render_connector(
+            svg,
+            box.connector_path,
+            box.color,
+            dot=False,
+            connector_style=connector_style,
+        )
         _render_pill_label(
             svg,
             box.label_x,
@@ -1949,13 +2051,26 @@ def _render_box(svg: _Svg, box: ResolvedBox, font_size: float) -> None:
             font_size,
             color=box.color,
             text_anchor=box.text_anchor,
+            label_style=label_style,
         )
 
 
-def _render_pointer(svg: _Svg, pointer: ResolvedPointer, font_size: float) -> None:
+def _render_pointer(
+    svg: _Svg,
+    pointer: ResolvedPointer,
+    font_size: float,
+    *,
+    connector_style: dict[str, object],
+    label_style: dict[str, object],
+) -> None:
     """Render a pointer with connector and margin label."""
     if pointer.label_text:
-        _render_connector(svg, pointer.connector_path, pointer.color)
+        _render_connector(
+            svg,
+            pointer.connector_path,
+            pointer.color,
+            connector_style=connector_style,
+        )
         _render_pill_label(
             svg,
             pointer.label_x,
@@ -1966,15 +2081,33 @@ def _render_pointer(svg: _Svg, pointer: ResolvedPointer, font_size: float) -> No
             font_size,
             color=pointer.color,
             text_anchor=pointer.text_anchor,
+            label_style=label_style,
         )
     elif pointer.connector_path:
-        _render_connector(svg, pointer.connector_path, pointer.color)
+        _render_connector(
+            svg,
+            pointer.connector_path,
+            pointer.color,
+            connector_style=connector_style,
+        )
 
 
-def _render_label(svg: _Svg, label: ResolvedLabel, font_size: float) -> None:
+def _render_label(
+    svg: _Svg,
+    label: ResolvedLabel,
+    font_size: float,
+    *,
+    connector_style: dict[str, object],
+    label_style: dict[str, object],
+) -> None:
     """Render a label with optional connector to its target."""
     if label.connector_path:
-        _render_connector(svg, label.connector_path, "rgba(180,180,200,0.5)")
+        _render_connector(
+            svg,
+            label.connector_path,
+            "rgba(180,180,200,0.5)",
+            connector_style=connector_style,
+        )
     if label.label_text:
         _render_pill_label(
             svg,
@@ -1987,6 +2120,7 @@ def _render_label(svg: _Svg, label: ResolvedLabel, font_size: float) -> None:
             color="rgba(60,60,80,0.9)",
             text_anchor=label.text_anchor,
             css_class="annotation-pill annotation-pill--muted",
+            label_style=label_style,
         )
 
 

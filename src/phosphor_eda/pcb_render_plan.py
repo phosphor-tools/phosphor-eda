@@ -18,6 +18,7 @@ from phosphor_eda.pcb import (
     PcbVia,
     PcbZone,
 )
+from phosphor_eda.pcb_render_settings import is_json_dict
 
 if TYPE_CHECKING:
     from phosphor_eda.pcb_render_settings import LayerIncludeRule, RenderSettings, StyleRule
@@ -260,6 +261,7 @@ def build_render_plan(
         view_box=ViewBox(vb_x, vb_y, vb_w, vb_h),
         board_bbox=(bx0, by0, bx1, by1),
         clip=ClipPlan(board_path_d=board_path_d, drill_path_d=_build_drill_path(board, transform)),
+        annotation_style=_annotation_style_for_settings(settings),
         custom_css=settings.custom_css,
     )
 
@@ -589,6 +591,19 @@ def _style_for_geometry(
         ):
             style.update(rule.style)
     return style
+
+
+def _annotation_style_for_settings(settings: RenderSettings) -> dict[str, object]:
+    styles: dict[str, object] = {}
+    for rule in settings.style_rules:
+        annotation = rule.match.get("annotation")
+        if not isinstance(annotation, str) or not rule.style:
+            continue
+        current = styles.get(annotation)
+        merged: dict[str, object] = dict(current) if is_json_dict(current) else {}
+        merged.update(rule.style)
+        styles[annotation] = merged
+    return styles
 
 
 def _style_rule_matches(

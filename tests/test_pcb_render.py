@@ -1168,6 +1168,41 @@ def test_swd_switch_annotation_end_to_end(board: Pcb) -> None:
     assert "SWD Enable" in svg
 
 
+def test_annotation_label_style_rule_emits_halo_css_or_attrs(board: Pcb) -> None:
+    from phosphor_eda.pcb_annotations import parse_annotations, resolve_annotations
+
+    settings = load_render_settings_json(
+        json.dumps(
+            {
+                "extends": "phosphor:print-callout",
+                "annotations": {"pointers": [{"target": "TP3.1", "label": "SWD"}]},
+            }
+        )
+    )
+    spec = parse_annotations(settings.annotations)
+    annotations = resolve_annotations(
+        spec,
+        board,
+        "front",
+        width_px=800,
+        font_size=settings.font_size,
+    )
+
+    svg = render_pcb_svg(board, annotations=annotations, render_settings=settings)
+
+    assert "font-size: 80.0px" in svg
+    assert "stroke-linejoin: round" in svg
+    assert ".annotation-label-text" in svg
+    assert "stroke: #fff" in svg
+    assert "stroke-width: 6.0px" in svg
+    assert "fill: #000" in svg
+    assert ".annotation-pill { stroke: none; display: none; }" in svg
+    assert ".annotation-connector" in svg
+    assert "stroke: #333" in svg
+    assert "stroke-width: 4.0px" in svg
+    assert ".annotation-dot { display: none; }" in svg
+
+
 def test_resolve_annotations_uses_requested_font_size(board: Pcb) -> None:
     """Annotation resolution should size label layout from requested display px."""
     from phosphor_eda.pcb_annotations import parse_annotations, resolve_annotations
@@ -1509,7 +1544,9 @@ def test_print_callout_extends_print_style_rules() -> None:
     assert settings.style_rules[0].match == {"object": "board_outline"}
     assert settings.style_rules[0].style["stroke"] == "#444"
     assert settings.style_rules[1].match == {"annotation": "label"}
+    assert settings.style_rules[1].style["pill_visible"] is False
     assert settings.style_rules[2].match == {"annotation": "connector"}
+    assert settings.style_rules[2].style["dot_visible"] is False
 
 
 def test_render_settings_extends_merges_v2_policy(tmp_path: Path) -> None:
