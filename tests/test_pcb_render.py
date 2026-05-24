@@ -69,17 +69,16 @@ def test_valid_svg(board: Pcb) -> None:
     assert svg.strip().endswith("</svg>")
 
 
-def test_has_theme_style(board: Pcb) -> None:
+def test_has_base_style(board: Pcb) -> None:
     svg = render_pcb_svg(board)
-    assert '<style id="theme">' in svg
+    assert '<style id="base">' in svg
 
 
-def test_print_theme_css_is_print_friendly(board: Pcb) -> None:
-    svg = render_pcb_svg(board, theme="print")
+def test_default_render_style_is_print_friendly(board: Pcb) -> None:
+    svg = render_pcb_svg(board)
     assert ".board-fill { fill: transparent" in svg
-    assert "stroke: #444" in svg
-    assert ".annotation-label-text" in svg
-    assert ".annotation-pill, .annotation-dot { display: none" in svg
+    assert "stroke: #111" in svg
+    assert ".highlight-overlay .trace" in svg
 
 
 def test_has_board_clip(board: Pcb) -> None:
@@ -398,50 +397,24 @@ def _make_board_with_inner_layers() -> Pcb:
     )
 
 
-def test_review_theme_hides_inner_copper() -> None:
-    """Review theme hides inner copper layers when no highlights are active."""
+def test_default_render_does_not_hide_inner_copper_with_css() -> None:
+    """Layer omission is no longer driven by theme display rules."""
     board = _make_board_with_inner_layers()
-    svg = render_pcb_svg(board, theme="review")
-    assert "g.layer-In1-Cu { display: none; }" in svg
+    svg = render_pcb_svg(board)
+    assert "display: none" not in svg
 
 
-def test_review_highlight_restores_inner_layer_visibility() -> None:
-    """Highlighting a net in review theme overrides display:none on inner layers."""
+def test_highlight_does_not_emit_visibility_restore_css() -> None:
+    """Highlights no longer restore hidden groups through CSS."""
     board = _make_board_with_inner_layers()
-    svg = render_pcb_svg(board, theme="review", highlight_nets=["SIG"])
-    assert "display: inline !important" in svg
-    assert "g.layer-In1-Cu { display: inline !important; }" in svg
-
-
-def test_clean_highlight_restores_all_copper_visibility() -> None:
-    """Highlighting a net in clean theme restores all copper, via, and silk groups."""
-    board = _make_board_with_inner_layers()
-    svg = render_pcb_svg(board, theme="clean", highlight_nets=["SIG"])
-    assert "g.layer-F-Cu { display: inline !important; }" in svg
-    assert "g.layer-In1-Cu { display: inline !important; }" in svg
-    assert "g.layer-B-Cu { display: inline !important; }" in svg
-    assert "g.layer-vias { display: inline !important; }" in svg
-    assert "g.layer-F-SilkS { display: inline !important; }" in svg
-
-
-def test_clean_highlight_component_restores_copper() -> None:
-    """Component highlight in clean theme still restores copper for pads."""
-    board = _make_board_with_inner_layers()
-    svg = render_pcb_svg(board, theme="clean", highlight_components=["U1"])
-    assert "g.layer-F-Cu { display: inline !important; }" in svg
-
-
-def test_design_highlight_restores_fab_visibility() -> None:
-    """Design theme hides fab groups; highlights restore them."""
-    board = _make_board_with_inner_layers()
-    svg = render_pcb_svg(board, theme="design", highlight_nets=["SIG"])
-    assert "g.layer-F-Fab { display: inline !important; }" in svg
+    svg = render_pcb_svg(board, highlight_nets=["SIG"])
+    assert "display: inline !important" not in svg
 
 
 def test_highlight_overlay_renders_above_zones() -> None:
     """Highlighted traces are in an overlay group that paints after all layers."""
     board = _make_board_with_inner_layers()
-    svg = render_pcb_svg(board, theme="review", highlight_nets=["SIG"])
+    svg = render_pcb_svg(board, highlight_nets=["SIG"])
     # Overlay group exists and contains highlighted traces
     assert 'class="highlight-overlay"' in svg
     assert "nn-1" in svg  # net 1 = SIG
@@ -454,7 +427,7 @@ def test_highlight_overlay_renders_above_zones() -> None:
 def test_highlight_overlay_contains_all_layers() -> None:
     """Overlay includes traces from every copper layer the highlighted net touches."""
     board = _make_board_with_inner_layers()
-    svg = render_pcb_svg(board, theme="review", highlight_nets=["SIG"])
+    svg = render_pcb_svg(board, highlight_nets=["SIG"])
     overlay_start = svg.index('class="highlight-overlay"')
     overlay = svg[overlay_start:]
     # SIG net has segments on F.Cu, In1.Cu, and B.Cu
@@ -466,7 +439,7 @@ def test_highlight_overlay_contains_all_layers() -> None:
 def test_highlight_overlay_includes_vias() -> None:
     """Highlighted vias appear in the overlay group."""
     board = _make_board_with_inner_layers()
-    svg = render_pcb_svg(board, theme="review", highlight_nets=["SIG"])
+    svg = render_pcb_svg(board, highlight_nets=["SIG"])
     overlay_start = svg.index('class="highlight-overlay"')
     overlay = svg[overlay_start:]
     assert "annular" in overlay
@@ -475,7 +448,7 @@ def test_highlight_overlay_includes_vias() -> None:
 def test_highlight_overlay_includes_pads() -> None:
     """Highlighted pads appear in the overlay group."""
     board = _make_board_with_inner_layers()
-    svg = render_pcb_svg(board, theme="review", highlight_nets=["SIG"])
+    svg = render_pcb_svg(board, highlight_nets=["SIG"])
     overlay_start = svg.index('class="highlight-overlay"')
     overlay = svg[overlay_start:]
     assert "pad" in overlay
@@ -493,7 +466,7 @@ def test_highlight_overlay_includes_zones() -> None:
             net_name="SIG",
         )
     )
-    svg = render_pcb_svg(board, theme="review", highlight_nets=["SIG"])
+    svg = render_pcb_svg(board, highlight_nets=["SIG"])
     overlay_start = svg.index('class="highlight-overlay"')
     overlay = svg[overlay_start:]
     assert "zone" in overlay
@@ -502,7 +475,7 @@ def test_highlight_overlay_includes_zones() -> None:
 def test_component_highlight_overlay_renders_pads_on_top() -> None:
     """Component highlights re-render matching pads in the top overlay."""
     board = _make_board_with_inner_layers()
-    svg = render_pcb_svg(board, theme="review", highlight_components=["U1"])
+    svg = render_pcb_svg(board, highlight_components=["U1"])
     overlay_start = svg.index('class="highlight-overlay"')
     last_fab = svg.rindex('data-layer="F.Fab"')
     assert overlay_start > last_fab
@@ -531,7 +504,7 @@ def test_component_highlight_overlay_renders_after_ref_text() -> None:
         )
     )
 
-    svg = render_pcb_svg(board, theme="review", highlight_components=["U1"])
+    svg = render_pcb_svg(board, highlight_components=["U1"])
 
     ref_text_start = svg.index('class="ref-text')
     overlay_start = svg.index('class="highlight-overlay"')
@@ -541,16 +514,15 @@ def test_component_highlight_overlay_renders_after_ref_text() -> None:
 def test_no_highlight_overlay_without_highlights() -> None:
     """No overlay group when no highlights are active."""
     board = _make_board_with_inner_layers()
-    svg = render_pcb_svg(board, theme="review")
-    assert "highlight-overlay" not in svg
+    svg = render_pcb_svg(board)
+    assert 'class="highlight-overlay"' not in svg
 
 
 def test_no_visibility_override_without_highlights() -> None:
-    """Without highlights, no display overrides are emitted for any theme."""
+    """Without highlights, no display overrides are emitted."""
     board = _make_board_with_inner_layers()
-    for theme in ("design", "review", "clean"):
-        svg = render_pcb_svg(board, theme=theme)
-        assert "display: inline !important" not in svg, f"theme={theme}"
+    svg = render_pcb_svg(board)
+    assert "display: inline !important" not in svg
 
 
 # ---------------------------------------------------------------------------
@@ -1533,7 +1505,6 @@ def test_bundled_print_callout_uses_v2_settings(tmp_path: Path) -> None:
 def test_bundled_render_settings_use_v2_settings(name: str) -> None:
     settings = load_render_settings_json(json.dumps({"extends": f"phosphor:{name}"}))
 
-    assert settings.theme == ""
     assert settings.include.layers
     assert settings.style_rules
 
@@ -1696,7 +1667,6 @@ def test_highlight_net_with_color() -> None:
     board = _make_board_with_inner_layers()
     svg = render_pcb_svg(
         board,
-        theme="review",
         highlight_specs=[HighlightSpec(net="SIG", color="#d4a843")],
     )
     assert 'style id="highlight"' in svg
@@ -1712,7 +1682,6 @@ def test_highlight_net_without_color_uses_layer_defaults() -> None:
     board = _make_board_with_inner_layers()
     svg = render_pcb_svg(
         board,
-        theme="review",
         highlight_specs=[HighlightSpec(net="SIG")],
     )
     assert 'style id="highlight"' in svg
@@ -1786,7 +1755,6 @@ def test_highlight_mixed_colors_and_defaults() -> None:
     )
     svg = render_pcb_svg(
         board,
-        theme="review",
         highlight_specs=[
             HighlightSpec(net="NET_A", color="#ff0000"),
             HighlightSpec(net="NET_B"),
@@ -1803,7 +1771,6 @@ def test_highlight_component_with_color() -> None:
     board = _make_board_with_inner_layers()
     svg = render_pcb_svg(
         board,
-        theme="review",
         highlight_specs=[HighlightSpec(component="U1", color="#5b8abf")],
     )
     assert 'style id="highlight"' in svg
@@ -1817,7 +1784,6 @@ def test_highlight_pad_with_color_renders_top_overlay() -> None:
     board = _make_board_with_inner_layers()
     svg = render_pcb_svg(
         board,
-        theme="review",
         highlight_specs=[HighlightSpec(pad="U1.1", color="#e0115f")],
     )
 
@@ -1837,7 +1803,6 @@ def test_highlight_specs_merge_with_flags() -> None:
     board = _make_board_with_inner_layers()
     svg = render_pcb_svg(
         board,
-        theme="review",
         highlight_nets=["SIG"],
         highlight_specs=[HighlightSpec(component="U1")],
     )
@@ -1857,7 +1822,7 @@ class TestClassBasedSelectors:
 
     def test_no_attribute_selectors_in_style(self, board: Pcb) -> None:
         """No attribute selectors should appear in any <style> block."""
-        svg = render_pcb_svg(board, theme="review", highlight_nets=["VCC"])
+        svg = render_pcb_svg(board, highlight_nets=["VCC"])
         # Extract all <style> blocks
         style_blocks = re.findall(r"<style[^>]*>(.*?)</style>", svg, re.DOTALL)
         css = "\n".join(style_blocks)
@@ -1973,7 +1938,7 @@ class TestClassBasedSelectors:
         assert "[data-component" not in css
 
     def test_dim_css_uses_lyr_class(self) -> None:
-        """Dim rules use g.lyr selector to match theme specificity."""
+        """Dim rules use g.lyr selector to match base style specificity."""
         board = _make_board_with_inner_layers()
         svg = render_pcb_svg(board, highlight_nets=["SIG"])
         style_blocks = re.findall(r"<style[^>]*>(.*?)</style>", svg, re.DOTALL)
@@ -1993,24 +1958,21 @@ class TestClassBasedSelectors:
         bare = re.findall(r"(?<![-\w])opacity:", highlight_css)
         assert bare == [], f"bare opacity found: {bare}"
 
-    def test_theme_css_uses_paint_opacity(self) -> None:
-        """Theme CSS must use stroke-opacity/fill-opacity, not bare opacity."""
+    def test_base_css_uses_paint_opacity(self) -> None:
+        """Base CSS must use stroke-opacity/fill-opacity, not bare opacity."""
         board = _make_board_with_inner_layers()
-        for theme in ("design", "review", "clean", "print"):
-            svg = render_pcb_svg(board, theme=theme)
-            style_blocks = re.findall(r"<style[^>]*>(.*?)</style>", svg, re.DOTALL)
-            theme_css = style_blocks[0]
-            bare = re.findall(r"(?<![-\w])opacity:", theme_css)
-            assert bare == [], f"theme={theme}: bare opacity found in theme CSS: {bare}"
-
-    def test_clean_theme_uses_pfx_class(self) -> None:
-        """Clean theme hides passives via .pfx-R etc., not [data-component^=]."""
-        board = _make_board_with_component(ref="R1", lib="R_0402", value="10k")
-        svg = render_pcb_svg(board, theme="clean")
+        svg = render_pcb_svg(board)
         style_blocks = re.findall(r"<style[^>]*>(.*?)</style>", svg, re.DOTALL)
-        css = "\n".join(style_blocks)
-        assert ".pfx-R" in css
-        assert '[data-component^="R"]' not in css
+        base_css = style_blocks[0]
+        bare = re.findall(r"(?<![-\w])opacity:", base_css)
+        assert bare == [], f"bare opacity found in base CSS: {bare}"
+
+    def test_passive_prefix_class_uses_pfx_class(self) -> None:
+        """Passive metadata uses .pfx-R etc., not [data-component^=]."""
+        board = _make_board_with_component(ref="R1", lib="R_0402", value="10k")
+        svg = render_pcb_svg(board)
+        assert "pfx-R" in svg
+        assert '[data-component^="R"]' not in svg
 
     def test_data_attrs_still_present(self) -> None:
         """data-* attributes are preserved on elements for query/tooling use."""

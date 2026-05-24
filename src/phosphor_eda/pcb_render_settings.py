@@ -59,7 +59,6 @@ class StyleRule:
 class RenderSettings:
     """Unified render configuration parsed from render-settings JSON."""
 
-    theme: str = ""
     side: str = ""
     width: int = 0
     font_size: float = 0.0

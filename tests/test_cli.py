@@ -340,12 +340,12 @@ def test_cli_render_custom_css_file_option_is_removed() -> None:
     assert "No such option: --custom-css-file" in result.output
 
 
-def test_cli_render_accepts_print_theme() -> None:
+def test_cli_render_theme_option_is_removed() -> None:
     runner = CliRunner()
     result = runner.invoke(main, ["pcb", "render", "--theme", "print", PCB_FILE])
 
-    assert result.exit_code == 0, result.output
-    assert ".board-fill { fill: transparent" in result.output
+    assert result.exit_code != 0
+    assert "No such option: --theme" in result.output
 
 
 def test_cli_render_supports_highlight_pad() -> None:
@@ -620,8 +620,8 @@ def test_cli_render_settings_non_object(tmp_path: Path) -> None:
     assert "must be an object" in result.output
 
 
-def test_cli_render_settings_invalid_theme(tmp_path: Path) -> None:
-    """Invalid theme in render settings produces a clear error."""
+def test_cli_render_settings_rejects_theme(tmp_path: Path) -> None:
+    """Unsupported theme in render settings produces a clear error."""
     settings_file = tmp_path / "bad.json"
     settings_file.write_text(json.dumps({"theme": "neon"}))
 

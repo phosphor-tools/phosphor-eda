@@ -1,8 +1,8 @@
-"""Render a Pcb as layered SVG with CSS theming.
+"""Render a Pcb as layered SVG from structured render settings.
 
 Emits an SVG with layer groups, data-* attributes on every element, and
-a <style> block for theming.  Highlights, layer visibility, and colors
-are all controlled via CSS — downstream JS can restyle without re-rendering.
+style blocks for render-time paint rules and custom CSS. Highlights,
+layer visibility, and geometry omission are resolved before SVG emission.
 
 No external dependencies — SVG is built via string formatting.
 """
@@ -13,7 +13,6 @@ import json
 import math
 import re
 from collections import defaultdict
-from collections.abc import Callable
 from dataclasses import replace
 from importlib.resources import files
 from pathlib import Path
@@ -49,6 +48,8 @@ from phosphor_eda.pcb_render_settings import (
 from phosphor_eda.text_metrics import BASELINE_CENTER_OFFSET, INTER_REGULAR_BASE64
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from phosphor_eda.pcb import (
         Pcb,
         PcbArc,
@@ -911,7 +912,7 @@ def _pfx_class(ref: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# CSS theme
+# Render styles
 # ---------------------------------------------------------------------------
 
 # Colors assigned by layer function + side, not by layer name.
@@ -927,13 +928,6 @@ _COPPER_COLOR_INNER = [
     "#3ec8c8",
     "#c83ec8",
 ]
-_SILK_COLOR_FRONT = "#f2eda1"
-_SILK_COLOR_BACK = "#e8b2a7"
-_FAB_COLOR_FRONT = "#afafaf"
-_FAB_COLOR_BACK = "#585d84"
-_EDGE_COLOR = "#d0d2cd"
-_VIA_COLOR = "#e3b72e"
-
 _COPPER_FALLBACK = "#b87333"
 
 
@@ -946,346 +940,11 @@ def _copper_color(layer: PcbLayer, inner_index: int) -> str:
     return _COPPER_COLOR_INNER[inner_index % len(_COPPER_COLOR_INNER)]
 
 
-def _silk_color(layer: PcbLayer) -> str:
-    return _SILK_COLOR_FRONT if layer.side == "front" else _SILK_COLOR_BACK
-
-
-def _fab_color(layer: PcbLayer) -> str:
-    return _FAB_COLOR_FRONT if layer.side == "front" else _FAB_COLOR_BACK
-
-
-def _design_theme_css(side: str, layers: list[PcbLayer]) -> str:
-    """Return the design-mode CSS theme for the SVG.
-
-    Design mode shows the board as an EDA editor would: dark background,
-    board outline visible, no solder mask fill, distinct colors per layer.
-    """
-    copper = [lyr for lyr in layers if lyr.function == LayerFunction.COPPER]
-    silk = [lyr for lyr in layers if lyr.function == LayerFunction.SILKSCREEN]
-    fab = [lyr for lyr in layers if lyr.function == LayerFunction.FAB]
-    opposite = "back" if side == "front" else "front"
-
-    rules: list[str] = []
-    rules.append("/* Board — design mode uses outline only, no solder mask fill */")
-    rules.append(f".board-fill {{ fill: none; stroke: {_EDGE_COLOR}; stroke-width: 0.15; }}")
-    rules.append("")
-
-    rules.append("/* Copper layers */")
-    inner_idx = 0
-    for layer in copper:
-        cls = _layer_class(layer.name)
-        color = _copper_color(layer, inner_idx)
-        if not layer.side:
-            inner_idx += 1
-        rules.append(f"g.{cls} .trace {{ stroke: {color}; stroke-linecap: round; fill: none; }}")
-        rules.append(
-            f"g.{cls} .trace-arc {{ stroke: {color}; stroke-linecap: round; fill: none; }}"
-        )
-        rules.append(f"g.{cls} .pad {{ fill: {color}; }}")
-        rules.append(f"g.{cls} .zone {{ fill: {color}; fill-opacity: 0.35; }}")
-
-    rules.append("")
-    rules.append("/* Vias */")
-    rules.append(f".via .annular {{ fill: {_VIA_COLOR}; }}")
-    rules.append(".via .drill { fill: #111111; }")
-
-    rules.append("")
-    rules.append("/* Silkscreen */")
-    for layer in silk:
-        cls = _layer_class(layer.name)
-        color = _silk_color(layer)
-        rules.append(f"g.{cls} .silk {{ stroke: {color}; stroke-linecap: round; fill: none; }}")
-
-    rules.append("")
-    rules.append("/* Fab / component bodies */")
-    for layer in fab:
-        cls = _layer_class(layer.name)
-        color = _fab_color(layer)
-        rules.append(
-            f"g.{cls} .body {{ fill: none; stroke: {color};"
-            f" stroke-width: 0.1; stroke-linejoin: round; }}"
-        )
-        rules.append(f"g.{cls} .body-circle {{ fill: none; stroke: {color}; }}")
-        rules.append(f"g.{cls} .body-circle-filled {{ fill: {color}; }}")
-        rules.append(f"g.{cls} .body-arc {{ fill: none; stroke: {color}; stroke-linecap: round; }}")
-        rules.append(f"g.{cls} .ref-text {{ fill: {color}; }}")
-
-    rules.append("")
-    rules.append("/* Ref text (outside layer groups) */")
-    rules.append(f".ref-text {{ fill: {_FAB_COLOR_FRONT}; }}")
-
-    # Design mode: hide opposite-side silk + all fab layers
-    rules.append("")
-    rules.append("/* Side visibility — design mode hides opposite silk + all fab */")
-    for layer in silk:
-        if layer.side == opposite:
-            rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
-    for layer in fab:
-        rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
-
-    return "\n".join(rules)
-
-
-_SOLDER_MASK_GREEN = "#1a5c2a"
-_BODY_FILL = "#3d3530"
-_BODY_STROKE = "#5a504a"
-
-
-def _review_theme_css(side: str, layers: list[PcbLayer]) -> str:
-    """Return the review-mode CSS theme for the SVG.
-
-    Realistic top-down view: green solder mask over copper, exposed pads
-    in copper color, white silkscreen, dark component bodies.
-    """
-    copper = [lyr for lyr in layers if lyr.function == LayerFunction.COPPER]
-    silk = [lyr for lyr in layers if lyr.function == LayerFunction.SILKSCREEN]
-    fab = [lyr for lyr in layers if lyr.function == LayerFunction.FAB]
-    opposite = "back" if side == "front" else "front"
-
-    rules: list[str] = []
-
-    rules.append("/* Board — green solder mask */")
-    rules.append(f".board-fill {{ fill: {_SOLDER_MASK_GREEN}; stroke: none; }}")
-    rules.append("")
-
-    rules.append("/* Copper under solder mask — dimmed */")
-    for layer in copper:
-        cls = _layer_class(layer.name)
-        rules.append(
-            f"g.{cls} .trace, g.{cls} .trace-arc "
-            f"{{ stroke: #145222; stroke-linecap: round; fill: none; stroke-opacity: 0.6; }}"
-        )
-        rules.append(f"g.{cls} .pad {{ fill: #b87333; }}")
-        rules.append(f"g.{cls} .zone {{ fill: #145222; fill-opacity: 0.3; }}")
-
-    rules.append("")
-    rules.append("/* Vias */")
-    rules.append(".via .annular { fill: #c0c0c0; }")
-    rules.append(f".via .drill {{ fill: {_SOLDER_MASK_GREEN}; }}")
-
-    rules.append("")
-    rules.append("/* Silkscreen — white */")
-    for layer in silk:
-        cls = _layer_class(layer.name)
-        rules.append(f"g.{cls} .silk {{ stroke: #ffffffcc; stroke-linecap: round; fill: none; }}")
-
-    rules.append("")
-    rules.append("/* Component bodies */")
-    for layer in fab:
-        cls = _layer_class(layer.name)
-        rules.append(
-            f"g.{cls} .body {{ fill: {_BODY_FILL}; stroke: {_BODY_STROKE}; "
-            f"stroke-width: 0.06; stroke-linejoin: round; }}"
-        )
-        rules.append(f"g.{cls} .body-circle {{ fill: none; stroke: {_BODY_STROKE}; }}")
-        rules.append(f"g.{cls} .body-circle-filled {{ fill: {_BODY_STROKE}; }}")
-        rules.append(
-            f"g.{cls} .body-arc {{ fill: none; stroke: {_BODY_STROKE}; stroke-linecap: round; }}"
-        )
-    rules.append(".ref-text { fill: #ffffffcc; }")
-
-    # Hide opposite-side copper, inner copper, opposite silk, opposite fab
-    rules.append("")
-    rules.append("/* Layer visibility — single side + fab */")
-    for layer in copper:
-        if layer.side == opposite or not layer.side:
-            rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
-    for layer in silk:
-        if layer.side == opposite:
-            rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
-    for layer in fab:
-        if layer.side == opposite:
-            rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
-
-    return "\n".join(rules)
-
-
-def _clean_theme_css(side: str, layers: list[PcbLayer]) -> str:
-    """Return the clean/documentation CSS theme for the SVG.
-
-    Documentation view: green board, no copper/vias/silkscreen, hides
-    passive components (R/C/L/TP), shows only ICs and connectors with
-    ref labels.
-    """
-    copper = [lyr for lyr in layers if lyr.function == LayerFunction.COPPER]
-    silk = [lyr for lyr in layers if lyr.function == LayerFunction.SILKSCREEN]
-    fab = [lyr for lyr in layers if lyr.function == LayerFunction.FAB]
-    opposite = "back" if side == "front" else "front"
-
-    rules: list[str] = []
-
-    rules.append("/* Board — green solder mask */")
-    rules.append(f".board-fill {{ fill: {_SOLDER_MASK_GREEN}; stroke: none; }}")
-    rules.append("")
-
-    rules.append("/* Hide copper, vias, silkscreen */")
-    for layer in copper:
-        rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
-    rules.append("g.layer-vias { display: none; }")
-    for layer in silk:
-        rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
-
-    rules.append("")
-    rules.append("/* Hide passive component bodies and labels */")
-    for prefix in _PASSIVE_PREFIXES:
-        pfx = f"pfx-{prefix}"
-        rules.append(f"g.{pfx} {{ display: none; }}")
-        rules.append(f".ref-text.{pfx} {{ display: none; }}")
-
-    rules.append("")
-    rules.append("/* Component bodies — dark */")
-    for layer in fab:
-        cls = _layer_class(layer.name)
-        rules.append(
-            f"g.{cls} .body {{ fill: {_BODY_FILL}; stroke: {_BODY_STROKE}; "
-            f"stroke-width: 0.06; stroke-linejoin: round; }}"
-        )
-    rules.append(".ref-text { fill: #ffffffee; }")
-
-    # Hide opposite-side fab
-    rules.append("")
-    rules.append("/* Layer visibility — only same-side fab */")
-    for layer in fab:
-        if layer.side == opposite:
-            rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
-
-    return "\n".join(rules)
-
-
-def _print_theme_css(side: str, layers: list[PcbLayer]) -> str:
-    """Return a paper-friendly high-contrast CSS theme for the SVG."""
-    copper = [lyr for lyr in layers if lyr.function == LayerFunction.COPPER]
-    silk = [lyr for lyr in layers if lyr.function == LayerFunction.SILKSCREEN]
-    fab = [lyr for lyr in layers if lyr.function == LayerFunction.FAB]
-    opposite = "back" if side == "front" else "front"
-
-    rules: list[str] = []
-
-    rules.append("/* Board — paper-friendly outline */")
-    rules.append(".board-fill { fill: transparent; stroke: #444; stroke-width: 0.12; }")
-    rules.append("")
-
-    rules.append("/* Copper — high contrast grayscale */")
-    for layer in copper:
-        cls = _layer_class(layer.name)
-        rules.append(f"g.{cls} .trace {{ stroke: #222; stroke-linecap: round; fill: none; }}")
-        rules.append(f"g.{cls} .trace-arc {{ stroke: #222; stroke-linecap: round; fill: none; }}")
-        rules.append(f"g.{cls} .pad {{ fill: #111; stroke: #fff; stroke-width: 0.03; }}")
-        rules.append(f"g.{cls} .zone {{ fill: #777; fill-opacity: 0.18; }}")
-
-    rules.append("")
-    rules.append("/* Vias */")
-    rules.append(".via .annular { fill: #222; }")
-    rules.append(".via .drill { fill: #fff; }")
-
-    rules.append("")
-    rules.append("/* Silkscreen */")
-    for layer in silk:
-        cls = _layer_class(layer.name)
-        rules.append(f"g.{cls} .silk {{ stroke: #444; stroke-linecap: round; fill: none; }}")
-
-    rules.append("")
-    rules.append("/* Component bodies */")
-    for layer in fab:
-        cls = _layer_class(layer.name)
-        rules.append(
-            f"g.{cls} .body {{ fill: none; stroke: #444; "
-            f"stroke-width: 0.08; stroke-linejoin: round; }}"
-        )
-        rules.append(f"g.{cls} .body-circle {{ fill: none; stroke: #444; }}")
-        rules.append(f"g.{cls} .body-circle-filled {{ fill: #555; }}")
-        rules.append(f"g.{cls} .body-arc {{ fill: none; stroke: #444; stroke-linecap: round; }}")
-    rules.append(".ref-text { fill: #222; }")
-
-    rules.append("")
-    rules.append("/* Print annotations — text-first, no filled pills/dots */")
-    rules.append(".annotation-label-text { fill: #111; }")
-    rules.append(".annotation-connector, .annotation-box { stroke: #111; }")
-    rules.append(".annotation-pill, .annotation-dot { display: none; }")
-
-    rules.append("")
-    rules.append("/* Layer visibility — single side + fab */")
-    for layer in copper:
-        if layer.side == opposite or not layer.side:
-            rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
-    for layer in silk:
-        if layer.side == opposite:
-            rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
-    for layer in fab:
-        if layer.side == opposite:
-            rules.append(f"g.{_layer_class(layer.name)} {{ display: none; }}")
-
-    return "\n".join(rules)
-
-
-_ThemeFn = Callable[[str, list[PcbLayer]], str]
-
-_THEME_CSS_FN: dict[str, _ThemeFn] = {
-    "design": _design_theme_css,
-    "review": _review_theme_css,
-    "clean": _clean_theme_css,
-    "print": _print_theme_css,
-}
-
-THEME_NAMES: list[str] = list(_THEME_CSS_FN.keys())
-
-
-def _theme_css(theme: str, side: str, layers: list[PcbLayer]) -> str:
-    """Dispatch to the appropriate theme CSS function."""
-    fn = _THEME_CSS_FN.get(theme, _design_theme_css)
-    return fn(side, layers)
-
-
-def _theme_hidden_layer_classes(theme: str, side: str, layers: list[PcbLayer]) -> set[str]:
-    """Return CSS class names for groups hidden by the theme via ``display: none``.
-
-    Includes layer groups, passive-prefix groups, and any other elements
-    the theme hides.  The highlight CSS emits ``display: inline !important``
-    for each returned class to make highlighted content visible.
-    """
-    opposite = "back" if side == "front" else "front"
-    copper = [lyr for lyr in layers if lyr.function == LayerFunction.COPPER]
-    silk = [lyr for lyr in layers if lyr.function == LayerFunction.SILKSCREEN]
-    fab = [lyr for lyr in layers if lyr.function == LayerFunction.FAB]
-
-    if theme in {"review", "print"}:
-        hidden: set[str] = set()
-        for lyr in copper:
-            if lyr.side == opposite or not lyr.side:
-                hidden.add(_layer_class(lyr.name))
-        for lyr in silk + fab:
-            if lyr.side == opposite:
-                hidden.add(_layer_class(lyr.name))
-        return hidden
-    if theme == "clean":
-        hidden = {_layer_class(lyr.name) for lyr in copper}
-        hidden.add("layer-vias")
-        for lyr in silk:
-            hidden.add(_layer_class(lyr.name))
-        for lyr in fab:
-            if lyr.side == opposite:
-                hidden.add(_layer_class(lyr.name))
-        # Passive body groups and ref-text are hidden via pfx-* classes
-        for prefix in _PASSIVE_PREFIXES:
-            hidden.add(f"pfx-{prefix}")
-        return hidden
-    if theme == "design":
-        hidden = set[str]()
-        for lyr in silk:
-            if lyr.side == opposite:
-                hidden.add(_layer_class(lyr.name))
-        for lyr in fab:
-            hidden.add(_layer_class(lyr.name))
-        return hidden
-    return set()
-
-
 def _highlight_css(
     hl_net_nums: set[int],
     hl_refs: set[str],
     hl_pads: set[tuple[str, str]],
     copper_layers: list[PcbLayer],
-    hidden_layer_classes: set[str] | None = None,
     net_colors: dict[int, str] | None = None,
     component_colors: dict[str, str] | None = None,
     pad_colors: dict[tuple[str, str], str] | None = None,
@@ -1296,11 +955,6 @@ def _highlight_css(
     Component highlights restore pads, bodies, and ref text for
     matching components.  The two are independent — specify both to see
     a component *and* its connected traces.
-
-    ``hidden_layer_classes`` lists CSS class names for layer ``<g>`` groups
-    that the theme hides with ``display: none``.  The highlight block must
-    override that to make highlighted content visible — a child's
-    ``opacity: 1 !important`` has no effect when the parent is hidden.
 
     ``net_colors`` maps net numbers to CSS colors.  Nets with an entry get
     that color for traces and pads; nets without fall back to the layer's
@@ -1315,16 +969,6 @@ def _highlight_css(
     _net_colors = net_colors or {}
     _component_colors = component_colors or {}
     _pad_colors = pad_colors or {}
-
-    # -- Restore visibility on groups hidden by the theme ----------------------
-    if hidden_layer_classes:
-        rules.append("/* Restore visibility on theme-hidden groups */")
-        for cls in sorted(hidden_layer_classes):
-            rules.append(f"g.{cls} {{ display: inline !important; }}")
-            # Passive-prefix classes also hide ref-text elements
-            if cls.startswith("pfx-"):
-                rules.append(f".ref-text.{cls} {{ display: inline !important; }}")
-        rules.append("")
 
     rules.append("/* Dim non-highlighted elements */")
     rules.append("g.lyr .trace, g.lyr .trace-arc { stroke-opacity: 0.12; fill-opacity: 0.12; }")
@@ -1472,7 +1116,7 @@ def render_pcb_svg_from_plan(plan: PcbRenderPlan) -> str:
         f'width="{plan.width_px}" height="{plan.height_px}" '
         f'viewBox="{view_box.x:.4f} {view_box.y:.4f} {view_box.width:.4f} {view_box.height:.4f}">'
     )
-    svg.raw('<style id="theme">')
+    svg.raw('<style id="base">')
     svg.raw(_plan_svg_css())
     svg.raw("</style>")
     if plan.custom_css:
@@ -2195,12 +1839,11 @@ def render_pcb_svg(
     highlight_components: list[str] | None = None,
     highlight_specs: list[HighlightSpec] | None = None,
     width_px: int = 800,
-    theme: str = "review",
     custom_css: str = "",
     annotations: ResolvedAnnotations | None = None,
     render_settings: RenderSettings | None = None,
 ) -> str:
-    """Render a Pcb as a layered SVG string with CSS theming.
+    """Render a Pcb as a layered SVG string from structured render settings.
 
     Parameters
     ----------
@@ -2217,12 +1860,8 @@ def render_pcb_svg(
         Merged with ``highlight_nets``/``highlight_components``.
     width_px:
         Pixel width of the SVG.
-    theme:
-        CSS theme: "design" (EDA view), "review" (realistic), or
-        "clean" (documentation — hides copper/passives), or "print"
-        (paper-friendly high contrast).
     custom_css:
-        Extra CSS injected after the theme and highlight styles.
+        Extra CSS injected after structured render styles.
         Overrides any built-in rule.  Useful for board mask recoloring,
         layer visibility, etc.
     annotations:
@@ -2394,13 +2033,12 @@ def render_pcb_svg(
         f'viewBox="{vb_x:.4f} {vb_y:.4f} {vb_w:.4f} {vb_h:.4f}">'
     )
 
-    # -- CSS theme ---------------------------------------------------------
-    svg.raw('<style id="theme">')
-    svg.raw(_theme_css(theme, side, board.layers))
+    # -- Structured base style ---------------------------------------------
+    svg.raw('<style id="base">')
+    svg.raw(_plan_svg_css())
     svg.raw("</style>")
 
     if has_hl:
-        hidden = _theme_hidden_layer_classes(theme, side, board.layers)
         svg.raw('<style id="highlight">')
         svg.raw(
             _highlight_css(
@@ -2408,7 +2046,6 @@ def render_pcb_svg(
                 hl_refs,
                 hl_pad_targets,
                 copper_layers,
-                hidden,
                 net_colors=net_colors or None,
                 component_colors=component_colors or None,
                 pad_colors=pad_colors or None,
