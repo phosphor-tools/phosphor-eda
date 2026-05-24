@@ -14,13 +14,18 @@ import math
 import re
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeGuard
+from typing import TYPE_CHECKING, Any
 from xml.sax.saxutils import escape as xml_escape
 
 from phosphor_eda.pcb import LayerFunction, PcbLayer
+from phosphor_eda.pcb_render_settings import (
+    HighlightSpec,
+    RenderSettings,
+    is_json_dict,
+    parse_render_settings,
+)
 from phosphor_eda.text_metrics import BASELINE_CENTER_OFFSET, INTER_REGULAR_BASE64
 
 if TYPE_CHECKING:
@@ -43,151 +48,9 @@ if TYPE_CHECKING:
         ResolvedPointer,
     )
 
-# ---------------------------------------------------------------------------
-# Render settings
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class HighlightSpec:
-    """A single net, component, or pad to highlight, with an optional color."""
-
-    net: str = ""
-    component: str = ""
-    pad: str = ""
-    color: str = ""
-
-
-@dataclass
-class RenderSettings:
-    """Unified render configuration — theme, highlights, annotations, CSS.
-
-    Parsed from the ``--render-settings`` JSON file.  All fields are optional;
-    omitted fields fall back to CLI defaults.
-    """
-
-    theme: str = ""
-    side: str = ""
-    width: int = 0
-    font_size: float = 0.0
-    highlights: list[HighlightSpec] = field(default_factory=list)
-    annotations: dict[str, Any] = field(default_factory=dict)
-    custom_css: str = ""
-
-
 _BUNDLED_SETTINGS_PACKAGE = "phosphor_eda.render_settings"
 _PHOSPHOR_SETTINGS_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _SETTINGS_EXTENDS_KEY = "extends"
-
-
-def is_json_dict(v: object) -> TypeGuard[dict[str, object]]:
-    """Narrow an object to ``dict[str, object]``.
-
-    ``isinstance(x, dict)`` narrows to ``dict[Unknown, Unknown]`` in
-    basedpyright strict.  This TypeGuard gives a properly-typed dict.
-    """
-    return isinstance(v, dict)
-
-
-def is_json_list(v: object) -> TypeGuard[list[object]]:
-    """Narrow an object to ``list[object]`` (see ``is_json_dict``)."""
-    return isinstance(v, list)
-
-
-def parse_render_settings(data: dict[str, Any]) -> RenderSettings:
-    """Parse a render-settings JSON dict into a ``RenderSettings`` object.
-
-    Raises ``ValueError`` on invalid input.
-    """
-    settings = RenderSettings()
-
-    if _SETTINGS_EXTENDS_KEY in data:
-        extends = data[_SETTINGS_EXTENDS_KEY]
-        if not isinstance(extends, str):
-            msg = "extends must be a string"
-            raise ValueError(msg)
-
-    if "theme" in data:
-        theme = data["theme"]
-        if not isinstance(theme, str) or theme not in THEME_NAMES:
-            allowed = "', '".join(THEME_NAMES)
-            msg = f"theme must be one of '{allowed}', got {theme!r}"
-            raise ValueError(msg)
-        settings.theme = theme
-
-    if "side" in data:
-        side = data["side"]
-        if not isinstance(side, str) or side not in ("front", "back"):
-            msg = f"side must be 'front' or 'back', got {side!r}"
-            raise ValueError(msg)
-        settings.side = side
-
-    if "width" in data:
-        width = data["width"]
-        if not isinstance(width, int) or isinstance(width, bool) or width <= 0:
-            msg = f"width must be a positive integer, got {width!r}"
-            raise ValueError(msg)
-        settings.width = width
-
-    if "font_size" in data:
-        font_size = data["font_size"]
-        if (
-            not isinstance(font_size, int | float)
-            or isinstance(font_size, bool)
-            or not math.isfinite(font_size)
-            or font_size < 1
-            or font_size > 500
-        ):
-            msg = f"font_size must be a number from 1 to 500, got {font_size!r}"
-            raise ValueError(msg)
-        settings.font_size = float(font_size)
-
-    if "highlights" in data:
-        raw_highlights = data["highlights"]
-        if not is_json_list(raw_highlights):
-            msg = "highlights must be an array"
-            raise ValueError(msg)
-        for i, item in enumerate(raw_highlights):
-            if not is_json_dict(item):
-                msg = f"highlights[{i}] must be an object"
-                raise ValueError(msg)
-            # Validate field types before extracting
-            for field in ("net", "component", "pad", "color"):
-                if field in item and not isinstance(item[field], str):
-                    msg = f"highlights[{i}].{field} must be a string"
-                    raise ValueError(msg)
-            net = str(item.get("net", ""))
-            component = str(item.get("component", ""))
-            pad = str(item.get("pad", ""))
-            has_net = bool(net)
-            has_comp = bool(component)
-            has_pad = bool(pad)
-            if sum((has_net, has_comp, has_pad)) != 1:
-                msg = f"highlights[{i}] must have exactly one of 'net', 'component', or 'pad'"
-                raise ValueError(msg)
-            if has_pad and not _is_pad_target(pad):
-                msg = f"highlights[{i}].pad must be '<component>.<pad>', got {pad!r}"
-                raise ValueError(msg)
-            color = str(item.get("color", ""))
-            settings.highlights.append(
-                HighlightSpec(net=net, component=component, pad=pad, color=color)
-            )
-
-    if "annotations" in data:
-        ann = data["annotations"]
-        if not isinstance(ann, dict):
-            msg = "annotations must be an object"
-            raise ValueError(msg)
-        settings.annotations = ann
-
-    if "custom_css" in data:
-        css = data["custom_css"]
-        if not isinstance(css, str):
-            msg = "custom_css must be a string"
-            raise ValueError(msg)
-        settings.custom_css = css
-
-    return settings
 
 
 def load_render_settings_file(path: Path) -> RenderSettings:
@@ -822,7 +685,6 @@ def _nn_class(net_number: int) -> str:
 
 
 _CSS_SAFE_RE = re.compile(r"[^A-Za-z0-9_-]")
-_PAD_TARGET_RE = re.compile(r"^[^.]+\..+$")
 _DEFAULT_PAD_HIGHLIGHT_COLOR = "#eab308"
 
 
@@ -839,11 +701,6 @@ def _cmp_class(ref: str) -> str:
 def _pad_class(ref: str, pad_number: str) -> str:
     """CSS class for a component pad target: padref-{sanitized_ref.pad}."""
     return f"padref-{_css_safe(f'{ref}.{pad_number}')}"
-
-
-def _is_pad_target(target: str) -> bool:
-    """Return True when a pad target has '<component>.<pad>' shape."""
-    return bool(_PAD_TARGET_RE.fullmatch(target))
 
 
 def _split_pad_target(target: str) -> tuple[str, str]:

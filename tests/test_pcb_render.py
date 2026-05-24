@@ -1099,34 +1099,125 @@ class TestParseRenderSettings:
 
     def test_empty_object(self) -> None:
         settings = parse_render_settings({})
-        assert settings.theme == ""
         assert settings.side == ""
         assert settings.width == 0
         assert settings.font_size == 0.0
         assert settings.highlights == []
+        assert settings.include.vias == "visible"
+        assert settings.include.layers == []
+        assert settings.highlight_behavior == {}
+        assert settings.style_rules == []
         assert settings.annotations == {}
         assert settings.custom_css == ""
 
-    def test_accepts_print_theme(self) -> None:
-        settings = parse_render_settings({"theme": "print"})
-        assert settings.theme == "print"
+    def test_render_settings_rejects_theme(self) -> None:
+        with pytest.raises(ValueError, match="theme"):
+            parse_render_settings({"theme": "print"})
+
+    def test_render_settings_accepts_font_size_px(self) -> None:
+        settings = parse_render_settings({"font_size_px": 72})
+        assert settings.font_size == 72
+
+    def test_render_settings_accepts_include_policy(self) -> None:
+        settings = parse_render_settings(
+            {
+                "include": {
+                    "board_outline": "visible",
+                    "drills": "visible",
+                    "vias": "when-highlighted",
+                    "layers": [
+                        {
+                            "role": "copper",
+                            "side": "active",
+                            "objects": {
+                                "pads": "visible",
+                                "traces": "when-highlighted",
+                                "zones": "hidden",
+                            },
+                        }
+                    ],
+                }
+            }
+        )
+        assert settings.include.vias == "when-highlighted"
+        assert settings.include.layers[0].objects["traces"] == "when-highlighted"
+
+    def test_render_settings_rejects_unknown_include_state(self) -> None:
+        with pytest.raises(ValueError, match=r"include\.layers\[0\]\.objects\.traces"):
+            parse_render_settings(
+                {
+                    "include": {
+                        "layers": [
+                            {
+                                "role": "copper",
+                                "objects": {"traces": "sometimes"},
+                            }
+                        ]
+                    }
+                }
+            )
+
+    def test_render_settings_rejects_unqualified_style_size(self) -> None:
+        with pytest.raises(ValueError, match="stroke_width"):
+            parse_render_settings(
+                {
+                    "style_rules": [
+                        {
+                            "match": {"object": "trace"},
+                            "style": {"stroke_width": 4},
+                        }
+                    ]
+                }
+            )
+
+    def test_render_settings_rejects_mm_and_mil_for_same_style_field(self) -> None:
+        with pytest.raises(ValueError, match="stroke_width"):
+            parse_render_settings(
+                {
+                    "style_rules": [
+                        {
+                            "match": {"object": "trace"},
+                            "style": {"stroke_width_mm": 0.2, "stroke_width_mil": 8},
+                        }
+                    ]
+                }
+            )
+
+    def test_render_settings_rejects_px_and_physical_style_units(self) -> None:
+        with pytest.raises(ValueError, match="text_halo_width"):
+            parse_render_settings(
+                {
+                    "style_rules": [
+                        {
+                            "match": {"object": "annotation-label"},
+                            "style": {"text_halo_width_px": 6, "text_halo_width_mm": 0.2},
+                        }
+                    ]
+                }
+            )
 
     def test_all_fields(self) -> None:
         data = {
-            "theme": "review",
             "side": "back",
             "width": 1200,
-            "font_size": 24,
+            "font_size_px": 24,
             "highlights": [
                 {"net": "VBUS", "color": "#ff0000"},
                 {"component": "U1"},
                 {"pad": "CN11.30", "color": "#00ff00"},
             ],
+            "include": {"vias": "hidden"},
+            "highlight_behavior": {"overlay": True, "dim_unhighlighted": False},
+            "style_rules": [
+                {
+                    "match": {"object": "pad"},
+                    "style": {"stroke_width_mm": 0.03},
+                }
+            ],
             "annotations": {"boxes": [{"targets": ["U1"], "label": "MCU"}]},
             "custom_css": ".board-fill { fill: red; }",
         }
         settings = parse_render_settings(data)
-        assert settings.theme == "review"
         assert settings.side == "back"
         assert settings.width == 1200
         assert settings.font_size == 24.0
@@ -1137,12 +1228,12 @@ class TestParseRenderSettings:
         assert settings.highlights[1].color == ""
         assert settings.highlights[2].pad == "CN11.30"
         assert settings.highlights[2].color == "#00ff00"
+        assert settings.include.vias == "hidden"
+        assert settings.highlight_behavior == {"overlay": True, "dim_unhighlighted": False}
+        assert settings.style_rules[0].match == {"object": "pad"}
+        assert settings.style_rules[0].style == {"stroke_width_mm": 0.03}
         assert settings.annotations == data["annotations"]
         assert settings.custom_css == ".board-fill { fill: red; }"
-
-    def test_invalid_theme(self) -> None:
-        with pytest.raises(ValueError, match="theme"):
-            parse_render_settings({"theme": "neon"})
 
     def test_invalid_side(self) -> None:
         with pytest.raises(ValueError, match="side"):
@@ -1154,18 +1245,21 @@ class TestParseRenderSettings:
 
     def test_invalid_font_size(self) -> None:
         with pytest.raises(ValueError, match="font_size"):
-            parse_render_settings({"font_size": 0})
+            parse_render_settings({"font_size": 24})
 
         with pytest.raises(ValueError, match="font_size"):
-            parse_render_settings({"font_size": True})
+            parse_render_settings({"font_size_px": 0})
 
         with pytest.raises(ValueError, match="font_size"):
-            parse_render_settings({"font_size": 501})
+            parse_render_settings({"font_size_px": True})
+
+        with pytest.raises(ValueError, match="font_size"):
+            parse_render_settings({"font_size_px": 501})
 
     @pytest.mark.parametrize("font_size", [math.nan, math.inf, -math.inf])
     def test_invalid_font_size_must_be_finite(self, font_size: float) -> None:
         with pytest.raises(ValueError, match="font_size"):
-            parse_render_settings({"font_size": font_size})
+            parse_render_settings({"font_size_px": font_size})
 
     def test_highlight_missing_net_and_component(self) -> None:
         with pytest.raises(ValueError, match="exactly one of 'net', 'component', or 'pad'"):
@@ -1221,8 +1315,8 @@ def test_load_render_settings_file_extends_local_file(tmp_path: Path) -> None:
     base.write_text(
         json.dumps(
             {
-                "theme": "print",
                 "width": 1200,
+                "font_size_px": 48,
                 "custom_css": ".base { color: black; }",
                 "annotations": {"legend": {"title": "Base", "entries": []}},
             }
@@ -1243,8 +1337,8 @@ def test_load_render_settings_file_extends_local_file(tmp_path: Path) -> None:
 
     settings = load_render_settings_file(child)
 
-    assert settings.theme == "print"
     assert settings.width == 2400
+    assert settings.font_size == 48
     assert settings.custom_css == ".base { color: black; }\n.child { color: red; }"
     assert settings.highlights == [HighlightSpec(pad="TP3.1", color="#c00000")]
     assert settings.annotations == {
@@ -1259,18 +1353,14 @@ def test_load_render_settings_file_extends_packaged_settings(tmp_path: Path) -> 
         json.dumps(
             {
                 "extends": "phosphor:print-callout",
-                "font_size": 72,
+                "font_size_px": 72,
                 "custom_css": ".annotation-connector { stroke-width: 6; }",
             }
         )
     )
 
-    settings = load_render_settings_file(child)
-
-    assert settings.theme == "print"
-    assert settings.font_size == 72
-    assert ".annotation-label-text" in settings.custom_css
-    assert ".annotation-connector { stroke-width: 6; }" in settings.custom_css
+    with pytest.raises(ValueError, match="theme|font_size"):
+        load_render_settings_file(child)
 
 
 def test_load_render_settings_file_detects_extend_cycles(tmp_path: Path) -> None:

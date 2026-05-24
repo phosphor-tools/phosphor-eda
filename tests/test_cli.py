@@ -445,9 +445,8 @@ def test_cli_render_settings_inline_custom_css_is_injected(tmp_path: Path) -> No
 
 
 def test_cli_render_settings_from_file(tmp_path: Path) -> None:
-    """--render-settings loads theme, highlights, and annotations from a JSON file."""
+    """--render-settings loads highlights and annotations from a JSON file."""
     settings = {
-        "theme": "review",
         "highlights": [{"net": "/SWDIO_TMS"}],
         "annotations": {
             "pointers": [{"target": "TP3", "label": "SWD"}],
@@ -471,7 +470,7 @@ def test_cli_render_settings_from_file(tmp_path: Path) -> None:
 
 def test_cli_render_settings_font_size_sets_annotation_size(tmp_path: Path) -> None:
     settings = {
-        "font_size": 24,
+        "font_size_px": 24,
         "annotations": {
             "pointers": [{"target": "TP3", "label": "SWD"}],
         },
@@ -491,10 +490,10 @@ def test_cli_render_settings_font_size_sets_annotation_size(tmp_path: Path) -> N
     assert "font-size: 24.0px" in svg
 
 
-def test_cli_render_settings_extends_packaged_settings(tmp_path: Path) -> None:
+def test_cli_render_settings_rejects_old_packaged_settings_until_v2(tmp_path: Path) -> None:
     settings = {
         "extends": "phosphor:print-callout",
-        "font_size": 64,
+        "font_size_px": 64,
         "annotations": {
             "pointers": [{"target": "TP3.1", "label": "SWD"}],
         },
@@ -509,16 +508,14 @@ def test_cli_render_settings_extends_packaged_settings(tmp_path: Path) -> None:
         ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file), "-o", str(out_file)],
     )
 
-    assert result.exit_code == 0, result.output
-    svg = out_file.read_text()
-    assert ".board-fill { fill: transparent" in svg
-    assert "font-size: 64.0px" in svg
-    assert "paint-order: stroke fill" in svg
+    assert result.exit_code != 0
+    assert "Render settings error:" in result.output
+    assert "font_size" in result.output or "theme" in result.output
 
 
 def test_cli_font_size_overrides_render_settings(tmp_path: Path) -> None:
     settings = {
-        "font_size": 12,
+        "font_size_px": 12,
         "annotations": {
             "pointers": [{"target": "TP3", "label": "SWD"}],
         },
@@ -552,7 +549,6 @@ def test_cli_font_size_overrides_render_settings(tmp_path: Path) -> None:
 def test_cli_render_settings_from_stdin(tmp_path: Path) -> None:
     """--render-settings - reads JSON from stdin."""
     settings = {
-        "theme": "review",
         "highlights": [{"net": "/SWDIO_TMS"}],
     }
     out_file = tmp_path / "out.svg"
@@ -572,7 +568,6 @@ def test_cli_render_settings_from_stdin(tmp_path: Path) -> None:
 def test_cli_render_settings_with_highlight_colors(tmp_path: Path) -> None:
     """Highlight colors from render settings appear in the SVG CSS."""
     settings = {
-        "theme": "review",
         "highlights": [
             {"net": "/SWDIO_TMS", "color": "#d4a843"},
             {"net": "/SWDCLK_TCK", "color": "#5b8abf"},
