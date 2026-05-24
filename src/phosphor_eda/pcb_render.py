@@ -1511,12 +1511,12 @@ def render_pcb_svg_from_plan(plan: PcbRenderPlan) -> str:
     bx0, by0, bx1, by1 = plan.board_bbox
     if plan.clip is not None:
         svg.raw(f'<g clip-path="url(#{active_clip})">')
-        svg.raw(f'<path d="{plan.clip.board_path_d}" class="board-fill"/>')
+        svg.path(plan.clip.board_path_d, attrs=_board_fill_attrs(board_outline))
         svg.group_end()
     elif board_outline is not None:
         svg.polygon(
             [(point.x, point.y) for point in board_outline.points],
-            attrs={"class": "board-fill", **board_outline.attrs},
+            attrs=_board_fill_attrs(board_outline),
         )
     else:
         svg.rect(bx0, by0, bx1 - bx0, by1 - by0, attrs={"class": "board-fill"})
@@ -1585,18 +1585,21 @@ def _render_plan_item(svg: _Svg, item: EmittedGeometry, *, overlay: bool) -> Non
         if item.points:
             center = item.points[0]
             pad = replace(pad, x=center.x, y=center.y)
+        pad = _style_expanded_pad(pad, item.style)
         _draw_pad(svg, pad, _plan_attrs(item, "pad", overlay=overlay))
     elif item.kind is GeometryKind.TRACE:
         segment = cast("PcbSegment", item.source)
         start = item.points[0] if len(item.points) >= 1 else None
         end = item.points[1] if len(item.points) >= 2 else None
+        attrs = _plan_attrs(item, "trace", overlay=overlay)
+        attrs.pop("stroke-width", None)
         svg.line(
             start.x if start is not None else segment.start_x,
             start.y if start is not None else segment.start_y,
             end.x if end is not None else segment.end_x,
             end.y if end is not None else segment.end_y,
-            segment.width,
-            attrs=_plan_attrs(item, "trace", overlay=overlay),
+            _style_stroke_width(item.style, segment.width),
+            attrs=attrs,
         )
     elif item.kind is GeometryKind.TRACE_ARC:
         trace_arc = cast("PcbTraceArc", item.source)
@@ -1615,7 +1618,7 @@ def _render_plan_item(svg: _Svg, item: EmittedGeometry, *, overlay: bool) -> Non
             d,
             attrs={
                 **_plan_attrs(item, "trace-arc", overlay=overlay),
-                "stroke-width": f"{trace_arc.width:.4f}",
+                "stroke-width": f"{_style_stroke_width(item.style, trace_arc.width):.4f}",
             },
         )
     elif item.kind is GeometryKind.ZONE:
@@ -1648,7 +1651,50 @@ def _plan_attrs(item: EmittedGeometry, class_name: str, *, overlay: bool) -> dic
     if overlay:
         classes.append("highlight")
     attrs["class"] = " ".join(classes)
+    attrs.update(_style_svg_attrs(item.style))
     return attrs
+
+
+def _board_fill_attrs(board_outline: EmittedGeometry | None) -> dict[str, str]:
+    if board_outline is None:
+        return {"class": "board-fill"}
+    attrs = dict(board_outline.attrs)
+    attrs["class"] = "board-fill"
+    attrs.update(_style_svg_attrs(board_outline.style))
+    return attrs
+
+
+def _style_svg_attrs(style: dict[str, object]) -> dict[str, str]:
+    attrs: dict[str, str] = {}
+    for style_key, attr_key in (
+        ("fill", "fill"),
+        ("stroke", "stroke"),
+        ("opacity", "opacity"),
+        ("stroke_width_mm", "stroke-width"),
+    ):
+        value = style.get(style_key)
+        if isinstance(value, str):
+            attrs[attr_key] = value
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            attrs[attr_key] = f"{float(value):.4f}"
+    return attrs
+
+
+def _style_stroke_width(style: dict[str, object], default_width: float) -> float:
+    value = style.get("stroke_width_mm")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return default_width
+
+
+def _style_expanded_pad(pad: PcbPad, style: dict[str, object]) -> PcbPad:
+    value = style.get("pad_expansion_mm")
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return pad
+    expansion = float(value)
+    if expansion == 0:
+        return pad
+    return replace(pad, width=pad.width + 2 * expansion, height=pad.height + 2 * expansion)
 
 
 def _render_settings_uses_plan(render_settings: RenderSettings | None) -> bool:

@@ -365,3 +365,33 @@ def test_back_side_plan_uses_rendered_view_x_coordinates() -> None:
     assert front_pad.points[0].x != highlighted_pad.points[0].x
     assert highlighted_pad.points[0].x == 118.5
     assert highlighted_pad.points[0].y == 64.5
+
+
+def test_style_rule_can_target_specific_pad() -> None:
+    board = parse_kicad_pcb(FIXTURE)
+    settings = load_render_settings_json(
+        '{"extends": "phosphor:print-callout", '
+        '"style_rules": ['
+        '{"match": {"pad": "TP3.1"}, '
+        '"style": {"fill": "#123456", "pad_expansion_mm": 0.25}}'
+        "]}",
+    )
+
+    plan = build_render_plan(board, settings=settings, side="back", width_px=1200)
+
+    target_pad = next(
+        geometry
+        for geometry in plan.base
+        if geometry.kind is GeometryKind.PAD
+        and geometry.attrs.get("data-component") == "TP3"
+        and geometry.attrs.get("data-pad") == "1"
+    )
+    other_pad = next(
+        geometry
+        for geometry in plan.base
+        if geometry.kind is GeometryKind.PAD
+        and (geometry.attrs.get("data-component") != "TP3" or geometry.attrs.get("data-pad") != "1")
+    )
+
+    assert target_pad.style == {"fill": "#123456", "pad_expansion_mm": 0.25}
+    assert other_pad.style == {}

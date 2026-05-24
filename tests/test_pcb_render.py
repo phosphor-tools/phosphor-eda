@@ -286,6 +286,20 @@ def test_render_settings_plan_path_does_not_duplicate_settings_highlights(
     assert captured_highlights == [settings.highlights]
 
 
+def test_structured_style_rule_emits_direct_attributes(board: Pcb) -> None:
+    settings = load_render_settings_json(
+        '{"extends": "phosphor:print-callout", '
+        '"style_rules": ['
+        '{"match": {"pad": "TP3.1"}, '
+        '"style": {"fill": "#123456", "pad_expansion_mm": 0.25}}'
+        "]}",
+    )
+
+    svg = render_pcb_svg(board, side="back", width_px=1200, render_settings=settings)
+
+    assert 'fill="#123456"' in svg
+
+
 # ---------------------------------------------------------------------------
 # Highlight tests
 # ---------------------------------------------------------------------------

@@ -20,7 +20,7 @@ from phosphor_eda.pcb import (
 )
 
 if TYPE_CHECKING:
-    from phosphor_eda.pcb_render_settings import LayerIncludeRule, RenderSettings
+    from phosphor_eda.pcb_render_settings import LayerIncludeRule, RenderSettings, StyleRule
 
 
 class GeometryKind(StrEnum):
@@ -276,6 +276,14 @@ def build_render_plan(
                 reason=InclusionReason.VISIBLE,
                 points=_outline_points(outline_lines, outline_arcs),
                 clipped=False,
+                style=_style_for_geometry(
+                    settings,
+                    kind=GeometryKind.BOARD_OUTLINE,
+                    layer=PcbLayer("Edge.Cuts", LayerFunction.EDGE),
+                    attrs={"data-type": "board-outline"},
+                    highlighted=False,
+                    active_side=side,
+                ),
             )
         )
     elif settings.include.board_outline != "never":
@@ -376,6 +384,14 @@ def build_render_plan(
             points=(transform.point(via.x, via.y),),
         )
         if state == "visible":
+            geometry.style = _style_for_geometry(
+                settings,
+                kind=geometry.kind,
+                layer=None,
+                attrs=geometry.attrs,
+                highlighted=highlighted,
+                active_side=side,
+            )
             plan.base.append(geometry)
         elif state == "when-highlighted" and highlighted:
             plan.overlay.append(
@@ -386,6 +402,14 @@ def build_render_plan(
                     reason=InclusionReason.HIGHLIGHT,
                     source=geometry.source,
                     points=geometry.points,
+                    style=_style_for_geometry(
+                        settings,
+                        kind=geometry.kind,
+                        layer=None,
+                        attrs=geometry.attrs,
+                        highlighted=True,
+                        active_side=side,
+                    ),
                 )
             )
         elif state != "never":
@@ -476,6 +500,14 @@ def _include_geometry(
         reason=InclusionReason.VISIBLE,
         source=source,
         points=points,
+        style=_style_for_geometry(
+            settings,
+            kind=kind,
+            layer=layer,
+            attrs=attrs,
+            highlighted=highlighted,
+            active_side=active_side,
+        ),
     )
     if state == "visible":
         plan.base.append(visible_geometry)
@@ -488,6 +520,14 @@ def _include_geometry(
                     reason=InclusionReason.HIGHLIGHT,
                     source=source,
                     points=points,
+                    style=_style_for_geometry(
+                        settings,
+                        kind=kind,
+                        layer=layer,
+                        attrs=attrs,
+                        highlighted=True,
+                        active_side=active_side,
+                    ),
                 )
             )
         return
@@ -500,6 +540,14 @@ def _include_geometry(
                 reason=InclusionReason.HIGHLIGHT,
                 source=source,
                 points=points,
+                style=_style_for_geometry(
+                    settings,
+                    kind=kind,
+                    layer=layer,
+                    attrs=attrs,
+                    highlighted=True,
+                    active_side=active_side,
+                ),
             )
         )
         return
@@ -518,6 +566,97 @@ def _object_include_state(
             continue
         return rule.objects.get(object_name, rule.objects.get("*", "hidden"))
     return "hidden"
+
+
+def _style_for_geometry(
+    settings: RenderSettings,
+    *,
+    kind: GeometryKind,
+    layer: PcbLayer | None,
+    attrs: dict[str, str],
+    highlighted: bool,
+    active_side: str,
+) -> dict[str, object]:
+    style: dict[str, object] = {}
+    for rule in settings.style_rules:
+        if _style_rule_matches(
+            rule,
+            kind=kind,
+            layer=layer,
+            attrs=attrs,
+            highlighted=highlighted,
+            active_side=active_side,
+        ):
+            style.update(rule.style)
+    return style
+
+
+def _style_rule_matches(
+    rule: StyleRule,
+    *,
+    kind: GeometryKind,
+    layer: PcbLayer | None,
+    attrs: dict[str, str],
+    highlighted: bool,
+    active_side: str,
+) -> bool:
+    for key, expected in rule.match.items():
+        if not _style_match_field(
+            key,
+            expected,
+            kind=kind,
+            layer=layer,
+            attrs=attrs,
+            highlighted=highlighted,
+            active_side=active_side,
+        ):
+            return False
+    return True
+
+
+def _style_match_field(
+    key: str,
+    expected: object,
+    *,
+    kind: GeometryKind,
+    layer: PcbLayer | None,
+    attrs: dict[str, str],
+    highlighted: bool,
+    active_side: str,
+) -> bool:
+    if key == "object":
+        return expected == kind.value
+    if key == "role":
+        return layer is not None and expected == layer_role(layer)
+    if key == "side":
+        return _style_side_matches(expected, layer, active_side)
+    if key == "name":
+        return layer is not None and expected == layer.name
+    if key == "net":
+        return expected in (attrs.get("data-net"), attrs.get("data-net-number"))
+    if key == "component":
+        return expected == attrs.get("data-component")
+    if key == "pad":
+        component = attrs.get("data-component")
+        pad = attrs.get("data-pad")
+        return component is not None and pad is not None and expected == f"{component}.{pad}"
+    if key == "highlight":
+        return expected is highlighted
+    if key == "annotation":
+        return False
+    return False
+
+
+def _style_side_matches(expected: object, layer: PcbLayer | None, active_side: str) -> bool:
+    if expected in ("", "any"):
+        return True
+    if layer is None:
+        return expected == active_side
+    if expected == "active":
+        return layer.side == active_side
+    if expected == "opposite":
+        return layer.side in ("front", "back") and layer.side != active_side
+    return expected == layer.side
 
 
 def _net_attrs(board: Pcb, data_type: str, net_number: int) -> dict[str, str]:
