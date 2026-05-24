@@ -1582,26 +1582,34 @@ def _render_plan_geometry(
 def _render_plan_item(svg: _Svg, item: EmittedGeometry, *, overlay: bool) -> None:
     if item.kind is GeometryKind.PAD:
         pad = cast("PcbPad", item.source)
+        if item.points:
+            center = item.points[0]
+            pad = replace(pad, x=center.x, y=center.y)
         _draw_pad(svg, pad, _plan_attrs(item, "pad", overlay=overlay))
     elif item.kind is GeometryKind.TRACE:
         segment = cast("PcbSegment", item.source)
+        start = item.points[0] if len(item.points) >= 1 else None
+        end = item.points[1] if len(item.points) >= 2 else None
         svg.line(
-            segment.start_x,
-            segment.start_y,
-            segment.end_x,
-            segment.end_y,
+            start.x if start is not None else segment.start_x,
+            start.y if start is not None else segment.start_y,
+            end.x if end is not None else segment.end_x,
+            end.y if end is not None else segment.end_y,
             segment.width,
             attrs=_plan_attrs(item, "trace", overlay=overlay),
         )
     elif item.kind is GeometryKind.TRACE_ARC:
         trace_arc = cast("PcbTraceArc", item.source)
+        start = item.points[0] if len(item.points) >= 1 else None
+        mid = item.points[1] if len(item.points) >= 2 else None
+        end = item.points[2] if len(item.points) >= 3 else None
         d = _svg_arc_path_d(
-            trace_arc.start_x,
-            trace_arc.start_y,
-            trace_arc.mid_x,
-            trace_arc.mid_y,
-            trace_arc.end_x,
-            trace_arc.end_y,
+            start.x if start is not None else trace_arc.start_x,
+            start.y if start is not None else trace_arc.start_y,
+            mid.x if mid is not None else trace_arc.mid_x,
+            mid.y if mid is not None else trace_arc.mid_y,
+            end.x if end is not None else trace_arc.end_x,
+            end.y if end is not None else trace_arc.end_y,
         )
         svg.path(
             d,
@@ -1612,13 +1620,22 @@ def _render_plan_item(svg: _Svg, item: EmittedGeometry, *, overlay: bool) -> Non
         )
     elif item.kind is GeometryKind.ZONE:
         zone = cast("PcbPolygon | PcbZone", item.source)
-        points = zone.points if isinstance(zone, PcbPolygon) else zone.boundary
+        points = (
+            [(point.x, point.y) for point in item.points]
+            if item.points
+            else zone.points
+            if isinstance(zone, PcbPolygon)
+            else zone.boundary
+        )
         svg.polygon(points, attrs=_plan_attrs(item, "zone", overlay=overlay))
     elif item.kind is GeometryKind.VIA:
         via = cast("PcbVia", item.source)
+        center = item.points[0] if item.points else None
+        x = center.x if center is not None else via.x
+        y = center.y if center is not None else via.y
         svg.group_start(attrs=_plan_attrs(item, "via", overlay=overlay))
-        svg.circle(via.x, via.y, via.size / 2, attrs={"class": "annular"})
-        svg.circle(via.x, via.y, via.drill / 2, attrs={"class": "drill"})
+        svg.circle(x, y, via.size / 2, attrs={"class": "annular"})
+        svg.circle(x, y, via.drill / 2, attrs={"class": "drill"})
         svg.group_end()
 
 

@@ -292,6 +292,25 @@ def test_build_render_plan_print_includes_vias_and_classifies_zone_sources() -> 
     assert {type(geometry.source) for geometry in base_zones} == {PcbPolygon, PcbZone}
 
 
+def test_back_side_plan_keeps_transformed_zone_holes_on_source() -> None:
+    board = _make_plan_board()
+    board.polygons[0].holes = [[(1.5, 1.5), (2.0, 1.5), (2.0, 2.0)]]
+    settings = load_render_settings_json(
+        '{"include": {"layers": [{"role": "copper", "side": "any", '
+        '"objects": {"zones": "visible"}}]}}'
+    )
+
+    plan = build_render_plan(board, settings=settings, side="back", width_px=1000)
+
+    polygon_zone = next(
+        geometry
+        for geometry in plan.base
+        if geometry.kind is GeometryKind.ZONE and isinstance(geometry.source, PcbPolygon)
+    )
+    assert polygon_zone.points[0].x == 19.0
+    assert polygon_zone.source.holes == [[(18.5, 1.5), (18.0, 1.5), (18.0, 2.0)]]
+
+
 def test_build_render_plan_includes_outline_arcs_in_clip_path() -> None:
     board = _make_plan_board()
     board.outline_lines = [
@@ -312,3 +331,37 @@ def test_build_render_plan_includes_outline_arcs_in_clip_path() -> None:
         geometry for geometry in plan.base if geometry.kind is GeometryKind.BOARD_OUTLINE
     )
     assert any(point.x == 12.0 and point.y == 2.5 for point in outline.points)
+
+
+def test_back_side_plan_uses_rendered_view_x_coordinates() -> None:
+    board = parse_kicad_pcb(FIXTURE)
+    settings = load_render_settings_json(
+        '{"include": {"layers": [{"role": "copper", "side": "any", '
+        '"objects": {"pads": "when-highlighted"}}]}, '
+        '"highlights": [{"pad": "TP3.1", "color": "#c00000"}]}'
+    )
+
+    front_plan = build_render_plan(board, settings=settings, side="front", width_px=1200)
+    plan = build_render_plan(board, settings=settings, side="back", width_px=1200)
+
+    front_pad = next(
+        geometry
+        for geometry in front_plan.overlay
+        if geometry.kind is GeometryKind.PAD
+        and geometry.attrs.get("data-component") == "TP3"
+        and geometry.attrs.get("data-pad") == "1"
+    )
+    highlighted_pad = next(
+        geometry
+        for geometry in plan.overlay
+        if geometry.kind is GeometryKind.PAD
+        and geometry.attrs.get("data-component") == "TP3"
+        and geometry.attrs.get("data-pad") == "1"
+    )
+
+    assert front_pad.points
+    assert len(highlighted_pad.points) == 1
+    assert front_pad.points[0].x == 93.5
+    assert front_pad.points[0].x != highlighted_pad.points[0].x
+    assert highlighted_pad.points[0].x == 118.5
+    assert highlighted_pad.points[0].y == 64.5

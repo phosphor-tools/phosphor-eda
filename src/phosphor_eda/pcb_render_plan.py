@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -13,6 +13,9 @@ from phosphor_eda.pcb import (
     PcbLine,
     PcbPad,
     PcbPolygon,
+    PcbSegment,
+    PcbTraceArc,
+    PcbVia,
     PcbZone,
 )
 
@@ -116,6 +119,120 @@ def layer_matches_rule(layer: PcbLayer, rule: LayerIncludeRule, active_side: str
     return layer.side == rule.side
 
 
+@dataclass(frozen=True)
+class _RenderedViewTransform:
+    mirror_x: float | None = None
+
+    def point(self, x: float, y: float) -> RenderPoint:
+        return RenderPoint(self.x(x), y)
+
+    def x(self, value: float) -> float:
+        if self.mirror_x is None:
+            return value
+        return self.mirror_x - value
+
+
+def _rendered_view_transform(
+    *,
+    side: str,
+    board_bbox: tuple[float, float, float, float],
+) -> _RenderedViewTransform:
+    if side != "back":
+        return _RenderedViewTransform()
+    bx0, _by0, bx1, _by1 = board_bbox
+    return _RenderedViewTransform(mirror_x=bx0 + bx1)
+
+
+def _transform_render_points(
+    points: tuple[RenderPoint, ...],
+    transform: _RenderedViewTransform,
+) -> tuple[RenderPoint, ...]:
+    if transform.mirror_x is None:
+        return points
+    return tuple(transform.point(point.x, point.y) for point in points)
+
+
+def _transform_pad(pad: PcbPad, transform: _RenderedViewTransform) -> PcbPad:
+    if transform.mirror_x is None:
+        return pad
+    rotation = (-pad.rotation) % 360 if pad.rotation else 0.0
+    return replace(pad, x=transform.x(pad.x), rotation=rotation)
+
+
+def _transform_segment(segment: PcbSegment, transform: _RenderedViewTransform) -> PcbSegment:
+    if transform.mirror_x is None:
+        return segment
+    return replace(
+        segment,
+        start_x=transform.x(segment.start_x),
+        end_x=transform.x(segment.end_x),
+    )
+
+
+def _transform_trace_arc(
+    trace_arc: PcbTraceArc,
+    transform: _RenderedViewTransform,
+) -> PcbTraceArc:
+    if transform.mirror_x is None:
+        return trace_arc
+    return replace(
+        trace_arc,
+        start_x=transform.x(trace_arc.start_x),
+        mid_x=transform.x(trace_arc.mid_x),
+        end_x=transform.x(trace_arc.end_x),
+    )
+
+
+def _transform_via(via: PcbVia, transform: _RenderedViewTransform) -> PcbVia:
+    if transform.mirror_x is None:
+        return via
+    return replace(via, x=transform.x(via.x))
+
+
+def _transform_zone(
+    zone: PcbPolygon | PcbZone,
+    transform: _RenderedViewTransform,
+) -> PcbPolygon | PcbZone:
+    if transform.mirror_x is None:
+        return zone
+    if isinstance(zone, PcbPolygon):
+        return replace(
+            zone,
+            points=[(transform.x(x), y) for x, y in zone.points],
+            holes=[[(transform.x(x), y) for x, y in hole] for hole in zone.holes],
+        )
+    return replace(zone, boundary=[(transform.x(x), y) for x, y in zone.boundary])
+
+
+def _transform_lines(
+    lines: list[PcbLine],
+    transform: _RenderedViewTransform,
+) -> list[PcbLine]:
+    if transform.mirror_x is None:
+        return lines
+    return [
+        replace(line, start_x=transform.x(line.start_x), end_x=transform.x(line.end_x))
+        for line in lines
+    ]
+
+
+def _transform_arcs(
+    arcs: list[PcbArc],
+    transform: _RenderedViewTransform,
+) -> list[PcbArc]:
+    if transform.mirror_x is None:
+        return arcs
+    return [
+        replace(
+            arc,
+            start_x=transform.x(arc.start_x),
+            mid_x=transform.x(arc.mid_x),
+            end_x=transform.x(arc.end_x),
+        )
+        for arc in arcs
+    ]
+
+
 def build_render_plan(
     board: Pcb,
     *,
@@ -124,13 +241,16 @@ def build_render_plan(
     width_px: int,
 ) -> PcbRenderPlan:
     bx0, by0, bx1, by1 = board.bbox()
+    transform = _rendered_view_transform(side=side, board_bbox=(bx0, by0, bx1, by1))
     pad_mm = 2.0
     vb_x = bx0 - pad_mm
     vb_y = by0 - pad_mm
     vb_w = (bx1 - bx0) + 2 * pad_mm
     vb_h = (by1 - by0) + 2 * pad_mm
     height_px = int(width_px * vb_h / vb_w) if vb_w > 0 else width_px
-    board_path_d = _build_outline_path(board.outline_lines, board.outline_arcs) or (
+    outline_lines = _transform_lines(board.outline_lines, transform)
+    outline_arcs = _transform_arcs(board.outline_arcs, transform)
+    board_path_d = _build_outline_path(outline_lines, outline_arcs) or (
         f"M {bx0:.4f} {by0:.4f} L {bx1:.4f} {by0:.4f} L {bx1:.4f} {by1:.4f} L {bx0:.4f} {by1:.4f} Z"
     )
     plan = PcbRenderPlan(
@@ -139,7 +259,7 @@ def build_render_plan(
         height_px=height_px,
         view_box=ViewBox(vb_x, vb_y, vb_w, vb_h),
         board_bbox=(bx0, by0, bx1, by1),
-        clip=ClipPlan(board_path_d=board_path_d, drill_path_d=_build_drill_path(board)),
+        clip=ClipPlan(board_path_d=board_path_d, drill_path_d=_build_drill_path(board, transform)),
         custom_css=settings.custom_css,
     )
 
@@ -154,7 +274,7 @@ def build_render_plan(
                 layer="Edge.Cuts",
                 attrs={"data-type": "board-outline"},
                 reason=InclusionReason.VISIBLE,
-                points=_outline_points(board.outline_lines, board.outline_arcs),
+                points=_outline_points(outline_lines, outline_arcs),
                 clipped=False,
             )
         )
@@ -171,7 +291,7 @@ def build_render_plan(
                 layer=layer,
                 kind=GeometryKind.PAD,
                 object_name="pads",
-                source=pad,
+                source=_transform_pad(pad, transform),
                 attrs={
                     "data-type": "pad",
                     "data-component": fp_ref,
@@ -179,7 +299,7 @@ def build_render_plan(
                     "data-net": pad.net_name or _net_name(board, pad.net_number),
                     "data-net-number": str(pad.net_number),
                 },
-                points=(RenderPoint(pad.x, pad.y),),
+                points=(transform.point(pad.x, pad.y),),
                 highlighted=(
                     pad.net_number in hl_net_nums
                     or fp_ref in hl_refs
@@ -195,11 +315,11 @@ def build_render_plan(
                 layer=layer,
                 kind=GeometryKind.TRACE,
                 object_name="traces",
-                source=segment,
+                source=_transform_segment(segment, transform),
                 attrs=_net_attrs(board, "trace", segment.net_number),
                 points=(
-                    RenderPoint(segment.start_x, segment.start_y),
-                    RenderPoint(segment.end_x, segment.end_y),
+                    transform.point(segment.start_x, segment.start_y),
+                    transform.point(segment.end_x, segment.end_y),
                 ),
                 highlighted=segment.net_number in hl_net_nums,
                 settings=settings,
@@ -212,12 +332,12 @@ def build_render_plan(
                 layer=layer,
                 kind=GeometryKind.TRACE_ARC,
                 object_name="traces",
-                source=trace_arc,
+                source=_transform_trace_arc(trace_arc, transform),
                 attrs=_net_attrs(board, "trace", trace_arc.net_number),
                 points=(
-                    RenderPoint(trace_arc.start_x, trace_arc.start_y),
-                    RenderPoint(trace_arc.mid_x, trace_arc.mid_y),
-                    RenderPoint(trace_arc.end_x, trace_arc.end_y),
+                    transform.point(trace_arc.start_x, trace_arc.start_y),
+                    transform.point(trace_arc.mid_x, trace_arc.mid_y),
+                    transform.point(trace_arc.end_x, trace_arc.end_y),
                 ),
                 highlighted=trace_arc.net_number in hl_net_nums,
                 settings=settings,
@@ -232,13 +352,13 @@ def build_render_plan(
                 layer=layer,
                 kind=GeometryKind.ZONE,
                 object_name="zones",
-                source=zone,
+                source=_transform_zone(zone, transform),
                 attrs={
                     "data-type": "zone",
                     "data-net": net_name,
                     "data-net-number": str(net_number),
                 },
-                points=_zone_points(zone),
+                points=_transform_render_points(_zone_points(zone), transform),
                 highlighted=net_number in hl_net_nums,
                 settings=settings,
                 active_side=side,
@@ -252,8 +372,8 @@ def build_render_plan(
             layer="vias",
             attrs=_net_attrs(board, "via", via.net_number),
             reason=InclusionReason.VISIBLE,
-            source=via,
-            points=(RenderPoint(via.x, via.y),),
+            source=_transform_via(via, transform),
+            points=(transform.point(via.x, via.y),),
         )
         if state == "visible":
             plan.base.append(geometry)
@@ -577,16 +697,16 @@ def _arc_svg_params(
     return (radius, large_arc, sweep)
 
 
-def _build_drill_path(board: Pcb) -> str:
+def _build_drill_path(board: Pcb, transform: _RenderedViewTransform) -> str:
     mask_layers = {"F.Mask", "B.Mask", "*.Mask"}
     holes: list[tuple[float, float, float]] = []
     for footprint in board.footprints:
         for pad in footprint.pads:
             if pad.drill > 0:
-                holes.append((pad.x, pad.y, pad.drill / 2))
+                holes.append((transform.x(pad.x), pad.y, pad.drill / 2))
     for via in board.vias:
         if via.drill > 0 and set(via.layers) & mask_layers:
-            holes.append((via.x, via.y, via.drill / 2))
+            holes.append((transform.x(via.x), via.y, via.drill / 2))
     return "".join(
         f" M {x - r:.4f} {y:.4f}"
         f" A {r:.4f} {r:.4f} 0 1 0 {x + r:.4f} {y:.4f}"

@@ -218,6 +218,25 @@ def test_print_callout_svg_omits_unhighlighted_traces(board: Pcb) -> None:
     assert 'data-type="pad"' in svg
 
 
+def test_back_side_plan_svg_does_not_use_top_level_mirror_transform(board: Pcb) -> None:
+    settings = load_render_settings_json(
+        '{"extends": "phosphor:print-callout", '
+        '"highlights": [{"pad": "TP3.1", "color": "#c00000"}]}'
+    )
+
+    svg = render_pcb_svg(
+        board,
+        side="back",
+        width_px=1200,
+        render_settings=settings,
+    )
+
+    assert "scale(-1" not in svg
+    assert 'data-component="TP3"' in svg
+    assert 'cx="118.5000" cy="64.5000"' in svg
+    assert 'cx="93.5000" cy="64.5000"' not in svg
+
+
 def test_print_callout_svg_keeps_highlighted_trace_overlay(board: Pcb) -> None:
     settings = load_render_settings_json(
         '{"extends": "phosphor:print-callout", '
