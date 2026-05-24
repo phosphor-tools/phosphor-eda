@@ -35,6 +35,7 @@ from phosphor_eda.pcb_render import (
     _cmp_class,  # pyright: ignore[reportPrivateUsage]
     _css_safe,  # pyright: ignore[reportPrivateUsage]
     _fmt_attrs,  # pyright: ignore[reportPrivateUsage]
+    load_render_settings_file,
     parse_render_settings,
     render_pcb_svg,
     render_settings_schema,
@@ -1194,6 +1195,10 @@ class TestParseRenderSettings:
         with pytest.raises(ValueError, match="custom_css must be a string"):
             parse_render_settings({"custom_css": 42})
 
+    def test_extends_not_string(self) -> None:
+        with pytest.raises(ValueError, match="extends must be a string"):
+            parse_render_settings({"extends": 42})
+
     def test_width_rejects_bool(self) -> None:
         with pytest.raises(ValueError, match="width must be a positive integer"):
             parse_render_settings({"width": True})
@@ -1204,6 +1209,85 @@ class TestParseRenderSettings:
 
         with pytest.raises(ValueError, match=r"highlights\[0\]\.pad must be a string"):
             parse_render_settings({"highlights": [{"pad": 42}]})
+
+
+# ---------------------------------------------------------------------------
+# render settings extends
+# ---------------------------------------------------------------------------
+
+
+def test_load_render_settings_file_extends_local_file(tmp_path: Path) -> None:
+    base = tmp_path / "base.json"
+    base.write_text(
+        json.dumps(
+            {
+                "theme": "print",
+                "width": 1200,
+                "custom_css": ".base { color: black; }",
+                "annotations": {"legend": {"title": "Base", "entries": []}},
+            }
+        )
+    )
+    child = tmp_path / "child.json"
+    child.write_text(
+        json.dumps(
+            {
+                "extends": "./base.json",
+                "width": 2400,
+                "custom_css": ".child { color: red; }",
+                "highlights": [{"pad": "TP3.1", "color": "#c00000"}],
+                "annotations": {"pointers": [{"target": "TP3.1", "label": "SWD"}]},
+            }
+        )
+    )
+
+    settings = load_render_settings_file(child)
+
+    assert settings.theme == "print"
+    assert settings.width == 2400
+    assert settings.custom_css == ".base { color: black; }\n.child { color: red; }"
+    assert settings.highlights == [HighlightSpec(pad="TP3.1", color="#c00000")]
+    assert settings.annotations == {
+        "legend": {"title": "Base", "entries": []},
+        "pointers": [{"target": "TP3.1", "label": "SWD"}],
+    }
+
+
+def test_load_render_settings_file_extends_packaged_settings(tmp_path: Path) -> None:
+    child = tmp_path / "child.json"
+    child.write_text(
+        json.dumps(
+            {
+                "extends": "phosphor:print-callout",
+                "font_size": 72,
+                "custom_css": ".annotation-connector { stroke-width: 6; }",
+            }
+        )
+    )
+
+    settings = load_render_settings_file(child)
+
+    assert settings.theme == "print"
+    assert settings.font_size == 72
+    assert ".annotation-label-text" in settings.custom_css
+    assert ".annotation-connector { stroke-width: 6; }" in settings.custom_css
+
+
+def test_load_render_settings_file_detects_extend_cycles(tmp_path: Path) -> None:
+    first = tmp_path / "first.json"
+    second = tmp_path / "second.json"
+    first.write_text(json.dumps({"extends": "./second.json"}))
+    second.write_text(json.dumps({"extends": "./first.json"}))
+
+    with pytest.raises(ValueError, match="cycle"):
+        load_render_settings_file(first)
+
+
+def test_render_settings_schema_documents_extends() -> None:
+    schema = render_settings_schema()
+
+    assert schema["properties"]["extends"]["type"] == "string"
+    assert "phosphor:print-callout" in json.dumps(schema["examples"])
 
 
 # ---------------------------------------------------------------------------

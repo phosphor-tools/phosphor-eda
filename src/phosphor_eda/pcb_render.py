@@ -15,6 +15,8 @@ import re
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from importlib.resources import files
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeGuard
 from xml.sax.saxutils import escape as xml_escape
 
@@ -73,6 +75,11 @@ class RenderSettings:
     custom_css: str = ""
 
 
+_BUNDLED_SETTINGS_PACKAGE = "phosphor_eda.render_settings"
+_PHOSPHOR_SETTINGS_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_SETTINGS_EXTENDS_KEY = "extends"
+
+
 def is_json_dict(v: object) -> TypeGuard[dict[str, object]]:
     """Narrow an object to ``dict[str, object]``.
 
@@ -93,6 +100,12 @@ def parse_render_settings(data: dict[str, Any]) -> RenderSettings:
     Raises ``ValueError`` on invalid input.
     """
     settings = RenderSettings()
+
+    if _SETTINGS_EXTENDS_KEY in data:
+        extends = data[_SETTINGS_EXTENDS_KEY]
+        if not isinstance(extends, str):
+            msg = "extends must be a string"
+            raise ValueError(msg)
 
     if "theme" in data:
         theme = data["theme"]
@@ -177,6 +190,135 @@ def parse_render_settings(data: dict[str, Any]) -> RenderSettings:
     return settings
 
 
+def load_render_settings_file(path: Path) -> RenderSettings:
+    """Load, resolve ``extends``, merge, and parse a render-settings JSON file."""
+    data = _load_render_settings_file_data(path.resolve(), stack=[])
+    return parse_render_settings(data)
+
+
+def load_render_settings_json(text: str) -> RenderSettings:
+    """Load render settings from JSON text.
+
+    Stdin settings can extend packaged ``phosphor:`` settings. Relative file
+    extends require a settings file path, so they are rejected for JSON text.
+    """
+    data = _load_render_settings_text_data(text, source=None, stack=[])
+    return parse_render_settings(data)
+
+
+def _load_render_settings_file_data(path: Path, stack: list[str]) -> dict[str, Any]:
+    try:
+        text = path.read_text()
+    except OSError as exc:
+        msg = f"Render settings file not found: {path}"
+        raise ValueError(msg) from exc
+    return _load_render_settings_text_data(text, source=path, stack=stack)
+
+
+def _load_render_settings_text_data(
+    text: str,
+    *,
+    source: Path | str | None,
+    stack: list[str],
+) -> dict[str, Any]:
+    source_id = _settings_source_id(source)
+    if source_id in stack:
+        cycle = " -> ".join([*stack, source_id])
+        msg = f"render settings extends cycle detected: {cycle}"
+        raise ValueError(msg)
+
+    try:
+        raw: object = json.loads(text)
+    except json.JSONDecodeError as exc:
+        msg = f"Invalid render settings JSON: {exc}"
+        raise ValueError(msg) from exc
+    if not is_json_dict(raw):
+        msg = "top-level JSON value must be an object"
+        raise ValueError(msg)
+
+    data = dict(raw)
+    parse_render_settings(data)
+    parent_ref = data.pop(_SETTINGS_EXTENDS_KEY, "")
+    if not parent_ref:
+        return data
+
+    parent_data = _load_parent_render_settings(parent_ref, source=source, stack=[*stack, source_id])
+    return _merge_render_settings_data(parent_data, data)
+
+
+def _settings_source_id(source: Path | str | None) -> str:
+    if source is None:
+        return "<stdin>"
+    if isinstance(source, Path):
+        return str(source.resolve())
+    return source
+
+
+def _load_parent_render_settings(
+    parent_ref: object,
+    *,
+    source: Path | str | None,
+    stack: list[str],
+) -> dict[str, Any]:
+    if not isinstance(parent_ref, str):
+        msg = "extends must be a string"
+        raise ValueError(msg)
+
+    if parent_ref.startswith("phosphor:"):
+        name = parent_ref.removeprefix("phosphor:")
+        if not _PHOSPHOR_SETTINGS_RE.fullmatch(name):
+            msg = f"Invalid phosphor render settings name: {parent_ref!r}"
+            raise ValueError(msg)
+        resource = files(_BUNDLED_SETTINGS_PACKAGE).joinpath(f"{name}.json")
+        if not resource.is_file():
+            msg = f"Unknown phosphor render settings: {parent_ref}"
+            raise ValueError(msg)
+        text = resource.read_text()
+        return _load_render_settings_text_data(text, source=parent_ref, stack=stack)
+
+    parent_path = Path(parent_ref)
+    if not parent_path.is_absolute():
+        if not isinstance(source, Path):
+            msg = f"Relative render settings extends requires a file source: {parent_ref}"
+            raise ValueError(msg)
+        parent_path = source.parent / parent_path
+    return _load_render_settings_file_data(parent_path.resolve(), stack=stack)
+
+
+def _merge_render_settings_data(
+    parent: dict[str, Any],
+    child: dict[str, Any],
+) -> dict[str, Any]:
+    merged = dict(parent)
+    child_css = child.get("custom_css")
+    parent_css = parent.get("custom_css")
+
+    for key, value in child.items():
+        existing = merged.get(key)
+        if key == "annotations" and is_json_dict(existing) and is_json_dict(value):
+            merged[key] = _deep_merge_json_dicts(existing, value)
+        elif key == "custom_css":
+            css_parts = [css for css in (parent_css, child_css) if isinstance(css, str) and css]
+            merged[key] = "\n".join(css_parts)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _deep_merge_json_dicts(
+    parent: dict[str, object],
+    child: dict[str, object],
+) -> dict[str, object]:
+    merged: dict[str, object] = dict(parent)
+    for key, value in child.items():
+        existing = merged.get(key)
+        if is_json_dict(existing) and is_json_dict(value):
+            merged[key] = _deep_merge_json_dicts(existing, value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def render_settings_schema() -> dict[str, object]:
     """Return the JSON Schema for ``pcb render`` settings."""
     return {
@@ -185,6 +327,13 @@ def render_settings_schema() -> dict[str, object]:
         "type": "object",
         "additionalProperties": False,
         "properties": {
+            "extends": {
+                "type": "string",
+                "description": (
+                    "Base render settings to merge first. Use phosphor:<name> "
+                    "for bundled settings or a relative/absolute JSON path."
+                ),
+            },
             "theme": {
                 "type": "string",
                 "enum": THEME_NAMES,
@@ -234,6 +383,7 @@ def render_settings_schema() -> dict[str, object]:
         },
         "examples": [
             {
+                "extends": "phosphor:print-callout",
                 "theme": "print",
                 "width": 3000,
                 "font_size": 100,

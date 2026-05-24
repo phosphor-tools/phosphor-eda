@@ -1,0 +1,5 @@
+{
+  "extends": "phosphor:print",
+  "font_size": 80,
+  "custom_css": ".annotation-label-text { fill: #000; paint-order: stroke fill; stroke: #fff; stroke-linejoin: round; font-weight: 700; } .annotation-connector { stroke: #333; stroke-width: 4; }"
+}

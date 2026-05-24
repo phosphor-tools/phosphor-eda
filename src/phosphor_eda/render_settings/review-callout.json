@@ -1,0 +1,5 @@
+{
+  "theme": "review",
+  "font_size": 80,
+  "custom_css": ".annotation-label-text { font-weight: 700; } .annotation-connector { stroke-width: 4; }"
+}
