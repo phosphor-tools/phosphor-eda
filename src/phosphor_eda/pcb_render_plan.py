@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+from phosphor_eda.pcb import LayerFunction, PcbLayer
+
+if TYPE_CHECKING:
+    from phosphor_eda.pcb_render_settings import LayerIncludeRule
 
 
 class GeometryKind(StrEnum):
@@ -68,3 +74,33 @@ class PcbRenderPlan:
     annotations: object | None = None
     annotation_style: dict[str, object] = field(default_factory=dict)
     custom_css: str = ""
+
+
+def layer_role(layer: PcbLayer) -> str:
+    if layer.function == LayerFunction.COPPER:
+        return "copper"
+    if layer.function == LayerFunction.SILKSCREEN:
+        return "silkscreen"
+    if layer.function == LayerFunction.FAB:
+        return "fabrication"
+    if layer.function == LayerFunction.SOLDER_MASK:
+        return "mask"
+    if layer.function == LayerFunction.SOLDER_PASTE:
+        return "paste"
+    if layer.function == LayerFunction.MECHANICAL:
+        return "mechanical"
+    return "unknown"
+
+
+def layer_matches_rule(layer: PcbLayer, rule: LayerIncludeRule, active_side: str) -> bool:
+    if rule.name and rule.name != layer.name:
+        return False
+    if rule.role and rule.role != layer_role(layer):
+        return False
+    if rule.side in ("", "any"):
+        return True
+    if rule.side == "active":
+        return layer.side == active_side
+    if rule.side == "opposite":
+        return layer.side in ("front", "back") and layer.side != active_side
+    return layer.side == rule.side
