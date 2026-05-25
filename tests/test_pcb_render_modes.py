@@ -5,7 +5,7 @@ from __future__ import annotations
 from shapely import GeometryCollection, Point, Polygon
 
 from phosphor_eda.pcb import PcbArc, PcbLine, PcbPad, PcbText, PcbVia, PcbZone
-from phosphor_eda.pcb_render_artwork import geometry_to_artwork
+from phosphor_eda.pcb_render_artwork import DerivedLayer, geometry_to_artwork
 from phosphor_eda.pcb_render_geometry import (
     GeometryKind,
     GeometryLayer,
@@ -13,7 +13,7 @@ from phosphor_eda.pcb_render_geometry import (
     PcbGeometryStore,
     RenderableGeometry,
 )
-from phosphor_eda.pcb_render_modes import build_cad_layers
+from phosphor_eda.pcb_render_modes import build_cad_layers, build_realistic_layers
 from phosphor_eda.pcb_render_settings import (
     LayerMatch,
     LayerSelectionRule,
@@ -294,15 +294,194 @@ def test_cad_board_outline_is_outline_only() -> None:
     )
 
 
+def test_realistic_front_layers_project_physical_stack_in_order() -> None:
+    mask_opening = Polygon([(0.25, 0.25), (1.75, 0.25), (1.75, 1.75), (0.25, 1.75)])
+    bare_substrate_opening = Polygon([(3.0, 0.5), (4.0, 0.5), (4.0, 1.5), (3.0, 1.5)])
+    copper = _pad(x=1.0, y=1.0, width=1.0, height=1.0)
+    silk = Polygon([(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)])
+    drill_pad = _pad(x=1.0, y=1.0, width=1.0, height=1.0, drill=0.6)
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "mask-copper-opening",
+                GeometryKind.MASK,
+                "F.Mask",
+                "mask",
+                "front",
+                geometry=mask_opening,
+            ),
+            _renderable(
+                "mask-substrate-opening",
+                GeometryKind.MASK,
+                "F.Mask",
+                "mask",
+                "front",
+                geometry=bare_substrate_opening,
+            ),
+            _renderable(
+                "copper-pad",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=copper,
+            ),
+            _renderable(
+                "silk-fill",
+                GeometryKind.SILK_POLYGON,
+                "F.SilkS",
+                "silkscreen",
+                "front",
+                geometry=silk,
+            ),
+            _renderable(
+                "drill-1",
+                GeometryKind.DRILL,
+                "drills",
+                "drill",
+                "",
+                geometry=drill_pad,
+            ),
+        )
+    )
+
+    layers = build_realistic_layers(
+        store,
+        _settings(
+            side="front",
+            rules=(
+                LayerSelectionRule(match=LayerMatch(function="solder_mask", side="front")),
+                LayerSelectionRule(match=LayerMatch(function="copper", side="front")),
+                LayerSelectionRule(match=LayerMatch(function="silkscreen", side="front")),
+            ),
+            tokens=_realistic_tokens(),
+        ),
+        warn=lambda _message: None,
+    )
+
+    assert [layer.id for layer in layers] == [
+        "realistic:substrate",
+        "realistic:solderMask",
+        "realistic:coveredCopper",
+        "realistic:exposedCopper",
+        "realistic:silkscreen",
+        "realistic:boardOutline",
+    ]
+    assert [layer.role.function for layer in layers] == [
+        "substrate",
+        "solderMask",
+        "coveredCopper",
+        "exposedCopper",
+        "silkscreen",
+        "boardOutline",
+    ]
+    assert [_require_style(layer).fill for layer in layers] == [
+        "#2d2118",
+        "#194d2e",
+        "#6d4b1f",
+        "#d6a13d",
+        "#ffffff",
+        "none",
+    ]
+
+    by_id = {layer.id: layer for layer in layers}
+    substrate = by_id["realistic:substrate"].geometry
+    solder_mask = by_id["realistic:solderMask"].geometry
+    covered_copper = by_id["realistic:coveredCopper"].geometry
+    exposed_copper = by_id["realistic:exposedCopper"].geometry
+    silkscreen = by_id["realistic:silkscreen"].geometry
+    board_outline = by_id["realistic:boardOutline"].geometry
+
+    assert _board_polygon().covers(substrate)
+    drill_center = Point(1.0, 1.0)
+    assert not substrate.contains(drill_center)
+    assert not solder_mask.contains(drill_center)
+    assert solder_mask.intersection(mask_opening).area == 0.0
+    assert solder_mask.intersection(bare_substrate_opening).area == 0.0
+    copper_artwork = geometry_to_artwork(_require_renderable(store, "copper-pad"))
+    assert copper_artwork is not None
+    assert exposed_copper.area < copper_artwork.geometry.area
+    assert covered_copper.area < copper_artwork.geometry.area
+    assert not exposed_copper.contains(drill_center)
+    assert not covered_copper.contains(drill_center)
+    assert silkscreen.intersection(mask_opening).area == 0.0
+    assert not silkscreen.contains(drill_center)
+    assert board_outline.equals(_board_polygon().boundary)
+
+    assert by_id["realistic:solderMask"].source_layers == ("F.Mask",)
+    assert by_id["realistic:coveredCopper"].source_ids == ("copper-pad",)
+    assert by_id["realistic:exposedCopper"].source_ids == (
+        "mask-copper-opening",
+        "mask-substrate-opening",
+        "copper-pad",
+    )
+
+
+def test_realistic_projection_uses_visible_side_only() -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "front-copper",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=1.0, y=1.0),
+            ),
+            _renderable(
+                "back-copper",
+                GeometryKind.PAD,
+                "B.Cu",
+                "copper",
+                "back",
+                geometry=_pad(x=3.0, y=1.0),
+            ),
+        )
+    )
+
+    layers = build_realistic_layers(
+        store,
+        _settings(
+            side="front",
+            rules=(LayerSelectionRule(match=LayerMatch(function="copper")),),
+            tokens=_realistic_tokens(),
+        ),
+        warn=lambda _message: None,
+    )
+
+    covered_copper = next(layer for layer in layers if layer.id == "realistic:coveredCopper")
+    assert covered_copper.source_layers == ("F.Cu",)
+    assert covered_copper.source_ids == ("front-copper",)
+    assert covered_copper.geometry.contains(Point(1.0, 1.0))
+    assert not covered_copper.geometry.contains(Point(3.0, 1.0))
+
+
 def _settings(
     *,
     rules: tuple[LayerSelectionRule, ...],
     tokens: dict[str, str | int | float | bool],
+    side: str = "",
 ) -> RenderSettings:
     return RenderSettings(
+        side=side,
         source=SourceSelection(layers=list(rules)),
         tokens=tokens,
     )
+
+
+def _realistic_tokens() -> dict[str, str | int | float | bool]:
+    return {
+        "realistic.substrate.fill": "#2d2118",
+        "realistic.solderMask.fill": "#194d2e",
+        "realistic.coveredCopper.fill": "#6d4b1f",
+        "realistic.exposedCopper.fill": "#d6a13d",
+        "realistic.silkscreen.fill": "#ffffff",
+        "realistic.boardOutline.fill": "none",
+        "realistic.boardOutline.stroke": "#111111",
+        "realistic.boardOutline.strokeWidthMm": 0.08,
+    }
 
 
 def _renderable(
@@ -328,6 +507,21 @@ def _renderable(
         payload=Point(1, 1) if geometry is None else geometry,
         source=geometry,
     )
+
+
+def _require_renderable(store: PcbGeometryStore, geometry_id: str) -> RenderableGeometry:
+    item = store.by_id(geometry_id)
+    if item is None:
+        msg = f"missing test geometry {geometry_id}"
+        raise AssertionError(msg)
+    return item
+
+
+def _require_style(layer: DerivedLayer) -> ResolvedStyle:
+    if layer.style is None:
+        msg = "missing test layer style"
+        raise AssertionError(msg)
+    return layer.style
 
 
 def _board_outline() -> RenderableGeometry:

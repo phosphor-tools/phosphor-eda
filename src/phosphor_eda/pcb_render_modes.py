@@ -56,6 +56,15 @@ _SOURCE_FUNCTION_TO_LAYER_ROLE = {
     "other": "unknown",
 }
 
+_REALISTIC_LAYER_ORDER = (
+    "substrate",
+    "solderMask",
+    "coveredCopper",
+    "exposedCopper",
+    "silkscreen",
+    "boardOutline",
+)
+
 
 def build_cad_layers(
     store: PcbGeometryStore,
@@ -110,6 +119,114 @@ def build_cad_layers(
         )
 
     return tuple(layers)
+
+
+def build_realistic_layers(
+    store: PcbGeometryStore,
+    settings: RenderSettings,
+    *,
+    warn: Callable[[str], None],
+) -> tuple[DerivedLayer, ...]:
+    """Build front/back realistic derived layers from selected source artwork."""
+    side = settings.side or "front"
+    selected_items = _filter_excluded_components(
+        select_source_artwork(store, settings.source.layers),
+        settings.source.exclude_components,
+    )
+    grouped_artwork = _groupable_artwork(store, selected_items, settings.source.layers)
+    board = board_outline_geometry(store)
+    surface_drills = _surface_drill_geometry(store)
+
+    mask_artwork = _side_artwork(selected_items, role="mask", side=side)
+    copper_artwork = tuple(
+        item.artwork
+        for item in grouped_artwork
+        if item.layer.role == "copper" and item.layer.side == side
+    )
+    silkscreen_artwork = _side_artwork(selected_items, role="silkscreen", side=side)
+
+    mask_openings = _clip_to_board(_union_or_empty(item.geometry for item in mask_artwork), board)
+    outer_copper = _clip_to_board(_union_or_empty(item.geometry for item in copper_artwork), board)
+    silkscreen = _clip_to_board(
+        _union_or_empty(item.geometry for item in silkscreen_artwork),
+        board,
+    )
+
+    layer_inputs = {
+        "substrate": _RealisticLayerInput(
+            geometry=board,
+            source_layers=_board_source_layers(store),
+            source_ids=_board_source_ids(store),
+        ),
+        "solderMask": _RealisticLayerInput(
+            geometry=_difference(board, mask_openings),
+            source_layers=_source_layers_from_artwork(mask_artwork),
+            source_ids=_source_ids_from_artwork(mask_artwork),
+        ),
+        "coveredCopper": _RealisticLayerInput(
+            geometry=outer_copper,
+            source_layers=_source_layers_from_artwork(copper_artwork),
+            source_ids=_source_ids_by_store_order_for_artwork(store, copper_artwork),
+        ),
+        "exposedCopper": _RealisticLayerInput(
+            geometry=_intersection(outer_copper, mask_openings),
+            source_layers=_unique_ordered(
+                (
+                    *_source_layers_from_artwork(copper_artwork),
+                    *_source_layers_from_artwork(mask_artwork),
+                )
+            ),
+            source_ids=_source_ids_by_store_order_for_artwork(
+                store,
+                (*copper_artwork, *mask_artwork),
+            ),
+        ),
+        "silkscreen": _RealisticLayerInput(
+            geometry=_difference(silkscreen, mask_openings),
+            source_layers=_source_layers_from_artwork(silkscreen_artwork),
+            source_ids=_source_ids_by_store_order_for_artwork(store, silkscreen_artwork),
+        ),
+        "boardOutline": _RealisticLayerInput(
+            geometry=_outline_geometry(board),
+            source_layers=_board_source_layers(store),
+            source_ids=_board_source_ids(store),
+        ),
+    }
+
+    layers: list[DerivedLayer] = []
+    for function in _REALISTIC_LAYER_ORDER:
+        layer_input = layer_inputs[function]
+        geometry = layer_input.geometry
+        if function != "boardOutline":
+            geometry = _difference(geometry, surface_drills)
+        if geometry.is_empty:
+            continue
+
+        role = VisualRole(namespace="realistic", function=function)
+        style = resolve_layer_style(
+            settings.tokens,
+            role,
+            dimmed=settings.dimming.enabled,
+            warn=warn,
+        )
+        layers.append(
+            DerivedLayer(
+                id=_derived_layer_id(role),
+                role=role,
+                geometry=geometry,
+                source_layers=layer_input.source_layers,
+                source_ids=layer_input.source_ids,
+                style=style,
+            )
+        )
+    return tuple(layers)
+
+
+@dataclass(frozen=True)
+class _RealisticLayerInput:
+    geometry: BaseGeometry
+    source_layers: tuple[str, ...]
+    source_ids: tuple[str, ...]
 
 
 def _groupable_artwork(
@@ -276,6 +393,49 @@ def _resolved_group_geometry(
     return geometry
 
 
+def _side_artwork(
+    selected_items: Iterable[RenderableGeometry],
+    *,
+    role: str,
+    side: str,
+) -> tuple[ArtworkItem, ...]:
+    artwork: list[ArtworkItem] = []
+    for item in selected_items:
+        if item.layer.role != role or item.layer.side != side:
+            continue
+        artwork_item = geometry_to_artwork(item)
+        if artwork_item is not None:
+            artwork.append(artwork_item)
+    return tuple(artwork)
+
+
+def _surface_drill_geometry(store: PcbGeometryStore) -> BaseGeometry:
+    """Return drills visible through board surfaces.
+
+    V1 treats parsed drills and vias as through-board openings. Span-aware
+    filtering and tenting semantics can be added behind this helper later.
+    """
+    return drill_geometry_for_layer(store)
+
+
+def _clip_to_board(geometry: BaseGeometry, board: BaseGeometry) -> BaseGeometry:
+    if geometry.is_empty or board.is_empty:
+        return geometry
+    return geometry.intersection(board)
+
+
+def _difference(geometry: BaseGeometry, subtractive: BaseGeometry) -> BaseGeometry:
+    if geometry.is_empty or subtractive.is_empty:
+        return geometry
+    return geometry.difference(subtractive)
+
+
+def _intersection(left: BaseGeometry, right: BaseGeometry) -> BaseGeometry:
+    if left.is_empty or right.is_empty:
+        return GeometryCollection()
+    return left.intersection(right)
+
+
 def _outline_geometry(board: BaseGeometry) -> BaseGeometry:
     if board.is_empty:
         return GeometryCollection()
@@ -310,3 +470,27 @@ def _source_ids_by_store_order(
 ) -> tuple[str, ...]:
     selected_ids = {source_id for item in group for source_id in item.artwork.source_ids}
     return tuple(item.id for item in store.items if item.id in selected_ids)
+
+
+def _source_layers_from_artwork(artwork: Iterable[ArtworkItem]) -> tuple[str, ...]:
+    return _unique_ordered(layer for item in artwork for layer in item.source_layers)
+
+
+def _source_ids_from_artwork(artwork: Iterable[ArtworkItem]) -> tuple[str, ...]:
+    return _unique_ordered(source_id for item in artwork for source_id in item.source_ids)
+
+
+def _source_ids_by_store_order_for_artwork(
+    store: PcbGeometryStore,
+    artwork: Iterable[ArtworkItem],
+) -> tuple[str, ...]:
+    selected_ids = {source_id for item in artwork for source_id in item.source_ids}
+    return tuple(item.id for item in store.items if item.id in selected_ids)
+
+
+def _board_source_layers(store: PcbGeometryStore) -> tuple[str, ...]:
+    return _unique_ordered(item.layer.name for item in store.by_kind(GeometryKind.BOARD_OUTLINE))
+
+
+def _board_source_ids(store: PcbGeometryStore) -> tuple[str, ...]:
+    return tuple(item.id for item in store.by_kind(GeometryKind.BOARD_OUTLINE))
