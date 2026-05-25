@@ -13,10 +13,12 @@ from phosphor_eda.pcb import (
     Pcb,
     PcbArc,
     PcbCircle,
+    PcbGraphicText,
     PcbLine,
     PcbPad,
     PcbPolygon,
     PcbSegment,
+    PcbText,
     PcbTraceArc,
     PcbVia,
     PcbZone,
@@ -33,6 +35,7 @@ from phosphor_eda.sql.geometry import (
     trace_arc_geometry,
     via_geometry,
 )
+from phosphor_eda.text_outlines import text_outline_geometry
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -279,6 +282,8 @@ def _item_shapely_geometry(item: RenderableGeometry) -> BaseGeometry | None:
         return _arc_geometry(payload)
     if item.kind in _CIRCLE_KINDS and isinstance(payload, PcbCircle):
         return _circle_geometry(payload)
+    if item.kind in _TEXT_KINDS and isinstance(payload, PcbText | PcbGraphicText):
+        return text_outline_geometry(payload)
     if item.kind is GeometryKind.BOARD_OUTLINE:
         return _board_outline_from_item(item)
     if item.kind is GeometryKind.BOARD_MATERIAL:
@@ -317,6 +322,15 @@ _CIRCLE_KINDS = frozenset(
     {
         GeometryKind.FAB_CIRCLE,
         GeometryKind.BODY_CIRCLE,
+    }
+)
+
+_TEXT_KINDS = frozenset(
+    {
+        GeometryKind.REF_TEXT,
+        GeometryKind.VALUE_TEXT,
+        GeometryKind.USER_TEXT,
+        GeometryKind.BOARD_GRAPHIC_TEXT,
     }
 )
 
