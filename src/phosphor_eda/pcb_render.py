@@ -44,6 +44,9 @@ from phosphor_eda.pcb_render_settings import (
     INCLUDE_STATES,
     LAYER_ROLES,
     LAYER_SIDES,
+    RENDER_MODES,
+    SOURCE_LAYER_FUNCTIONS,
+    SOURCE_LAYER_SIDES,
     HighlightSpec,
     RenderSettings,
     is_json_dict,
@@ -318,6 +321,10 @@ def render_settings_schema() -> dict[str, object]:
                     "for bundled settings or a relative/absolute JSON path."
                 ),
             },
+            "renderMode": {
+                "type": "string",
+                "enum": list(RENDER_MODES),
+            },
             "side": {
                 "type": "string",
                 "enum": ["front", "back"],
@@ -326,11 +333,75 @@ def render_settings_schema() -> dict[str, object]:
                 "type": "integer",
                 "minimum": 1,
             },
+            "fontSizePx": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 500,
+                "description": "Annotation label font size in display pixels.",
+            },
             "font_size_px": {
                 "type": "number",
                 "minimum": 1,
                 "maximum": 500,
                 "description": "Annotation label font size in display pixels.",
+            },
+            "source": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "layers": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "match": {
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "properties": {
+                                        "name": {"type": "string", "minLength": 1},
+                                        "function": {
+                                            "type": "string",
+                                            "enum": list(SOURCE_LAYER_FUNCTIONS),
+                                        },
+                                        "side": {
+                                            "type": "string",
+                                            "enum": list(SOURCE_LAYER_SIDES),
+                                        },
+                                    },
+                                },
+                                "visible": {"type": "boolean"},
+                                "objects": {
+                                    "type": "array",
+                                    "items": {"type": "string", "minLength": 1},
+                                },
+                            },
+                        },
+                    },
+                    "excludeComponents": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                    },
+                },
+            },
+            "tokens": {
+                "type": "object",
+                "patternProperties": {
+                    r"^(cad|realistic|highlight|annotation)(\.[A-Za-z][A-Za-z0-9_]*)+$": {
+                        "$ref": "#/$defs/token_value"
+                    },
+                    r"^(cad|realistic|highlight)\.layer\[[^\]\r\n]+\]\.[A-Za-z][A-Za-z0-9_]*$": {
+                        "$ref": "#/$defs/token_value"
+                    },
+                },
+                "additionalProperties": False,
+            },
+            "dimming": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "enabled": {"type": "boolean"},
+                },
             },
             "highlights": {
                 "type": "array",
@@ -412,12 +483,32 @@ def render_settings_schema() -> dict[str, object]:
                 "type": "string",
                 "enum": list(INCLUDE_STATES),
             },
+            "token_value": {
+                "type": ["string", "number", "boolean"],
+            },
         },
         "examples": [
             {
                 "extends": "phosphor:simplified-high-contrast",
+                "renderMode": "cad",
                 "width": 3000,
+                "fontSizePx": 40,
                 "font_size_px": 40,
+                "source": {
+                    "layers": [
+                        {"match": {"function": "copper"}, "visible": True},
+                        {
+                            "match": {"function": "silkscreen", "side": "front"},
+                            "visible": True,
+                        },
+                    ],
+                    "excludeComponents": ["R", "C", "L"],
+                },
+                "tokens": {
+                    "cad.copper.front.fill": "#d17a22",
+                    "cad.layer[F.Cu].fill": "#d17a22",
+                },
+                "dimming": {"enabled": False},
                 "include": {
                     "vias": "when-highlighted",
                     "layers": [

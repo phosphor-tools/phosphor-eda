@@ -1793,6 +1793,76 @@ class TestParseRenderSettings:
         with pytest.raises(ValueError, match="theme"):
             parse_render_settings({"theme": "print"})
 
+    @pytest.mark.parametrize("render_mode", ["cad", "realistic"])
+    def test_render_settings_accepts_render_mode(self, render_mode: str) -> None:
+        settings = parse_render_settings({"renderMode": render_mode})
+        assert settings.render_mode == render_mode
+
+    def test_render_settings_rejects_unknown_render_mode(self) -> None:
+        with pytest.raises(ValueError, match="renderMode"):
+            parse_render_settings({"renderMode": "xray"})
+
+    def test_render_settings_accepts_source_layer_rules(self) -> None:
+        settings = parse_render_settings(
+            {
+                "source": {
+                    "layers": [
+                        {
+                            "match": {"function": "copper", "side": "front"},
+                            "visible": True,
+                            "objects": ["pads", "traces"],
+                        },
+                        {
+                            "match": {"name": "Mechanical 13"},
+                            "visible": False,
+                        },
+                    ],
+                    "excludeComponents": ["R", "C"],
+                }
+            }
+        )
+
+        assert settings.source.layers[0].match.function == "copper"
+        assert settings.source.layers[0].match.side == "front"
+        assert settings.source.layers[0].visible is True
+        assert settings.source.layers[0].objects == ("pads", "traces")
+        assert settings.source.layers[1].match.name == "Mechanical 13"
+        assert settings.source.layers[1].visible is False
+        assert settings.source.layers[1].objects == ()
+        assert settings.source.exclude_components == ("R", "C")
+
+    def test_render_settings_accepts_dot_and_native_layer_tokens(self) -> None:
+        settings = parse_render_settings(
+            {
+                "tokens": {
+                    "cad.copper.front.fill": "#d17a22",
+                    "cad.layer[F.Cu].fill": "#ff0000",
+                    "highlight.copper.front.opacity": 0.85,
+                }
+            }
+        )
+
+        assert settings.tokens["cad.copper.front.fill"] == "#d17a22"
+        assert settings.tokens["cad.layer[F.Cu].fill"] == "#ff0000"
+        assert settings.tokens["highlight.copper.front.opacity"] == 0.85
+
+    def test_render_settings_accepts_font_size_px_camel_case(self) -> None:
+        settings = parse_render_settings({"fontSizePx": 72})
+        assert settings.font_size == 72
+
+    def test_render_settings_accepts_annotations_highlights_and_dimming(self) -> None:
+        settings = parse_render_settings(
+            {
+                "annotations": {"pointers": [{"target": "J1", "label": "USB interface"}]},
+                "highlights": [{"net": "SPI_CLK", "color": "#ff3b30"}],
+                "dimming": {"enabled": True},
+            }
+        )
+
+        assert settings.annotations == {"pointers": [{"target": "J1", "label": "USB interface"}]}
+        assert settings.highlights == [HighlightSpec(net="SPI_CLK", color="#ff3b30")]
+        assert settings.dimming.enabled is True
+
     def test_render_settings_accepts_font_size_px(self) -> None:
         settings = parse_render_settings({"font_size_px": 72})
         assert settings.font_size == 72
