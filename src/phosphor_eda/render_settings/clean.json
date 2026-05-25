@@ -1,0 +1,51 @@
+{
+  "extends": "phosphor:review",
+  "include": {
+    "vias": "hidden",
+    "layers": [
+      {
+        "role": "copper",
+        "side": "active",
+        "objects": {
+          "pads": "hidden",
+          "traces": "hidden",
+          "zones": "hidden"
+        }
+      },
+      {
+        "role": "silkscreen",
+        "side": "active",
+        "objects": "hidden"
+      },
+      {
+        "role": "fabrication",
+        "side": "active",
+        "objects": "visible"
+      }
+    ]
+  },
+  "highlight_behavior": {
+    "overlay": true,
+    "dim_unhighlighted": false
+  },
+  "exclude_component_prefixes": ["R", "C", "L", "TP"],
+  "style_rules": [
+    {
+      "match": { "object": "board_material" },
+      "style": { "fill": "#1a5c2a", "stroke": "none" }
+    },
+    {
+      "match": { "role": "copper", "object": "pad" },
+      "style": { "fill": "#31443a", "stroke": "#5a504a" }
+    },
+    {
+      "match": { "annotation": "label" },
+      "style": {
+        "fill": "#fff",
+        "text_halo": "#1a5c2a",
+        "text_halo_width_px": 4,
+        "font_weight": 650
+      }
+    }
+  ]
+}

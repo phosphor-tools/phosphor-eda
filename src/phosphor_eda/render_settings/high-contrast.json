@@ -1,0 +1,69 @@
+{
+  "include": {
+    "board_outline": "visible",
+    "drills": "visible",
+    "vias": "visible",
+    "layers": [
+      {
+        "role": "copper",
+        "side": "active",
+        "objects": {
+          "pads": "visible",
+          "traces": "visible",
+          "zones": "visible"
+        }
+      },
+      {
+        "role": "silkscreen",
+        "side": "active",
+        "objects": "visible"
+      },
+      {
+        "role": "fabrication",
+        "side": "active",
+        "objects": "visible"
+      }
+    ]
+  },
+  "style_rules": [
+    {
+      "match": { "object": "board_outline" },
+      "style": {
+        "fill": "transparent",
+        "stroke": "#444",
+        "stroke_width_mm": 0.12
+      }
+    },
+    {
+      "match": { "role": "copper", "object": "trace" },
+      "style": { "stroke": "#222" }
+    },
+    {
+      "match": { "role": "copper", "object": "trace_arc" },
+      "style": { "stroke": "#222" }
+    },
+    {
+      "match": { "role": "copper", "object": "pad" },
+      "style": {
+        "fill": "#111",
+        "stroke": "#fff",
+        "stroke_width_mm": 0.03
+      }
+    },
+    {
+      "match": { "role": "copper", "object": "zone" },
+      "style": {
+        "fill": "#777",
+        "opacity": 0.18
+      }
+    },
+    {
+      "match": { "object": "via" },
+      "style": {
+        "fill": "#222",
+        "stroke": "#fff",
+        "stroke_width_mm": 0.03
+      }
+    }
+  ]
+}

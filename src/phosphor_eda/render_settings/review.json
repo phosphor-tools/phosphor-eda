@@ -1,0 +1,87 @@
+{
+  "include": {
+    "board_outline": "visible",
+    "drills": "visible",
+    "vias": "visible",
+    "layers": [
+      {
+        "role": "copper",
+        "side": "active",
+        "objects": {
+          "pads": "visible",
+          "traces": "visible",
+          "zones": "visible"
+        }
+      },
+      {
+        "role": "silkscreen",
+        "side": "active",
+        "objects": "visible"
+      },
+      {
+        "role": "fabrication",
+        "side": "active",
+        "objects": "visible"
+      }
+    ]
+  },
+  "style_rules": [
+    {
+      "match": { "object": "board_material" },
+      "style": { "fill": "#1a5c2a", "stroke": "none" }
+    },
+    {
+      "match": { "object": "board_outline" },
+      "style": { "fill": "#1a5c2a", "stroke": "#1a5c2a" }
+    },
+    {
+      "match": { "role": "copper", "object": "trace" },
+      "style": { "stroke": "#145222", "opacity": 0.6 }
+    },
+    {
+      "match": { "role": "copper", "object": "trace_arc" },
+      "style": { "stroke": "#145222", "opacity": 0.6 }
+    },
+    {
+      "match": { "role": "copper", "object": "pad" },
+      "style": { "fill": "#b87333", "stroke": "#8a5526", "stroke_width_mm": 0.03 }
+    },
+    {
+      "match": { "role": "copper", "object": "zone" },
+      "style": { "fill": "#145222", "opacity": 0.3 }
+    },
+    {
+      "match": { "object": "via" },
+      "style": { "fill": "#c0c0c0", "stroke": "#1a5c2a" }
+    },
+    {
+      "match": { "role": "silkscreen", "object": "silk" },
+      "style": { "stroke": "#ffffffcc", "fill": "#ffffffcc" }
+    },
+    {
+      "match": { "role": "fabrication", "object": "body" },
+      "style": {
+        "fill": "#3d3530",
+        "stroke": "#5a504a",
+        "stroke_width_mm": 0.06
+      }
+    },
+    {
+      "match": { "object": "ref_text" },
+      "style": { "fill": "#ffffffcc", "stroke": "none" }
+    },
+    {
+      "match": { "annotation": "label" },
+      "style": {
+        "fill": "#fff",
+        "text_halo": "#1a5c2a",
+        "text_halo_width_px": 3,
+        "font_weight": 650
+      }
+    },
+    {
+      "match": { "annotation": "connector" },
+      "style": { "stroke": "#ffffffcc", "stroke_width_px": 3 }
+    }
+  ]
+}

@@ -393,5 +393,7 @@ def test_style_rule_can_target_specific_pad() -> None:
         and (geometry.attrs.get("data-component") != "TP3" or geometry.attrs.get("data-pad") != "1")
     )
 
-    assert target_pad.style == {"fill": "#123456", "pad_expansion_mm": 0.25}
-    assert other_pad.style == {}
+    assert target_pad.style["fill"] == "#123456"
+    assert target_pad.style["pad_expansion_mm"] == 0.25
+    assert other_pad.style.get("fill") != "#123456"
+    assert "pad_expansion_mm" not in other_pad.style

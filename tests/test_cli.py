@@ -495,7 +495,7 @@ def test_cli_render_settings_font_size_sets_annotation_size(tmp_path: Path) -> N
 
 def test_cli_render_settings_accepts_packaged_v2_settings(tmp_path: Path) -> None:
     settings = {
-        "extends": "phosphor:print-callout",
+        "extends": "phosphor:simplified-high-contrast",
         "font_size_px": 64,
         "annotations": {
             "pointers": [{"target": "TP3.1", "label": "SWD"}],

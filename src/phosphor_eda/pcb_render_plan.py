@@ -12,11 +12,17 @@ from phosphor_eda.pcb import (
     PcbLayer,
     PcbLine,
     PcbPad,
-    PcbPolygon,
     PcbSegment,
     PcbTraceArc,
     PcbVia,
-    PcbZone,
+)
+from phosphor_eda.pcb_render_geometry import (
+    GeometryKind as StoreGeometryKind,
+)
+from phosphor_eda.pcb_render_geometry import (
+    PcbGeometryStore,
+    RenderableGeometry,
+    build_geometry_store,
 )
 from phosphor_eda.pcb_render_settings import is_json_dict
 
@@ -25,6 +31,7 @@ if TYPE_CHECKING:
 
 
 class GeometryKind(StrEnum):
+    BOARD_MATERIAL = "board_material"
     BOARD_OUTLINE = "board_outline"
     PAD = "pad"
     TRACE = "trace"
@@ -34,6 +41,9 @@ class GeometryKind(StrEnum):
     SILK = "silk"
     BODY = "body"
     REF_TEXT = "ref_text"
+    VALUE_TEXT = "value_text"
+    USER_TEXT = "user_text"
+    BOARD_GRAPHIC_TEXT = "board_graphic_text"
 
 
 class InclusionReason(StrEnum):
@@ -144,67 +154,6 @@ def _rendered_view_transform(
     return _RenderedViewTransform(mirror_x=bx0 + bx1)
 
 
-def _transform_render_points(
-    points: tuple[RenderPoint, ...],
-    transform: _RenderedViewTransform,
-) -> tuple[RenderPoint, ...]:
-    if transform.mirror_x is None:
-        return points
-    return tuple(transform.point(point.x, point.y) for point in points)
-
-
-def _transform_pad(pad: PcbPad, transform: _RenderedViewTransform) -> PcbPad:
-    if transform.mirror_x is None:
-        return pad
-    rotation = (-pad.rotation) % 360 if pad.rotation else 0.0
-    return replace(pad, x=transform.x(pad.x), rotation=rotation)
-
-
-def _transform_segment(segment: PcbSegment, transform: _RenderedViewTransform) -> PcbSegment:
-    if transform.mirror_x is None:
-        return segment
-    return replace(
-        segment,
-        start_x=transform.x(segment.start_x),
-        end_x=transform.x(segment.end_x),
-    )
-
-
-def _transform_trace_arc(
-    trace_arc: PcbTraceArc,
-    transform: _RenderedViewTransform,
-) -> PcbTraceArc:
-    if transform.mirror_x is None:
-        return trace_arc
-    return replace(
-        trace_arc,
-        start_x=transform.x(trace_arc.start_x),
-        mid_x=transform.x(trace_arc.mid_x),
-        end_x=transform.x(trace_arc.end_x),
-    )
-
-
-def _transform_via(via: PcbVia, transform: _RenderedViewTransform) -> PcbVia:
-    if transform.mirror_x is None:
-        return via
-    return replace(via, x=transform.x(via.x))
-
-
-def _transform_zone(
-    zone: PcbPolygon | PcbZone,
-    transform: _RenderedViewTransform,
-) -> PcbPolygon | PcbZone:
-    if transform.mirror_x is None:
-        return zone
-    if isinstance(zone, PcbPolygon):
-        return replace(
-            zone,
-            points=[(transform.x(x), y) for x, y in zone.points],
-            holes=[[(transform.x(x), y) for x, y in hole] for hole in zone.holes],
-        )
-    return replace(zone, boundary=[(transform.x(x), y) for x, y in zone.boundary])
-
-
 def _transform_lines(
     lines: list[PcbLine],
     transform: _RenderedViewTransform,
@@ -265,11 +214,32 @@ def build_render_plan(
         custom_css=settings.custom_css,
     )
 
-    hl_net_nums, hl_refs, hl_pad_targets = _highlight_targets(board, settings)
-    layer_lookup = {layer.name: layer for layer in board.layers}
-    pads_by_layer = _pads_by_layer(board, layer_lookup)
+    hl_net_nums, hl_refs, hl_pad_targets, net_colors, component_colors, pad_colors = (
+        _highlight_targets(board, settings)
+    )
+    geometry_store = build_geometry_store(board, side=side)
 
     if settings.include.board_outline == "visible":
+        board_material_style = _style_for_geometry(
+            settings,
+            kind=GeometryKind.BOARD_MATERIAL,
+            layer=PcbLayer("Edge.Cuts", LayerFunction.EDGE),
+            attrs={"data-type": "board-material"},
+            highlighted=False,
+            active_side=side,
+        )
+        if board_material_style:
+            plan.base.append(
+                EmittedGeometry(
+                    kind=GeometryKind.BOARD_MATERIAL,
+                    layer="Edge.Cuts",
+                    attrs={"data-type": "board-material"},
+                    reason=InclusionReason.VISIBLE,
+                    points=_outline_points(outline_lines, outline_arcs),
+                    clipped=False,
+                    style=board_material_style,
+                )
+            )
         plan.base.append(
             EmittedGeometry(
                 kind=GeometryKind.BOARD_OUTLINE,
@@ -295,95 +265,116 @@ def build_render_plan(
         if layer.function != LayerFunction.COPPER:
             continue
 
-        for pad, fp_ref in pads_by_layer.get(layer.name, []):
+        for store_item in _store_items_for_layer(
+            geometry_store,
+            layer.name,
+            {StoreGeometryKind.PAD},
+        ):
+            pad = store_item.source
+            if not isinstance(pad, PcbPad):
+                continue
             _include_geometry(
                 plan,
                 layer=layer,
                 kind=GeometryKind.PAD,
                 object_name="pads",
-                source=_transform_pad(pad, transform),
-                attrs={
-                    "data-type": "pad",
-                    "data-component": fp_ref,
-                    "data-pad": pad.number,
-                    "data-net": pad.net_name or _net_name(board, pad.net_number),
-                    "data-net-number": str(pad.net_number),
-                },
-                points=(transform.point(pad.x, pad.y),),
+                source=pad,
+                attrs=_attrs_for_store_geometry(store_item, data_type="pad"),
+                points=_plan_points(store_item),
                 highlighted=(
-                    pad.net_number in hl_net_nums
-                    or fp_ref in hl_refs
-                    or (fp_ref, pad.number) in hl_pad_targets
+                    store_item.tags.net_number in hl_net_nums
+                    or store_item.tags.component_ref in hl_refs
+                    or (store_item.tags.component_ref, store_item.tags.pad_number) in hl_pad_targets
                 ),
                 settings=settings,
                 active_side=side,
+                net_colors=net_colors,
+                component_colors=component_colors,
+                pad_colors=pad_colors,
             )
 
-        for segment in [seg for seg in board.segments if seg.layer == layer.name]:
+        for store_item in _store_items_for_layer(
+            geometry_store,
+            layer.name,
+            {StoreGeometryKind.TRACE},
+        ):
+            segment = store_item.source
+            if not isinstance(segment, PcbSegment):
+                continue
             _include_geometry(
                 plan,
                 layer=layer,
                 kind=GeometryKind.TRACE,
                 object_name="traces",
-                source=_transform_segment(segment, transform),
-                attrs=_net_attrs(board, "trace", segment.net_number),
-                points=(
-                    transform.point(segment.start_x, segment.start_y),
-                    transform.point(segment.end_x, segment.end_y),
-                ),
-                highlighted=segment.net_number in hl_net_nums,
+                source=segment,
+                attrs=_attrs_for_store_geometry(store_item, data_type="trace"),
+                points=_plan_points(store_item),
+                highlighted=store_item.tags.net_number in hl_net_nums,
                 settings=settings,
                 active_side=side,
+                net_colors=net_colors,
+                component_colors=component_colors,
+                pad_colors=pad_colors,
             )
 
-        for trace_arc in [arc for arc in board.trace_arcs if arc.layer == layer.name]:
+        for store_item in _store_items_for_layer(
+            geometry_store,
+            layer.name,
+            {StoreGeometryKind.TRACE_ARC},
+        ):
+            trace_arc = store_item.source
+            if not isinstance(trace_arc, PcbTraceArc):
+                continue
             _include_geometry(
                 plan,
                 layer=layer,
                 kind=GeometryKind.TRACE_ARC,
                 object_name="traces",
-                source=_transform_trace_arc(trace_arc, transform),
-                attrs=_net_attrs(board, "trace", trace_arc.net_number),
-                points=(
-                    transform.point(trace_arc.start_x, trace_arc.start_y),
-                    transform.point(trace_arc.mid_x, trace_arc.mid_y),
-                    transform.point(trace_arc.end_x, trace_arc.end_y),
-                ),
-                highlighted=trace_arc.net_number in hl_net_nums,
+                source=trace_arc,
+                attrs=_attrs_for_store_geometry(store_item, data_type="trace"),
+                points=_plan_points(store_item),
+                highlighted=store_item.tags.net_number in hl_net_nums,
                 settings=settings,
                 active_side=side,
+                net_colors=net_colors,
+                component_colors=component_colors,
+                pad_colors=pad_colors,
             )
 
-        for zone in _zones_for_layer(board, layer.name):
-            net_number = zone.net_number
-            net_name = _zone_net_name(board, zone)
+        for store_item in _store_items_for_layer(
+            geometry_store,
+            layer.name,
+            {StoreGeometryKind.ZONE},
+        ):
             _include_geometry(
                 plan,
                 layer=layer,
                 kind=GeometryKind.ZONE,
                 object_name="zones",
-                source=_transform_zone(zone, transform),
-                attrs={
-                    "data-type": "zone",
-                    "data-net": net_name,
-                    "data-net-number": str(net_number),
-                },
-                points=_transform_render_points(_zone_points(zone), transform),
-                highlighted=net_number in hl_net_nums,
+                source=store_item.source,
+                attrs=_attrs_for_store_geometry(store_item, data_type="zone"),
+                points=_plan_points(store_item),
+                highlighted=store_item.tags.net_number in hl_net_nums,
                 settings=settings,
                 active_side=side,
+                net_colors=net_colors,
+                component_colors=component_colors,
+                pad_colors=pad_colors,
             )
 
-    for via in board.vias:
+    for store_item in geometry_store.by_kind(StoreGeometryKind.VIA):
+        via = store_item.source
+        if not isinstance(via, PcbVia):
+            continue
         state = settings.include.vias
-        highlighted = via.net_number in hl_net_nums
+        highlighted = store_item.tags.net_number in hl_net_nums
         geometry = EmittedGeometry(
             kind=GeometryKind.VIA,
             layer="vias",
-            attrs=_net_attrs(board, "via", via.net_number),
+            attrs=_attrs_for_store_geometry(store_item, data_type="via"),
             reason=InclusionReason.VISIBLE,
-            source=_transform_via(via, transform),
-            points=(transform.point(via.x, via.y),),
+            source=via,
+            points=_plan_points(store_item),
         )
         if state == "visible":
             geometry.style = _style_for_geometry(
@@ -396,26 +387,115 @@ def build_render_plan(
             )
             plan.base.append(geometry)
         elif state == "when-highlighted" and highlighted:
-            plan.overlay.append(
-                EmittedGeometry(
+            overlay_geometry = EmittedGeometry(
+                kind=geometry.kind,
+                layer=geometry.layer,
+                attrs=geometry.attrs,
+                reason=InclusionReason.HIGHLIGHT,
+                source=geometry.source,
+                points=geometry.points,
+                style=_style_for_geometry(
+                    settings,
                     kind=geometry.kind,
-                    layer=geometry.layer,
+                    layer=None,
                     attrs=geometry.attrs,
-                    reason=InclusionReason.HIGHLIGHT,
-                    source=geometry.source,
-                    points=geometry.points,
-                    style=_style_for_geometry(
-                        settings,
-                        kind=geometry.kind,
-                        layer=None,
-                        attrs=geometry.attrs,
-                        highlighted=True,
-                        active_side=side,
-                    ),
+                    highlighted=True,
+                    active_side=side,
+                ),
+            )
+            overlay_geometry.style.update(
+                _highlight_style_for_geometry(
+                    geometry.kind,
+                    geometry.attrs,
+                    net_colors=net_colors,
+                    component_colors=component_colors,
+                    pad_colors=pad_colors,
                 )
             )
+            plan.overlay.append(overlay_geometry)
         elif state != "never":
             plan.omitted_count += 1
+
+    for layer in _ordered_layers(board):
+        if layer.function != LayerFunction.SILKSCREEN:
+            continue
+        for store_item in _store_items_for_layer(
+            geometry_store,
+            layer.name,
+            {
+                StoreGeometryKind.SILK_LINE,
+                StoreGeometryKind.SILK_POLYGON,
+                StoreGeometryKind.BOARD_GRAPHIC_TEXT,
+            },
+        ):
+            kind = (
+                GeometryKind.BOARD_GRAPHIC_TEXT
+                if store_item.kind == StoreGeometryKind.BOARD_GRAPHIC_TEXT
+                else GeometryKind.SILK
+            )
+            _include_geometry(
+                plan,
+                layer=layer,
+                kind=kind,
+                object_name="silk",
+                source=store_item.source,
+                attrs=_attrs_for_store_geometry(
+                    store_item,
+                    data_type=kind.value if kind is not GeometryKind.SILK else "silk",
+                ),
+                points=_plan_points(store_item),
+                highlighted=store_item.tags.component_ref in hl_refs,
+                settings=settings,
+                active_side=side,
+                net_colors=net_colors,
+                component_colors=component_colors,
+                pad_colors=pad_colors,
+            )
+
+    for layer in _ordered_layers(board):
+        if layer.function != LayerFunction.FAB:
+            continue
+        for store_item in _store_items_for_layer(
+            geometry_store,
+            layer.name,
+            {
+                StoreGeometryKind.FAB_LINE,
+                StoreGeometryKind.FAB_CIRCLE,
+                StoreGeometryKind.FAB_ARC,
+                StoreGeometryKind.FAB_POLYGON,
+                StoreGeometryKind.REF_TEXT,
+                StoreGeometryKind.VALUE_TEXT,
+                StoreGeometryKind.USER_TEXT,
+            },
+        ):
+            if _component_prefix_excluded(settings, store_item.tags.component_prefix):
+                continue
+            if store_item.kind == StoreGeometryKind.VALUE_TEXT:
+                kind = GeometryKind.VALUE_TEXT
+            elif store_item.kind == StoreGeometryKind.REF_TEXT:
+                kind = GeometryKind.REF_TEXT
+            elif store_item.kind == StoreGeometryKind.USER_TEXT:
+                kind = GeometryKind.USER_TEXT
+            else:
+                kind = GeometryKind.BODY
+            _include_geometry(
+                plan,
+                layer=layer,
+                kind=kind,
+                object_name="body",
+                source=store_item.source,
+                attrs=_attrs_for_store_geometry(
+                    store_item,
+                    data_type=kind.value if kind is not GeometryKind.BODY else "body",
+                ),
+                points=_plan_points(store_item),
+                highlighted=store_item.tags.component_ref in hl_refs,
+                settings=settings,
+                active_side=side,
+                net_colors=net_colors,
+                component_colors=component_colors,
+                pad_colors=pad_colors,
+            )
 
     return plan
 
@@ -436,17 +516,33 @@ def _ordered_layers(board: Pcb) -> list[PcbLayer]:
 def _highlight_targets(
     board: Pcb,
     settings: RenderSettings,
-) -> tuple[set[int], set[str], set[tuple[str, str]]]:
+) -> tuple[
+    set[int],
+    set[str],
+    set[tuple[str, str]],
+    dict[int, str],
+    dict[str, str],
+    dict[tuple[str, str], str],
+]:
     net_numbers: set[int] = set()
     refs: set[str] = set()
     pad_targets: set[tuple[str, str]] = set()
+    net_colors: dict[int, str] = {}
+    component_colors: dict[str, str] = {}
+    pad_colors: dict[tuple[str, str], str] = {}
     for highlight in settings.highlights:
         if highlight.net:
-            net_numbers |= board.net_numbers_by_name(highlight.net)
+            nums = board.net_numbers_by_name(highlight.net)
+            net_numbers |= nums
+            if highlight.color:
+                for net_number in nums:
+                    net_colors[net_number] = highlight.color
         elif highlight.component:
             footprint = board.footprint_by_ref(highlight.component)
             if footprint is not None:
                 refs.add(footprint.reference)
+                if highlight.color:
+                    component_colors[footprint.reference] = highlight.color
         elif highlight.pad:
             ref, separator, pad_number = highlight.pad.partition(".")
             if not separator or not ref or not pad_number:
@@ -455,30 +551,53 @@ def _highlight_targets(
             if footprint is not None:
                 for pad in footprint.pads:
                     if pad.number == pad_number:
-                        pad_targets.add((footprint.reference, pad.number))
-    return net_numbers, refs, pad_targets
+                        target = (footprint.reference, pad.number)
+                        pad_targets.add(target)
+                        if highlight.color:
+                            pad_colors[target] = highlight.color
+    return net_numbers, refs, pad_targets, net_colors, component_colors, pad_colors
 
 
-def _pads_by_layer(
-    board: Pcb,
-    layer_lookup: dict[str, PcbLayer],
-) -> dict[str, list[tuple[PcbPad, str]]]:
-    pads: dict[str, list[tuple[PcbPad, str]]] = {}
-    for footprint in board.footprints:
-        for pad in footprint.pads:
-            layer = _pad_copper_layer(pad, footprint.layer, layer_lookup)
-            pads.setdefault(layer, []).append((pad, footprint.reference))
-    return pads
+def _store_items_for_layer(
+    store: PcbGeometryStore,
+    layer_name: str,
+    kinds: set[StoreGeometryKind],
+) -> list[RenderableGeometry]:
+    return [item for item in store.items if item.layer.name == layer_name and item.kind in kinds]
 
 
-def _pad_copper_layer(pad: PcbPad, footprint_layer: str, layer_lookup: dict[str, PcbLayer]) -> str:
-    for layer_name in pad.layers:
-        if layer_name == "*.Cu":
-            return footprint_layer
-        layer = layer_lookup.get(layer_name)
-        if layer and layer.function == LayerFunction.COPPER:
-            return layer_name
-    return footprint_layer
+def _plan_points(item: RenderableGeometry) -> tuple[RenderPoint, ...]:
+    return tuple(RenderPoint(point.x, point.y) for point in item.points)
+
+
+def _attrs_for_store_geometry(item: RenderableGeometry, *, data_type: str) -> dict[str, str]:
+    attrs = {
+        "data-type": data_type,
+        "data-source-geometry-id": item.id,
+        "data-layer-role": item.layer.role,
+        "data-side": item.layer.side,
+    }
+    if item.tags.component_ref:
+        attrs["data-component"] = item.tags.component_ref
+    if item.tags.component_prefix:
+        attrs["data-component-prefix"] = item.tags.component_prefix
+    if item.tags.footprint_lib:
+        attrs["data-footprint-lib"] = item.tags.footprint_lib
+    if item.tags.value:
+        attrs["data-value"] = item.tags.value
+    if item.tags.pad_number:
+        attrs["data-pad"] = item.tags.pad_number
+    if item.tags.net_name:
+        attrs["data-net"] = item.tags.net_name
+    if item.tags.net_number is not None:
+        attrs["data-net-number"] = str(item.tags.net_number)
+    if item.tags.text_kind:
+        attrs["data-text-kind"] = item.tags.text_kind
+    return attrs
+
+
+def _component_prefix_excluded(settings: RenderSettings, prefix: str) -> bool:
+    return bool(prefix) and prefix in settings.exclude_component_prefixes
 
 
 def _include_geometry(
@@ -493,6 +612,9 @@ def _include_geometry(
     highlighted: bool,
     settings: RenderSettings,
     active_side: str,
+    net_colors: dict[int, str],
+    component_colors: dict[str, str],
+    pad_colors: dict[tuple[str, str], str],
 ) -> None:
     state = _object_include_state(layer, object_name, settings, active_side)
     visible_geometry = EmittedGeometry(
@@ -514,28 +636,7 @@ def _include_geometry(
     if state == "visible":
         plan.base.append(visible_geometry)
         if highlighted:
-            plan.overlay.append(
-                EmittedGeometry(
-                    kind=kind,
-                    layer=layer.name,
-                    attrs=attrs,
-                    reason=InclusionReason.HIGHLIGHT,
-                    source=source,
-                    points=points,
-                    style=_style_for_geometry(
-                        settings,
-                        kind=kind,
-                        layer=layer,
-                        attrs=attrs,
-                        highlighted=True,
-                        active_side=active_side,
-                    ),
-                )
-            )
-        return
-    if state == "when-highlighted" and highlighted:
-        plan.overlay.append(
-            EmittedGeometry(
+            overlay_geometry = EmittedGeometry(
                 kind=kind,
                 layer=layer.name,
                 attrs=attrs,
@@ -551,7 +652,44 @@ def _include_geometry(
                     active_side=active_side,
                 ),
             )
+            overlay_geometry.style.update(
+                _highlight_style_for_geometry(
+                    kind,
+                    attrs,
+                    net_colors=net_colors,
+                    component_colors=component_colors,
+                    pad_colors=pad_colors,
+                )
+            )
+            plan.overlay.append(overlay_geometry)
+        return
+    if state == "when-highlighted" and highlighted:
+        overlay_geometry = EmittedGeometry(
+            kind=kind,
+            layer=layer.name,
+            attrs=attrs,
+            reason=InclusionReason.HIGHLIGHT,
+            source=source,
+            points=points,
+            style=_style_for_geometry(
+                settings,
+                kind=kind,
+                layer=layer,
+                attrs=attrs,
+                highlighted=True,
+                active_side=active_side,
+            ),
         )
+        overlay_geometry.style.update(
+            _highlight_style_for_geometry(
+                kind,
+                attrs,
+                net_colors=net_colors,
+                component_colors=component_colors,
+                pad_colors=pad_colors,
+            )
+        )
+        plan.overlay.append(overlay_geometry)
         return
     if state != "never":
         plan.omitted_count += 1
@@ -568,6 +706,57 @@ def _object_include_state(
             continue
         return rule.objects.get(object_name, rule.objects.get("*", "hidden"))
     return "hidden"
+
+
+def _highlight_style_for_geometry(
+    kind: GeometryKind,
+    attrs: dict[str, str],
+    *,
+    net_colors: dict[int, str],
+    component_colors: dict[str, str],
+    pad_colors: dict[tuple[str, str], str],
+) -> dict[str, object]:
+    color = _highlight_color_for_attrs(
+        attrs,
+        net_colors=net_colors,
+        component_colors=component_colors,
+        pad_colors=pad_colors,
+    )
+    if not color:
+        return {}
+    if kind in (GeometryKind.TRACE, GeometryKind.TRACE_ARC):
+        return {"stroke": color}
+    if kind is GeometryKind.PAD:
+        return {"fill": color, "stroke": color}
+    if kind in (GeometryKind.ZONE, GeometryKind.VIA):
+        return {"fill": color}
+    return {}
+
+
+def _highlight_color_for_attrs(
+    attrs: dict[str, str],
+    *,
+    net_colors: dict[int, str],
+    component_colors: dict[str, str],
+    pad_colors: dict[tuple[str, str], str],
+) -> str:
+    component = attrs.get("data-component")
+    pad = attrs.get("data-pad")
+    if component is not None and pad is not None:
+        pad_color = pad_colors.get((component, pad))
+        if pad_color:
+            return pad_color
+    if component is not None:
+        component_color = component_colors.get(component)
+        if component_color:
+            return component_color
+    net_number = attrs.get("data-net-number")
+    if net_number is not None:
+        try:
+            return net_colors.get(int(net_number), "")
+        except ValueError:
+            return ""
+    return ""
 
 
 def _style_for_geometry(
@@ -667,42 +856,13 @@ def _style_side_matches(expected: object, layer: PcbLayer | None, active_side: s
         return True
     if layer is None:
         return expected == active_side
+    if expected == "inner":
+        return layer.function == LayerFunction.COPPER and layer.side == ""
     if expected == "active":
         return layer.side == active_side
     if expected == "opposite":
         return layer.side in ("front", "back") and layer.side != active_side
     return expected == layer.side
-
-
-def _net_attrs(board: Pcb, data_type: str, net_number: int) -> dict[str, str]:
-    return {
-        "data-type": data_type,
-        "data-net": _net_name(board, net_number),
-        "data-net-number": str(net_number),
-    }
-
-
-def _net_name(board: Pcb, net_number: int) -> str:
-    net = board.nets.get(net_number)
-    return net.name if net else ""
-
-
-def _zones_for_layer(board: Pcb, layer: str) -> list[PcbPolygon | PcbZone]:
-    zones: list[PcbPolygon | PcbZone] = []
-    zones.extend(poly for poly in board.polygons if poly.layer == layer)
-    zones.extend(zone for zone in board.zones if zone.layer == layer)
-    return zones
-
-
-def _zone_net_name(board: Pcb, zone: PcbPolygon | PcbZone) -> str:
-    if zone.net_name:
-        return zone.net_name
-    return _net_name(board, zone.net_number)
-
-
-def _zone_points(zone: PcbPolygon | PcbZone) -> tuple[RenderPoint, ...]:
-    raw_points = zone.points if isinstance(zone, PcbPolygon) else zone.boundary
-    return tuple(RenderPoint(x, y) for x, y in raw_points)
 
 
 def _outline_points(lines: list[PcbLine], arcs: list[PcbArc]) -> tuple[RenderPoint, ...]:

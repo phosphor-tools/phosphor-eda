@@ -1,0 +1,98 @@
+{
+  "include": {
+    "board_outline": "visible",
+    "drills": "visible",
+    "vias": "visible",
+    "layers": [
+      {
+        "role": "copper",
+        "side": "any",
+        "objects": {
+          "pads": "visible",
+          "traces": "visible",
+          "zones": "visible"
+        }
+      },
+      {
+        "role": "silkscreen",
+        "side": "active",
+        "objects": "visible"
+      },
+      {
+        "role": "fabrication",
+        "side": "any",
+        "objects": "never"
+      }
+    ]
+  },
+  "style_rules": [
+    {
+      "match": { "object": "board_outline" },
+      "style": {
+        "fill": "transparent",
+        "stroke": "#d0d2cd",
+        "stroke_width_mm": 0.15
+      }
+    },
+    {
+      "match": { "role": "copper", "side": "front", "object": "trace" },
+      "style": { "stroke": "#c83434" }
+    },
+    {
+      "match": { "role": "copper", "side": "front", "object": "trace_arc" },
+      "style": { "stroke": "#c83434" }
+    },
+    {
+      "match": { "role": "copper", "side": "front", "object": "pad" },
+      "style": { "fill": "#c83434", "stroke": "#c83434", "stroke_width_mm": 0.03 }
+    },
+    {
+      "match": { "role": "copper", "side": "front", "object": "zone" },
+      "style": { "fill": "#c83434", "opacity": 0.35 }
+    },
+    {
+      "match": { "role": "copper", "side": "back", "object": "trace" },
+      "style": { "stroke": "#4d7fc4" }
+    },
+    {
+      "match": { "role": "copper", "side": "back", "object": "trace_arc" },
+      "style": { "stroke": "#4d7fc4" }
+    },
+    {
+      "match": { "role": "copper", "side": "back", "object": "pad" },
+      "style": { "fill": "#4d7fc4", "stroke": "#4d7fc4", "stroke_width_mm": 0.03 }
+    },
+    {
+      "match": { "role": "copper", "side": "back", "object": "zone" },
+      "style": { "fill": "#4d7fc4", "opacity": 0.35 }
+    },
+    {
+      "match": { "role": "copper", "side": "inner", "object": "trace" },
+      "style": { "stroke": "#7fc87f" }
+    },
+    {
+      "match": { "role": "copper", "side": "inner", "object": "trace_arc" },
+      "style": { "stroke": "#7fc87f" }
+    },
+    {
+      "match": { "role": "copper", "side": "inner", "object": "pad" },
+      "style": { "fill": "#7fc87f", "stroke": "#4f8f4f", "stroke_width_mm": 0.03 }
+    },
+    {
+      "match": { "role": "copper", "side": "inner", "object": "zone" },
+      "style": { "fill": "#7fc87f", "opacity": 0.35 }
+    },
+    {
+      "match": { "object": "via" },
+      "style": { "fill": "#e3b72e", "stroke": "#111" }
+    },
+    {
+      "match": { "role": "silkscreen", "side": "front", "object": "silk" },
+      "style": { "stroke": "#f2eda1", "fill": "#f2eda1" }
+    },
+    {
+      "match": { "role": "silkscreen", "side": "back", "object": "silk" },
+      "style": { "stroke": "#e8b2a7", "fill": "#e8b2a7" }
+    }
+  ]
+}

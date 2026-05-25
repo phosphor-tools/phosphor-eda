@@ -21,10 +21,15 @@ from xml.sax.saxutils import escape as xml_escape
 
 from phosphor_eda.pcb import (
     LayerFunction,
+    PcbArc,
+    PcbCircle,
+    PcbGraphicText,
     PcbLayer,
+    PcbLine,
     PcbPad,
     PcbPolygon,
     PcbSegment,
+    PcbText,
     PcbTraceArc,
     PcbVia,
     PcbZone,
@@ -52,10 +57,7 @@ if TYPE_CHECKING:
 
     from phosphor_eda.pcb import (
         Pcb,
-        PcbArc,
-        PcbCircle,
         PcbFootprint,
-        PcbLine,
     )
     from phosphor_eda.pcb_annotations import (
         ResolvedAnnotations,
@@ -413,9 +415,9 @@ def render_settings_schema() -> dict[str, object]:
         },
         "examples": [
             {
-                "extends": "phosphor:print-callout",
+                "extends": "phosphor:simplified-high-contrast",
                 "width": 3000,
-                "font_size_px": 100,
+                "font_size_px": 40,
                 "include": {
                     "vias": "when-highlighted",
                     "layers": [
@@ -1108,7 +1110,7 @@ def _draw_pad(svg: _Svg, pad: PcbPad, attrs: dict[str, str]) -> None:
 
 
 def render_pcb_svg_from_plan(plan: PcbRenderPlan) -> str:
-    """Serialize a render plan to SVG for the initial print-callout slice."""
+    """Serialize a structured render plan to SVG."""
     svg = _Svg()
     view_box = plan.view_box
     svg.raw(
@@ -1152,7 +1154,21 @@ def render_pcb_svg_from_plan(plan: PcbRenderPlan) -> str:
         (item for item in plan.base if item.kind is GeometryKind.BOARD_OUTLINE),
         None,
     )
+    board_material = next(
+        (item for item in plan.base if item.kind is GeometryKind.BOARD_MATERIAL),
+        None,
+    )
     bx0, by0, bx1, by1 = plan.board_bbox
+    if board_material is not None:
+        if plan.clip is not None:
+            svg.raw(f'<g clip-path="url(#{active_clip})">')
+            svg.path(plan.clip.board_path_d, attrs=_board_material_attrs(board_material))
+            svg.group_end()
+        else:
+            svg.polygon(
+                [(point.x, point.y) for point in board_material.points],
+                attrs=_board_material_attrs(board_material),
+            )
     if plan.clip is not None:
         svg.raw(f'<g clip-path="url(#{active_clip})">')
         svg.path(plan.clip.board_path_d, attrs=_board_fill_attrs(board_outline))
@@ -1191,17 +1207,7 @@ def render_pcb_svg_from_plan(plan: PcbRenderPlan) -> str:
 
 def _plan_svg_css() -> str:
     return """
-.board-fill { fill: transparent; stroke: #111; stroke-width: 0.12; }
-.pad { fill: #111; stroke: #fff; stroke-width: 0.03; }
-.via .annular { fill: #111; stroke: #fff; stroke-width: 0.03; }
-.via .drill { fill: #fff; stroke: none; }
-.zone { fill: #ddd; stroke: none; }
-.trace, .trace-arc { stroke: #111; fill: none; stroke-linecap: round; }
-.highlight-overlay .pad,
-.highlight-overlay .via .annular { fill: #c00000; stroke: #111; }
-.highlight-overlay .trace,
-.highlight-overlay .trace-arc { stroke: #c00000; fill: none; stroke-linecap: round; }
-.highlight-overlay .zone { fill: #c00000; }
+.trace, .trace-arc { stroke-linecap: round; }
 """.strip()
 
 
@@ -1214,7 +1220,7 @@ def _render_plan_geometry(
     current_layer = ""
     layer_open = False
     for item in geometry:
-        if item.kind is GeometryKind.BOARD_OUTLINE:
+        if item.kind in (GeometryKind.BOARD_MATERIAL, GeometryKind.BOARD_OUTLINE):
             continue
         layer = item.layer
         if layer != current_layer:
@@ -1286,9 +1292,82 @@ def _render_plan_item(svg: _Svg, item: EmittedGeometry, *, overlay: bool) -> Non
         x = center.x if center is not None else via.x
         y = center.y if center is not None else via.y
         svg.group_start(attrs=_plan_attrs(item, "via", overlay=overlay))
-        svg.circle(x, y, via.size / 2, attrs={"class": "annular"})
+        svg.circle(x, y, via.size / 2, attrs={"class": "annular", **_style_svg_attrs(item.style)})
         svg.circle(x, y, via.drill / 2, attrs={"class": "drill"})
         svg.group_end()
+    elif item.kind is GeometryKind.SILK:
+        source = item.source
+        attrs = _plan_attrs(item, "silk", overlay=overlay)
+        if isinstance(source, PcbLine):
+            svg.line(
+                source.start_x,
+                source.start_y,
+                source.end_x,
+                source.end_y,
+                _style_stroke_width(item.style, max(source.width, 0.1)),
+                attrs=attrs,
+            )
+        elif isinstance(source, PcbPolygon):
+            svg.polygon(source.points, attrs=attrs)
+    elif item.kind is GeometryKind.BODY:
+        source = item.source
+        attrs = _plan_attrs(item, "body", overlay=overlay)
+        if isinstance(source, PcbLine):
+            svg.line(
+                source.start_x,
+                source.start_y,
+                source.end_x,
+                source.end_y,
+                _style_stroke_width(item.style, max(source.width, 0.08)),
+                attrs=attrs,
+            )
+        elif isinstance(source, PcbCircle):
+            svg.circle(source.cx, source.cy, source.radius, attrs=attrs)
+        elif isinstance(source, PcbArc):
+            d = _svg_arc_path_d(
+                source.start_x,
+                source.start_y,
+                source.mid_x,
+                source.mid_y,
+                source.end_x,
+                source.end_y,
+            )
+            attrs = {
+                **attrs,
+                "stroke-width": f"{_style_stroke_width(item.style, max(source.width, 0.08)):.4f}",
+            }
+            svg.path(d, attrs=attrs)
+        elif isinstance(source, PcbPolygon):
+            svg.polygon(source.points, attrs=attrs)
+    elif item.kind in (
+        GeometryKind.REF_TEXT,
+        GeometryKind.VALUE_TEXT,
+        GeometryKind.USER_TEXT,
+        GeometryKind.BOARD_GRAPHIC_TEXT,
+    ):
+        source = item.source
+        if isinstance(source, PcbGraphicText):
+            text_x = source.x
+            text_y = source.y
+            text_content = source.text
+            text_size = source.font_size
+            text_rotation = source.rotation
+        else:
+            text = cast("PcbText", source)
+            text_x = text.x
+            text_y = text.y
+            text_content = text.text
+            text_size = text.font_size
+            text_rotation = text.rotation
+        class_name = "ref-text" if item.kind is GeometryKind.REF_TEXT else "user-text"
+        svg.text(
+            text_x,
+            text_y,
+            text_content,
+            min(text_size, 0.8),
+            rotation=text_rotation,
+            attrs=_plan_attrs(item, class_name, overlay=overlay),
+        )
 
 
 def _plan_attrs(item: EmittedGeometry, class_name: str, *, overlay: bool) -> dict[str, str]:
@@ -1301,6 +1380,7 @@ def _plan_attrs(item: EmittedGeometry, class_name: str, *, overlay: bool) -> dic
         classes.append("highlight")
     attrs["class"] = " ".join(classes)
     attrs.update(_style_svg_attrs(item.style))
+    attrs["data-render-reason"] = item.reason.value
     return attrs
 
 
@@ -1313,8 +1393,15 @@ def _board_fill_attrs(board_outline: EmittedGeometry | None) -> dict[str, str]:
     return attrs
 
 
+def _board_material_attrs(board_material: EmittedGeometry) -> dict[str, str]:
+    attrs = dict(board_material.attrs)
+    attrs["class"] = "board-material"
+    attrs.update(_style_svg_attrs(board_material.style))
+    return attrs
+
+
 def _style_svg_attrs(style: dict[str, object]) -> dict[str, str]:
-    attrs: dict[str, str] = {}
+    declarations: list[str] = []
     for style_key, attr_key in (
         ("fill", "fill"),
         ("stroke", "stroke"),
@@ -1323,9 +1410,12 @@ def _style_svg_attrs(style: dict[str, object]) -> dict[str, str]:
     ):
         value = style.get(style_key)
         if isinstance(value, str):
-            attrs[attr_key] = value
+            declarations.append(f"{attr_key}: {value}")
         elif isinstance(value, (int, float)) and not isinstance(value, bool):
-            attrs[attr_key] = f"{float(value):.4f}"
+            declarations.append(f"{attr_key}: {float(value):.4f}")
+    attrs: dict[str, str] = {}
+    if declarations:
+        attrs["style"] = "; ".join(declarations)
     return attrs
 
 

@@ -13,6 +13,7 @@ from phosphor_eda.pcb import (
     LayerFunction,
     Pcb,
     PcbFootprint,
+    PcbGraphicText,
     PcbLayer,
     PcbLine,
     PcbModel3D,
@@ -43,6 +44,12 @@ from phosphor_eda.pcb_render import (
     render_pcb_svg,
     render_settings_schema,
 )
+from phosphor_eda.pcb_render_geometry import (
+    GeometryKind,
+    GeometrySelector,
+    build_geometry_store,
+    geometry_matches_selector,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "swd_switch.kicad_pcb"
 ORANGECRAB_FIXTURE = Path(__file__).parent / "fixtures" / "orangecrab.kicad_pcb"
@@ -63,6 +70,14 @@ def orangecrab_board() -> Pcb:
 # ---------------------------------------------------------------------------
 
 
+def _assert_svg_contains_in_order(svg: str, needles: list[str]) -> None:
+    cursor = -1
+    for needle in needles:
+        next_index = svg.find(needle, cursor + 1)
+        assert next_index >= 0, f"{needle!r} not found after index {cursor}"
+        cursor = next_index
+
+
 def test_valid_svg(board: Pcb) -> None:
     svg = render_pcb_svg(board)
     assert svg.startswith("<svg")
@@ -74,11 +89,12 @@ def test_has_base_style(board: Pcb) -> None:
     assert '<style id="base">' in svg
 
 
-def test_default_render_style_is_print_friendly(board: Pcb) -> None:
+def test_base_plan_svg_css_has_no_paint_defaults(board: Pcb) -> None:
     svg = render_pcb_svg(board)
-    assert ".board-fill { fill: transparent" in svg
-    assert "stroke: #111" in svg
-    assert ".highlight-overlay .trace" in svg
+    base_css = svg[svg.index('<style id="base">') : svg.index("</style>")]
+    assert "fill:" not in base_css
+    assert "stroke:" not in base_css
+    assert ".trace, .trace-arc" in base_css
 
 
 def test_has_board_clip(board: Pcb) -> None:
@@ -204,8 +220,8 @@ def test_component_body_attributes(board: Pcb) -> None:
     assert 'data-type="body"' in svg
 
 
-def test_print_callout_svg_omits_unhighlighted_traces(board: Pcb) -> None:
-    settings = load_render_settings_json('{"extends": "phosphor:print-callout"}')
+def test_simplified_high_contrast_svg_omits_unhighlighted_traces(board: Pcb) -> None:
+    settings = load_render_settings_json('{"extends": "phosphor:simplified-high-contrast"}')
     svg = render_pcb_svg(
         board,
         side="front",
@@ -219,7 +235,7 @@ def test_print_callout_svg_omits_unhighlighted_traces(board: Pcb) -> None:
 
 def test_back_side_plan_svg_does_not_use_top_level_mirror_transform(board: Pcb) -> None:
     settings = load_render_settings_json(
-        '{"extends": "phosphor:print-callout", '
+        '{"extends": "phosphor:simplified-high-contrast", '
         '"highlights": [{"pad": "TP3.1", "color": "#c00000"}]}'
     )
 
@@ -236,9 +252,9 @@ def test_back_side_plan_svg_does_not_use_top_level_mirror_transform(board: Pcb) 
     assert 'cx="93.5000" cy="64.5000"' not in svg
 
 
-def test_print_callout_svg_keeps_highlighted_trace_overlay(board: Pcb) -> None:
+def test_simplified_high_contrast_svg_keeps_highlighted_trace_overlay(board: Pcb) -> None:
     settings = load_render_settings_json(
-        '{"extends": "phosphor:print-callout", '
+        '{"extends": "phosphor:simplified-high-contrast", '
         '"highlights": [{"net": "/SWDIO_TMS", "color": "#c00000"}]}'
     )
     svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
@@ -251,7 +267,7 @@ def test_render_settings_plan_path_does_not_duplicate_settings_highlights(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = load_render_settings_json(
-        '{"extends": "phosphor:print-callout", '
+        '{"extends": "phosphor:simplified-high-contrast", '
         '"highlights": [{"net": "/SWDIO_TMS", "color": "#c00000"}]}'
     )
     captured_highlights: list[list[HighlightSpec]] = []
@@ -287,7 +303,7 @@ def test_render_settings_plan_path_does_not_duplicate_settings_highlights(
 
 def test_structured_style_rule_emits_direct_attributes(board: Pcb) -> None:
     settings = load_render_settings_json(
-        '{"extends": "phosphor:print-callout", '
+        '{"extends": "phosphor:simplified-high-contrast", '
         '"style_rules": ['
         '{"match": {"pad": "TP3.1"}, '
         '"style": {"fill": "#123456", "pad_expansion_mm": 0.25}}'
@@ -296,7 +312,288 @@ def test_structured_style_rule_emits_direct_attributes(board: Pcb) -> None:
 
     svg = render_pcb_svg(board, side="back", width_px=1200, render_settings=settings)
 
-    assert 'fill="#123456"' in svg
+    assert 'style="fill: #123456' in svg
+
+
+def test_structured_preset_colors_use_inline_style_so_css_does_not_override(
+    board: Pcb,
+) -> None:
+    settings = load_render_settings_json('{"extends": "phosphor:review"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    material_pos = svg.index('class="board-material"')
+    mask_pos = svg.index('class="board-fill"')
+    assert material_pos < mask_pos
+    assert '<g clip-path="url(#drill-clip)">\n<path' in svg[:material_pos]
+    assert 'class="board-material" style="fill: #1a5c2a; stroke: none"' in svg
+    assert 'class="board-fill" style="fill: #1a5c2a; stroke: #1a5c2a"' in svg
+    assert 'class="pad nn-1" style="fill: #b87333; stroke: #8a5526' in svg
+    assert 'class="trace nn-1" style="stroke: #145222; opacity: 0.6000"' in svg
+    assert 'class="annular" style="fill: #c0c0c0; stroke: #1a5c2a"' in svg
+
+
+def test_clean_preset_enables_board_material(board: Pcb) -> None:
+    settings = load_render_settings_json('{"extends": "phosphor:clean"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert 'class="board-material" style="fill: #1a5c2a; stroke: none"' in svg
+    assert 'class="board-fill" style="fill: #1a5c2a; stroke: #1a5c2a"' in svg
+
+
+def test_renderable_geometry_store_preserves_component_pad_metadata() -> None:
+    board = _make_board_with_component()
+
+    store = build_geometry_store(board, side="front")
+    pad = next(item for item in store.items if item.kind == GeometryKind.PAD)
+
+    assert pad.id.startswith("pad:")
+    assert pad.layer.name == "F.Cu"
+    assert pad.layer.role == "copper"
+    assert pad.tags.component_ref == "U1"
+    assert pad.tags.component_prefix == "U"
+    assert pad.tags.pad_number == "1"
+    assert pad.tags.net_name == "VCC"
+    assert pad.source is not None
+
+
+def test_renderable_geometry_store_includes_non_copper_geometry() -> None:
+    board = _make_board_with_component()
+    board.footprints[0].texts.append(
+        PcbText(
+            text="U1",
+            x=10.0,
+            y=8.0,
+            rotation=0.0,
+            layer="F.Fab",
+            font_size=0.5,
+            kind="reference",
+            footprint_ref="U1",
+        )
+    )
+
+    store = build_geometry_store(board, side="front")
+    kinds = {item.kind for item in store.items}
+
+    assert GeometryKind.BOARD_MATERIAL in kinds
+    assert GeometryKind.BOARD_OUTLINE in kinds
+    assert GeometryKind.PAD in kinds
+    assert GeometryKind.SILK_LINE in kinds
+    assert GeometryKind.FAB_LINE in kinds
+    assert GeometryKind.REF_TEXT in kinds
+
+
+def test_geometry_selector_matches_net_component_pad_and_prefix() -> None:
+    board = _make_board_with_component(ref="R1", lib="Resistor_SMD:R_0402", value="10k")
+    store = build_geometry_store(board, side="front")
+    pad = next(item for item in store.items if item.kind == GeometryKind.PAD)
+
+    assert geometry_matches_selector(
+        pad,
+        GeometrySelector(kinds=frozenset({GeometryKind.PAD}), net_name="VCC"),
+        active_side="front",
+    )
+    assert geometry_matches_selector(
+        pad,
+        GeometrySelector(component_ref="R1", pad_number="1"),
+        active_side="front",
+    )
+    assert geometry_matches_selector(
+        pad,
+        GeometrySelector(component_prefixes=("R",)),
+        active_side="front",
+    )
+    assert not geometry_matches_selector(
+        pad,
+        GeometrySelector(component_prefixes=("U",)),
+        active_side="front",
+    )
+
+
+def test_geometry_selector_matches_active_opposite_and_inner_layers() -> None:
+    board = _make_board_with_inner_layers()
+    store = build_geometry_store(board, side="front")
+    front_trace = next(
+        item
+        for item in store.items
+        if item.kind == GeometryKind.TRACE and item.layer.name == "F.Cu"
+    )
+    back_trace = next(
+        item
+        for item in store.items
+        if item.kind == GeometryKind.TRACE and item.layer.name == "B.Cu"
+    )
+    inner_trace = next(
+        item
+        for item in store.items
+        if item.kind == GeometryKind.TRACE and item.layer.name == "In1.Cu"
+    )
+
+    assert geometry_matches_selector(
+        front_trace,
+        GeometrySelector(role="copper", side="active"),
+        active_side="front",
+    )
+    assert geometry_matches_selector(
+        back_trace,
+        GeometrySelector(role="copper", side="opposite"),
+        active_side="front",
+    )
+    assert geometry_matches_selector(
+        inner_trace,
+        GeometrySelector(role="copper", side="inner"),
+        active_side="front",
+    )
+
+
+def test_design_preset_matches_legacy_core_colors_and_order() -> None:
+    board = _make_board_with_inner_layers()
+    board.polygons.append(
+        PcbPolygon(
+            points=[(2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0)],
+            layer="F.Cu",
+            net_number=1,
+            net_name="SIG",
+        )
+    )
+    board.footprints[0].silkscreen_lines.append(
+        PcbLine(4.0, 8.5, 6.0, 8.5, "F.SilkS", 0.12, footprint_ref="U1")
+    )
+    settings = load_render_settings_json('{"extends": "phosphor:design"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert "#c83434" in svg
+    assert "#4d7fc4" in svg
+    assert "#7fc87f" in svg
+    assert "opacity: 0.3500" in svg
+    assert "#f2eda1" in svg
+    assert 'data-type="body"' not in svg
+    _assert_svg_contains_in_order(
+        svg,
+        [
+            'data-layer="B.Cu"',
+            'data-layer="In1.Cu"',
+            'data-layer="F.Cu"',
+            'data-layer="vias"',
+        ],
+    )
+
+
+def test_review_preset_matches_legacy_mask_and_body_context() -> None:
+    board = _make_board_with_component()
+    board.footprints[0].texts.append(
+        PcbText(
+            text="U1",
+            x=10.0,
+            y=8.0,
+            rotation=0.0,
+            layer="F.Fab",
+            font_size=0.5,
+            kind="reference",
+            footprint_ref="U1",
+        )
+    )
+    settings = load_render_settings_json('{"extends": "phosphor:review"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert 'class="board-material" style="fill: #1a5c2a; stroke: none"' in svg
+    assert 'class="pad nn-1' in svg
+    assert "#b87333" in svg
+    assert "#ffffffcc" in svg
+    assert 'data-type="body"' in svg
+    assert 'class="ref-text' in svg
+
+
+def test_plan_path_renders_board_level_graphic_text() -> None:
+    board = _make_board_with_component()
+    board.graphic_texts.append(
+        PcbGraphicText(
+            text="ON",
+            x=12.0,
+            y=12.0,
+            rotation=0.0,
+            layer="F.SilkS",
+            font_size=0.75,
+        )
+    )
+    settings = load_render_settings_json('{"extends": "phosphor:review"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert 'data-type="board_graphic_text"' in svg
+    assert ">ON</text>" in svg
+
+
+@pytest.mark.parametrize("ref", ["R1", "C1", "L1", "TP1"])
+def test_clean_preset_omits_passive_component_body_context(ref: str) -> None:
+    board = _make_board_with_component(ref=ref)
+    board.footprints[0].texts.append(
+        PcbText(
+            text=ref,
+            x=10.0,
+            y=8.0,
+            rotation=0.0,
+            layer="F.Fab",
+            font_size=0.5,
+            kind="reference",
+            footprint_ref=ref,
+        )
+    )
+    settings = load_render_settings_json('{"extends": "phosphor:clean"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert 'class="board-material" style="fill: #1a5c2a; stroke: none"' in svg
+    assert 'data-type="pad"' not in svg
+    assert 'class="silk' not in svg
+    assert 'data-type="body"' not in svg
+    assert 'class="ref-text' not in svg
+
+
+def test_clean_preset_keeps_non_passive_component_body_context() -> None:
+    board = _make_board_with_component(ref="U1")
+    board.footprints[0].texts.append(
+        PcbText(
+            text="U1",
+            x=10.0,
+            y=8.0,
+            rotation=0.0,
+            layer="F.Fab",
+            font_size=0.5,
+            kind="reference",
+            footprint_ref="U1",
+        )
+    )
+    settings = load_render_settings_json('{"extends": "phosphor:clean"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert 'data-type="pad"' not in svg
+    assert 'class="silk' not in svg
+    assert 'data-type="body"' in svg
+    assert 'class="ref-text' in svg
+
+
+def test_structured_highlight_colors_use_inline_style_so_css_does_not_override(
+    board: Pcb,
+) -> None:
+    settings = load_render_settings_json(
+        '{"extends": "phosphor:review", '
+        '"highlights": ['
+        '{"net": "/SWDIO_TMS", "color": "#0057b8"}, '
+        '{"component": "U1", "color": "#c00000"}'
+        "]}"
+    )
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    overlay = svg[svg.index('<g class="highlight-overlay">') :]
+    assert 'class="trace nn-4 highlight" style="stroke: #0057b8' in overlay
+    assert 'data-component="U1"' in overlay
+    assert 'style="fill: #c00000' in overlay
 
 
 # ---------------------------------------------------------------------------
@@ -1146,7 +1443,7 @@ def test_annotation_label_style_rule_emits_halo_css_or_attrs(board: Pcb) -> None
     settings = load_render_settings_json(
         json.dumps(
             {
-                "extends": "phosphor:print-callout",
+                "extends": "phosphor:simplified-high-contrast",
                 "annotations": {"pointers": [{"target": "TP3.1", "label": "SWD"}]},
             }
         )
@@ -1162,11 +1459,11 @@ def test_annotation_label_style_rule_emits_halo_css_or_attrs(board: Pcb) -> None
 
     svg = render_pcb_svg(board, annotations=annotations, render_settings=settings)
 
-    assert "font-size: 80.0px" in svg
+    assert "font-size: 40.0px" in svg
     assert "stroke-linejoin: round" in svg
     assert ".annotation-label-text" in svg
     assert "stroke: #fff" in svg
-    assert "stroke-width: 6.0px" in svg
+    assert "stroke-width: 4.0px" in svg
     assert "fill: #000" in svg
     assert ".annotation-pill { stroke: none; display: none; }" in svg
     assert ".annotation-connector" in svg
@@ -1212,7 +1509,7 @@ class TestParseRenderSettings:
         assert "highlight_behavior" in props
         assert "style_rules" in props
         assert "custom_css" in props
-        assert "phosphor:print-callout" in json.dumps(schema["examples"])
+        assert "phosphor:simplified-high-contrast" in json.dumps(schema["examples"])
         example = schema["examples"][0]
         assert "include" in example
         assert "highlight_behavior" in example
@@ -1474,7 +1771,7 @@ def test_load_render_settings_file_extends_packaged_settings(tmp_path: Path) -> 
     child.write_text(
         json.dumps(
             {
-                "extends": "phosphor:print-callout",
+                "extends": "phosphor:simplified-high-contrast",
                 "font_size_px": 72,
                 "custom_css": ".annotation-connector { stroke-width: 6; }",
             }
@@ -1489,19 +1786,31 @@ def test_load_render_settings_file_extends_packaged_settings(tmp_path: Path) -> 
     assert settings.style_rules
 
 
-def test_bundled_print_callout_uses_v2_settings(tmp_path: Path) -> None:
+def test_bundled_simplified_high_contrast_uses_v2_settings(tmp_path: Path) -> None:
     child = tmp_path / "child.json"
-    child.write_text(json.dumps({"extends": "phosphor:print-callout"}))
+    child.write_text(json.dumps({"extends": "phosphor:simplified-high-contrast"}))
 
     settings = load_render_settings_file(child)
 
-    assert settings.font_size == 80
+    assert settings.font_size == 40
     assert settings.include.layers
     assert settings.include.vias == "when-highlighted"
     assert settings.style_rules
 
 
-@pytest.mark.parametrize("name", ["print", "print-callout", "review-callout"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "review",
+        "design",
+        "clean",
+        "high-contrast",
+        "simplified-high-contrast",
+        "print",  # compatibility alias for high-contrast
+        "print-callout",  # compatibility alias for simplified-high-contrast
+        "review-callout",  # compatibility alias for review
+    ],
+)
 def test_bundled_render_settings_use_v2_settings(name: str) -> None:
     settings = load_render_settings_json(json.dumps({"extends": f"phosphor:{name}"}))
 
@@ -1509,15 +1818,14 @@ def test_bundled_render_settings_use_v2_settings(name: str) -> None:
     assert settings.style_rules
 
 
-def test_print_callout_extends_print_style_rules() -> None:
-    settings = load_render_settings_json('{"extends": "phosphor:print-callout"}')
+def test_simplified_high_contrast_extends_high_contrast_style_rules() -> None:
+    settings = load_render_settings_json('{"extends": "phosphor:simplified-high-contrast"}')
+    rules_by_match = {tuple(rule.match.items()): rule.style for rule in settings.style_rules}
 
-    assert settings.style_rules[0].match == {"object": "board_outline"}
-    assert settings.style_rules[0].style["stroke"] == "#444"
-    assert settings.style_rules[1].match == {"annotation": "label"}
-    assert settings.style_rules[1].style["pill_visible"] is False
-    assert settings.style_rules[2].match == {"annotation": "connector"}
-    assert settings.style_rules[2].style["dot_visible"] is False
+    assert settings.font_size == 40
+    assert rules_by_match[(("object", "board_outline"),)]["stroke"] == "#444"
+    assert rules_by_match[(("annotation", "label"),)]["pill_visible"] is False
+    assert rules_by_match[(("annotation", "connector"),)]["dot_visible"] is False
 
 
 def test_render_settings_extends_merges_v2_policy(tmp_path: Path) -> None:
@@ -1654,7 +1962,7 @@ def test_render_settings_schema_documents_extends() -> None:
     schema = render_settings_schema()
 
     assert schema["properties"]["extends"]["type"] == "string"
-    assert "phosphor:print-callout" in json.dumps(schema["examples"])
+    assert "phosphor:simplified-high-contrast" in json.dumps(schema["examples"])
 
 
 # ---------------------------------------------------------------------------

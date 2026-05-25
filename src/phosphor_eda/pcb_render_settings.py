@@ -65,6 +65,7 @@ class RenderSettings:
     highlights: list[HighlightSpec] = field(default_factory=list)
     include: IncludePolicy = field(default_factory=IncludePolicy)
     highlight_behavior: dict[str, object] = field(default_factory=dict)
+    exclude_component_prefixes: tuple[str, ...] = ()
     style_rules: list[StyleRule] = field(default_factory=list)
     annotations: dict[str, object] = field(default_factory=dict)
     custom_css: str = ""
@@ -135,6 +136,19 @@ def parse_render_settings(data: dict[str, object]) -> RenderSettings:
             msg = "highlight_behavior must be an object"
             raise ValueError(msg)
         settings.highlight_behavior = behavior
+
+    if "exclude_component_prefixes" in data:
+        prefixes = data["exclude_component_prefixes"]
+        if not is_json_list(prefixes):
+            msg = "exclude_component_prefixes must be an array"
+            raise ValueError(msg)
+        parsed_prefixes: list[str] = []
+        for index, prefix in enumerate(prefixes):
+            if not isinstance(prefix, str) or not prefix:
+                msg = f"exclude_component_prefixes[{index}] must be a non-empty string"
+                raise ValueError(msg)
+            parsed_prefixes.append(prefix.upper())
+        settings.exclude_component_prefixes = tuple(parsed_prefixes)
 
     if "style_rules" in data:
         settings.style_rules = _parse_style_rules(data["style_rules"])

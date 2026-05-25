@@ -1,38 +1,3 @@
 {
-  "include": {
-    "board_outline": "visible",
-    "drills": "visible",
-    "vias": "visible",
-    "layers": [
-      {
-        "role": "copper",
-        "side": "active",
-        "objects": {
-          "pads": "visible",
-          "traces": "visible",
-          "zones": "visible"
-        }
-      },
-      {
-        "role": "silkscreen",
-        "side": "active",
-        "objects": "visible"
-      },
-      {
-        "role": "fabrication",
-        "side": "active",
-        "objects": "visible"
-      }
-    ]
-  },
-  "style_rules": [
-    {
-      "match": { "object": "board_outline" },
-      "style": {
-        "fill": "transparent",
-        "stroke": "#444",
-        "stroke_width_mm": 0.12
-      }
-    }
-  ]
+  "extends": "phosphor:high-contrast"
 }
