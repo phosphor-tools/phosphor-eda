@@ -29,22 +29,26 @@
     {
       "match": { "object": "board_outline" },
       "style": {
-        "fill": "transparent",
+        "fill": "none",
         "stroke": "#d0d2cd",
         "stroke_width_mm": 0.15
       }
     },
     {
       "match": { "role": "copper", "side": "front", "object": "trace" },
-      "style": { "stroke": "#c83434" }
+      "style": { "stroke": "#c83434", "opacity": 0.35 }
     },
     {
       "match": { "role": "copper", "side": "front", "object": "trace_arc" },
-      "style": { "stroke": "#c83434" }
+      "style": { "stroke": "#c83434", "opacity": 0.35 }
     },
     {
       "match": { "role": "copper", "side": "front", "object": "pad" },
-      "style": { "fill": "#c83434", "stroke": "#c83434", "stroke_width_mm": 0.03 }
+      "style": { "fill": "#c83434", "opacity": 0.35 }
+    },
+    {
+      "match": { "role": "copper", "side": "front", "object": "via" },
+      "style": { "fill": "#c83434" }
     },
     {
       "match": { "role": "copper", "side": "front", "object": "zone" },
@@ -52,15 +56,19 @@
     },
     {
       "match": { "role": "copper", "side": "back", "object": "trace" },
-      "style": { "stroke": "#4d7fc4" }
+      "style": { "stroke": "#4d7fc4", "opacity": 0.35 }
     },
     {
       "match": { "role": "copper", "side": "back", "object": "trace_arc" },
-      "style": { "stroke": "#4d7fc4" }
+      "style": { "stroke": "#4d7fc4", "opacity": 0.35 }
     },
     {
       "match": { "role": "copper", "side": "back", "object": "pad" },
-      "style": { "fill": "#4d7fc4", "stroke": "#4d7fc4", "stroke_width_mm": 0.03 }
+      "style": { "fill": "#4d7fc4", "opacity": 0.35 }
+    },
+    {
+      "match": { "role": "copper", "side": "back", "object": "via" },
+      "style": { "fill": "#4d7fc4" }
     },
     {
       "match": { "role": "copper", "side": "back", "object": "zone" },
@@ -68,31 +76,47 @@
     },
     {
       "match": { "role": "copper", "side": "inner", "object": "trace" },
-      "style": { "stroke": "#7fc87f" }
+      "style": { "stroke": "phosphor:design-inner-copper", "opacity": 0.35 }
     },
     {
       "match": { "role": "copper", "side": "inner", "object": "trace_arc" },
-      "style": { "stroke": "#7fc87f" }
+      "style": { "stroke": "phosphor:design-inner-copper", "opacity": 0.35 }
     },
     {
       "match": { "role": "copper", "side": "inner", "object": "pad" },
-      "style": { "fill": "#7fc87f", "stroke": "#4f8f4f", "stroke_width_mm": 0.03 }
+      "style": { "fill": "phosphor:design-inner-copper", "opacity": 0.35 }
+    },
+    {
+      "match": { "role": "copper", "side": "inner", "object": "via" },
+      "style": { "fill": "phosphor:design-inner-copper" }
     },
     {
       "match": { "role": "copper", "side": "inner", "object": "zone" },
-      "style": { "fill": "#7fc87f", "opacity": 0.35 }
-    },
-    {
-      "match": { "object": "via" },
-      "style": { "fill": "#e3b72e", "stroke": "#111" }
+      "style": { "fill": "phosphor:design-inner-copper", "opacity": 0.35 }
     },
     {
       "match": { "role": "silkscreen", "side": "front", "object": "silk" },
-      "style": { "stroke": "#f2eda1", "fill": "#f2eda1" }
+      "style": { "stroke": "#ffffff", "fill": "#ffffff" }
     },
     {
       "match": { "role": "silkscreen", "side": "back", "object": "silk" },
-      "style": { "stroke": "#e8b2a7", "fill": "#e8b2a7" }
+      "style": { "stroke": "#ffffff", "fill": "#ffffff" }
+    },
+    {
+      "match": { "object": "board_graphic_text" },
+      "style": { "fill": "#ffffff", "stroke": "none" }
+    },
+    {
+      "match": { "object": "user_text" },
+      "style": { "fill": "#ffffff", "stroke": "none" }
+    },
+    {
+      "match": { "object": "ref_text" },
+      "style": { "fill": "#ffffff", "stroke": "none" }
+    },
+    {
+      "match": { "object": "value_text" },
+      "style": { "fill": "#ffffff", "stroke": "none" }
     }
   ]
 }

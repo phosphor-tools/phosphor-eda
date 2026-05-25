@@ -15,12 +15,12 @@
       {
         "role": "silkscreen",
         "side": "active",
-        "objects": "hidden"
+        "objects": "visible"
       },
       {
         "role": "fabrication",
         "side": "active",
-        "objects": "visible"
+        "objects": "never"
       }
     ]
   },
@@ -36,7 +36,7 @@
     },
     {
       "match": { "role": "copper", "object": "pad" },
-      "style": { "fill": "#31443a", "stroke": "#5a504a" }
+      "style": { "fill": "#31443a", "stroke": "none", "opacity": 0.6 }
     },
     {
       "match": { "annotation": "label" },

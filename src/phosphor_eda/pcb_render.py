@@ -1241,12 +1241,12 @@ def _render_plan_item(svg: _Svg, item: EmittedGeometry, *, overlay: bool) -> Non
             center = item.points[0]
             pad = replace(pad, x=center.x, y=center.y)
         pad = _style_expanded_pad(pad, item.style)
-        _draw_pad(svg, pad, _plan_attrs(item, "pad", overlay=overlay))
+        _draw_pad(svg, pad, _plan_attrs(item, "pad", overlay=overlay, paint_mode="fill"))
     elif item.kind is GeometryKind.TRACE:
         segment = cast("PcbSegment", item.source)
         start = item.points[0] if len(item.points) >= 1 else None
         end = item.points[1] if len(item.points) >= 2 else None
-        attrs = _plan_attrs(item, "trace", overlay=overlay)
+        attrs = _plan_attrs(item, "trace", overlay=overlay, paint_mode="stroke")
         attrs.pop("stroke-width", None)
         svg.line(
             start.x if start is not None else segment.start_x,
@@ -1272,7 +1272,7 @@ def _render_plan_item(svg: _Svg, item: EmittedGeometry, *, overlay: bool) -> Non
         svg.path(
             d,
             attrs={
-                **_plan_attrs(item, "trace-arc", overlay=overlay),
+                **_plan_attrs(item, "trace-arc", overlay=overlay, paint_mode="stroke"),
                 "stroke-width": f"{_style_stroke_width(item.style, trace_arc.width):.4f}",
             },
         )
@@ -1285,20 +1285,25 @@ def _render_plan_item(svg: _Svg, item: EmittedGeometry, *, overlay: bool) -> Non
             if isinstance(zone, PcbPolygon)
             else zone.boundary
         )
-        svg.polygon(points, attrs=_plan_attrs(item, "zone", overlay=overlay))
+        svg.polygon(points, attrs=_plan_attrs(item, "zone", overlay=overlay, paint_mode="fill"))
     elif item.kind is GeometryKind.VIA:
         via = cast("PcbVia", item.source)
         center = item.points[0] if item.points else None
         x = center.x if center is not None else via.x
         y = center.y if center is not None else via.y
-        svg.group_start(attrs=_plan_attrs(item, "via", overlay=overlay))
-        svg.circle(x, y, via.size / 2, attrs={"class": "annular", **_style_svg_attrs(item.style)})
+        svg.group_start(attrs=_plan_attrs(item, "via", overlay=overlay, paint_mode="fill"))
+        svg.circle(
+            x,
+            y,
+            via.size / 2,
+            attrs={"class": "annular", **_style_svg_attrs(item.style, paint_mode="fill")},
+        )
         svg.circle(x, y, via.drill / 2, attrs={"class": "drill"})
         svg.group_end()
     elif item.kind is GeometryKind.SILK:
         source = item.source
-        attrs = _plan_attrs(item, "silk", overlay=overlay)
         if isinstance(source, PcbLine):
+            attrs = _plan_attrs(item, "silk", overlay=overlay, paint_mode="stroke")
             svg.line(
                 source.start_x,
                 source.start_y,
@@ -1308,11 +1313,12 @@ def _render_plan_item(svg: _Svg, item: EmittedGeometry, *, overlay: bool) -> Non
                 attrs=attrs,
             )
         elif isinstance(source, PcbPolygon):
+            attrs = _plan_attrs(item, "silk", overlay=overlay, paint_mode="fill")
             svg.polygon(source.points, attrs=attrs)
     elif item.kind is GeometryKind.BODY:
         source = item.source
-        attrs = _plan_attrs(item, "body", overlay=overlay)
         if isinstance(source, PcbLine):
+            attrs = _plan_attrs(item, "body", overlay=overlay, paint_mode="stroke")
             svg.line(
                 source.start_x,
                 source.start_y,
@@ -1322,8 +1328,10 @@ def _render_plan_item(svg: _Svg, item: EmittedGeometry, *, overlay: bool) -> Non
                 attrs=attrs,
             )
         elif isinstance(source, PcbCircle):
+            attrs = _plan_attrs(item, "body", overlay=overlay)
             svg.circle(source.cx, source.cy, source.radius, attrs=attrs)
         elif isinstance(source, PcbArc):
+            attrs = _plan_attrs(item, "body", overlay=overlay, paint_mode="stroke")
             d = _svg_arc_path_d(
                 source.start_x,
                 source.start_y,
@@ -1338,6 +1346,7 @@ def _render_plan_item(svg: _Svg, item: EmittedGeometry, *, overlay: bool) -> Non
             }
             svg.path(d, attrs=attrs)
         elif isinstance(source, PcbPolygon):
+            attrs = _plan_attrs(item, "body", overlay=overlay, paint_mode="fill")
             svg.polygon(source.points, attrs=attrs)
     elif item.kind in (
         GeometryKind.REF_TEXT,
@@ -1366,11 +1375,17 @@ def _render_plan_item(svg: _Svg, item: EmittedGeometry, *, overlay: bool) -> Non
             text_content,
             min(text_size, 0.8),
             rotation=text_rotation,
-            attrs=_plan_attrs(item, class_name, overlay=overlay),
+            attrs=_plan_attrs(item, class_name, overlay=overlay, paint_mode="fill"),
         )
 
 
-def _plan_attrs(item: EmittedGeometry, class_name: str, *, overlay: bool) -> dict[str, str]:
+def _plan_attrs(
+    item: EmittedGeometry,
+    class_name: str,
+    *,
+    overlay: bool,
+    paint_mode: str = "all",
+) -> dict[str, str]:
     attrs = dict(item.attrs)
     net_number = attrs.get("data-net-number", "")
     classes = [class_name]
@@ -1379,7 +1394,7 @@ def _plan_attrs(item: EmittedGeometry, class_name: str, *, overlay: bool) -> dic
     if overlay:
         classes.append("highlight")
     attrs["class"] = " ".join(classes)
-    attrs.update(_style_svg_attrs(item.style))
+    attrs.update(_style_svg_attrs(item.style, paint_mode=paint_mode))
     attrs["data-render-reason"] = item.reason.value
     return attrs
 
@@ -1400,19 +1415,37 @@ def _board_material_attrs(board_material: EmittedGeometry) -> dict[str, str]:
     return attrs
 
 
-def _style_svg_attrs(style: dict[str, object]) -> dict[str, str]:
+def _style_svg_attrs(style: dict[str, object], *, paint_mode: str = "all") -> dict[str, str]:
     declarations: list[str] = []
-    for style_key, attr_key in (
-        ("fill", "fill"),
-        ("stroke", "stroke"),
-        ("opacity", "opacity"),
-        ("stroke_width_mm", "stroke-width"),
-    ):
-        value = style.get(style_key)
+    if paint_mode in ("all", "fill"):
+        value = style.get("fill")
         if isinstance(value, str):
-            declarations.append(f"{attr_key}: {value}")
+            declarations.append(f"fill: {value}")
         elif isinstance(value, (int, float)) and not isinstance(value, bool):
-            declarations.append(f"{attr_key}: {float(value):.4f}")
+            declarations.append(f"fill: {float(value):.4f}")
+
+    if paint_mode in ("all", "stroke"):
+        value = style.get("stroke")
+        if value is None and paint_mode == "stroke":
+            value = style.get("fill")
+        if isinstance(value, str):
+            declarations.append(f"stroke: {value}")
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            declarations.append(f"stroke: {float(value):.4f}")
+
+    value = style.get("opacity")
+    if isinstance(value, str):
+        declarations.append(f"opacity: {value}")
+    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+        declarations.append(f"opacity: {float(value):.4f}")
+
+    if paint_mode in ("all", "stroke"):
+        value = style.get("stroke_width_mm")
+        if isinstance(value, str):
+            declarations.append(f"stroke-width: {value}")
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            declarations.append(f"stroke-width: {float(value):.4f}")
+
     attrs: dict[str, str] = {}
     if declarations:
         attrs["style"] = "; ".join(declarations)

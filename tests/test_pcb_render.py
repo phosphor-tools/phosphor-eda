@@ -209,6 +209,53 @@ def test_via_annular_ring_uses_size() -> None:
     assert 'r="0.2500"' not in svg  # old hardcoded formula
 
 
+def test_via_drill_hole_is_in_drill_clip_without_mask_layers() -> None:
+    """Physical via drills should clip the board even when via.layers are copper layers."""
+    board = _make_board_with_inner_layers()
+    settings = load_render_settings_json('{"extends": "phosphor:review"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    drill_start = svg.index('<clipPath id="drill-clip"')
+    drill_clip = svg[drill_start : svg.index("</clipPath>", drill_start)]
+    assert "M 9.8500 10.0000 A 0.1500 0.1500" in drill_clip
+
+
+def test_via_annular_rings_are_emitted_on_spanned_copper_layers() -> None:
+    board = _make_board_with_inner_layers()
+    settings = load_render_settings_json('{"extends": "phosphor:design"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    def layer_svg(name: str) -> str:
+        start = svg.index(f'data-layer="{name}"')
+        next_layer = svg.find('<g data-layer="', start + 1)
+        end = next_layer if next_layer != -1 else len(svg)
+        return svg[start:end]
+
+    front_layer = layer_svg("F.Cu")
+    inner_layer = layer_svg("In1.Cu")
+    back_layer = layer_svg("B.Cu")
+    assert 'data-type="via"' in front_layer
+    assert 'class="annular" style="fill: #c83434"' in front_layer
+    assert 'data-type="via"' in inner_layer
+    assert 'class="annular" style="fill: #7fc87f"' in inner_layer
+    assert 'data-type="via"' not in back_layer
+    assert 'data-layer="vias"' not in svg
+
+
+def test_via_annular_rings_respect_selected_copper_layers() -> None:
+    board = _make_board_with_inner_layers()
+    settings = load_render_settings_json('{"extends": "phosphor:review"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert 'data-layer="F.Cu"' in svg
+    assert 'data-type="via"' in svg[svg.index('data-layer="F.Cu"') :]
+    assert 'data-layer="In1.Cu"' not in svg
+    assert 'data-layer="B.Cu"' not in svg
+
+
 def test_zone_attributes(board: Pcb) -> None:
     """swd_switch has zones on inner copper layers."""
     svg = render_pcb_svg(board)
@@ -328,9 +375,11 @@ def test_structured_preset_colors_use_inline_style_so_css_does_not_override(
     assert '<g clip-path="url(#drill-clip)">\n<path' in svg[:material_pos]
     assert 'class="board-material" style="fill: #1a5c2a; stroke: none"' in svg
     assert 'class="board-fill" style="fill: #1a5c2a; stroke: #1a5c2a"' in svg
-    assert 'class="pad nn-1" style="fill: #b87333; stroke: #8a5526' in svg
+    assert 'class="pad nn-1" style="fill: #b87333; opacity: 0.6000"' in svg
+    assert 'class="pad nn-1" style="fill: #b87333; stroke:' not in svg
     assert 'class="trace nn-1" style="stroke: #145222; opacity: 0.6000"' in svg
-    assert 'class="annular" style="fill: #c0c0c0; stroke: #1a5c2a"' in svg
+    assert 'class="annular" style="fill: #b87333"' in svg
+    assert 'class="annular" style="fill: #b87333; stroke:' not in svg
 
 
 def test_clean_preset_enables_board_material(board: Pcb) -> None:
@@ -366,7 +415,7 @@ def test_renderable_geometry_store_includes_non_copper_geometry() -> None:
             x=10.0,
             y=8.0,
             rotation=0.0,
-            layer="F.Fab",
+            layer="F.SilkS",
             font_size=0.5,
             kind="reference",
             footprint_ref="U1",
@@ -467,8 +516,10 @@ def test_design_preset_matches_legacy_core_colors_and_order() -> None:
     assert "#c83434" in svg
     assert "#4d7fc4" in svg
     assert "#7fc87f" in svg
-    assert "opacity: 0.3500" in svg
-    assert "#f2eda1" in svg
+    assert re.search(r'class="trace nn-1" style="stroke: #c83434; opacity: 0\.3500"', svg)
+    assert re.search(r'class="pad nn-1" style="fill: #c83434; opacity: 0\.3500"', svg)
+    assert re.search(r'class="zone nn-1" style="fill: #c83434; opacity: 0\.3500"', svg)
+    assert "#ffffff" in svg
     assert 'data-type="body"' not in svg
     _assert_svg_contains_in_order(
         svg,
@@ -476,12 +527,80 @@ def test_design_preset_matches_legacy_core_colors_and_order() -> None:
             'data-layer="B.Cu"',
             'data-layer="In1.Cu"',
             'data-layer="F.Cu"',
-            'data-layer="vias"',
         ],
     )
 
 
-def test_review_preset_matches_legacy_mask_and_body_context() -> None:
+def test_design_preset_renders_board_outline_without_fill() -> None:
+    board = _make_board_with_inner_layers()
+    settings = load_render_settings_json('{"extends": "phosphor:design"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert 'class="board-material"' not in svg
+    assert re.search(
+        r'class="board-fill" style="fill: none; stroke: #d0d2cd; stroke-width: 0\.1500"',
+        svg,
+    )
+
+
+def test_design_preset_cycles_inner_copper_colors() -> None:
+    board = _make_board_with_inner_layers()
+    board.layers.insert(2, PcbLayer("In2.Cu", LayerFunction.COPPER, side="", number=2))
+    board.segments.append(PcbSegment(3.0, 12.0, 7.0, 12.0, 0.25, "In2.Cu", 1))
+    board.polygons.append(
+        PcbPolygon(
+            points=[(3.0, 13.0), (7.0, 13.0), (7.0, 15.0), (3.0, 15.0)],
+            layer="In2.Cu",
+            net_number=1,
+            net_name="SIG",
+        )
+    )
+    settings = load_render_settings_json('{"extends": "phosphor:design"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    in1_start = svg.index('data-layer="In1.Cu"')
+    in2_start = svg.index('data-layer="In2.Cu"')
+    front_start = svg.index('data-layer="F.Cu"')
+    in1_svg = svg[in1_start:in2_start]
+    in2_svg = svg[in2_start:front_start]
+    assert 'class="trace nn-1" style="stroke: #7fc87f; opacity: 0.3500"' in in1_svg
+    assert 'class="annular" style="fill: #7fc87f"' in in1_svg
+    assert 'class="trace nn-1" style="stroke: #ce7d2c; opacity: 0.3500"' in in2_svg
+    assert 'class="zone nn-1" style="fill: #ce7d2c; opacity: 0.3500"' in in2_svg
+
+
+def test_copper_layer_paints_traces_zones_then_pads() -> None:
+    board = _make_board_with_inner_layers()
+    board.polygons.append(
+        PcbPolygon(
+            points=[(2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0)],
+            layer="F.Cu",
+            net_number=1,
+            net_name="SIG",
+        )
+    )
+    settings = load_render_settings_json('{"extends": "phosphor:design"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    front_layer_start = svg.index('data-layer="F.Cu"')
+    next_layer_start = svg.find('<g data-layer="', front_layer_start + 1)
+    front_layer_svg = svg[
+        front_layer_start : next_layer_start if next_layer_start != -1 else len(svg)
+    ]
+    _assert_svg_contains_in_order(
+        front_layer_svg,
+        [
+            'class="trace',
+            'class="zone',
+            'class="pad',
+        ],
+    )
+
+
+def test_review_preset_matches_legacy_mask_without_body_context() -> None:
     board = _make_board_with_component()
     board.footprints[0].texts.append(
         PcbText(
@@ -502,9 +621,73 @@ def test_review_preset_matches_legacy_mask_and_body_context() -> None:
     assert 'class="board-material" style="fill: #1a5c2a; stroke: none"' in svg
     assert 'class="pad nn-1' in svg
     assert "#b87333" in svg
-    assert "#ffffffcc" in svg
-    assert 'data-type="body"' in svg
-    assert 'class="ref-text' in svg
+    assert "#ffffff" in svg
+    assert 'data-type="body"' not in svg
+
+
+def test_review_zone_opacity_matches_trace_opacity() -> None:
+    board = _make_board_with_inner_layers()
+    board.polygons.append(
+        PcbPolygon(
+            points=[(2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0)],
+            layer="F.Cu",
+            net_number=1,
+            net_name="SIG",
+        )
+    )
+    settings = load_render_settings_json('{"extends": "phosphor:review"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert 'class="trace nn-1" style="stroke: #145222; opacity: 0.6000"' in svg
+    assert 'class="pad nn-1" style="fill: #b87333; opacity: 0.6000"' in svg
+    assert re.search(r'class="zone nn-1" style="fill: #145222; opacity: 0.6000"', svg)
+
+
+def test_clean_copper_opacity_matches_when_copper_is_visible() -> None:
+    board = _make_board_with_inner_layers()
+    board.polygons.append(
+        PcbPolygon(
+            points=[(2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0)],
+            layer="F.Cu",
+            net_number=1,
+            net_name="SIG",
+        )
+    )
+    settings = load_render_settings_json(
+        '{"extends": "phosphor:clean", '
+        '"include": {"layers": ['
+        '{"role": "copper", "side": "active", '
+        '"objects": {"pads": "visible", "traces": "visible", "zones": "visible"}}'
+        "]}}",
+    )
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert 'class="trace nn-1" style="stroke: #145222; opacity: 0.6000"' in svg
+    assert 'class="pad nn-1" style="fill: #31443a; opacity: 0.6000"' in svg
+    assert re.search(r'class="zone nn-1" style="fill: #145222; opacity: 0.6000"', svg)
+
+
+def test_high_contrast_copper_opacity_matches_trace_opacity() -> None:
+    board = _make_board_with_inner_layers()
+    board.polygons.append(
+        PcbPolygon(
+            points=[(2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0)],
+            layer="F.Cu",
+            net_number=1,
+            net_name="SIG",
+        )
+    )
+    settings = load_render_settings_json('{"extends": "phosphor:high-contrast"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert 'class="trace nn-1" style="stroke: #222"' in svg
+    assert re.search(r'class="pad nn-1" style="fill: #111"', svg)
+    assert re.search(r'class="zone nn-1" style="fill: #777"', svg)
+    assert not re.search(r'class="pad nn-1" style="[^"]*opacity:', svg)
+    assert not re.search(r'class="zone nn-1" style="[^"]*opacity:', svg)
 
 
 def test_plan_path_renders_board_level_graphic_text() -> None:
@@ -525,6 +708,83 @@ def test_plan_path_renders_board_level_graphic_text() -> None:
 
     assert 'data-type="board_graphic_text"' in svg
     assert ">ON</text>" in svg
+
+
+def test_review_preset_renders_reference_and_board_text_white() -> None:
+    board = _make_board_with_component()
+    board.graphic_texts.append(
+        PcbGraphicText(
+            text="ON",
+            x=12.0,
+            y=12.0,
+            rotation=0.0,
+            layer="F.SilkS",
+            font_size=0.75,
+        )
+    )
+    settings = load_render_settings_json('{"extends": "phosphor:review"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert 'class="user-text" style="fill: #ffffff"' in svg
+
+
+def test_style_projection_matches_svg_primitive_semantics() -> None:
+    board = _make_board_with_component()
+    board.footprints[0].silkscreen_polygons.append(
+        PcbPolygon(
+            points=[(12.0, 9.0), (13.0, 9.0), (13.0, 10.0), (12.0, 10.0)],
+            layer="F.SilkS",
+            footprint_ref="U1",
+        )
+    )
+    board.graphic_texts.append(
+        PcbGraphicText(
+            text="ON",
+            x=12.0,
+            y=12.0,
+            rotation=0.0,
+            layer="F.SilkS",
+            font_size=0.75,
+        )
+    )
+    settings = load_render_settings_json('{"extends": "phosphor:review"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert re.search(r'<line [^>]*class="silk" style="[^"]*stroke: #ffffff', svg)
+    assert not re.search(r'<line [^>]*class="silk" style="[^"]*fill:', svg)
+    assert re.search(r'<polygon [^>]*class="silk" style="fill: #ffffff"', svg)
+    assert not re.search(r'<polygon [^>]*class="silk" style="[^"]*stroke:', svg)
+    assert not re.search(r'<text [^>]*style="[^"]*stroke: #[^";]+', svg)
+
+
+def test_design_preset_renders_board_text_white() -> None:
+    board = _make_board_with_component()
+    board.graphic_texts.append(
+        PcbGraphicText(
+            text="ON",
+            x=12.0,
+            y=12.0,
+            rotation=0.0,
+            layer="F.SilkS",
+            font_size=0.75,
+        )
+    )
+    settings = load_render_settings_json('{"extends": "phosphor:design"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert 'class="user-text" style="fill: #ffffff"' in svg
+
+
+def test_clean_preset_renders_silkscreen_white() -> None:
+    board = _make_board_with_component()
+    settings = load_render_settings_json('{"extends": "phosphor:clean"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert 'class="silk" style="stroke: #ffffff"' in svg
 
 
 @pytest.mark.parametrize("ref", ["R1", "C1", "L1", "TP1"])
@@ -548,12 +808,12 @@ def test_clean_preset_omits_passive_component_body_context(ref: str) -> None:
 
     assert 'class="board-material" style="fill: #1a5c2a; stroke: none"' in svg
     assert 'data-type="pad"' not in svg
-    assert 'class="silk' not in svg
+    assert 'class="silk' in svg
     assert 'data-type="body"' not in svg
     assert 'class="ref-text' not in svg
 
 
-def test_clean_preset_keeps_non_passive_component_body_context() -> None:
+def test_clean_preset_omits_non_passive_component_body_context() -> None:
     board = _make_board_with_component(ref="U1")
     board.footprints[0].texts.append(
         PcbText(
@@ -572,9 +832,9 @@ def test_clean_preset_keeps_non_passive_component_body_context() -> None:
     svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
 
     assert 'data-type="pad"' not in svg
-    assert 'class="silk' not in svg
-    assert 'data-type="body"' in svg
-    assert 'class="ref-text' in svg
+    assert 'class="silk' in svg
+    assert 'data-type="body"' not in svg
+    assert 'class="ref-text' not in svg
 
 
 def test_structured_highlight_colors_use_inline_style_so_css_does_not_override(
@@ -2225,7 +2485,6 @@ class TestClassBasedSelectors:
         board = _make_board_with_inner_layers()
         svg = render_pcb_svg(board)
         assert re.search(r'class="layer-F-Cu lyr"', svg)
-        assert re.search(r'class="layer-vias lyr"', svg)
 
     def test_highlight_css_uses_nn_class(self) -> None:
         """Highlight CSS uses .nn-X selectors, not [data-net-number]."""

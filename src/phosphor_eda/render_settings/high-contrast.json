@@ -51,18 +51,15 @@
       }
     },
     {
-      "match": { "role": "copper", "object": "zone" },
+      "match": { "role": "copper", "object": "via" },
       "style": {
-        "fill": "#777",
-        "opacity": 0.18
+        "fill": "#111"
       }
     },
     {
-      "match": { "object": "via" },
+      "match": { "role": "copper", "object": "zone" },
       "style": {
-        "fill": "#222",
-        "stroke": "#fff",
-        "stroke_width_mm": 0.03
+        "fill": "#777"
       }
     }
   ]

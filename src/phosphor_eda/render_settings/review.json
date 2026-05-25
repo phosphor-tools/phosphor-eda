@@ -21,7 +21,7 @@
       {
         "role": "fabrication",
         "side": "active",
-        "objects": "visible"
+        "objects": "never"
       }
     ]
   },
@@ -44,19 +44,19 @@
     },
     {
       "match": { "role": "copper", "object": "pad" },
-      "style": { "fill": "#b87333", "stroke": "#8a5526", "stroke_width_mm": 0.03 }
+      "style": { "fill": "#b87333", "opacity": 0.6 }
+    },
+    {
+      "match": { "role": "copper", "object": "via" },
+      "style": { "fill": "#b87333" }
     },
     {
       "match": { "role": "copper", "object": "zone" },
-      "style": { "fill": "#145222", "opacity": 0.3 }
-    },
-    {
-      "match": { "object": "via" },
-      "style": { "fill": "#c0c0c0", "stroke": "#1a5c2a" }
+      "style": { "fill": "#145222", "opacity": 0.6 }
     },
     {
       "match": { "role": "silkscreen", "object": "silk" },
-      "style": { "stroke": "#ffffffcc", "fill": "#ffffffcc" }
+      "style": { "stroke": "#ffffff", "fill": "#ffffff" }
     },
     {
       "match": { "role": "fabrication", "object": "body" },
@@ -68,7 +68,19 @@
     },
     {
       "match": { "object": "ref_text" },
-      "style": { "fill": "#ffffffcc", "stroke": "none" }
+      "style": { "fill": "#ffffff", "stroke": "none" }
+    },
+    {
+      "match": { "object": "value_text" },
+      "style": { "fill": "#ffffff", "stroke": "none" }
+    },
+    {
+      "match": { "object": "user_text" },
+      "style": { "fill": "#ffffff", "stroke": "none" }
+    },
+    {
+      "match": { "object": "board_graphic_text" },
+      "style": { "fill": "#ffffff", "stroke": "none" }
     },
     {
       "match": { "annotation": "label" },

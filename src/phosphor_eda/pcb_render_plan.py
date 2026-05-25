@@ -29,6 +29,18 @@ from phosphor_eda.pcb_render_settings import is_json_dict
 if TYPE_CHECKING:
     from phosphor_eda.pcb_render_settings import LayerIncludeRule, RenderSettings, StyleRule
 
+_DESIGN_INNER_COPPER_COLOR_TOKEN = "phosphor:design-inner-copper"
+_DESIGN_INNER_COPPER_COLORS = (
+    "#7fc87f",
+    "#ce7d2c",
+    "#4fcbcb",
+    "#db628b",
+    "#c8c83e",
+    "#a18d3e",
+    "#3ec8c8",
+    "#c83ec8",
+)
+
 
 class GeometryKind(StrEnum):
     BOARD_MATERIAL = "board_material"
@@ -218,6 +230,7 @@ def build_render_plan(
         _highlight_targets(board, settings)
     )
     geometry_store = build_geometry_store(board, side=side)
+    inner_copper_indexes = _inner_copper_indexes(board)
 
     if settings.include.board_outline == "visible":
         board_material_style = _style_for_geometry(
@@ -227,6 +240,7 @@ def build_render_plan(
             attrs={"data-type": "board-material"},
             highlighted=False,
             active_side=side,
+            inner_copper_indexes=inner_copper_indexes,
         )
         if board_material_style:
             plan.base.append(
@@ -255,6 +269,7 @@ def build_render_plan(
                     attrs={"data-type": "board-outline"},
                     highlighted=False,
                     active_side=side,
+                    inner_copper_indexes=inner_copper_indexes,
                 ),
             )
         )
@@ -264,34 +279,6 @@ def build_render_plan(
     for layer in _ordered_layers(board):
         if layer.function != LayerFunction.COPPER:
             continue
-
-        for store_item in _store_items_for_layer(
-            geometry_store,
-            layer.name,
-            {StoreGeometryKind.PAD},
-        ):
-            pad = store_item.source
-            if not isinstance(pad, PcbPad):
-                continue
-            _include_geometry(
-                plan,
-                layer=layer,
-                kind=GeometryKind.PAD,
-                object_name="pads",
-                source=pad,
-                attrs=_attrs_for_store_geometry(store_item, data_type="pad"),
-                points=_plan_points(store_item),
-                highlighted=(
-                    store_item.tags.net_number in hl_net_nums
-                    or store_item.tags.component_ref in hl_refs
-                    or (store_item.tags.component_ref, store_item.tags.pad_number) in hl_pad_targets
-                ),
-                settings=settings,
-                active_side=side,
-                net_colors=net_colors,
-                component_colors=component_colors,
-                pad_colors=pad_colors,
-            )
 
         for store_item in _store_items_for_layer(
             geometry_store,
@@ -312,6 +299,7 @@ def build_render_plan(
                 highlighted=store_item.tags.net_number in hl_net_nums,
                 settings=settings,
                 active_side=side,
+                inner_copper_indexes=inner_copper_indexes,
                 net_colors=net_colors,
                 component_colors=component_colors,
                 pad_colors=pad_colors,
@@ -336,6 +324,7 @@ def build_render_plan(
                 highlighted=store_item.tags.net_number in hl_net_nums,
                 settings=settings,
                 active_side=side,
+                inner_copper_indexes=inner_copper_indexes,
                 net_colors=net_colors,
                 component_colors=component_colors,
                 pad_colors=pad_colors,
@@ -357,64 +346,128 @@ def build_render_plan(
                 highlighted=store_item.tags.net_number in hl_net_nums,
                 settings=settings,
                 active_side=side,
+                inner_copper_indexes=inner_copper_indexes,
                 net_colors=net_colors,
                 component_colors=component_colors,
                 pad_colors=pad_colors,
             )
 
-    for store_item in geometry_store.by_kind(StoreGeometryKind.VIA):
-        via = store_item.source
-        if not isinstance(via, PcbVia):
-            continue
-        state = settings.include.vias
-        highlighted = store_item.tags.net_number in hl_net_nums
-        geometry = EmittedGeometry(
-            kind=GeometryKind.VIA,
-            layer="vias",
-            attrs=_attrs_for_store_geometry(store_item, data_type="via"),
-            reason=InclusionReason.VISIBLE,
-            source=via,
-            points=_plan_points(store_item),
-        )
-        if state == "visible":
-            geometry.style = _style_for_geometry(
-                settings,
-                kind=geometry.kind,
-                layer=None,
-                attrs=geometry.attrs,
-                highlighted=highlighted,
-                active_side=side,
+        for store_item in geometry_store.by_kind(StoreGeometryKind.VIA):
+            via = store_item.source
+            if not isinstance(via, PcbVia):
+                continue
+            if not _copper_layer_selected_for_vias(settings, layer, side):
+                continue
+            if layer.name not in _via_copper_layer_names(board, via):
+                continue
+            state = settings.include.vias
+            highlighted = store_item.tags.net_number in hl_net_nums
+            geometry = EmittedGeometry(
+                kind=GeometryKind.VIA,
+                layer=layer.name,
+                attrs=_attrs_for_store_geometry(store_item, data_type="via"),
+                reason=InclusionReason.VISIBLE,
+                source=via,
+                points=_plan_points(store_item),
             )
-            plan.base.append(geometry)
-        elif state == "when-highlighted" and highlighted:
-            overlay_geometry = EmittedGeometry(
-                kind=geometry.kind,
-                layer=geometry.layer,
-                attrs=geometry.attrs,
-                reason=InclusionReason.HIGHLIGHT,
-                source=geometry.source,
-                points=geometry.points,
-                style=_style_for_geometry(
+            if state == "visible":
+                geometry.style = _style_for_geometry(
                     settings,
                     kind=geometry.kind,
-                    layer=None,
+                    layer=layer,
                     attrs=geometry.attrs,
-                    highlighted=True,
+                    highlighted=highlighted,
                     active_side=side,
-                ),
-            )
-            overlay_geometry.style.update(
-                _highlight_style_for_geometry(
-                    geometry.kind,
-                    geometry.attrs,
-                    net_colors=net_colors,
-                    component_colors=component_colors,
-                    pad_colors=pad_colors,
+                    inner_copper_indexes=inner_copper_indexes,
                 )
+                plan.base.append(geometry)
+                if highlighted:
+                    overlay_geometry = EmittedGeometry(
+                        kind=geometry.kind,
+                        layer=layer.name,
+                        attrs=geometry.attrs,
+                        reason=InclusionReason.HIGHLIGHT,
+                        source=geometry.source,
+                        points=geometry.points,
+                        style=_style_for_geometry(
+                            settings,
+                            kind=geometry.kind,
+                            layer=layer,
+                            attrs=geometry.attrs,
+                            highlighted=True,
+                            active_side=side,
+                            inner_copper_indexes=inner_copper_indexes,
+                        ),
+                    )
+                    overlay_geometry.style.update(
+                        _highlight_style_for_geometry(
+                            geometry.kind,
+                            geometry.attrs,
+                            net_colors=net_colors,
+                            component_colors=component_colors,
+                            pad_colors=pad_colors,
+                        )
+                    )
+                    plan.overlay.append(overlay_geometry)
+            elif state == "when-highlighted" and highlighted:
+                overlay_geometry = EmittedGeometry(
+                    kind=geometry.kind,
+                    layer=layer.name,
+                    attrs=geometry.attrs,
+                    reason=InclusionReason.HIGHLIGHT,
+                    source=geometry.source,
+                    points=geometry.points,
+                    style=_style_for_geometry(
+                        settings,
+                        kind=geometry.kind,
+                        layer=layer,
+                        attrs=geometry.attrs,
+                        highlighted=True,
+                        active_side=side,
+                        inner_copper_indexes=inner_copper_indexes,
+                    ),
+                )
+                overlay_geometry.style.update(
+                    _highlight_style_for_geometry(
+                        geometry.kind,
+                        geometry.attrs,
+                        net_colors=net_colors,
+                        component_colors=component_colors,
+                        pad_colors=pad_colors,
+                    )
+                )
+                plan.overlay.append(overlay_geometry)
+            elif state != "never":
+                plan.omitted_count += 1
+
+        for store_item in _store_items_for_layer(
+            geometry_store,
+            layer.name,
+            {StoreGeometryKind.PAD},
+        ):
+            pad = store_item.source
+            if not isinstance(pad, PcbPad):
+                continue
+            _include_geometry(
+                plan,
+                layer=layer,
+                kind=GeometryKind.PAD,
+                object_name="pads",
+                source=pad,
+                attrs=_attrs_for_store_geometry(store_item, data_type="pad"),
+                points=_plan_points(store_item),
+                highlighted=(
+                    store_item.tags.net_number in hl_net_nums
+                    or store_item.tags.component_ref in hl_refs
+                    or (store_item.tags.component_ref, store_item.tags.pad_number) in hl_pad_targets
+                ),
+                settings=settings,
+                active_side=side,
+                inner_copper_indexes=inner_copper_indexes,
+                net_colors=net_colors,
+                component_colors=component_colors,
+                pad_colors=pad_colors,
             )
-            plan.overlay.append(overlay_geometry)
-        elif state != "never":
-            plan.omitted_count += 1
 
     for layer in _ordered_layers(board):
         if layer.function != LayerFunction.SILKSCREEN:
@@ -447,6 +500,7 @@ def build_render_plan(
                 highlighted=store_item.tags.component_ref in hl_refs,
                 settings=settings,
                 active_side=side,
+                inner_copper_indexes=inner_copper_indexes,
                 net_colors=net_colors,
                 component_colors=component_colors,
                 pad_colors=pad_colors,
@@ -492,6 +546,7 @@ def build_render_plan(
                 highlighted=store_item.tags.component_ref in hl_refs,
                 settings=settings,
                 active_side=side,
+                inner_copper_indexes=inner_copper_indexes,
                 net_colors=net_colors,
                 component_colors=component_colors,
                 pad_colors=pad_colors,
@@ -511,6 +566,37 @@ def _ordered_layers(board: Pcb) -> list[PcbLayer]:
         return (1, layer.number if layer.number is not None else 5_000, layer.name)
 
     return sorted(board.layers, key=sort_key)
+
+
+def _inner_copper_indexes(board: Pcb) -> dict[str, int]:
+    indexes: dict[str, int] = {}
+    for layer in _ordered_layers(board):
+        if layer.function == LayerFunction.COPPER and layer.side == "":
+            indexes[layer.name] = len(indexes)
+    return indexes
+
+
+def _via_copper_layer_names(board: Pcb, via: PcbVia) -> set[str]:
+    copper_layers = [
+        layer for layer in _ordered_layers(board) if layer.function == LayerFunction.COPPER
+    ]
+    copper_names = [layer.name for layer in copper_layers]
+    via_indexes = [copper_names.index(name) for name in via.layers if name in copper_names]
+    if not via_indexes:
+        return {name for name in via.layers if name}
+    start = min(via_indexes)
+    end = max(via_indexes)
+    return set(copper_names[start : end + 1])
+
+
+def _copper_layer_selected_for_vias(
+    settings: RenderSettings, layer: PcbLayer, active_side: str
+) -> bool:
+    for rule in settings.include.layers:
+        if not layer_matches_rule(layer, rule, active_side):
+            continue
+        return any(state in ("visible", "when-highlighted") for state in rule.objects.values())
+    return False
 
 
 def _highlight_targets(
@@ -612,6 +698,7 @@ def _include_geometry(
     highlighted: bool,
     settings: RenderSettings,
     active_side: str,
+    inner_copper_indexes: dict[str, int],
     net_colors: dict[int, str],
     component_colors: dict[str, str],
     pad_colors: dict[tuple[str, str], str],
@@ -631,6 +718,7 @@ def _include_geometry(
             attrs=attrs,
             highlighted=highlighted,
             active_side=active_side,
+            inner_copper_indexes=inner_copper_indexes,
         ),
     )
     if state == "visible":
@@ -650,6 +738,7 @@ def _include_geometry(
                     attrs=attrs,
                     highlighted=True,
                     active_side=active_side,
+                    inner_copper_indexes=inner_copper_indexes,
                 ),
             )
             overlay_geometry.style.update(
@@ -678,6 +767,7 @@ def _include_geometry(
                 attrs=attrs,
                 highlighted=True,
                 active_side=active_side,
+                inner_copper_indexes=inner_copper_indexes,
             ),
         )
         overlay_geometry.style.update(
@@ -767,6 +857,7 @@ def _style_for_geometry(
     attrs: dict[str, str],
     highlighted: bool,
     active_side: str,
+    inner_copper_indexes: dict[str, int],
 ) -> dict[str, object]:
     style: dict[str, object] = {}
     for rule in settings.style_rules:
@@ -779,7 +870,26 @@ def _style_for_geometry(
             active_side=active_side,
         ):
             style.update(rule.style)
-    return style
+    return _resolve_style_tokens(style, layer, inner_copper_indexes)
+
+
+def _resolve_style_tokens(
+    style: dict[str, object],
+    layer: PcbLayer | None,
+    inner_copper_indexes: dict[str, int],
+) -> dict[str, object]:
+    if layer is None:
+        return style
+    resolved: dict[str, object] = {}
+    for key, value in style.items():
+        if value == _DESIGN_INNER_COPPER_COLOR_TOKEN:
+            inner_index = inner_copper_indexes.get(layer.name, 0)
+            resolved[key] = _DESIGN_INNER_COPPER_COLORS[
+                inner_index % len(_DESIGN_INNER_COPPER_COLORS)
+            ]
+        else:
+            resolved[key] = value
+    return resolved
 
 
 def _annotation_style_for_settings(settings: RenderSettings) -> dict[str, object]:
@@ -1012,14 +1122,13 @@ def _arc_svg_params(
 
 
 def _build_drill_path(board: Pcb, transform: _RenderedViewTransform) -> str:
-    mask_layers = {"F.Mask", "B.Mask", "*.Mask"}
     holes: list[tuple[float, float, float]] = []
     for footprint in board.footprints:
         for pad in footprint.pads:
             if pad.drill > 0:
                 holes.append((transform.x(pad.x), pad.y, pad.drill / 2))
     for via in board.vias:
-        if via.drill > 0 and set(via.layers) & mask_layers:
+        if via.drill > 0:
             holes.append((transform.x(via.x), via.y, via.drill / 2))
     return "".join(
         f" M {x - r:.4f} {y:.4f}"
