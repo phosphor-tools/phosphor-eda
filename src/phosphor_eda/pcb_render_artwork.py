@@ -27,6 +27,7 @@ from phosphor_eda.pcb_render_geometry import (
 )
 from phosphor_eda.shapely_geometry import normalize_geometry, robust_union
 from phosphor_eda.sql.geometry import (
+    VIA_DRILL_QUAD_SEGS,
     arc_to_polyline,
     board_outline_polygon,
     pad_polygon,
@@ -392,7 +393,7 @@ def _pad_drill_geometry(payload: object, *, layer_name: str | None) -> BaseGeome
         return None
     if layer_name is not None and not _layer_in_stack(layer_name, payload.layers):
         return None
-    return Point(payload.x, payload.y).buffer(payload.drill / 2, quad_segs=32)
+    return Point(payload.x, payload.y).buffer(payload.drill / 2, quad_segs=VIA_DRILL_QUAD_SEGS)
 
 
 def _via_drill_geometry(payload: object, *, layer_name: str | None) -> BaseGeometry | None:

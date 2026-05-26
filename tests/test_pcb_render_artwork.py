@@ -239,6 +239,8 @@ def test_vias_convert_to_annular_copper_and_drill_geometry_separately() -> None:
     assert artwork is not None
     assert isinstance(artwork.geometry, Polygon)
     assert len(artwork.geometry.interiors) == 1
+    assert len(artwork.geometry.exterior.coords) == 33
+    assert len(artwork.geometry.interiors[0].coords) == 33
     _assert_close(float(artwork.geometry.area), math.pi * (0.5**2 - 0.2**2), rel=0.01)
     _assert_close(float(drills.area), math.pi * 0.2**2, rel=0.01)
 
@@ -349,6 +351,49 @@ def test_drill_holes_convert_to_subtractive_geometry() -> None:
     assert geometry.contains(Point(2.0, 0.0))
 
 
+def test_curved_pad_geometry_uses_reduced_render_tessellation() -> None:
+    circle = geometry_to_artwork(
+        _renderable(
+            "pad-circle",
+            GeometryKind.PAD,
+            "F.Cu",
+            "copper",
+            "front",
+            geometry=_pad(shape="circle", width=2.0, height=2.0),
+        )
+    )
+    oval = geometry_to_artwork(
+        _renderable(
+            "pad-oval",
+            GeometryKind.PAD,
+            "F.Cu",
+            "copper",
+            "front",
+            geometry=_pad(shape="oval", width=3.0, height=1.0),
+        )
+    )
+    roundrect = geometry_to_artwork(
+        _renderable(
+            "pad-roundrect",
+            GeometryKind.PAD,
+            "F.Cu",
+            "copper",
+            "front",
+            geometry=_pad(shape="roundrect", width=2.0, height=1.0, roundrect_rratio=0.5),
+        )
+    )
+
+    assert circle is not None
+    assert oval is not None
+    assert roundrect is not None
+    assert isinstance(circle.geometry, Polygon)
+    assert isinstance(oval.geometry, Polygon)
+    assert isinstance(roundrect.geometry, Polygon)
+    assert len(circle.geometry.exterior.coords) == 49
+    assert len(oval.geometry.exterior.coords) == 51
+    assert len(roundrect.geometry.exterior.coords) == 37
+
+
 def test_drill_holes_are_not_additive_artwork_items() -> None:
     pad_drill = _renderable(
         "drill-1",
@@ -390,6 +435,7 @@ def _pad(
     x: float = 0.0,
     y: float = 0.0,
     drill: float = 0.0,
+    roundrect_rratio: float = 0.0,
 ) -> PcbPad:
     return PcbPad(
         number="1",
@@ -403,6 +449,7 @@ def _pad(
         net_name="GND",
         footprint_ref="J1",
         drill=drill,
+        roundrect_rratio=roundrect_rratio,
     )
 
 

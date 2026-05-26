@@ -31,6 +31,9 @@ if TYPE_CHECKING:
 # Layer names indicating front copper (KiCad and Altium conventions)
 _FRONT_LAYERS = {"F.Cu", "Top Layer", "Top"}
 _BACK_LAYERS = {"B.Cu", "Bottom Layer", "Bottom"}
+PAD_CURVE_QUAD_SEGS = 12
+PAD_ROUNDRECT_QUAD_SEGS = 8
+VIA_DRILL_QUAD_SEGS = 8
 
 
 def _box(min_x: float, min_y: float, max_x: float, max_y: float) -> Polygon:
@@ -49,18 +52,18 @@ def pad_polygon(pad: PcbPad) -> BaseGeometry:
     w, h = pad.width, pad.height
 
     if pad.shape == "circle":
-        return Point(cx, cy).buffer(w / 2, quad_segs=32)
+        return Point(cx, cy).buffer(w / 2, quad_segs=PAD_CURVE_QUAD_SEGS)
 
     if pad.shape == "oval":
         # Capsule shape: buffered line along major axis
         if w >= h:
             half = (w - h) / 2
             line = LineString([(cx - half, cy), (cx + half, cy)])
-            geom = line.buffer(h / 2, quad_segs=32)
+            geom = line.buffer(h / 2, quad_segs=PAD_CURVE_QUAD_SEGS)
         else:
             half = (h - w) / 2
             line = LineString([(cx, cy - half), (cx, cy + half)])
-            geom = line.buffer(w / 2, quad_segs=32)
+            geom = line.buffer(w / 2, quad_segs=PAD_CURVE_QUAD_SEGS)
         if pad.rotation != 0.0:
             geom = rotate(geom, pad.rotation, origin=(cx, cy))
         return geom
@@ -76,7 +79,7 @@ def pad_polygon(pad: PcbPad) -> BaseGeometry:
             cx + inset_w / 2,
             cy + inset_h / 2,
         )
-        geom = inner.buffer(corner_radius, quad_segs=16)
+        geom = inner.buffer(corner_radius, quad_segs=PAD_ROUNDRECT_QUAD_SEGS)
         if pad.rotation != 0.0:
             geom = rotate(geom, pad.rotation, origin=(cx, cy))
         return geom
@@ -232,8 +235,8 @@ def trace_arc_geometry(arc: PcbTraceArc) -> tuple[LineString, Polygon]:
 
 def via_geometry(via: PcbVia) -> tuple[Polygon, Polygon]:
     """Return (copper annular ring, drill hole) as circle polygons."""
-    copper = Point(via.x, via.y).buffer(via.size / 2, quad_segs=32)
-    drill = Point(via.x, via.y).buffer(via.drill / 2, quad_segs=32)
+    copper = Point(via.x, via.y).buffer(via.size / 2, quad_segs=VIA_DRILL_QUAD_SEGS)
+    drill = Point(via.x, via.y).buffer(via.drill / 2, quad_segs=VIA_DRILL_QUAD_SEGS)
     return copper, drill
 
 
