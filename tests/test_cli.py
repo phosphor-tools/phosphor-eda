@@ -317,9 +317,13 @@ def test_cli_render_settings_schema_outputs_json_without_file() -> None:
     assert schema["additionalProperties"] is False
     assert "theme" not in schema["properties"]
     assert "font_size" not in schema["properties"]
-    assert "font_size_px" in schema["properties"]
-    assert "include" in schema["properties"]
-    assert "style_rules" in schema["properties"]
+    assert "font_size_px" not in schema["properties"]
+    assert "include" not in schema["properties"]
+    assert "highlight_behavior" not in schema["properties"]
+    assert "style_rules" not in schema["properties"]
+    assert "fontSizePx" in schema["properties"]
+    assert "source" in schema["properties"]
+    assert "tokens" in schema["properties"]
     assert "pad" in json.dumps(schema["properties"]["highlights"])
     assert schema["examples"]
 
@@ -354,8 +358,8 @@ def test_cli_render_supports_highlight_pad() -> None:
 
     assert result.exit_code == 0, result.output
     assert 'class="highlight-overlay"' in result.output
-    assert 'data-component="TP3"' in result.output
-    assert 'data-pad="1"' in result.output
+    assert 'data-highlight-target="pad:TP3.1"' in result.output
+    assert 'data-source-ids="pad:TP3:1:0"' in result.output
 
 
 def test_cli_render_prjpcb_resolves_single_existing_pcbdoc(
@@ -450,6 +454,7 @@ def test_cli_render_settings_inline_custom_css_is_injected(tmp_path: Path) -> No
 def test_cli_render_settings_from_file(tmp_path: Path) -> None:
     """--render-settings loads highlights and annotations from a JSON file."""
     settings = {
+        "extends": "phosphor:review",
         "highlights": [{"net": "/SWDIO_TMS"}],
         "annotations": {
             "pointers": [{"target": "TP3", "label": "SWD"}],
@@ -467,13 +472,14 @@ def test_cli_render_settings_from_file(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     svg = out_file.read_text()
     assert svg.startswith("<svg")
-    assert 'style id="highlight"' in svg
+    assert 'class="highlight-overlay"' in svg
+    assert 'data-highlight-target="net:/SWDIO_TMS"' in svg
     assert "SWD" in svg
 
 
 def test_cli_render_settings_font_size_sets_annotation_size(tmp_path: Path) -> None:
     settings = {
-        "font_size_px": 24,
+        "fontSizePx": 24,
         "annotations": {
             "pointers": [{"target": "TP3", "label": "SWD"}],
         },
@@ -496,7 +502,7 @@ def test_cli_render_settings_font_size_sets_annotation_size(tmp_path: Path) -> N
 def test_cli_render_settings_accepts_packaged_v2_settings(tmp_path: Path) -> None:
     settings = {
         "extends": "phosphor:simplified-high-contrast",
-        "font_size_px": 64,
+        "fontSizePx": 64,
         "annotations": {
             "pointers": [{"target": "TP3.1", "label": "SWD"}],
         },
@@ -519,7 +525,7 @@ def test_cli_render_settings_accepts_packaged_v2_settings(tmp_path: Path) -> Non
 
 def test_cli_font_size_overrides_render_settings(tmp_path: Path) -> None:
     settings = {
-        "font_size_px": 12,
+        "fontSizePx": 12,
         "annotations": {
             "pointers": [{"target": "TP3", "label": "SWD"}],
         },
@@ -553,6 +559,7 @@ def test_cli_font_size_overrides_render_settings(tmp_path: Path) -> None:
 def test_cli_render_settings_from_stdin(tmp_path: Path) -> None:
     """--render-settings - reads JSON from stdin."""
     settings = {
+        "extends": "phosphor:review",
         "highlights": [{"net": "/SWDIO_TMS"}],
     }
     out_file = tmp_path / "out.svg"
@@ -566,12 +573,14 @@ def test_cli_render_settings_from_stdin(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     svg = out_file.read_text()
     assert svg.startswith("<svg")
-    assert 'style id="highlight"' in svg
+    assert 'class="highlight-overlay"' in svg
+    assert 'data-highlight-target="net:/SWDIO_TMS"' in svg
 
 
 def test_cli_render_settings_with_highlight_colors(tmp_path: Path) -> None:
     """Highlight colors from render settings appear in the SVG CSS."""
     settings = {
+        "extends": "phosphor:review",
         "highlights": [
             {"net": "/SWDIO_TMS", "color": "#d4a843"},
             {"net": "/SWDCLK_TCK", "color": "#5b8abf"},

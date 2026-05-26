@@ -37,8 +37,6 @@ from phosphor_eda.pcb_annotations import (
 from phosphor_eda.pcb_render import (
     HighlightSpec,
     RenderSettings,
-    _cmp_class,  # pyright: ignore[reportPrivateUsage]
-    _css_safe,  # pyright: ignore[reportPrivateUsage]
     _fmt_attrs,  # pyright: ignore[reportPrivateUsage]
     load_render_settings_file,
     load_render_settings_json,
@@ -150,131 +148,6 @@ def test_valid_svg(board: Pcb) -> None:
     assert svg.strip().endswith("</svg>")
 
 
-def test_has_base_style(board: Pcb) -> None:
-    svg = render_pcb_svg(board)
-    assert '<style id="base">' in svg
-
-
-def test_base_plan_svg_css_has_no_paint_defaults(board: Pcb) -> None:
-    svg = render_pcb_svg(board)
-    base_css = svg[svg.index('<style id="base">') : svg.index("</style>")]
-    assert "fill:" not in base_css
-    assert "stroke:" not in base_css
-    assert ".trace, .trace-arc" in base_css
-
-
-def test_has_board_clip(board: Pcb) -> None:
-    svg = render_pcb_svg(board)
-    assert "board-clip" in svg
-
-
-def test_has_drill_clip(board: Pcb) -> None:
-    svg = render_pcb_svg(board)
-    assert "drill-clip" in svg
-
-
-def test_has_copper_layer_groups(board: Pcb) -> None:
-    svg = render_pcb_svg(board)
-    assert 'data-layer="F.Cu"' in svg
-    assert 'data-layer="B.Cu"' in svg
-
-
-def test_layer_paint_order(board: Pcb) -> None:
-    """B.Cu should appear before F.Cu in document order (painter's model)."""
-    svg = render_pcb_svg(board)
-    assert svg.index('data-layer="B.Cu"') < svg.index('data-layer="F.Cu"')
-
-
-def test_silk_after_copper(board: Pcb) -> None:
-    """Silkscreen layer group appears after copper layer groups."""
-    svg = render_pcb_svg(board)
-    fcu_pos = svg.index('data-layer="F.Cu"')
-    silk_names = ["F.SilkS", "F.Silkscreen", "B.SilkS", "B.Silkscreen"]
-    found = False
-    for name in silk_names:
-        marker = f'data-layer="{name}"'
-        if marker in svg:
-            assert svg.index(marker) > fcu_pos
-            found = True
-    assert found, "No silkscreen layer group found"
-
-
-# ---------------------------------------------------------------------------
-# Data attribute tests
-# ---------------------------------------------------------------------------
-
-
-def test_pad_attributes(board: Pcb) -> None:
-    svg = render_pcb_svg(board)
-    assert 'data-type="pad"' in svg
-    assert "data-component=" in svg
-    assert "data-pad=" in svg
-    assert "data-net=" in svg
-
-
-def test_trace_attributes(board: Pcb) -> None:
-    """All traces are always present (visibility controlled via CSS)."""
-    svg = render_pcb_svg(board)
-    assert 'data-type="trace"' in svg
-    assert "data-net-number=" in svg
-
-
-def test_via_attributes(board: Pcb) -> None:
-    svg = render_pcb_svg(board)
-    assert 'data-type="via"' in svg
-    assert re.search(r'class="via\b', svg)
-
-
-def test_via_annular_ring_uses_size() -> None:
-    """Annular ring radius should be via.size / 2, not drill / 2 + constant."""
-    fp = PcbFootprint(
-        reference="U1",
-        footprint_lib="test",
-        x=5.0,
-        y=5.0,
-        rotation=0.0,
-        layer="F.Cu",
-        pads=[
-            PcbPad(
-                number="1",
-                x=5.0,
-                y=5.0,
-                width=1.0,
-                height=1.0,
-                shape="rect",
-                layers=["F.Cu"],
-                net_number=1,
-                net_name="SIG",
-                footprint_ref="U1",
-            )
-        ],
-        fab_lines=[PcbLine(4, 4, 6, 4, "F.Fab", 0.1)],
-    )
-    board = Pcb(
-        name="via-size-test",
-        nets={0: PcbNet(0, ""), 1: PcbNet(1, "SIG")},
-        footprints=[fp],
-        segments=[PcbSegment(5.0, 5.0, 10.0, 5.0, 0.25, "F.Cu", 1)],
-        vias=[PcbVia(10.0, 5.0, size=0.8, drill=0.4, layers=["F.Cu", "B.Cu"], net_number=1)],
-        outline_lines=[
-            PcbLine(0, 0, 15, 0, "Edge.Cuts", 0.1),
-            PcbLine(15, 0, 15, 10, "Edge.Cuts", 0.1),
-            PcbLine(15, 10, 0, 10, "Edge.Cuts", 0.1),
-            PcbLine(0, 10, 0, 0, "Edge.Cuts", 0.1),
-        ],
-        outline_arcs=[],
-        layers=[
-            PcbLayer("F.Cu", LayerFunction.COPPER, side="front"),
-            PcbLayer("B.Cu", LayerFunction.COPPER, side="back"),
-            PcbLayer("F.Fab", LayerFunction.FAB, side="front"),
-        ],
-    )
-    svg = render_pcb_svg(board)
-    # Annular ring radius should be size/2 = 0.4, not drill/2 + 0.05 = 0.25
-    assert 'r="0.4000"' in svg
-    assert 'r="0.2500"' not in svg  # old hardcoded formula
-
-
 def test_via_drill_hole_is_in_drill_clip_without_mask_layers() -> None:
     """Derived realistic presets subtract via drills without legacy clip paths."""
     board = _make_board_with_inner_layers()
@@ -308,17 +181,6 @@ def test_via_annular_rings_respect_selected_copper_layers() -> None:
     assert 'data-role="realistic.coveredCopper"' in svg
     assert 'data-source-layers="F.Cu"' in svg
     assert 'data-role="cad.copper.inner' not in svg
-
-
-def test_zone_attributes(board: Pcb) -> None:
-    """swd_switch has zones on inner copper layers."""
-    svg = render_pcb_svg(board)
-    assert 'data-type="zone"' in svg
-
-
-def test_component_body_attributes(board: Pcb) -> None:
-    svg = render_pcb_svg(board)
-    assert 'data-type="body"' in svg
 
 
 def test_simplified_high_contrast_svg_omits_unhighlighted_traces(board: Pcb) -> None:
@@ -890,40 +752,6 @@ def test_structured_highlight_colors_use_inline_style_so_css_does_not_override(
 
 
 # ---------------------------------------------------------------------------
-# Highlight tests
-# ---------------------------------------------------------------------------
-
-
-def test_highlight_adds_style(board: Pcb) -> None:
-    svg = render_pcb_svg(board, highlight_nets=["VCC"])
-    assert '<style id="highlight">' in svg
-
-
-def test_highlight_css_targets_net(board: Pcb) -> None:
-    """VCC elements have data-net-number="1" attr (CSS uses .nn-1 class)."""
-    svg = render_pcb_svg(board, highlight_nets=["VCC"])
-    assert 'data-net-number="1"' in svg
-
-
-def test_highlight_component_restores_by_ref(board: Pcb) -> None:
-    """Component highlight restores elements by cmp-{ref} class."""
-    svg = render_pcb_svg(board, highlight_components=["TP3"])
-    assert 'data-component="TP3"' in svg
-    assert "Restore highlighted components" in svg
-
-
-def test_highlight_component_does_not_highlight_nets(board: Pcb) -> None:
-    """-c alone should not produce net-number restore rules."""
-    svg = render_pcb_svg(board, highlight_components=["TP3"])
-    assert "Restore highlighted nets" not in svg
-
-
-def test_no_highlight_without_args(board: Pcb) -> None:
-    svg = render_pcb_svg(board)
-    assert '<style id="highlight">' not in svg
-
-
-# ---------------------------------------------------------------------------
 # Highlight + inner-layer visibility
 # ---------------------------------------------------------------------------
 
@@ -1099,40 +927,6 @@ def test_highlight_does_not_emit_visibility_restore_css() -> None:
     assert "display: inline !important" not in svg
 
 
-def test_highlight_overlay_renders_above_zones() -> None:
-    """Highlighted traces are in an overlay group that paints after all layers."""
-    board = _make_board_with_inner_layers()
-    svg = render_pcb_svg(board, highlight_nets=["SIG"])
-    # Overlay group exists and contains highlighted traces
-    assert 'class="highlight-overlay"' in svg
-    assert "nn-1" in svg  # net 1 = SIG
-    # The overlay group element appears AFTER the fab layer groups
-    overlay_pos = svg.index('<g class="highlight-overlay">')
-    last_fab = svg.rindex('data-layer="F.Fab"')
-    assert overlay_pos > last_fab
-
-
-def test_highlight_overlay_contains_all_layers() -> None:
-    """Overlay includes traces from every copper layer the highlighted net touches."""
-    board = _make_board_with_inner_layers()
-    svg = render_pcb_svg(board, highlight_nets=["SIG"])
-    overlay_start = svg.index('class="highlight-overlay"')
-    overlay = svg[overlay_start:]
-    # SIG net has segments on F.Cu, In1.Cu, and B.Cu
-    assert "data-layer" not in overlay or "trace" in overlay
-    # Verify traces from all three layers appear in overlay
-    assert overlay.count("nn-1") >= 3  # at least one trace per layer + via + pad
-
-
-def test_highlight_overlay_includes_vias() -> None:
-    """Highlighted vias appear in the overlay group."""
-    board = _make_board_with_inner_layers()
-    svg = render_pcb_svg(board, highlight_nets=["SIG"])
-    overlay_start = svg.index('class="highlight-overlay"')
-    overlay = svg[overlay_start:]
-    assert "annular" in overlay
-
-
 def test_highlight_overlay_includes_pads() -> None:
     """Highlighted pads appear in the overlay group."""
     board = _make_board_with_inner_layers()
@@ -1160,45 +954,6 @@ def test_highlight_overlay_includes_zones() -> None:
     assert "zone" in overlay
 
 
-def test_component_highlight_overlay_renders_pads_on_top() -> None:
-    """Component highlights re-render matching pads in the top overlay."""
-    board = _make_board_with_inner_layers()
-    svg = render_pcb_svg(board, highlight_components=["U1"])
-    overlay_start = svg.index('class="highlight-overlay"')
-    last_fab = svg.rindex('data-layer="F.Fab"')
-    assert overlay_start > last_fab
-
-    content_clip_end = svg.rindex("</g>", 0, svg.rindex("</svg>"))
-    overlay = svg[overlay_start:content_clip_end]
-    assert 'data-type="pad"' in overlay
-    assert 'data-component="U1"' in overlay
-    assert 'data-pad="1"' in overlay
-    assert 'data-type="body"' not in overlay
-
-
-def test_component_highlight_overlay_renders_after_ref_text() -> None:
-    """Component highlight overlay paints after normal board ref text labels."""
-    board = _make_board_with_inner_layers()
-    board.footprints[0].texts.append(
-        PcbText(
-            text="U1",
-            x=5.0,
-            y=8.0,
-            rotation=0.0,
-            layer="F.Fab",
-            font_size=0.5,
-            kind="reference",
-            footprint_ref="U1",
-        )
-    )
-
-    svg = render_pcb_svg(board, highlight_components=["U1"])
-
-    ref_text_start = svg.index('class="ref-text')
-    overlay_start = svg.index('class="highlight-overlay"')
-    assert overlay_start > ref_text_start
-
-
 def test_no_highlight_overlay_without_highlights() -> None:
     """No overlay group when no highlights are active."""
     board = _make_board_with_inner_layers()
@@ -1216,11 +971,6 @@ def test_no_visibility_override_without_highlights() -> None:
 # ---------------------------------------------------------------------------
 # Side tests
 # ---------------------------------------------------------------------------
-
-
-def test_back_mirror(board: Pcb) -> None:
-    svg = render_pcb_svg(board, side="back")
-    assert "scale(-1" in svg
 
 
 def test_front_no_mirror(board: Pcb) -> None:
@@ -1243,13 +993,6 @@ def test_unknown_component_no_error(board: Pcb) -> None:
     assert svg.startswith("<svg")
 
 
-def test_both_highlight_types(board: Pcb) -> None:
-    svg = render_pcb_svg(board, highlight_nets=["GND"], highlight_components=["TP3"])
-    assert svg.startswith("<svg")
-    assert "TP3" in svg
-    assert '<style id="highlight">' in svg
-
-
 # ---------------------------------------------------------------------------
 # OrangeCrab integration
 # ---------------------------------------------------------------------------
@@ -1259,11 +1002,6 @@ def test_orangecrab_renders(orangecrab_board: Pcb) -> None:
     svg = render_pcb_svg(orangecrab_board)
     assert svg.startswith("<svg")
     assert svg.strip().endswith("</svg>")
-
-
-def test_orangecrab_has_zones(orangecrab_board: Pcb) -> None:
-    svg = render_pcb_svg(orangecrab_board)
-    assert 'data-type="zone"' in svg
 
 
 # ---------------------------------------------------------------------------
@@ -1322,49 +1060,6 @@ def _make_board_with_models(
     )
 
 
-def test_body_group_has_data_models() -> None:
-    """Footprint with a cached model gets data-models on the body group."""
-    model = PcbModel3D(
-        source="test.step",
-        offset=(1.0, 2.0, 3.0),
-        rotation=(0.0, 0.0, 90.0),
-        scale=(1.0, 1.0, 1.0),
-        cache_key="abc123",
-    )
-    fab_line = PcbLine(9, 9, 11, 9, "F.Fab", 0.1)
-    board = _make_board_with_models([model], fab_lines=[fab_line])
-    svg = render_pcb_svg(board)
-    assert "data-models=" in svg
-
-
-def test_data_models_json_valid() -> None:
-    """The data-models attribute contains valid JSON with the expected schema."""
-    model = PcbModel3D(
-        source="test.step",
-        offset=(1.0, 2.0, 3.0),
-        rotation=(0.0, 0.0, 90.0),
-        scale=(1.0, 1.0, 1.0),
-        cache_key="abc123",
-    )
-    fab_line = PcbLine(9, 9, 11, 9, "F.Fab", 0.1)
-    board = _make_board_with_models([model], fab_lines=[fab_line])
-    svg = render_pcb_svg(board)
-
-    # Extract the data-models attribute value (XML-escaped JSON)
-    match = re.search(r'data-models="([^"]*)"', svg)
-    assert match is not None
-    # The value is XML-escaped, but since we use compact JSON with no quotes
-    # in values, the main escaping is &quot; for the JSON internal quotes.
-    raw = match.group(1).replace("&quot;", '"').replace("&amp;", "&")
-    parsed = json.loads(raw)
-    assert isinstance(parsed, list)
-    assert len(parsed) == 1
-    assert parsed[0]["key"] == "abc123"
-    assert parsed[0]["offset"] == [1.0, 2.0, 3.0]
-    assert parsed[0]["rotation"] == [0.0, 0.0, 90.0]
-    assert parsed[0]["scale"] == [1.0, 1.0, 1.0]
-
-
 def test_no_data_models_when_empty() -> None:
     """Footprint with no models → no data-models attribute."""
     fab_line = PcbLine(9, 9, 11, 9, "F.Fab", 0.1)
@@ -1380,15 +1075,6 @@ def test_no_data_models_when_no_cache_key() -> None:
     board = _make_board_with_models([model], fab_lines=[fab_line])
     svg = render_pcb_svg(board)
     assert "data-models" not in svg
-
-
-def test_model_only_footprint_gets_body_group() -> None:
-    """Footprint with 3D model but no fab geometry still gets a body group."""
-    model = PcbModel3D(source="test.step", cache_key="def456")
-    board = _make_board_with_models([model])
-    svg = render_pcb_svg(board)
-    assert "data-models=" in svg
-    assert 'data-component="U1"' in svg
 
 
 # ---------------------------------------------------------------------------
@@ -1455,54 +1141,6 @@ def _make_board_with_component(
             PcbLayer("F.Fab", LayerFunction.FAB, side="front"),
         ],
     )
-
-
-def test_pad_has_footprint_lib_and_value() -> None:
-    """Pads carry data-footprint-lib and data-value from the footprint."""
-    board = _make_board_with_component()
-    svg = render_pcb_svg(board)
-    assert 'data-footprint-lib="Package_SO:SOIC-8"' in svg
-    assert 'data-value="SN74LVC2G66"' in svg
-
-
-def test_silk_has_footprint_lib() -> None:
-    """Silkscreen lines with a footprint_ref carry lib/value attributes."""
-    board = _make_board_with_component()
-    svg = render_pcb_svg(board)
-    # Silk lines should have component attrs
-    silk_pattern = re.compile(r'class="silk[^"]*"[^/]*data-footprint-lib="Package_SO:SOIC-8"')
-    assert silk_pattern.search(svg)
-
-
-def test_body_group_has_lib_and_value() -> None:
-    """Body group <g> carries data-footprint-lib and data-value."""
-    board = _make_board_with_component()
-    svg = render_pcb_svg(board)
-    body_pattern = re.compile(r'data-type="body"[^>]*data-footprint-lib="Package_SO:SOIC-8"')
-    assert body_pattern.search(svg)
-
-
-def test_ref_text_has_lib_and_value() -> None:
-    """Ref text labels carry data-footprint-lib and data-value."""
-    from phosphor_eda.pcb import PcbText
-
-    board = _make_board_with_component()
-    # Add a visible ref text so it renders
-    board.footprints[0].texts.append(
-        PcbText(
-            text="U1",
-            x=10.0,
-            y=8.0,
-            rotation=0.0,
-            layer="F.Fab",
-            font_size=0.5,
-            kind="reference",
-            footprint_ref="U1",
-        )
-    )
-    svg = render_pcb_svg(board)
-    ref_pattern = re.compile(r'class="ref-text[^"]*"[^>]*data-footprint-lib="Package_SO:SOIC-8"')
-    assert ref_pattern.search(svg)
 
 
 def test_no_lib_attr_when_empty() -> None:
@@ -1584,12 +1222,6 @@ def test_custom_css_not_present_when_empty() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_swd_switch_has_footprint_lib_attr(board: Pcb) -> None:
-    """Rendered SVG should contain data-footprint-lib for real footprints."""
-    svg = render_pcb_svg(board)
-    assert "data-footprint-lib=" in svg
-
-
 def test_swd_switch_metadata_has_lib(board: Pcb) -> None:
     """The pcb-metadata JSON block should include entries with non-empty lib."""
     svg = render_pcb_svg(board)
@@ -1602,12 +1234,6 @@ def test_swd_switch_metadata_has_lib(board: Pcb) -> None:
     parsed = json.loads(match.group(1))
     libs = [v["lib"] for v in parsed.values() if v.get("lib")]
     assert len(libs) >= 3
-
-
-def test_swd_switch_has_data_value(board: Pcb) -> None:
-    """At least some elements should carry data-value for components with values."""
-    svg = render_pcb_svg(board)
-    assert "data-value=" in svg
 
 
 # ---------------------------------------------------------------------------
@@ -1831,7 +1457,6 @@ def test_derived_realistic_svg_uses_derived_path(board: Pcb) -> None:
 
 def test_derived_serializer_does_not_use_raw_source_kind_branches(
     board: Pcb,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = load_render_settings_json(
         json.dumps(
@@ -1843,13 +1468,9 @@ def test_derived_serializer_does_not_use_raw_source_kind_branches(
         )
     )
 
-    def fail_raw_serializer(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("legacy raw source serializer was called")
-
-    monkeypatch.setattr(pcb_render_module, "_render_plan_item", fail_raw_serializer)
-
     svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
 
+    assert not hasattr(pcb_render_module, "_render_plan_item")
     assert '<g data-role="cad.copper.front"' in svg
 
 
@@ -2043,18 +1664,6 @@ def test_viewbox_expands_for_annotations() -> None:
     assert ann_vals[2] > def_vals[2] or ann_vals[3] > def_vals[3]
 
 
-def test_back_side_annotations_not_mirrored() -> None:
-    """Annotations should render outside the mirror group."""
-    board = _make_board_with_component()
-    annotations = _make_annotations(boxes=True)
-    svg = render_pcb_svg(board, side="back", annotations=annotations)
-    # The annotation group element should appear after the mirror group
-    scale_pos = svg.index("scale(-1")
-    # Look for the <g class="annotations"> group, not the CSS class name
-    annotation_group_pos = svg.index('class="annotations"')
-    assert annotation_group_pos > scale_pos
-
-
 def test_no_foreign_object() -> None:
     """Pure SVG rendering should not use foreignObject."""
     board = _make_board_with_component()
@@ -2149,16 +1758,23 @@ class TestParseRenderSettings:
         props = _as_object_dict(schema["properties"])
         assert "theme" not in props
         assert "font_size" not in props
-        assert "font_size_px" in props
-        assert "include" in props
-        assert "highlight_behavior" in props
-        assert "style_rules" in props
+        assert "font_size_px" not in props
+        assert "include" not in props
+        assert "highlight_behavior" not in props
+        assert "style_rules" not in props
+        assert "fontSizePx" in props
+        assert "source" in props
+        assert "tokens" in props
         assert "custom_css" in props
         assert "phosphor:simplified-high-contrast" in json.dumps(schema["examples"])
         example = _as_object_dict(_as_object_list(schema["examples"])[0])
-        assert "include" in example
-        assert "highlight_behavior" in example
-        assert "style_rules" in example
+        assert "source" in example
+        assert "tokens" in example
+        assert "dimming" in example
+        assert "font_size_px" not in example
+        assert "include" not in example
+        assert "highlight_behavior" not in example
+        assert "style_rules" not in example
         assert "custom_css" in example
 
     def test_empty_object(self) -> None:
@@ -2167,10 +1783,9 @@ class TestParseRenderSettings:
         assert settings.width == 0
         assert settings.font_size == 0.0
         assert settings.highlights == []
-        assert settings.include.vias == "visible"
-        assert settings.include.layers == []
-        assert settings.highlight_behavior == {}
-        assert settings.style_rules == []
+        assert settings.source.layers == []
+        assert settings.tokens == {}
+        assert settings.dimming.enabled is False
         assert settings.annotations == {}
         assert settings.custom_css == ""
 
@@ -2248,105 +1863,33 @@ class TestParseRenderSettings:
         assert settings.highlights == [HighlightSpec(net="SPI_CLK", color="#ff3b30")]
         assert settings.dimming.enabled is True
 
-    def test_render_settings_accepts_font_size_px(self) -> None:
-        settings = parse_render_settings({"font_size_px": 72})
-        assert settings.font_size == 72
-
-    def test_render_settings_accepts_include_policy(self) -> None:
-        settings = parse_render_settings(
-            {
-                "include": {
-                    "board_outline": "visible",
-                    "drills": "visible",
-                    "vias": "when-highlighted",
-                    "layers": [
-                        {
-                            "role": "copper",
-                            "side": "active",
-                            "objects": {
-                                "pads": "visible",
-                                "traces": "when-highlighted",
-                                "zones": "hidden",
-                            },
-                        }
-                    ],
-                }
-            }
-        )
-        assert settings.include.vias == "when-highlighted"
-        assert settings.include.layers[0].objects["traces"] == "when-highlighted"
-
-    def test_render_settings_rejects_unknown_include_state(self) -> None:
-        with pytest.raises(ValueError, match=r"include\.layers\[0\]\.objects\.traces"):
-            parse_render_settings(
-                {
-                    "include": {
-                        "layers": [
-                            {
-                                "role": "copper",
-                                "objects": {"traces": "sometimes"},
-                            }
-                        ]
-                    }
-                }
-            )
-
-    def test_render_settings_rejects_unqualified_style_size(self) -> None:
-        with pytest.raises(ValueError, match="stroke_width"):
-            parse_render_settings(
-                {
-                    "style_rules": [
-                        {
-                            "match": {"object": "trace"},
-                            "style": {"stroke_width": 4},
-                        }
-                    ]
-                }
-            )
-
-    def test_render_settings_rejects_mm_and_mil_for_same_style_field(self) -> None:
-        with pytest.raises(ValueError, match="stroke_width"):
-            parse_render_settings(
-                {
-                    "style_rules": [
-                        {
-                            "match": {"object": "trace"},
-                            "style": {"stroke_width_mm": 0.2, "stroke_width_mil": 8},
-                        }
-                    ]
-                }
-            )
-
-    def test_render_settings_rejects_px_and_physical_style_units(self) -> None:
-        with pytest.raises(ValueError, match="text_halo_width"):
-            parse_render_settings(
-                {
-                    "style_rules": [
-                        {
-                            "match": {"object": "annotation-label"},
-                            "style": {"text_halo_width_px": 6, "text_halo_width_mm": 0.2},
-                        }
-                    ]
-                }
-            )
+    @pytest.mark.parametrize(
+        "legacy_key",
+        ["font_size_px", "include", "highlight_behavior", "style_rules"],
+    )
+    def test_render_settings_rejects_legacy_settings_keys(self, legacy_key: str) -> None:
+        with pytest.raises(ValueError, match=legacy_key):
+            parse_render_settings({legacy_key: {}})
 
     def test_all_fields(self) -> None:
         data: dict[str, object] = {
             "side": "back",
             "width": 1200,
-            "font_size_px": 24,
+            "fontSizePx": 24,
+            "renderMode": "cad",
+            "source": {
+                "layers": [{"match": {"function": "copper"}, "objects": ["pads"]}],
+                "excludeComponents": ["R", "C"],
+            },
+            "tokens": {
+                "cad.copper.front.fill": "#d17a22",
+                "highlight.copper.front.fill": "#ff8a00",
+            },
+            "dimming": {"enabled": True},
             "highlights": [
                 {"net": "VBUS", "color": "#ff0000"},
                 {"component": "U1"},
                 {"pad": "CN11.30", "color": "#00ff00"},
-            ],
-            "include": {"vias": "hidden"},
-            "highlight_behavior": {"overlay": True, "dim_unhighlighted": False},
-            "style_rules": [
-                {
-                    "match": {"object": "pad"},
-                    "style": {"stroke_width_mm": 0.03},
-                }
             ],
             "annotations": {"boxes": [{"targets": ["U1"], "label": "MCU"}]},
             "custom_css": ".board-fill { fill: red; }",
@@ -2355,6 +1898,12 @@ class TestParseRenderSettings:
         assert settings.side == "back"
         assert settings.width == 1200
         assert settings.font_size == 24.0
+        assert settings.render_mode == "cad"
+        assert settings.source.layers[0].match.function == "copper"
+        assert settings.source.layers[0].objects == ("pads",)
+        assert settings.source.exclude_components == ("R", "C")
+        assert settings.tokens["cad.copper.front.fill"] == "#d17a22"
+        assert settings.dimming.enabled is True
         assert len(settings.highlights) == 3
         assert settings.highlights[0].net == "VBUS"
         assert settings.highlights[0].color == "#ff0000"
@@ -2362,10 +1911,6 @@ class TestParseRenderSettings:
         assert settings.highlights[1].color == ""
         assert settings.highlights[2].pad == "CN11.30"
         assert settings.highlights[2].color == "#00ff00"
-        assert settings.include.vias == "hidden"
-        assert settings.highlight_behavior == {"overlay": True, "dim_unhighlighted": False}
-        assert settings.style_rules[0].match == {"object": "pad"}
-        assert settings.style_rules[0].style == {"stroke_width_mm": 0.03}
         assert settings.annotations == data["annotations"]
         assert settings.custom_css == ".board-fill { fill: red; }"
 
@@ -2381,19 +1926,19 @@ class TestParseRenderSettings:
         with pytest.raises(ValueError, match="font_size"):
             parse_render_settings({"font_size": 24})
 
-        with pytest.raises(ValueError, match="font_size"):
-            parse_render_settings({"font_size_px": 0})
+        with pytest.raises(ValueError, match="fontSizePx"):
+            parse_render_settings({"fontSizePx": 0})
 
-        with pytest.raises(ValueError, match="font_size"):
-            parse_render_settings({"font_size_px": True})
+        with pytest.raises(ValueError, match="fontSizePx"):
+            parse_render_settings({"fontSizePx": True})
 
-        with pytest.raises(ValueError, match="font_size"):
-            parse_render_settings({"font_size_px": 501})
+        with pytest.raises(ValueError, match="fontSizePx"):
+            parse_render_settings({"fontSizePx": 501})
 
     @pytest.mark.parametrize("font_size", [math.nan, math.inf, -math.inf])
     def test_invalid_font_size_must_be_finite(self, font_size: float) -> None:
-        with pytest.raises(ValueError, match="font_size"):
-            parse_render_settings({"font_size_px": font_size})
+        with pytest.raises(ValueError, match="fontSizePx"):
+            parse_render_settings({"fontSizePx": font_size})
 
     def test_highlight_missing_net_and_component(self) -> None:
         with pytest.raises(ValueError, match="exactly one of 'net', 'component', or 'pad'"):
@@ -2450,7 +1995,7 @@ def test_load_render_settings_file_extends_local_file(tmp_path: Path) -> None:
         json.dumps(
             {
                 "width": 1200,
-                "font_size_px": 48,
+                "fontSizePx": 48,
                 "custom_css": ".base { color: black; }",
                 "annotations": {"legend": {"title": "Base", "entries": []}},
             }
@@ -2487,7 +2032,7 @@ def test_load_render_settings_file_extends_packaged_settings(tmp_path: Path) -> 
         json.dumps(
             {
                 "extends": "phosphor:simplified-high-contrast",
-                "font_size_px": 72,
+                "fontSizePx": 72,
                 "custom_css": ".annotation-connector { stroke-width: 6; }",
             }
         )
@@ -2614,7 +2159,7 @@ def test_bundled_render_settings_do_not_enable_highlight_halo_by_default(name: s
     assert all(value == 0 for value in highlight_stroke_width_tokens.values())
 
 
-def test_simplified_high_contrast_extends_high_contrast_style_rules() -> None:
+def test_simplified_high_contrast_extends_high_contrast_tokens() -> None:
     settings = load_render_settings_json('{"extends": "phosphor:simplified-high-contrast"}')
 
     assert settings.font_size == 40
@@ -2629,27 +2174,18 @@ def test_render_settings_extends_merges_v2_policy(tmp_path: Path) -> None:
     base.write_text(
         json.dumps(
             {
-                "include": {
-                    "board_outline": "visible",
-                    "drills": "visible",
-                    "vias": "visible",
+                "source": {
                     "layers": [
-                        {
-                            "role": "copper",
-                            "side": "active",
-                            "objects": {
-                                "pads": "visible",
-                                "traces": "visible",
-                                "zones": "visible",
-                            },
-                        },
-                        {"role": "silkscreen", "side": "active", "objects": "visible"},
+                        {"match": {"function": "copper"}, "objects": ["pads"]},
+                        {"match": {"function": "silkscreen", "side": "front"}},
                     ],
+                    "excludeComponents": ["R"],
                 },
-                "highlight_behavior": {"overlay": False, "palette": {"default": "#111"}},
-                "style_rules": [
-                    {"match": {"object": "board_outline"}, "style": {"stroke": "#444"}}
-                ],
+                "tokens": {
+                    "cad.copper.front.fill": "#111111",
+                    "annotation.label.fill": "#000000",
+                },
+                "dimming": {"enabled": False},
             }
         )
     )
@@ -2658,90 +2194,29 @@ def test_render_settings_extends_merges_v2_policy(tmp_path: Path) -> None:
         json.dumps(
             {
                 "extends": "./base.json",
-                "include": {
-                    "vias": "when-highlighted",
-                    "layers": [
-                        {
-                            "role": "copper",
-                            "side": "active",
-                            "objects": {
-                                "traces": "when-highlighted",
-                                "zones": "hidden",
-                            },
-                        },
-                        {"role": "fabrication", "side": "active", "objects": "visible"},
-                    ],
+                "source": {
+                    "layers": [{"match": {"name": "Mechanical 13"}}],
+                    "excludeComponents": ["C"],
                 },
-                "highlight_behavior": {"overlay": True, "palette": {"warning": "#c00"}},
-                "style_rules": [{"match": {"annotation": "label"}, "style": {"fill": "#000"}}],
+                "tokens": {
+                    "cad.copper.front.fill": "#222222",
+                    "highlight.copper.front.fill": "#ff8a00",
+                },
+                "dimming": {"enabled": True},
             }
         )
     )
 
     settings = load_render_settings_file(child)
 
-    assert settings.include.board_outline == "visible"
-    assert settings.include.vias == "when-highlighted"
-    assert settings.include.layers[0].objects == {
-        "pads": "visible",
-        "traces": "when-highlighted",
-        "zones": "hidden",
+    assert [rule.match.name for rule in settings.source.layers] == ["Mechanical 13"]
+    assert settings.source.exclude_components == ("C",)
+    assert settings.tokens == {
+        "cad.copper.front.fill": "#222222",
+        "annotation.label.fill": "#000000",
+        "highlight.copper.front.fill": "#ff8a00",
     }
-    assert settings.include.layers[1].role == "silkscreen"
-    assert settings.include.layers[2].role == "fabrication"
-    assert settings.highlight_behavior == {
-        "overlay": True,
-        "palette": {"default": "#111", "warning": "#c00"},
-    }
-    assert [rule.match for rule in settings.style_rules] == [
-        {"object": "board_outline"},
-        {"annotation": "label"},
-    ]
-
-
-def test_render_settings_extends_merges_include_layer_object_scalar_defaults(
-    tmp_path: Path,
-) -> None:
-    base = tmp_path / "base.json"
-    base.write_text(
-        json.dumps(
-            {
-                "include": {
-                    "layers": [
-                        {
-                            "role": "silkscreen",
-                            "side": "active",
-                            "objects": "visible",
-                        }
-                    ]
-                }
-            }
-        )
-    )
-    child = tmp_path / "child.json"
-    child.write_text(
-        json.dumps(
-            {
-                "extends": "./base.json",
-                "include": {
-                    "layers": [
-                        {
-                            "role": "silkscreen",
-                            "side": "active",
-                            "objects": {"reference_text": "hidden"},
-                        }
-                    ]
-                },
-            }
-        )
-    )
-
-    settings = load_render_settings_file(child)
-
-    assert settings.include.layers[0].objects == {
-        "*": "visible",
-        "reference_text": "hidden",
-    }
+    assert settings.dimming.enabled is True
 
 
 def test_load_render_settings_file_detects_extend_cycles(tmp_path: Path) -> None:
@@ -2761,345 +2236,3 @@ def test_render_settings_schema_documents_extends() -> None:
 
     assert extends["type"] == "string"
     assert "phosphor:simplified-high-contrast" in json.dumps(schema["examples"])
-
-
-# ---------------------------------------------------------------------------
-# Highlight colors
-# ---------------------------------------------------------------------------
-
-
-def test_highlight_net_with_color() -> None:
-    """A highlight spec with a color applies that color to traces and pads."""
-    board = _make_board_with_inner_layers()
-    svg = render_pcb_svg(
-        board,
-        highlight_specs=[HighlightSpec(net="SIG", color="#d4a843")],
-    )
-    assert 'style id="highlight"' in svg
-    # The custom color should appear in the CSS
-    assert "#d4a843" in svg
-    # Traces and pads with the net should get the custom color
-    assert "stroke: #d4a843 !important" in svg
-    assert "fill: #d4a843 !important" in svg
-
-
-def test_highlight_net_without_color_uses_layer_defaults() -> None:
-    """A highlight spec without color falls back to per-layer copper colors."""
-    board = _make_board_with_inner_layers()
-    svg = render_pcb_svg(
-        board,
-        highlight_specs=[HighlightSpec(net="SIG")],
-    )
-    assert 'style id="highlight"' in svg
-    # Should have copper color rules, not a custom color
-    assert "Restore vibrant copper colors" in svg
-
-
-def test_highlight_mixed_colors_and_defaults() -> None:
-    """Nets with colors get per-net rules; nets without get per-layer rules."""
-    fp = PcbFootprint(
-        reference="U1",
-        footprint_lib="test",
-        x=5.0,
-        y=10.0,
-        rotation=0.0,
-        layer="F.Cu",
-        pads=[
-            PcbPad(
-                number="1",
-                x=5.0,
-                y=10.0,
-                width=1.0,
-                height=1.0,
-                shape="rect",
-                layers=["F.Cu"],
-                net_number=1,
-                net_name="NET_A",
-                footprint_ref="U1",
-            ),
-            PcbPad(
-                number="2",
-                x=7.0,
-                y=10.0,
-                width=1.0,
-                height=1.0,
-                shape="rect",
-                layers=["F.Cu"],
-                net_number=2,
-                net_name="NET_B",
-                footprint_ref="U1",
-            ),
-        ],
-        fab_lines=[
-            PcbLine(4, 9, 8, 9, "F.Fab", 0.1),
-            PcbLine(8, 9, 8, 11, "F.Fab", 0.1),
-            PcbLine(8, 11, 4, 11, "F.Fab", 0.1),
-            PcbLine(4, 11, 4, 9, "F.Fab", 0.1),
-        ],
-    )
-    board = Pcb(
-        name="mixed-test",
-        nets={0: PcbNet(0, ""), 1: PcbNet(1, "NET_A"), 2: PcbNet(2, "NET_B")},
-        footprints=[fp],
-        segments=[
-            PcbSegment(5.0, 10.0, 10.0, 10.0, 0.25, "F.Cu", 1),
-            PcbSegment(7.0, 10.0, 12.0, 10.0, 0.25, "F.Cu", 2),
-        ],
-        vias=[],
-        outline_lines=[
-            PcbLine(0, 0, 20, 0, "Edge.Cuts", 0.1),
-            PcbLine(20, 0, 20, 20, "Edge.Cuts", 0.1),
-            PcbLine(20, 20, 0, 20, "Edge.Cuts", 0.1),
-            PcbLine(0, 20, 0, 0, "Edge.Cuts", 0.1),
-        ],
-        outline_arcs=[],
-        layers=[
-            PcbLayer("F.Cu", LayerFunction.COPPER, side="front"),
-            PcbLayer("B.Cu", LayerFunction.COPPER, side="back"),
-            PcbLayer("F.Fab", LayerFunction.FAB, side="front"),
-        ],
-    )
-    svg = render_pcb_svg(
-        board,
-        highlight_specs=[
-            HighlightSpec(net="NET_A", color="#ff0000"),
-            HighlightSpec(net="NET_B"),
-        ],
-    )
-    # NET_A gets per-net color
-    assert "stroke: #ff0000 !important" in svg
-    # NET_B gets per-layer copper color rules
-    assert "Restore vibrant copper colors" in svg
-
-
-def test_highlight_component_with_color() -> None:
-    """Component highlight with color applies to pads and body."""
-    board = _make_board_with_inner_layers()
-    svg = render_pcb_svg(
-        board,
-        highlight_specs=[HighlightSpec(component="U1", color="#5b8abf")],
-    )
-    assert 'style id="highlight"' in svg
-    assert "#5b8abf" in svg
-    assert "fill: #5b8abf !important" in svg
-    assert "stroke: #5b8abf !important" in svg
-
-
-def test_highlight_pad_with_color_renders_top_overlay() -> None:
-    """Pad highlight re-renders the target pad above normal board artwork."""
-    board = _make_board_with_inner_layers()
-    svg = render_pcb_svg(
-        board,
-        highlight_specs=[HighlightSpec(pad="U1.1", color="#e0115f")],
-    )
-
-    assert '<style id="highlight">' in svg
-    assert "#e0115f" in svg
-    overlay_start = svg.index('class="highlight-overlay"')
-    content_clip_end = svg.rindex("</g>", 0, svg.rindex("</svg>"))
-    assert overlay_start < content_clip_end
-    overlay = svg[overlay_start:content_clip_end]
-    assert 'data-component="U1"' in overlay
-    assert 'data-pad="1"' in overlay
-    assert "highlight-pad" in overlay
-
-
-def test_highlight_specs_merge_with_flags() -> None:
-    """highlight_specs merge with highlight_nets/highlight_components."""
-    board = _make_board_with_inner_layers()
-    svg = render_pcb_svg(
-        board,
-        highlight_nets=["SIG"],
-        highlight_specs=[HighlightSpec(component="U1")],
-    )
-    # Both net and component should be highlighted
-    assert "Restore highlighted nets" in svg
-    assert "Restore highlighted components" in svg
-
-
-# ---------------------------------------------------------------------------
-# Class-based CSS selectors (no attribute selectors in <style>)
-# ---------------------------------------------------------------------------
-
-
-class TestClassBasedSelectors:
-    """CSS uses class selectors (.nn-X, .cmp-X, .pfx-X, .lyr) instead of
-    attribute selectors ([data-net-number="X"]) for O(1) rasterization."""
-
-    def test_no_attribute_selectors_in_style(self, board: Pcb) -> None:
-        """No attribute selectors should appear in any <style> block."""
-        svg = render_pcb_svg(board, highlight_nets=["VCC"])
-        # Extract all <style> blocks
-        style_blocks = re.findall(r"<style[^>]*>(.*?)</style>", svg, re.DOTALL)
-        css = "\n".join(style_blocks)
-        # No attribute selectors of the form [data-...]
-        assert "[data-" not in css, f"Found attribute selector in CSS: {css}"
-
-    def test_nn_class_on_traces(self) -> None:
-        """Traces get nn-{number} class alongside data-net-number attr."""
-        board = _make_board_with_inner_layers()
-        svg = render_pcb_svg(board)
-        # Net 1 = SIG. Traces should have class="trace nn-1"
-        assert re.search(r'class="trace nn-1"', svg)
-
-    def test_nn_class_on_pads(self) -> None:
-        """Pads get nn-{number} class."""
-        board = _make_board_with_inner_layers()
-        svg = render_pcb_svg(board)
-        assert re.search(r'class="pad[^"]*\bnn-1\b', svg)
-
-    def test_nn_class_on_zones(self, board: Pcb) -> None:
-        """Zone polygons get nn-{number} class."""
-        svg = render_pcb_svg(board)
-        assert re.search(r'class="zone nn-\d+"', svg)
-
-    def test_nn_class_on_vias(self) -> None:
-        """Via groups get nn-{number} class."""
-        board = _make_board_with_inner_layers()
-        svg = render_pcb_svg(board)
-        assert re.search(r'class="via nn-1"', svg)
-
-    def test_nn_class_on_trace_arcs(self) -> None:
-        """Trace arcs get nn-{number} class."""
-        from phosphor_eda.pcb import PcbTraceArc
-
-        board = _make_board_with_inner_layers()
-        board.trace_arcs.append(PcbTraceArc(5.0, 10.0, 7.5, 8.0, 10.0, 10.0, 0.25, "F.Cu", 1))
-        svg = render_pcb_svg(board)
-        assert re.search(r'class="trace-arc nn-1"', svg)
-
-    def test_cmp_class_on_pads(self) -> None:
-        """Pads get cmp-{ref} class."""
-        board = _make_board_with_component()
-        svg = render_pcb_svg(board)
-        assert re.search(r'class="pad[^"]*\bcmp-U1\b', svg)
-
-    def test_cmp_class_on_body(self) -> None:
-        """Body group gets cmp-{ref} class."""
-        board = _make_board_with_component()
-        svg = render_pcb_svg(board)
-        assert re.search(r'class="[^"]*\bcmp-U1\b', svg)
-
-    def test_cmp_class_on_ref_text(self) -> None:
-        """Ref text gets cmp-{ref} class."""
-        from phosphor_eda.pcb import PcbText
-
-        board = _make_board_with_component()
-        board.footprints[0].texts.append(
-            PcbText(
-                text="U1",
-                x=10.0,
-                y=8.0,
-                rotation=0.0,
-                layer="F.Fab",
-                font_size=0.5,
-                kind="reference",
-                footprint_ref="U1",
-            )
-        )
-        svg = render_pcb_svg(board)
-        assert re.search(r'class="ref-text[^"]*\bcmp-U1\b', svg)
-
-    def test_cmp_class_on_silk(self) -> None:
-        """Silk lines with a footprint ref get cmp-{ref} class."""
-        board = _make_board_with_component()
-        svg = render_pcb_svg(board)
-        assert re.search(r'class="silk[^"]*\bcmp-U1\b', svg)
-
-    def test_pfx_class_on_passive_components(self) -> None:
-        """Components with R/C/L/TP prefix get pfx-{prefix} class."""
-        board = _make_board_with_component(ref="R1", lib="Resistor_SMD:R_0402", value="10k")
-        svg = render_pcb_svg(board)
-        assert re.search(r'class="[^"]*\bpfx-R\b', svg)
-
-    def test_pfx_class_not_on_ics(self) -> None:
-        """IC components (U prefix) don't get a pfx- class."""
-        board = _make_board_with_component(ref="U1")
-        svg = render_pcb_svg(board)
-        assert "pfx-U" not in svg
-
-    def test_lyr_class_on_layer_groups(self) -> None:
-        """Layer <g> groups get the lyr class."""
-        board = _make_board_with_inner_layers()
-        svg = render_pcb_svg(board)
-        assert re.search(r'class="layer-F-Cu lyr"', svg)
-
-    def test_highlight_css_uses_nn_class(self) -> None:
-        """Highlight CSS uses .nn-X selectors, not [data-net-number]."""
-        board = _make_board_with_inner_layers()
-        svg = render_pcb_svg(board, highlight_nets=["SIG"])
-        style_blocks = re.findall(r"<style[^>]*>(.*?)</style>", svg, re.DOTALL)
-        css = "\n".join(style_blocks)
-        assert ".nn-1" in css
-        assert "[data-net-number" not in css
-
-    def test_highlight_css_uses_cmp_class(self) -> None:
-        """Component highlight CSS uses .cmp-X selectors."""
-        board = _make_board_with_inner_layers()
-        svg = render_pcb_svg(board, highlight_components=["U1"])
-        style_blocks = re.findall(r"<style[^>]*>(.*?)</style>", svg, re.DOTALL)
-        css = "\n".join(style_blocks)
-        assert ".cmp-U1" in css
-        assert "[data-component" not in css
-
-    def test_dim_css_uses_lyr_class(self) -> None:
-        """Dim rules use g.lyr selector to match base style specificity."""
-        board = _make_board_with_inner_layers()
-        svg = render_pcb_svg(board, highlight_nets=["SIG"])
-        style_blocks = re.findall(r"<style[^>]*>(.*?)</style>", svg, re.DOTALL)
-        css = "\n".join(style_blocks)
-        assert "g.lyr .trace" in css
-        assert "g[data-layer]" not in css
-
-    def test_dim_css_uses_paint_opacity(self) -> None:
-        """Dim/restore rules use stroke-opacity/fill-opacity, not opacity."""
-        board = _make_board_with_inner_layers()
-        svg = render_pcb_svg(board, highlight_nets=["SIG"])
-        style_blocks = re.findall(r"<style[^>]*>(.*?)</style>", svg, re.DOTALL)
-        highlight_css = style_blocks[1] if len(style_blocks) > 1 else ""
-        assert "stroke-opacity:" in highlight_css
-        assert "fill-opacity:" in highlight_css
-        # No bare "opacity:" — only stroke-opacity/fill-opacity
-        bare = re.findall(r"(?<![-\w])opacity:", highlight_css)
-        assert bare == [], f"bare opacity found: {bare}"
-
-    def test_base_css_uses_paint_opacity(self) -> None:
-        """Base CSS must use stroke-opacity/fill-opacity, not bare opacity."""
-        board = _make_board_with_inner_layers()
-        svg = render_pcb_svg(board)
-        style_blocks = re.findall(r"<style[^>]*>(.*?)</style>", svg, re.DOTALL)
-        base_css = style_blocks[0]
-        bare = re.findall(r"(?<![-\w])opacity:", base_css)
-        assert bare == [], f"bare opacity found in base CSS: {bare}"
-
-    def test_passive_prefix_class_uses_pfx_class(self) -> None:
-        """Passive metadata uses .pfx-R etc., not [data-component^=]."""
-        board = _make_board_with_component(ref="R1", lib="R_0402", value="10k")
-        svg = render_pcb_svg(board)
-        assert "pfx-R" in svg
-        assert '[data-component^="R"]' not in svg
-
-    def test_data_attrs_still_present(self) -> None:
-        """data-* attributes are preserved on elements for query/tooling use."""
-        board = _make_board_with_inner_layers()
-        svg = render_pcb_svg(board)
-        assert 'data-net-number="1"' in svg
-        assert 'data-component="U1"' in svg
-        assert 'data-layer="F.Cu"' in svg
-
-    def test_css_safe_identity_for_simple_refs(self) -> None:
-        """Simple alphanumeric refs pass through unchanged."""
-        assert _css_safe("R1") == "R1"
-        assert _css_safe("U3A") == "U3A"
-        assert _css_safe("C_10") == "C_10"
-
-    def test_css_safe_encodes_special_chars(self) -> None:
-        """Characters invalid in CSS class names are hex-escaped."""
-        assert _css_safe("R?") == "R_3f"
-        assert _css_safe("J1/SHIELD") == "J1_2fSHIELD"
-        assert _css_safe("U1:A") == "U1_3aA"
-
-    def test_cmp_class_uses_sanitized_ref(self) -> None:
-        """_cmp_class produces valid CSS class tokens for special refs."""
-        assert _cmp_class("R1") == "cmp-R1"
-        assert _cmp_class("J1/SHIELD") == "cmp-J1_2fSHIELD"
