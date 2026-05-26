@@ -51,12 +51,12 @@ def _build_embedded_font() -> str:
     The subset is small (~50KB TTF, ~67KB base64) and is embedded in the
     SVG via @font-face so the rendered font exactly matches our metrics.
     """
-    font = TTFont(INTER_REGULAR)
+    font = TTFont(INTER_REGULAR, recalcTimestamp=False)
     chars = set(range(0x20, 0x7F))  # Basic ASCII
     chars.update(range(0x00C0, 0x0100))  # Latin Extended-A
     chars.update(ord(c) for c in "°µΩ±×÷≤≥≠←→↑↓•–—''")
     subsetter = ft_subset.Subsetter()  # pyright: ignore[reportUnknownMemberType]
-    subsetter.populate(unicodes=chars)  # pyright: ignore[reportUnknownMemberType]
+    subsetter.populate(unicodes=sorted(chars))  # pyright: ignore[reportUnknownMemberType]
     subsetter.subset(font)  # pyright: ignore[reportUnknownMemberType]
     buf = io.BytesIO()
     font.save(buf)
