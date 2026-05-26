@@ -477,6 +477,37 @@ def test_cli_render_settings_from_file(tmp_path: Path) -> None:
     assert "SWD" in svg
 
 
+def test_cli_render_profile_outputs_json_to_stderr(tmp_path: Path) -> None:
+    settings = {"extends": "phosphor:review"}
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps(settings))
+    out_file = tmp_path / "out.svg"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "pcb",
+            "render",
+            PCB_FILE,
+            "--render-settings",
+            str(settings_file),
+            "--profile-render",
+            "-o",
+            str(out_file),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert out_file.read_text().startswith("<svg")
+    profile = json.loads(result.stderr.split("Wrote", maxsplit=1)[1].split("\n", maxsplit=1)[1])
+    event_names = [event["name"] for event in profile["events"]]
+    assert "cli.parse_board" in event_names
+    assert "plan.build_geometry_store" in event_names
+    assert "render.serialize" in event_names
+    assert "svg.output" in event_names
+
+
 def test_cli_render_settings_font_size_sets_annotation_size(tmp_path: Path) -> None:
     settings = {
         "fontSizePx": 24,

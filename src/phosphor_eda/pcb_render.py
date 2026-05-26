@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import contextmanager
 from dataclasses import replace
 from importlib.resources import files
 from pathlib import Path
@@ -35,7 +36,7 @@ from phosphor_eda.pcb_render_settings import (
 from phosphor_eda.text_metrics import BASELINE_CENTER_OFFSET, INTER_REGULAR_BASE64
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Iterator
 
     from shapely.coords import CoordinateSequence
     from shapely.geometry.base import BaseGeometry
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
         ResolvedPointer,
     )
     from phosphor_eda.pcb_render_artwork import DerivedLayer
+    from phosphor_eda.pcb_render_profile import RenderProfiler
     from phosphor_eda.pcb_render_tokens import ResolvedStyle, VisualRole
 
 _BUNDLED_SETTINGS_PACKAGE = "phosphor_eda.render_settings"
@@ -456,7 +458,11 @@ class _Svg:
         return "\n".join(self._parts)
 
 
-def render_pcb_svg_from_derived_plan(plan: DerivedRenderPlan) -> str:
+def render_pcb_svg_from_derived_plan(
+    plan: DerivedRenderPlan,
+    *,
+    profiler: RenderProfiler | None = None,
+) -> str:
     """Serialize a derived-layer render plan to SVG."""
     svg = _Svg()
     view_box = plan.view_box
@@ -479,10 +485,10 @@ def render_pcb_svg_from_derived_plan(plan: DerivedRenderPlan) -> str:
         )
         svg.raw("</style>")
 
-    _render_derived_layers(svg, plan.base_layers)
+    _render_derived_layers(svg, plan.base_layers, profiler=profiler, group="base")
     for group in plan.highlight_groups:
         svg.group_start(attrs={"class": "highlight-overlay", "data-highlight-target": group.target})
-        _render_derived_layers(svg, group.layers)
+        _render_derived_layers(svg, group.layers, profiler=profiler, group="highlight")
         svg.group_end()
 
     if plan.annotations is not None:
@@ -494,7 +500,17 @@ def render_pcb_svg_from_derived_plan(plan: DerivedRenderPlan) -> str:
         )
 
     svg.raw("</svg>")
-    return svg.build()
+    rendered = svg.build()
+    if profiler is not None:
+        profiler.metric(
+            "svg.output",
+            bytes=len(rendered.encode()),
+            characters=len(rendered),
+            base_layers=len(plan.base_layers),
+            highlight_groups=len(plan.highlight_groups),
+            highlight_layers=sum(len(group.layers) for group in plan.highlight_groups),
+        )
+    return rendered
 
 
 def _append_pcb_metadata(svg: str, board: Pcb) -> str:
@@ -526,11 +542,28 @@ def _escape_style_block_text(value: str) -> str:
     return _STYLE_BLOCK_TERMINATOR_RE.sub(r"<\\/style>", value)
 
 
-def _render_derived_layers(svg: _Svg, layers: tuple[DerivedLayer, ...]) -> None:
+def _render_derived_layers(
+    svg: _Svg,
+    layers: tuple[DerivedLayer, ...],
+    *,
+    profiler: RenderProfiler | None = None,
+    group: str,
+) -> None:
     for layer in layers:
         path_d = _geometry_to_svg_path_d(layer.geometry)
         if not path_d:
             continue
+        if profiler is not None:
+            profiler.metric(
+                "svg.layer_path",
+                group=group,
+                layer=layer.id,
+                geometry_type=layer.geometry.geom_type,
+                source_ids=len(layer.source_ids),
+                path_characters=len(path_d),
+                move_commands=path_d.count("M "),
+                line_commands=path_d.count("L "),
+            )
         svg.group_start(attrs=_derived_layer_group_attrs(layer))
         svg.path(path_d, attrs=_derived_layer_path_attrs(layer.style))
         svg.group_end()
@@ -1108,6 +1141,7 @@ def render_pcb_svg(
     custom_css: str = "",
     annotations: ResolvedAnnotations | None = None,
     render_settings: RenderSettings | None = None,
+    profiler: RenderProfiler | None = None,
 ) -> str:
     """Render a Pcb as a layered SVG string from structured render settings.
 
@@ -1133,21 +1167,45 @@ def render_pcb_svg(
     annotations:
         Resolved annotations to overlay on the board.
     """
-    effective_settings = render_settings or load_render_settings_json(
-        '{"extends": "phosphor:review"}'
-    )
-    plan_settings = _settings_for_plan(
-        effective_settings,
-        highlight_nets=highlight_nets,
-        highlight_components=highlight_components,
-        highlight_specs=highlight_specs,
-        custom_css=custom_css,
-    )
-    plan = build_derived_render_plan(
-        board,
-        settings=plan_settings,
-        side=side,
-        width_px=width_px,
-        annotations=annotations,
-    )
-    return _append_pcb_metadata(render_pcb_svg_from_derived_plan(plan), board)
+    with _profile_span(profiler, "render.settings"):
+        effective_settings = render_settings or load_render_settings_json(
+            '{"extends": "phosphor:review"}'
+        )
+        plan_settings = _settings_for_plan(
+            effective_settings,
+            highlight_nets=highlight_nets,
+            highlight_components=highlight_components,
+            highlight_specs=highlight_specs,
+            custom_css=custom_css,
+        )
+    with _profile_span(profiler, "render.build_plan"):
+        if profiler is None:
+            plan = build_derived_render_plan(
+                board,
+                settings=plan_settings,
+                side=side,
+                width_px=width_px,
+                annotations=annotations,
+            )
+        else:
+            plan = build_derived_render_plan(
+                board,
+                settings=plan_settings,
+                side=side,
+                width_px=width_px,
+                annotations=annotations,
+                profiler=profiler,
+            )
+    with _profile_span(profiler, "render.serialize"):
+        svg = render_pcb_svg_from_derived_plan(plan, profiler=profiler)
+    with _profile_span(profiler, "render.metadata"):
+        return _append_pcb_metadata(svg, board)
+
+
+@contextmanager
+def _profile_span(profiler: RenderProfiler | None, name: str) -> Iterator[None]:
+    if profiler is None:
+        yield
+        return
+    with profiler.span(name):
+        yield

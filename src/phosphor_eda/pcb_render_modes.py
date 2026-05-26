@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry
 
     from phosphor_eda.pcb_render_geometry import PcbGeometryStore, RenderableGeometry
+    from phosphor_eda.pcb_render_profile import RenderProfiler
     from phosphor_eda.pcb_render_settings import HighlightSpec, LayerSelectionRule, RenderSettings
 
 
@@ -81,18 +82,24 @@ def build_cad_layers(
     settings: RenderSettings,
     *,
     warn: Callable[[str], None],
+    profiler: RenderProfiler | None = None,
 ) -> tuple[DerivedLayer, ...]:
     """Build CAD derived layers from selected PCB source artwork."""
     selected_items = _filter_excluded_components(
         select_source_artwork(store, settings.source.layers, active_side=settings.side),
         settings.source.exclude_components,
     )
+    if profiler is not None:
+        profiler.metric("cad.selected_items", count=len(selected_items))
     grouped_artwork = _groupable_artwork(
         store,
         selected_items,
         settings.source.layers,
         active_side=settings.side,
+        profiler=profiler,
     )
+    if profiler is not None:
+        profiler.metric("cad.grouped_artwork", count=len(grouped_artwork))
     board = board_outline_geometry(store)
     dimmed = _should_dim_base_layers(store, settings)
     warned_missing_dimmed_tokens: set[str] = set()
@@ -103,7 +110,17 @@ def build_cad_layers(
 
     layers: list[DerivedLayer] = []
     for key, group in sorted(groups.items(), key=_group_sort_key):
-        geometry = _resolved_group_geometry(store, group, board)
+        if profiler is None:
+            geometry = _resolved_group_geometry(store, group, board)
+        else:
+            with profiler.span(
+                "cad.resolve_group",
+                layer=key.source_layer_name,
+                function=key.function,
+                side=key.side,
+                items=len(group),
+            ):
+                geometry = _resolved_group_geometry(store, group, board)
         if geometry.is_empty:
             continue
         role = VisualRole(
@@ -144,6 +161,7 @@ def build_realistic_layers(
     settings: RenderSettings,
     *,
     warn: Callable[[str], None],
+    profiler: RenderProfiler | None = None,
 ) -> tuple[DerivedLayer, ...]:
     """Build front/back realistic derived layers from selected source artwork."""
     side = settings.side or "front"
@@ -151,12 +169,17 @@ def build_realistic_layers(
         select_source_artwork(store, settings.source.layers, active_side=side),
         settings.source.exclude_components,
     )
+    if profiler is not None:
+        profiler.metric("realistic.selected_items", count=len(selected_items))
     grouped_artwork = _groupable_artwork(
         store,
         selected_items,
         settings.source.layers,
         active_side=side,
+        profiler=profiler,
     )
+    if profiler is not None:
+        profiler.metric("realistic.grouped_artwork", count=len(grouped_artwork))
     board = board_outline_geometry(store)
     surface_drills = _surface_drill_geometry(store)
     dimmed = _should_dim_base_layers(store, settings)
@@ -170,12 +193,39 @@ def build_realistic_layers(
     )
     silkscreen_artwork = _side_artwork(selected_items, role="silkscreen", side=side)
 
-    mask_openings = _clip_to_board(_union_or_empty(item.geometry for item in mask_artwork), board)
-    outer_copper = _clip_to_board(_union_or_empty(item.geometry for item in copper_artwork), board)
-    silkscreen = _clip_to_board(
-        _union_or_empty(item.geometry for item in silkscreen_artwork),
-        board,
-    )
+    if profiler is not None:
+        profiler.metric("realistic.mask_artwork", count=len(mask_artwork))
+        profiler.metric("realistic.copper_artwork", count=len(copper_artwork))
+        profiler.metric("realistic.silkscreen_artwork", count=len(silkscreen_artwork))
+    if profiler is None:
+        mask_openings = _clip_to_board(
+            _union_or_empty(item.geometry for item in mask_artwork),
+            board,
+        )
+        outer_copper = _clip_to_board(
+            _union_or_empty(item.geometry for item in copper_artwork),
+            board,
+        )
+        silkscreen = _clip_to_board(
+            _union_or_empty(item.geometry for item in silkscreen_artwork),
+            board,
+        )
+    else:
+        with profiler.span("realistic.union_mask_openings", items=len(mask_artwork)):
+            mask_openings = _clip_to_board(
+                _union_or_empty(item.geometry for item in mask_artwork),
+                board,
+            )
+        with profiler.span("realistic.union_outer_copper", items=len(copper_artwork)):
+            outer_copper = _clip_to_board(
+                _union_or_empty(item.geometry for item in copper_artwork),
+                board,
+            )
+        with profiler.span("realistic.union_silkscreen", items=len(silkscreen_artwork)):
+            silkscreen = _clip_to_board(
+                _union_or_empty(item.geometry for item in silkscreen_artwork),
+                board,
+            )
 
     layer_inputs = {
         "substrate": _RealisticLayerInput(
@@ -253,6 +303,7 @@ def build_highlight_layers(
     settings: RenderSettings,
     *,
     warn: Callable[[str], None],
+    profiler: RenderProfiler | None = None,
 ) -> tuple[HighlightGroup, ...]:
     """Build derived highlight overlay groups from selected raw source geometry."""
     board = board_outline_geometry(store)
@@ -267,7 +318,16 @@ def build_highlight_layers(
             settings.source.layers,
             active_side=settings.side,
             via_items=selected_vias,
+            profiler=profiler,
         )
+        if profiler is not None:
+            profiler.metric(
+                "highlight.selected_items",
+                target=_highlight_target(highlight),
+                items=len(selected_items),
+                vias=len(selected_vias),
+                grouped=len(grouped_artwork),
+            )
         if not grouped_artwork:
             continue
 
@@ -278,7 +338,18 @@ def build_highlight_layers(
         target = _highlight_target(highlight)
         layers: list[DerivedLayer] = []
         for key, layer_group in sorted(by_layer.items(), key=_group_sort_key):
-            geometry = _resolved_group_geometry(store, layer_group, board)
+            if profiler is None:
+                geometry = _resolved_group_geometry(store, layer_group, board)
+            else:
+                with profiler.span(
+                    "highlight.resolve_group",
+                    target=target,
+                    layer=key.source_layer_name,
+                    function=key.function,
+                    side=key.side,
+                    items=len(layer_group),
+                ):
+                    geometry = _resolved_group_geometry(store, layer_group, board)
             if geometry.is_empty:
                 continue
             role = VisualRole(
@@ -332,36 +403,57 @@ def _groupable_artwork(
     *,
     active_side: str,
     via_items: Iterable[RenderableGeometry] | None = None,
+    profiler: RenderProfiler | None = None,
 ) -> tuple[_GroupedArtwork, ...]:
     grouped: list[_GroupedArtwork] = []
     selected_non_vias = tuple(item for item in selected_items if item.kind is not GeometryKind.VIA)
-    for item in selected_non_vias:
-        artwork = geometry_to_artwork(item)
-        if artwork is None:
-            continue
-        grouped.append(_GroupedArtwork(artwork=artwork, layer=item.layer))
+    if profiler is None:
+        for item in selected_non_vias:
+            artwork = geometry_to_artwork(item)
+            if artwork is None:
+                continue
+            grouped.append(_GroupedArtwork(artwork=artwork, layer=item.layer))
+    else:
+        with profiler.span("artwork.convert_non_vias", items=len(selected_non_vias)):
+            for item in selected_non_vias:
+                artwork = geometry_to_artwork(item)
+                if artwork is None:
+                    continue
+                grouped.append(_GroupedArtwork(artwork=artwork, layer=item.layer))
 
     selected_copper_layers = _selected_copper_layers(store, rules, active_side=active_side)
     selected_via_items = store.by_kind(GeometryKind.VIA) if via_items is None else tuple(via_items)
-    for item in selected_via_items:
-        artwork = geometry_to_artwork(item)
-        if artwork is None:
-            continue
-        via_layers = _via_layers(item)
-        for layer in selected_copper_layers:
-            if layer.name not in via_layers and "*.Cu" not in via_layers:
+
+    def append_vias() -> None:
+        for item in selected_via_items:
+            artwork = geometry_to_artwork(item)
+            if artwork is None:
                 continue
-            grouped.append(
-                _GroupedArtwork(
-                    artwork=ArtworkItem(
-                        geometry=artwork.geometry,
-                        source_ids=artwork.source_ids,
-                        source_layers=(layer.name,),
-                        tags=artwork.tags,
-                    ),
-                    layer=layer,
+            via_layers = _via_layers(item)
+            for layer in selected_copper_layers:
+                if layer.name not in via_layers and "*.Cu" not in via_layers:
+                    continue
+                grouped.append(
+                    _GroupedArtwork(
+                        artwork=ArtworkItem(
+                            geometry=artwork.geometry,
+                            source_ids=artwork.source_ids,
+                            source_layers=(layer.name,),
+                            tags=artwork.tags,
+                        ),
+                        layer=layer,
+                    )
                 )
-            )
+
+    if profiler is None:
+        append_vias()
+    else:
+        with profiler.span(
+            "artwork.convert_vias",
+            vias=len(selected_via_items),
+            copper_layers=len(selected_copper_layers),
+        ):
+            append_vias()
     return tuple(grouped)
 
 
