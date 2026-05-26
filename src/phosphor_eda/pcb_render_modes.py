@@ -52,6 +52,12 @@ class _GroupedArtwork:
 
 
 @dataclass(frozen=True)
+class _ProfiledArtwork:
+    kind: GeometryKind
+    grouped: _GroupedArtwork
+
+
+@dataclass(frozen=True)
 class _TraceArtworkKey:
     layer_name: str
     net_number: int | None
@@ -511,6 +517,7 @@ def _groupable_artwork(
     profiler: RenderProfiler | None = None,
 ) -> tuple[_GroupedArtwork, ...]:
     grouped: list[_GroupedArtwork] = []
+    profiled_artwork: list[_ProfiledArtwork] = []
     selected_non_vias = tuple(item for item in selected_items if item.kind is not GeometryKind.VIA)
     trace_groups: dict[_TraceArtworkKey, list[RenderableGeometry]] = defaultdict(list)
     selected_other_items: list[RenderableGeometry] = []
@@ -522,7 +529,7 @@ def _groupable_artwork(
             trace_groups[trace_key].append(item)
 
     if profiler is None:
-        _append_trace_artwork_groups(grouped, trace_groups)
+        grouped.extend(_trace_grouped_artwork(trace_groups))
         for item in selected_other_items:
             artwork = geometry_to_artwork(item)
             if artwork is None:
@@ -530,17 +537,25 @@ def _groupable_artwork(
             grouped.append(_GroupedArtwork(artwork=artwork, layer=item.layer))
     else:
         with profiler.span("artwork.convert_non_vias", items=len(selected_non_vias)):
-            _append_trace_artwork_groups(grouped, trace_groups)
+            trace_artwork = _trace_grouped_artwork(trace_groups)
+            grouped.extend(trace_artwork)
+            profiled_artwork.extend(
+                _ProfiledArtwork(kind=GeometryKind.TRACE, grouped=item) for item in trace_artwork
+            )
             for item in selected_other_items:
                 artwork = geometry_to_artwork(item)
                 if artwork is None:
                     continue
-                grouped.append(_GroupedArtwork(artwork=artwork, layer=item.layer))
+                grouped_item = _GroupedArtwork(artwork=artwork, layer=item.layer)
+                grouped.append(grouped_item)
+                profiled_artwork.append(_ProfiledArtwork(kind=item.kind, grouped=grouped_item))
+        _profile_artwork_by_kind(profiler, profiled_artwork)
 
     selected_copper_layers = _selected_copper_layers(store, rules, active_side=active_side)
     selected_via_items = store.by_kind(GeometryKind.VIA) if via_items is None else tuple(via_items)
 
     def append_vias() -> None:
+        via_profiled_artwork: list[_ProfiledArtwork] = []
         for item in selected_via_items:
             artwork = geometry_to_artwork(item)
             if artwork is None:
@@ -549,17 +564,21 @@ def _groupable_artwork(
             for layer in selected_copper_layers:
                 if layer.name not in via_layers and "*.Cu" not in via_layers:
                     continue
-                grouped.append(
-                    _GroupedArtwork(
-                        artwork=ArtworkItem(
-                            geometry=artwork.geometry,
-                            source_ids=artwork.source_ids,
-                            source_layers=(layer.name,),
-                            tags=artwork.tags,
-                        ),
-                        layer=layer,
-                    )
+                grouped_item = _GroupedArtwork(
+                    artwork=ArtworkItem(
+                        geometry=artwork.geometry,
+                        source_ids=artwork.source_ids,
+                        source_layers=(layer.name,),
+                        tags=artwork.tags,
+                    ),
+                    layer=layer,
                 )
+                grouped.append(grouped_item)
+                via_profiled_artwork.append(
+                    _ProfiledArtwork(kind=GeometryKind.VIA, grouped=grouped_item)
+                )
+        if profiler is not None:
+            _profile_artwork_by_kind(profiler, via_profiled_artwork)
 
     if profiler is None:
         append_vias()
@@ -589,14 +608,40 @@ def _trace_artwork_key(item: RenderableGeometry) -> _TraceArtworkKey | None:
     )
 
 
-def _append_trace_artwork_groups(
-    grouped: list[_GroupedArtwork],
+def _trace_grouped_artwork(
     trace_groups: dict[_TraceArtworkKey, list[RenderableGeometry]],
-) -> None:
+) -> tuple[_GroupedArtwork, ...]:
+    grouped: list[_GroupedArtwork] = []
     for items in trace_groups.values():
         artwork = _trace_artwork_from_items(items)
         if artwork is not None:
             grouped.append(_GroupedArtwork(artwork=artwork, layer=items[0].layer))
+    return tuple(grouped)
+
+
+def _profile_artwork_by_kind(
+    profiler: RenderProfiler,
+    items: Iterable[_ProfiledArtwork],
+) -> None:
+    grouped: dict[tuple[GeometryKind, str, str, str], list[ArtworkItem]] = defaultdict(list)
+    for item in items:
+        layer = item.grouped.layer
+        grouped[(item.kind, layer.name, layer.role, layer.side)].append(item.grouped.artwork)
+
+    for (kind, layer_name, function, side), artwork in sorted(
+        grouped.items(),
+        key=lambda item: (item[0][1], item[0][0].value),
+    ):
+        profiler.metric(
+            "artwork.converted_by_kind",
+            kind=kind.value,
+            layer=layer_name,
+            function=function,
+            side=side,
+            groups=len(artwork),
+            sourceItems=sum(len(item.source_ids) for item in artwork),
+            **_geometry_complexity(item.geometry for item in artwork).profile_data(),
+        )
 
 
 def _trace_artwork_from_items(items: list[RenderableGeometry]) -> ArtworkItem | None:

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from shapely import GeometryCollection, Point, Polygon
 
 import phosphor_eda.pcb_render_modes as render_modes
 from phosphor_eda.kicad.pcb_parser import parse_kicad_pcb
-from phosphor_eda.pcb import PcbArc, PcbLine, PcbPad, PcbText, PcbVia, PcbZone
+from phosphor_eda.pcb import PcbArc, PcbLine, PcbPad, PcbSegment, PcbText, PcbVia, PcbZone
 from phosphor_eda.pcb_render_artwork import DerivedLayer, geometry_to_artwork
 from phosphor_eda.pcb_render_geometry import (
     GeometryKind,
@@ -869,6 +869,83 @@ def test_layer_processing_profiles_input_and_output_geometry_complexity() -> Non
     assert input_event["data"]["coordinates"] == 10
     assert output_event["data"]["geometries"] > 0
     assert output_event["data"]["coordinates"] > 0
+
+
+def test_profiler_reports_converted_artwork_complexity_by_source_kind() -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "pad-1",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=1.0, y=1.0),
+            ),
+            _renderable(
+                "trace-1",
+                GeometryKind.TRACE,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=PcbSegment(1.0, 1.0, 4.0, 1.0, 0.2, "F.Cu", 1),
+            ),
+            _renderable(
+                "zone-1",
+                GeometryKind.ZONE,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=PcbZone(
+                    net_number=1,
+                    net_name="GND",
+                    layer="F.Cu",
+                    boundary=[(3.0, 1.0), (4.0, 1.0), (4.0, 2.0), (3.0, 2.0)],
+                ),
+            ),
+            _renderable(
+                "via-1",
+                GeometryKind.VIA,
+                "vias",
+                "via",
+                "",
+                geometry=PcbVia(5.0, 1.0, 0.6, 0.3, ["F.Cu"], 1),
+                tags=GeometryTags(source_collection="vias", net_number=1, net_name="GND"),
+            ),
+        )
+    )
+    profiler = RenderProfiler()
+
+    _ = build_cad_layers(
+        store,
+        _settings(
+            rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
+            tokens={"cad.copper.front.fill": "#d17a22"},
+        ),
+        warn=lambda _message: None,
+        profiler=profiler,
+    )
+
+    profile_events = cast("list[dict[str, object]]", profiler.to_dict()["events"])
+    events: list[dict[str, object]] = []
+    by_kind: dict[str, dict[str, object]] = {}
+    for event in profile_events:
+        if event["name"] != "artwork.converted_by_kind":
+            continue
+        data = cast("dict[str, object]", event["data"])
+        kind = data["kind"]
+        assert isinstance(kind, str)
+        events.append(event)
+        by_kind[kind] = data
+
+    assert {"pad", "trace", "zone", "via"}.issubset(by_kind)
+    assert len(events) == 4
+    assert by_kind["pad"]["sourceItems"] == 1
+    assert by_kind["trace"]["sourceItems"] == 1
+    assert isinstance(by_kind["zone"]["coordinates"], int)
+    assert by_kind["zone"]["coordinates"] > 0
+    assert by_kind["via"]["layer"] == "F.Cu"
 
 
 def test_highlight_layers_cache_drill_geometry_per_layer(
