@@ -24,6 +24,7 @@ from phosphor_eda.pcb_render_modes import (
     build_highlight_layers,
     build_realistic_layers,
 )
+from phosphor_eda.pcb_render_profile import RenderProfiler
 from phosphor_eda.pcb_render_settings import (
     DimmingSettings,
     HighlightSpec,
@@ -816,6 +817,58 @@ def test_realistic_layer_processing_prefers_disjoint_subset_union(
     )
 
     assert calls[0] is True
+
+
+def test_layer_processing_profiles_input_and_output_geometry_complexity() -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "pad-1",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=1.0, y=1.0),
+            ),
+            _renderable(
+                "pad-2",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=3.0, y=1.0),
+            ),
+        )
+    )
+    profiler = RenderProfiler()
+
+    _ = build_cad_layers(
+        store,
+        _settings(
+            rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
+            tokens={"cad.copper.front.fill": "#d17a22"},
+        ),
+        warn=lambda _message: None,
+        profiler=profiler,
+    )
+
+    events = profiler.to_dict()["events"]
+    input_event = next(
+        event
+        for event in events
+        if isinstance(event, dict) and event["name"] == "cad.resolve_group.input_geometry"
+    )
+    output_event = next(
+        event
+        for event in events
+        if isinstance(event, dict) and event["name"] == "cad.resolve_group.output_geometry"
+    )
+
+    assert input_event["data"]["geometries"] == 2
+    assert input_event["data"]["coordinates"] == 10
+    assert output_event["data"]["geometries"] > 0
+    assert output_event["data"]["coordinates"] > 0
 
 
 def test_highlight_layers_cache_drill_geometry_per_layer(

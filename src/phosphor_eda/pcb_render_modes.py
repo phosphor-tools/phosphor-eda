@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from shapely import GeometryCollection
+from shapely import GeometryCollection, LineString, MultiLineString, MultiPolygon, Polygon
 
 from phosphor_eda.pcb import PcbVia
 from phosphor_eda.pcb_render_artwork import (
@@ -56,6 +56,33 @@ class _LayerProcessingProfile:
     function: str
     side: str
     items: int
+
+
+@dataclass(frozen=True)
+class _GeometryComplexity:
+    geometries: int = 0
+    polygons: int = 0
+    rings: int = 0
+    coordinates: int = 0
+    max_coordinates: int = 0
+
+    def plus(self, other: _GeometryComplexity) -> _GeometryComplexity:
+        return _GeometryComplexity(
+            geometries=self.geometries + other.geometries,
+            polygons=self.polygons + other.polygons,
+            rings=self.rings + other.rings,
+            coordinates=self.coordinates + other.coordinates,
+            max_coordinates=max(self.max_coordinates, other.max_coordinates),
+        )
+
+    def profile_data(self) -> dict[str, int]:
+        return {
+            "geometries": self.geometries,
+            "polygons": self.polygons,
+            "rings": self.rings,
+            "coordinates": self.coordinates,
+            "maxCoordinates": self.max_coordinates,
+        }
 
 
 @dataclass(frozen=True)
@@ -798,6 +825,11 @@ def _process_artwork_layer(
             prefer_disjoint_subsets=prefer_disjoint_subsets,
         )
     else:
+        profiler.metric(
+            f"{profile.event_prefix}.input_geometry",
+            **profile_data,
+            **_geometry_complexity(geometry_tuple).profile_data(),
+        )
         with profiler.span(f"{profile.event_prefix}.union", **profile_data):
             geometry = _union_or_empty(
                 geometry_tuple,
@@ -833,7 +865,60 @@ def _process_artwork_layer(
                     **profile_data,
                 ):
                     geometry = _difference(geometry, drills)
+    if profiler is not None and profile is not None:
+        profiler.metric(
+            f"{profile.event_prefix}.output_geometry",
+            **profile_data,
+            **_geometry_complexity((geometry,)).profile_data(),
+        )
     return geometry
+
+
+def _geometry_complexity(geometries: Iterable[BaseGeometry]) -> _GeometryComplexity:
+    complexity = _GeometryComplexity()
+    for geometry in geometries:
+        complexity = complexity.plus(_single_geometry_complexity(geometry))
+    return complexity
+
+
+def _single_geometry_complexity(geometry: BaseGeometry) -> _GeometryComplexity:
+    if geometry.is_empty:
+        return _GeometryComplexity(geometries=1)
+    if isinstance(geometry, Polygon):
+        rings = (geometry.exterior, *geometry.interiors)
+        coordinates = sum(len(ring.coords) for ring in rings)
+        return _GeometryComplexity(
+            geometries=1,
+            polygons=1,
+            rings=len(rings),
+            coordinates=coordinates,
+            max_coordinates=coordinates,
+        )
+    if isinstance(geometry, MultiPolygon):
+        complexity = _GeometryComplexity()
+        for polygon in geometry.geoms:
+            complexity = complexity.plus(_single_geometry_complexity(polygon))
+        return complexity
+    if isinstance(geometry, LineString):
+        coordinates = len(geometry.coords)
+        return _GeometryComplexity(
+            geometries=1,
+            rings=1,
+            coordinates=coordinates,
+            max_coordinates=coordinates,
+        )
+    if isinstance(geometry, MultiLineString):
+        complexity = _GeometryComplexity()
+        for part in cast("tuple[BaseGeometry, ...]", tuple(geometry.geoms)):
+            complexity = complexity.plus(_single_geometry_complexity(part))
+        return complexity
+    if isinstance(geometry, GeometryCollection):
+        complexity = _GeometryComplexity()
+        collection = cast("GeometryCollection[BaseGeometry]", geometry)
+        for part in tuple(collection.geoms):
+            complexity = complexity.plus(_single_geometry_complexity(part))
+        return complexity
+    return _GeometryComplexity(geometries=1)
 
 
 def _side_artwork(
