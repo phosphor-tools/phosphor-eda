@@ -3,7 +3,7 @@
   "source": {
     "layers": [
       { "match": { "function": "copper" } },
-      { "match": { "function": "silkscreen" } },
+      { "match": { "function": "silkscreen", "side": "active" } },
       { "match": { "function": "edge" } }
     ]
   },

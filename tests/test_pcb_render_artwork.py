@@ -47,6 +47,21 @@ def test_select_source_artwork_matches_layer_function_side_and_object_classes() 
     assert selected == (front_pad,)
 
 
+def test_select_source_artwork_resolves_active_side_from_rendered_side() -> None:
+    front_silk = _renderable("silk-1", GeometryKind.SILK_LINE, "F.SilkS", "silkscreen", "front")
+    back_silk = _renderable("silk-2", GeometryKind.SILK_LINE, "B.SilkS", "silkscreen", "back")
+    front_copper = _renderable("pad-1", GeometryKind.PAD, "F.Cu", "copper", "front")
+    store = PcbGeometryStore(items=(front_silk, back_silk, front_copper))
+
+    selected = select_source_artwork(
+        store,
+        (LayerSelectionRule(match=LayerMatch(function="silkscreen", side="active")),),
+        active_side="back",
+    )
+
+    assert selected == (back_silk,)
+
+
 def test_select_source_artwork_rule_without_object_filter_selects_all_matched_layers() -> None:
     front_pad = _renderable("pad-1", GeometryKind.PAD, "F.Cu", "copper", "front")
     front_trace = _renderable("trace-1", GeometryKind.TRACE, "F.Cu", "copper", "front")
@@ -281,6 +296,31 @@ def test_board_outline_converts_to_a_polygon() -> None:
 
     assert isinstance(geometry, Polygon)
     _assert_close(float(geometry.area), 50.0)
+
+
+def test_board_outline_falls_back_to_board_material_when_outline_reconstruction_is_empty() -> None:
+    material = _renderable(
+        "board-material",
+        GeometryKind.BOARD_MATERIAL,
+        "Edge.Cuts",
+        "edge",
+        "",
+        geometry=(0.0, 0.0, 12.0, 8.0),
+    )
+    empty_outline = _renderable(
+        "board-outline",
+        GeometryKind.BOARD_OUTLINE,
+        "Edge.Cuts",
+        "edge",
+        "",
+        geometry=([], []),
+    )
+    store = PcbGeometryStore(items=(material, empty_outline))
+
+    geometry = board_outline_geometry(store)
+
+    assert isinstance(geometry, Polygon)
+    _assert_close(float(geometry.area), 96.0)
 
 
 def test_drill_holes_convert_to_subtractive_geometry() -> None:

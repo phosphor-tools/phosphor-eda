@@ -3,9 +3,12 @@
   "source": {
     "layers": [
       { "match": { "function": "copper" } },
-      { "match": { "function": "silkscreen" } },
-      { "match": { "function": "fab" } },
-      { "match": { "function": "mechanical" } },
+      {
+        "match": { "function": "silkscreen", "side": "active" },
+        "objects": ["silk", "board_graphic_text"]
+      },
+      { "match": { "function": "fab", "side": "active" } },
+      { "match": { "function": "mechanical" }, "objects": ["mechanical"] },
       { "match": { "function": "edge" } }
     ]
   },

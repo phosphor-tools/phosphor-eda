@@ -19,7 +19,7 @@ SOURCE_LAYER_FUNCTIONS = (
     "mechanical",
     "other",
 )
-SOURCE_LAYER_SIDES = ("front", "back", "inner", "")
+SOURCE_LAYER_SIDES = ("front", "back", "inner", "active", "")
 
 _SETTINGS_EXTENDS_KEY = "extends"
 _PAD_TARGET_RE = re.compile(r"^[^.]+\..+$")

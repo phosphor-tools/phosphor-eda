@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from shapely import GeometryCollection, Point, Polygon
 
+from phosphor_eda.kicad.pcb_parser import parse_kicad_pcb
 from phosphor_eda.pcb import PcbArc, PcbLine, PcbPad, PcbText, PcbVia, PcbZone
 from phosphor_eda.pcb_render_artwork import DerivedLayer, geometry_to_artwork
 from phosphor_eda.pcb_render_geometry import (
@@ -12,6 +15,7 @@ from phosphor_eda.pcb_render_geometry import (
     GeometryTags,
     PcbGeometryStore,
     RenderableGeometry,
+    build_geometry_store,
 )
 from phosphor_eda.pcb_render_modes import (
     build_cad_layers,
@@ -272,6 +276,29 @@ def test_cad_geometry_is_clipped_to_board_and_cut_by_drill_holes() -> None:
     assert _board_polygon().covers(geometry)
     assert not geometry.contains(Point(0.0, 0.0))
     assert geometry.area < 4.0
+
+
+def test_cad_drill_clipping_handles_kicad_symbol_layer_names() -> None:
+    fixture = Path(__file__).parent / "fixtures" / "orangecrab.kicad_pcb"
+    board = parse_kicad_pcb(fixture)
+    store = build_geometry_store(board, side="front")
+
+    layers = build_cad_layers(
+        store,
+        _settings(
+            rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
+            tokens={"cad.copper.front.fill": "#d17a22"},
+        ),
+        warn=lambda _message: None,
+    )
+
+    front_copper = next(
+        layer for layer in layers if layer.role.function == "copper" and layer.role.side == "front"
+    )
+
+    assert not front_copper.geometry.covers(Point(137.05, 111.84))
+    assert not front_copper.geometry.covers(Point(137.05, 94.06))
+    assert all(layer.role.inner_index != 5000 for layer in layers)
 
 
 def test_cad_board_outline_is_outline_only() -> None:

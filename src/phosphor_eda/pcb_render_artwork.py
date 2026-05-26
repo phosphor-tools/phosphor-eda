@@ -140,13 +140,15 @@ _OBJECT_KIND_ALIASES = {
 def select_source_artwork(
     store: PcbGeometryStore,
     rules: Iterable[LayerSelectionRule],
+    *,
+    active_side: str = "",
 ) -> tuple[RenderableGeometry, ...]:
     """Select raw renderable geometry using source-layer rules."""
     active_rules = tuple(rule for rule in rules if rule.visible)
     selected: list[RenderableGeometry] = []
 
     for item in store.items:
-        if any(_matches_rule(item, rule) for rule in active_rules):
+        if any(_matches_rule(item, rule, active_side=active_side) for rule in active_rules):
             selected.append(item)
 
     return tuple(selected)
@@ -184,7 +186,14 @@ def board_outline_geometry(store: PcbGeometryStore) -> BaseGeometry:
         geometry = _board_outline_from_item(item)
         if geometry is not None and not geometry.is_empty:
             outlines.append(geometry)
-    return _union_or_empty(outlines)
+    outline = _union_or_empty(outlines)
+    if not outline.is_empty:
+        return outline
+    for item in store.by_kind(GeometryKind.BOARD_MATERIAL):
+        geometry = _board_material_geometry(_item_payload(item))
+        if geometry is not None and not geometry.is_empty:
+            return geometry
+    return outline
 
 
 def drill_geometry_for_layer(
@@ -229,13 +238,19 @@ def derived_layer_from_artwork(
     )
 
 
-def _matches_rule(item: RenderableGeometry, rule: LayerSelectionRule) -> bool:
+def _matches_rule(
+    item: RenderableGeometry,
+    rule: LayerSelectionRule,
+    *,
+    active_side: str,
+) -> bool:
     match = rule.match
     if match.name and item.layer.name != match.name:
         return False
     if match.function and item.layer.role != _function_layer_role(match.function):
         return False
-    if match.side and item.layer.side != match.side:
+    match_side = active_side if match.side == "active" else match.side
+    if match_side and item.layer.side != match_side:
         return False
     return _matches_object_filter(item.kind, rule.objects)
 
@@ -390,7 +405,8 @@ def _via_drill_geometry(payload: object, *, layer_name: str | None) -> BaseGeome
 
 
 def _layer_in_stack(layer_name: str, layers: list[str]) -> bool:
-    return layer_name in layers or "*.Cu" in layers
+    normalized_layers = {str(layer) for layer in layers}
+    return layer_name in normalized_layers or "*.Cu" in normalized_layers
 
 
 def _board_outline_from_item(item: RenderableGeometry) -> BaseGeometry | None:

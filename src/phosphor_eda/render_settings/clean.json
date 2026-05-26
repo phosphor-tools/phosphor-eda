@@ -3,8 +3,8 @@
   "source": {
     "layers": [
       { "match": { "function": "copper" } },
-      { "match": { "function": "solder_mask" } },
-      { "match": { "function": "silkscreen" } },
+      { "match": { "function": "solder_mask", "side": "active" } },
+      { "match": { "function": "silkscreen", "side": "active" } },
       { "match": { "function": "edge" } }
     ],
     "excludeComponents": ["R", "C", "L", "TP"]

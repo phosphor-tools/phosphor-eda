@@ -1808,7 +1808,7 @@ class TestParseRenderSettings:
                 "source": {
                     "layers": [
                         {
-                            "match": {"function": "copper", "side": "front"},
+                            "match": {"function": "copper", "side": "active"},
                             "visible": True,
                             "objects": ["pads", "traces"],
                         },
@@ -1823,7 +1823,7 @@ class TestParseRenderSettings:
         )
 
         assert settings.source.layers[0].match.function == "copper"
-        assert settings.source.layers[0].match.side == "front"
+        assert settings.source.layers[0].match.side == "active"
         assert settings.source.layers[0].visible is True
         assert settings.source.layers[0].objects == ("pads", "traces")
         assert settings.source.layers[1].match.name == "Mechanical 13"
@@ -2087,6 +2087,21 @@ def test_bundled_render_settings_use_expected_render_modes(name: str, render_mod
     settings = load_render_settings_json(json.dumps({"extends": f"phosphor:{name}"}))
 
     assert settings.render_mode == render_mode
+
+
+@pytest.mark.parametrize("name", ["high-contrast", "simplified-high-contrast"])
+def test_high_contrast_presets_limit_surface_layers_to_active_side(name: str) -> None:
+    settings = load_render_settings_json(json.dumps({"extends": f"phosphor:{name}"}))
+    rules_by_function = {
+        rule.match.function: rule
+        for rule in settings.source.layers
+        if rule.match.function in {"silkscreen", "fab", "mechanical"}
+    }
+
+    assert rules_by_function["silkscreen"].match.side == "active"
+    assert rules_by_function["silkscreen"].objects == ("silk", "board_graphic_text")
+    assert rules_by_function["fab"].match.side == "active"
+    assert rules_by_function["mechanical"].objects == ("mechanical",)
 
 
 @pytest.mark.parametrize("name", BUILT_IN_DERIVED_PRESETS)

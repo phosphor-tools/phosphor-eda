@@ -82,10 +82,15 @@ def build_cad_layers(
 ) -> tuple[DerivedLayer, ...]:
     """Build CAD derived layers from selected PCB source artwork."""
     selected_items = _filter_excluded_components(
-        select_source_artwork(store, settings.source.layers),
+        select_source_artwork(store, settings.source.layers, active_side=settings.side),
         settings.source.exclude_components,
     )
-    grouped_artwork = _groupable_artwork(store, selected_items, settings.source.layers)
+    grouped_artwork = _groupable_artwork(
+        store,
+        selected_items,
+        settings.source.layers,
+        active_side=settings.side,
+    )
     board = board_outline_geometry(store)
     dimmed = _should_dim_base_layers(store, settings)
     warned_missing_dimmed_tokens: set[str] = set()
@@ -141,10 +146,15 @@ def build_realistic_layers(
     """Build front/back realistic derived layers from selected source artwork."""
     side = settings.side or "front"
     selected_items = _filter_excluded_components(
-        select_source_artwork(store, settings.source.layers),
+        select_source_artwork(store, settings.source.layers, active_side=side),
         settings.source.exclude_components,
     )
-    grouped_artwork = _groupable_artwork(store, selected_items, settings.source.layers)
+    grouped_artwork = _groupable_artwork(
+        store,
+        selected_items,
+        settings.source.layers,
+        active_side=side,
+    )
     board = board_outline_geometry(store)
     surface_drills = _surface_drill_geometry(store)
     dimmed = _should_dim_base_layers(store, settings)
@@ -253,6 +263,7 @@ def build_highlight_layers(
             store,
             selected_items,
             settings.source.layers,
+            active_side=settings.side,
             via_items=selected_vias,
         )
         if not grouped_artwork:
@@ -317,6 +328,7 @@ def _groupable_artwork(
     selected_items: Iterable[RenderableGeometry],
     rules: Iterable[LayerSelectionRule],
     *,
+    active_side: str,
     via_items: Iterable[RenderableGeometry] | None = None,
 ) -> tuple[_GroupedArtwork, ...]:
     grouped: list[_GroupedArtwork] = []
@@ -327,7 +339,7 @@ def _groupable_artwork(
             continue
         grouped.append(_GroupedArtwork(artwork=artwork, layer=item.layer))
 
-    selected_copper_layers = _selected_copper_layers(store, rules)
+    selected_copper_layers = _selected_copper_layers(store, rules, active_side=active_side)
     selected_via_items = store.by_kind(GeometryKind.VIA) if via_items is None else tuple(via_items)
     for item in selected_via_items:
         artwork = geometry_to_artwork(item)
@@ -367,7 +379,7 @@ def _selected_highlight_items(
     highlight: HighlightSpec,
 ) -> tuple[RenderableGeometry, ...]:
     selected_items = _filter_excluded_components(
-        select_source_artwork(store, settings.source.layers),
+        select_source_artwork(store, settings.source.layers, active_side=settings.side),
         settings.source.exclude_components,
     )
     return tuple(
@@ -382,7 +394,11 @@ def _selected_highlight_vias(
     settings: RenderSettings,
     highlight: HighlightSpec,
 ) -> tuple[RenderableGeometry, ...]:
-    selected_copper_layers = _selected_copper_layers(store, settings.source.layers)
+    selected_copper_layers = _selected_copper_layers(
+        store,
+        settings.source.layers,
+        active_side=settings.side,
+    )
     if not selected_copper_layers:
         return ()
     return tuple(
@@ -440,6 +456,8 @@ def _filter_excluded_components(
 def _selected_copper_layers(
     store: PcbGeometryStore,
     rules: Iterable[LayerSelectionRule],
+    *,
+    active_side: str,
 ) -> tuple[GeometryLayer, ...]:
     rule_tuple = tuple(rules)
     known_layers = {
@@ -449,7 +467,15 @@ def _selected_copper_layers(
     for item in store.items:
         if item.layer.role != "copper":
             continue
-        if not any(_rule_selects_layer(rule, item.layer, object_name="via") for rule in rule_tuple):
+        if not any(
+            _rule_selects_layer(
+                rule,
+                item.layer,
+                object_name="via",
+                active_side=active_side,
+            )
+            for rule in rule_tuple
+        ):
             continue
         layers[item.layer.name] = item.layer
 
@@ -458,7 +484,15 @@ def _selected_copper_layers(
             if layer_name == "*.Cu":
                 continue
             layer = known_layers.get(layer_name, _copper_layer_for_name(layer_name))
-            if any(_rule_selects_layer(rule, layer, object_name="via") for rule in rule_tuple):
+            if any(
+                _rule_selects_layer(
+                    rule,
+                    layer,
+                    object_name="via",
+                    active_side=active_side,
+                )
+                for rule in rule_tuple
+            ):
                 layers[layer.name] = layer
     return tuple(layers.values())
 
@@ -468,6 +502,7 @@ def _rule_selects_layer(
     layer: GeometryLayer,
     *,
     object_name: str,
+    active_side: str,
 ) -> bool:
     if not rule.visible:
         return False
@@ -475,7 +510,8 @@ def _rule_selects_layer(
         return False
     if rule.match.function and layer.role != _source_function_layer_role(rule.match.function):
         return False
-    if rule.match.side and layer.side != rule.match.side:
+    match_side = active_side if rule.match.side == "active" else rule.match.side
+    if match_side and layer.side != match_side:
         return False
     return not rule.objects or object_name in _normalized_objects(rule.objects)
 
@@ -492,7 +528,7 @@ def _via_layers(item: RenderableGeometry) -> frozenset[str]:
     payload = item.payload if item.payload is not None else item.source
     if not isinstance(payload, PcbVia):
         return frozenset()
-    return frozenset(payload.layers)
+    return frozenset(str(layer) for layer in payload.layers)
 
 
 def _copper_layer_for_name(name: str) -> GeometryLayer:
