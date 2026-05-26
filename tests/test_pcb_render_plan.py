@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from phosphor_eda.kicad.pcb_parser import parse_kicad_pcb
@@ -16,13 +17,16 @@ from phosphor_eda.pcb import (
     PcbVia,
     PcbZone,
 )
+from phosphor_eda.pcb_annotations import ResolvedAnnotations
 from phosphor_eda.pcb_render import load_render_settings_json
 from phosphor_eda.pcb_render_plan import (
+    DerivedRenderPlan,
     EmittedGeometry,
     GeometryKind,
     InclusionReason,
     PcbRenderPlan,
     ViewBox,
+    build_derived_render_plan,
     build_render_plan,
     layer_matches_rule,
     layer_role,
@@ -59,6 +63,138 @@ def test_render_plan_tracks_base_and_overlay_geometry() -> None:
 
     assert plan.base[0].reason is InclusionReason.VISIBLE
     assert plan.overlay[0].reason is InclusionReason.HIGHLIGHT
+
+
+def test_build_derived_render_plan_cad_uses_derived_layers() -> None:
+    settings = load_render_settings_json(
+        json.dumps(
+            {
+                "renderMode": "cad",
+                "source": {"layers": [{"match": {"name": "F.Cu"}}]},
+                "tokens": {"cad.layer[F.Cu].fill": "#ff6600"},
+            }
+        )
+    )
+
+    plan = build_derived_render_plan(
+        _make_plan_board(),
+        settings=settings,
+        side="front",
+        width_px=1000,
+        annotations=None,
+    )
+
+    assert isinstance(plan, DerivedRenderPlan)
+    assert plan.width_px == 1000
+    assert plan.height_px > 0
+    assert plan.base_layers
+    assert plan.base_layers[0].role.namespace == "cad"
+    assert plan.base_layers[0].role.function == "copper"
+    assert plan.base_layers[0].source_layers == ("F.Cu",)
+    assert plan.highlight_groups == ()
+    assert plan.warnings == ()
+
+
+def test_build_derived_render_plan_realistic_uses_derived_layers() -> None:
+    settings = load_render_settings_json(
+        json.dumps(
+            {
+                "renderMode": "realistic",
+                "side": "front",
+                "source": {
+                    "layers": [
+                        {"match": {"function": "copper", "side": "front"}},
+                        {"match": {"name": "Edge.Cuts"}},
+                    ]
+                },
+                "tokens": {
+                    "realistic.substrate.fill": "#244426",
+                    "realistic.solderMask.fill": "#0f5f32",
+                    "realistic.coveredCopper.fill": "#9a6924",
+                    "realistic.exposedCopper.fill": "#d6a13d",
+                    "realistic.silkscreen.fill": "#ffffff",
+                    "realistic.boardOutline.fill": "none",
+                    "realistic.boardOutline.stroke": "#111111",
+                    "realistic.boardOutline.strokeWidthMm": 0.08,
+                },
+            }
+        )
+    )
+
+    plan = build_derived_render_plan(
+        _make_plan_board(),
+        settings=settings,
+        side="front",
+        width_px=1000,
+        annotations=None,
+    )
+
+    assert isinstance(plan, DerivedRenderPlan)
+    assert {layer.role.namespace for layer in plan.base_layers} == {"realistic"}
+    assert {layer.role.function for layer in plan.base_layers} >= {"substrate", "boardOutline"}
+
+
+def test_build_derived_render_plan_uses_requested_side_over_settings_side() -> None:
+    settings = load_render_settings_json(
+        json.dumps(
+            {
+                "renderMode": "realistic",
+                "side": "back",
+                "source": {
+                    "layers": [
+                        {"match": {"function": "copper", "side": "front"}},
+                        {"match": {"name": "Edge.Cuts"}},
+                    ]
+                },
+                "tokens": {
+                    "realistic.substrate.fill": "#244426",
+                    "realistic.solderMask.fill": "#0f5f32",
+                    "realistic.coveredCopper.fill": "#9a6924",
+                    "realistic.exposedCopper.fill": "#d6a13d",
+                    "realistic.silkscreen.fill": "#ffffff",
+                    "realistic.boardOutline.fill": "none",
+                    "realistic.boardOutline.stroke": "#111111",
+                    "realistic.boardOutline.strokeWidthMm": 0.08,
+                },
+            }
+        )
+    )
+
+    plan = build_derived_render_plan(
+        _make_plan_board(),
+        settings=settings,
+        side="front",
+        width_px=1000,
+        annotations=None,
+    )
+
+    covered_copper = next(
+        layer for layer in plan.base_layers if layer.role.function == "coveredCopper"
+    )
+    assert covered_copper.source_layers == ("F.Cu",)
+
+
+def test_build_derived_render_plan_expands_view_box_for_annotations() -> None:
+    settings = load_render_settings_json(
+        json.dumps(
+            {
+                "renderMode": "cad",
+                "source": {"layers": [{"match": {"name": "F.Cu"}}]},
+                "tokens": {"cad.layer[F.Cu].fill": "#ff6600"},
+            }
+        )
+    )
+
+    plan = build_derived_render_plan(
+        _make_plan_board(),
+        settings=settings,
+        side="front",
+        width_px=1000,
+        annotations=ResolvedAnnotations(content_bbox=(-10.0, -10.0, 30.0, 40.0)),
+    )
+
+    assert plan.view_box == ViewBox(x=-10.0, y=-10.0, width=40.0, height=50.0)
+    assert plan.height_px == 1250
 
 
 def test_layer_role_maps_common_functions() -> None:
@@ -308,7 +444,9 @@ def test_back_side_plan_keeps_transformed_zone_holes_on_source() -> None:
         if geometry.kind is GeometryKind.ZONE and isinstance(geometry.source, PcbPolygon)
     )
     assert polygon_zone.points[0].x == 19.0
-    assert polygon_zone.source.holes == [[(18.5, 1.5), (18.0, 1.5), (18.0, 2.0)]]
+    source = polygon_zone.source
+    assert isinstance(source, PcbPolygon)
+    assert source.holes == [[(18.5, 1.5), (18.0, 1.5), (18.0, 2.0)]]
 
 
 def test_build_render_plan_includes_outline_arcs_in_clip_path() -> None:

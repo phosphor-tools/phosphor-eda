@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from xml.sax.saxutils import escape as xml_escape
 
+from shapely import GeometryCollection, LineString, MultiLineString, MultiPolygon, Polygon
+
 from phosphor_eda.pcb import (
     LayerFunction,
     PcbArc,
@@ -35,9 +37,11 @@ from phosphor_eda.pcb import (
     PcbZone,
 )
 from phosphor_eda.pcb_render_plan import (
+    DerivedRenderPlan,
     EmittedGeometry,
     GeometryKind,
     PcbRenderPlan,
+    build_derived_render_plan,
     build_render_plan,
 )
 from phosphor_eda.pcb_render_settings import (
@@ -56,7 +60,10 @@ from phosphor_eda.pcb_render_settings import (
 from phosphor_eda.text_metrics import BASELINE_CENTER_OFFSET, INTER_REGULAR_BASE64
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
+
+    from shapely.coords import CoordinateSequence
+    from shapely.geometry.base import BaseGeometry
 
     from phosphor_eda.pcb import (
         Pcb,
@@ -69,10 +76,13 @@ if TYPE_CHECKING:
         ResolvedLegend,
         ResolvedPointer,
     )
+    from phosphor_eda.pcb_render_artwork import DerivedLayer
+    from phosphor_eda.pcb_render_tokens import ResolvedStyle, VisualRole
 
 _BUNDLED_SETTINGS_PACKAGE = "phosphor_eda.render_settings"
 _PHOSPHOR_SETTINGS_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _SETTINGS_EXTENDS_KEY = "extends"
+_STYLE_BLOCK_TERMINATOR_RE = re.compile(r"</\s*style\s*>", re.IGNORECASE)
 
 
 def load_render_settings_file(path: Path) -> RenderSettings:
@@ -1200,6 +1210,201 @@ def _draw_pad(svg: _Svg, pad: PcbPad, attrs: dict[str, str]) -> None:
         svg.rect(pad.x - hw, pad.y - hh, pad.width, pad.height, attrs=attrs)
 
 
+def render_pcb_svg_from_derived_plan(plan: DerivedRenderPlan) -> str:
+    """Serialize a derived-layer render plan to SVG."""
+    svg = _Svg()
+    view_box = plan.view_box
+    svg_open = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{plan.width_px}" '
+        + f'height="{plan.height_px}" viewBox="{view_box.x:.4f} {view_box.y:.4f} '
+        + f'{view_box.width:.4f} {view_box.height:.4f}">'
+    )
+    svg.raw(svg_open)
+    if plan.custom_css:
+        svg.raw('<style id="custom">')
+        svg.raw(_escape_style_block_text(plan.custom_css))
+        svg.raw("</style>")
+    if plan.annotations is not None:
+        svg.raw('<style id="annotations">')
+        svg.raw(
+            _escape_style_block_text(
+                _annotation_css(plan.annotations.font_size, annotation_style=plan.annotation_style)
+            )
+        )
+        svg.raw("</style>")
+
+    _render_derived_layers(svg, plan.base_layers)
+    for group in plan.highlight_groups:
+        svg.group_start(attrs={"class": "highlight-overlay", "data-highlight-target": group.target})
+        _render_derived_layers(svg, group.layers)
+        svg.group_end()
+
+    if plan.annotations is not None:
+        _render_annotations(
+            svg,
+            plan.annotations,
+            plan.annotations.font_size,
+            annotation_style=plan.annotation_style,
+        )
+
+    svg.raw("</svg>")
+    return svg.build()
+
+
+def _append_pcb_metadata(svg: str, board: Pcb) -> str:
+    metadata_json = _pcb_metadata_json(board)
+    if not metadata_json:
+        return svg
+    metadata_block = (
+        f'<script type="application/json" id="pcb-metadata">\n{metadata_json}\n</script>'
+    )
+    if svg.endswith("</svg>"):
+        return f"{svg[:-6]}{metadata_block}\n</svg>"
+    return f"{svg}\n{metadata_block}"
+
+
+def _pcb_metadata_json(board: Pcb) -> str:
+    meta = {
+        fp.reference: {"lib": fp.footprint_lib, "value": fp.value}
+        for fp in sorted(board.footprints, key=lambda footprint: footprint.reference)
+        if fp.footprint_lib or fp.value
+    }
+    return _escape_json_for_script(json.dumps(meta, separators=(",", ":"))) if meta else ""
+
+
+def _escape_json_for_script(value: str) -> str:
+    return value.replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e")
+
+
+def _escape_style_block_text(value: str) -> str:
+    return _STYLE_BLOCK_TERMINATOR_RE.sub(r"<\\/style>", value)
+
+
+def _legacy_pcb_metadata_json(fp_meta: dict[str, tuple[str, str]]) -> str:
+    meta = {
+        ref: {"lib": lib, "value": val} for ref, (lib, val) in sorted(fp_meta.items()) if lib or val
+    }
+    return _escape_json_for_script(json.dumps(meta, separators=(",", ":"))) if meta else ""
+
+
+def _render_derived_layers(svg: _Svg, layers: tuple[DerivedLayer, ...]) -> None:
+    for layer in layers:
+        path_d = _geometry_to_svg_path_d(layer.geometry)
+        if not path_d:
+            continue
+        svg.group_start(attrs=_derived_layer_group_attrs(layer))
+        svg.path(path_d, attrs=_derived_layer_path_attrs(layer.style))
+        svg.group_end()
+
+
+def _derived_layer_group_attrs(layer: DerivedLayer) -> dict[str, str]:
+    attrs = {
+        "data-role": _visual_role_name(layer.role),
+        "data-source-layers": ",".join(layer.source_layers),
+    }
+    if layer.source_ids:
+        attrs["data-source-ids"] = ",".join(layer.source_ids)
+    for key, value in layer.data.items():
+        attr_name = key if key.startswith("data-") else f"data-{key}"
+        attrs[attr_name] = value
+    return attrs
+
+
+def _derived_layer_path_attrs(style: ResolvedStyle | None) -> dict[str, str]:
+    attrs = _resolved_style_svg_attrs(style)
+    attrs["fill-rule"] = "evenodd"
+    return attrs
+
+
+def _visual_role_name(role: VisualRole) -> str:
+    parts = [role.namespace, role.function]
+    if role.side:
+        parts.append(role.side)
+    if role.side == "inner" and role.inner_index is not None:
+        parts.append(str(role.inner_index))
+    return ".".join(parts)
+
+
+def _resolved_style_svg_attrs(style: ResolvedStyle | None) -> dict[str, str]:
+    if style is None:
+        return {}
+    declarations: list[str] = []
+    if style.fill is not None:
+        declarations.append(f"fill: {style.fill}")
+    if style.stroke is not None:
+        declarations.append(f"stroke: {style.stroke}")
+    if style.opacity is not None:
+        declarations.append(f"opacity: {style.opacity:.4f}")
+    if style.stroke_width_mm is not None:
+        declarations.append(f"stroke-width: {style.stroke_width_mm:.4f}")
+    return {"style": "; ".join(declarations)} if declarations else {}
+
+
+def _geometry_to_svg_path_d(geometry: object) -> str:
+    if not isinstance(
+        geometry,
+        (GeometryCollection, LineString, MultiLineString, MultiPolygon, Polygon),
+    ):
+        return ""
+    if geometry.is_empty:
+        return ""
+    if isinstance(geometry, Polygon):
+        return _polygon_to_svg_path_d(geometry)
+    if isinstance(geometry, MultiPolygon):
+        return " ".join(
+            path_d
+            for polygon in geometry.geoms
+            for path_d in (_polygon_to_svg_path_d(polygon),)
+            if path_d
+        )
+    if isinstance(geometry, LineString):
+        return _line_string_to_svg_path_d(geometry)
+    if isinstance(geometry, MultiLineString):
+        return " ".join(
+            path_d
+            for line in geometry.geoms
+            for path_d in (_line_string_to_svg_path_d(line),)
+            if path_d
+        )
+    return _geometry_collection_to_svg_path_d(cast("GeometryCollection[BaseGeometry]", geometry))
+
+
+def _geometry_collection_to_svg_path_d(geometry: GeometryCollection[BaseGeometry]) -> str:
+    parts = cast("Iterable[BaseGeometry]", geometry.geoms)
+    return " ".join(
+        path_d for part in parts for path_d in (_geometry_to_svg_path_d(part),) if path_d
+    )
+
+
+def _polygon_to_svg_path_d(polygon: Polygon) -> str:
+    rings = [_ring_to_svg_path_d(polygon.exterior.coords)]
+    rings.extend(_ring_to_svg_path_d(interior.coords) for interior in polygon.interiors)
+    return " ".join(ring for ring in rings if ring)
+
+
+def _ring_to_svg_path_d(coords: CoordinateSequence) -> str:
+    points = [(float(x), float(y)) for x, y in coords]
+    if len(points) < 2:
+        return ""
+    if points[0] == points[-1]:
+        points = points[:-1]
+    if len(points) < 2:
+        return ""
+    commands = [f"M {points[0][0]:.4f} {points[0][1]:.4f}"]
+    commands.extend(f"L {x:.4f} {y:.4f}" for x, y in points[1:])
+    commands.append("Z")
+    return " ".join(commands)
+
+
+def _line_string_to_svg_path_d(line: LineString) -> str:
+    points = [(float(x), float(y)) for x, y in line.coords]
+    if len(points) < 2:
+        return ""
+    commands = [f"M {points[0][0]:.4f} {points[0][1]:.4f}"]
+    commands.extend(f"L {x:.4f} {y:.4f}" for x, y in points[1:])
+    return " ".join(commands)
+
+
 def render_pcb_svg_from_plan(plan: PcbRenderPlan) -> str:
     """Serialize a structured render plan to SVG."""
     svg = _Svg()
@@ -1214,12 +1419,16 @@ def render_pcb_svg_from_plan(plan: PcbRenderPlan) -> str:
     svg.raw("</style>")
     if plan.custom_css:
         svg.raw('<style id="custom">')
-        svg.raw(plan.custom_css)
+        svg.raw(_escape_style_block_text(plan.custom_css))
         svg.raw("</style>")
     if plan.annotations is not None:
         annotations = cast("ResolvedAnnotations", plan.annotations)
         svg.raw('<style id="annotations">')
-        svg.raw(_annotation_css(annotations.font_size, annotation_style=plan.annotation_style))
+        svg.raw(
+            _escape_style_block_text(
+                _annotation_css(annotations.font_size, annotation_style=plan.annotation_style)
+            )
+        )
         svg.raw("</style>")
 
     active_clip = "board-clip"
@@ -1562,6 +1771,10 @@ def _style_expanded_pad(pad: PcbPad, style: dict[str, object]) -> PcbPad:
 
 def _render_settings_uses_plan(render_settings: RenderSettings | None) -> bool:
     return render_settings is not None and bool(render_settings.include.layers)
+
+
+def _render_settings_uses_derived_plan(render_settings: RenderSettings | None) -> bool:
+    return render_settings is not None and bool(render_settings.source.layers)
 
 
 def _settings_for_plan(
@@ -2081,6 +2294,23 @@ def render_pcb_svg(
     annotations:
         Resolved annotations to overlay on the board.
     """
+    if render_settings is not None and _render_settings_uses_derived_plan(render_settings):
+        plan_settings = _settings_for_plan(
+            render_settings,
+            highlight_nets=highlight_nets,
+            highlight_components=highlight_components,
+            highlight_specs=highlight_specs,
+            custom_css=custom_css,
+        )
+        plan = build_derived_render_plan(
+            board,
+            settings=plan_settings,
+            side=side,
+            width_px=width_px,
+            annotations=annotations,
+        )
+        return _append_pcb_metadata(render_pcb_svg_from_derived_plan(plan), board)
+
     if render_settings is not None and _render_settings_uses_plan(render_settings):
         plan_settings = _settings_for_plan(
             render_settings,
@@ -2269,12 +2499,12 @@ def render_pcb_svg(
 
     if custom_css:
         svg.raw('<style id="custom">')
-        svg.raw(custom_css)
+        svg.raw(_escape_style_block_text(custom_css))
         svg.raw("</style>")
 
     if annotations is not None:
         svg.raw('<style id="annotations">')
-        svg.raw(_annotation_css(annotations.font_size))
+        svg.raw(_escape_style_block_text(_annotation_css(annotations.font_size)))
         svg.raw("</style>")
 
     # -- Back-side mirror --------------------------------------------------
@@ -2700,12 +2930,10 @@ def render_pcb_svg(
         _render_annotations(svg, annotations, annotations.font_size)
 
     # -- Component metadata (embedded JSON for downstream tooling) ----------
-    meta = {
-        ref: {"lib": lib, "value": val} for ref, (lib, val) in sorted(fp_meta.items()) if lib or val
-    }
-    if meta:
+    metadata_json = _legacy_pcb_metadata_json(fp_meta)
+    if metadata_json:
         svg.raw('<script type="application/json" id="pcb-metadata">')
-        svg.raw(json.dumps(meta, separators=(",", ":")))
+        svg.raw(metadata_json)
         svg.raw("</script>")
 
     svg.raw("</svg>")

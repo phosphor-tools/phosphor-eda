@@ -24,9 +24,17 @@ from phosphor_eda.pcb_render_geometry import (
     RenderableGeometry,
     build_geometry_store,
 )
+from phosphor_eda.pcb_render_modes import (
+    HighlightGroup,
+    build_cad_layers,
+    build_highlight_layers,
+    build_realistic_layers,
+)
 from phosphor_eda.pcb_render_settings import is_json_dict
 
 if TYPE_CHECKING:
+    from phosphor_eda.pcb_annotations import ResolvedAnnotations
+    from phosphor_eda.pcb_render_artwork import DerivedLayer
     from phosphor_eda.pcb_render_settings import LayerIncludeRule, RenderSettings, StyleRule
 
 _DESIGN_INNER_COPPER_COLOR_TOKEN = "phosphor:design-inner-copper"
@@ -108,6 +116,19 @@ class PcbRenderPlan:
     omitted_count: int = 0
     clip: ClipPlan | None = None
     annotations: object | None = None
+    annotation_style: dict[str, object] = field(default_factory=dict)
+    custom_css: str = ""
+
+
+@dataclass(frozen=True)
+class DerivedRenderPlan:
+    view_box: ViewBox
+    width_px: int
+    height_px: int
+    base_layers: tuple[DerivedLayer, ...]
+    highlight_groups: tuple[HighlightGroup, ...]
+    annotations: ResolvedAnnotations | None
+    warnings: tuple[str, ...]
     annotation_style: dict[str, object] = field(default_factory=dict)
     custom_css: str = ""
 
@@ -553,6 +574,72 @@ def build_render_plan(
             )
 
     return plan
+
+
+def build_derived_render_plan(
+    board: Pcb,
+    *,
+    settings: RenderSettings,
+    side: str,
+    width_px: int,
+    annotations: ResolvedAnnotations | None,
+) -> DerivedRenderPlan:
+    bx0, by0, bx1, by1 = board.bbox()
+    pad_mm = 2.0
+    vb_x = bx0 - pad_mm
+    vb_y = by0 - pad_mm
+    vb_w = (bx1 - bx0) + 2 * pad_mm
+    vb_h = (by1 - by0) + 2 * pad_mm
+    if annotations is not None:
+        vb_x, vb_y, vb_w, vb_h = _expand_view_box_for_annotations(
+            vb_x,
+            vb_y,
+            vb_w,
+            vb_h,
+            annotations,
+        )
+    height_px = int(width_px * vb_h / vb_w) if vb_w > 0 else width_px
+    warnings: list[str] = []
+
+    store = build_geometry_store(board, side=side)
+    mode_settings = replace(settings, side=side)
+    if mode_settings.render_mode == "realistic":
+        base_layers = build_realistic_layers(store, mode_settings, warn=warnings.append)
+    else:
+        base_layers = build_cad_layers(store, mode_settings, warn=warnings.append)
+
+    return DerivedRenderPlan(
+        view_box=ViewBox(vb_x, vb_y, vb_w, vb_h),
+        width_px=width_px,
+        height_px=height_px,
+        base_layers=base_layers,
+        highlight_groups=build_highlight_layers(store, mode_settings, warn=warnings.append),
+        annotations=annotations,
+        warnings=tuple(warnings),
+        annotation_style=_annotation_style_for_settings(settings),
+        custom_css=settings.custom_css,
+    )
+
+
+def _expand_view_box_for_annotations(
+    vb_x: float,
+    vb_y: float,
+    vb_w: float,
+    vb_h: float,
+    annotations: ResolvedAnnotations,
+) -> tuple[float, float, float, float]:
+    ax0, ay0, ax1, ay1 = annotations.content_bbox
+    if ax0 < vb_x:
+        vb_w += vb_x - ax0
+        vb_x = ax0
+    if ay0 < vb_y:
+        vb_h += vb_y - ay0
+        vb_y = ay0
+    if ax1 > vb_x + vb_w:
+        vb_w = ax1 - vb_x
+    if ay1 > vb_y + vb_h:
+        vb_h = ay1 - vb_y
+    return vb_x, vb_y, vb_w, vb_h
 
 
 def _ordered_layers(board: Pcb) -> list[PcbLayer]:

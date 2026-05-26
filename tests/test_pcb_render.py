@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 import pytest
+from shapely import GeometryCollection, MultiPolygon, Polygon
 
 import phosphor_eda.pcb_render as pcb_render_module
 from phosphor_eda.kicad.pcb_parser import parse_kicad_pcb
@@ -44,15 +45,29 @@ from phosphor_eda.pcb_render import (
     render_pcb_svg,
     render_settings_schema,
 )
+from phosphor_eda.pcb_render_artwork import DerivedLayer
 from phosphor_eda.pcb_render_geometry import (
     GeometryKind,
     GeometrySelector,
     build_geometry_store,
     geometry_matches_selector,
 )
+from phosphor_eda.pcb_render_plan import DerivedRenderPlan, ViewBox
+from phosphor_eda.pcb_render_settings import is_json_dict, is_json_list
+from phosphor_eda.pcb_render_tokens import ResolvedStyle, VisualRole
 
 FIXTURE = Path(__file__).parent / "fixtures" / "swd_switch.kicad_pcb"
 ORANGECRAB_FIXTURE = Path(__file__).parent / "fixtures" / "orangecrab.kicad_pcb"
+
+
+def _as_object_dict(value: object) -> dict[str, object]:
+    assert is_json_dict(value)
+    return value
+
+
+def _as_object_list(value: object) -> list[object]:
+    assert is_json_list(value)
+    return value
 
 
 @pytest.fixture(scope="module")
@@ -1411,6 +1426,14 @@ def test_no_metadata_when_no_lib_or_value() -> None:
     assert "pcb-metadata" not in svg
 
 
+def test_metadata_json_escapes_script_terminators() -> None:
+    board = _make_board_with_component(value='</script><script>alert("x")</script>')
+    svg = render_pcb_svg(board)
+
+    assert '</script><script>alert("x")</script>' not in svg
+    assert "\\u003c/script\\u003e\\u003cscript\\u003e" in svg
+
+
 # ---------------------------------------------------------------------------
 # Custom CSS injection
 # ---------------------------------------------------------------------------
@@ -1423,6 +1446,14 @@ def test_custom_css_injected() -> None:
     svg = render_pcb_svg(board, custom_css=css)
     assert '<style id="custom">' in svg
     assert "fill: purple;" in svg
+
+
+def test_custom_css_escapes_style_terminators() -> None:
+    board = _make_board_with_component()
+    svg = render_pcb_svg(board, custom_css='.x { color: red; } </style><script>alert("x")</script>')
+
+    assert '</style><script>alert("x")</script>' not in svg
+    assert '<\\/style><script>alert("x")</script>' in svg
 
 
 def test_custom_css_not_present_when_empty() -> None:
@@ -1625,6 +1656,247 @@ def test_no_annotations_no_group() -> None:
     assert '<style id="annotations">' not in svg
 
 
+def test_derived_cad_svg_groups_by_role_source_layers_and_style(board: Pcb) -> None:
+    settings = load_render_settings_json(
+        json.dumps(
+            {
+                "renderMode": "cad",
+                "source": {"layers": [{"match": {"name": "F.Cu"}}]},
+                "tokens": {
+                    "cad.layer[F.Cu].fill": "#ff6600",
+                    "cad.copper.front.opacity": 0.75,
+                },
+            }
+        )
+    )
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert '<g data-role="cad.copper.front" data-source-layers="F.Cu"' in svg
+    assert 'style="fill: #ff6600; opacity: 0.7500"' in svg
+    assert 'data-source-ids="' in svg
+    assert "board-clip" not in svg
+    assert "drill-clip" not in svg
+
+
+def test_derived_realistic_svg_uses_derived_path(board: Pcb) -> None:
+    settings = load_render_settings_json(
+        json.dumps(
+            {
+                "renderMode": "realistic",
+                "side": "front",
+                "source": {
+                    "layers": [
+                        {"match": {"function": "copper", "side": "front"}},
+                        {"match": {"name": "Edge.Cuts"}},
+                    ]
+                },
+                "tokens": {
+                    "realistic.substrate.fill": "#244426",
+                    "realistic.solderMask.fill": "#0f5f32",
+                    "realistic.coveredCopper.fill": "#9a6924",
+                    "realistic.exposedCopper.fill": "#d6a13d",
+                    "realistic.silkscreen.fill": "#ffffff",
+                    "realistic.boardOutline.fill": "none",
+                    "realistic.boardOutline.stroke": "#111111",
+                    "realistic.boardOutline.strokeWidthMm": 0.08,
+                },
+            }
+        )
+    )
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert '<g data-role="realistic.substrate"' in svg
+    assert '<g data-role="realistic.boardOutline"' in svg
+    assert "board-clip" not in svg
+    assert "drill-clip" not in svg
+
+
+def test_derived_serializer_does_not_use_raw_source_kind_branches(
+    board: Pcb,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = load_render_settings_json(
+        json.dumps(
+            {
+                "renderMode": "cad",
+                "source": {"layers": [{"match": {"name": "F.Cu"}}]},
+                "tokens": {"cad.layer[F.Cu].fill": "#ff6600"},
+            }
+        )
+    )
+
+    def fail_raw_serializer(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("legacy raw source serializer was called")
+
+    monkeypatch.setattr(pcb_render_module, "_render_plan_item", fail_raw_serializer)
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert '<g data-role="cad.copper.front"' in svg
+
+
+def test_derived_serializer_renders_annotations(board: Pcb) -> None:
+    settings = load_render_settings_json(
+        json.dumps(
+            {
+                "renderMode": "cad",
+                "source": {"layers": [{"match": {"name": "F.Cu"}}]},
+                "tokens": {"cad.layer[F.Cu].fill": "#ff6600"},
+            }
+        )
+    )
+
+    svg = render_pcb_svg(
+        board,
+        side="front",
+        width_px=1200,
+        annotations=_make_annotations(labels=True),
+        render_settings=settings,
+    )
+
+    assert '<style id="annotations">' in svg
+    assert "annotation-connector" in svg
+    assert "Main MCU" in svg
+
+
+def test_derived_renderer_preserves_component_metadata_block() -> None:
+    board = _make_board_with_component()
+    settings = load_render_settings_json(
+        json.dumps(
+            {
+                "renderMode": "cad",
+                "source": {"layers": [{"match": {"name": "F.Cu"}}]},
+                "tokens": {"cad.layer[F.Cu].fill": "#ff6600"},
+            }
+        )
+    )
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+    match = re.search(
+        r'<script type="application/json" id="pcb-metadata">\n(.*?)\n</script>',
+        svg,
+        re.DOTALL,
+    )
+
+    assert match is not None
+    assert '"U1":{"lib":"Package_SO:SOIC-8","value":"SN74LVC2G66"}' in match.group(1)
+
+
+def test_derived_renderer_escapes_metadata_script_terminators() -> None:
+    board = _make_board_with_component(value='</script><script>alert("x")</script>')
+    settings = load_render_settings_json(
+        json.dumps(
+            {
+                "renderMode": "cad",
+                "source": {"layers": [{"match": {"name": "F.Cu"}}]},
+                "tokens": {"cad.layer[F.Cu].fill": "#ff6600"},
+            }
+        )
+    )
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert '</script><script>alert("x")</script>' not in svg
+    assert "\\u003c/script\\u003e\\u003cscript\\u003e" in svg
+
+
+def test_derived_renderer_escapes_custom_css_style_terminators() -> None:
+    board = _make_board_with_component()
+    settings = load_render_settings_json(
+        json.dumps(
+            {
+                "renderMode": "cad",
+                "source": {"layers": [{"match": {"name": "F.Cu"}}]},
+                "tokens": {"cad.layer[F.Cu].fill": "#ff6600"},
+                "custom_css": '.x { color: red; } </STYLE ><script>alert("x")</script>',
+            }
+        )
+    )
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert '</STYLE ><script>alert("x")</script>' not in svg
+    assert '<\\/style><script>alert("x")</script>' in svg
+
+
+def test_derived_renderer_escapes_annotation_css_style_terminators() -> None:
+    plan = DerivedRenderPlan(
+        view_box=ViewBox(0.0, 0.0, 10.0, 10.0),
+        width_px=100,
+        height_px=100,
+        base_layers=(),
+        highlight_groups=(),
+        annotations=_make_annotations(labels=True),
+        annotation_style={"label": {"fill": '</style><script>alert("x")</script>'}},
+        warnings=(),
+    )
+
+    svg = pcb_render_module.render_pcb_svg_from_derived_plan(plan)
+    style_block = re.search(r'<style id="annotations">(.*?)</style>', svg, re.DOTALL)
+
+    assert style_block is not None
+    assert '</style><script>alert("x")</script>' not in style_block.group(1)
+    assert '<\\/style><script>alert("x")</script>' in style_block.group(1)
+
+
+def test_derived_serializer_converts_polygons_multipolygons_holes_and_empty_geometry() -> None:
+    plan = DerivedRenderPlan(
+        view_box=ViewBox(0.0, 0.0, 10.0, 10.0),
+        width_px=100,
+        height_px=100,
+        base_layers=(
+            DerivedLayer(
+                id="cad:copper:front",
+                role=VisualRole(namespace="cad", function="copper", side="front"),
+                geometry=Polygon(
+                    shell=[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)],
+                    holes=[[(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)]],
+                ),
+                source_layers=("F.Cu",),
+                source_ids=("pad-1",),
+                style=ResolvedStyle(fill="#ff6600"),
+            ),
+            DerivedLayer(
+                id="cad:mask:front",
+                role=VisualRole(namespace="cad", function="mask", side="front"),
+                geometry=MultiPolygon(
+                    [
+                        Polygon([(5.0, 0.0), (6.0, 0.0), (6.0, 1.0), (5.0, 1.0)]),
+                        Polygon([(7.0, 0.0), (8.0, 0.0), (8.0, 1.0), (7.0, 1.0)]),
+                    ]
+                ),
+                source_layers=("F.Mask",),
+                source_ids=("mask-1", "mask-2"),
+                style=ResolvedStyle(fill="#008800"),
+            ),
+            DerivedLayer(
+                id="cad:empty:front",
+                role=VisualRole(namespace="cad", function="empty", side="front"),
+                geometry=GeometryCollection(),
+                source_layers=("Empty",),
+                source_ids=(),
+                style=ResolvedStyle(fill="#000000"),
+            ),
+        ),
+        highlight_groups=(),
+        annotations=None,
+        warnings=(),
+    )
+
+    svg = pcb_render_module.render_pcb_svg_from_derived_plan(plan)
+
+    assert 'data-role="cad.copper.front"' in svg
+    assert 'fill-rule="evenodd"' in svg
+    assert "M 0.0000 0.0000 L 4.0000 0.0000" in svg
+    assert "M 1.0000 1.0000 L 2.0000 1.0000" in svg
+    assert 'data-role="cad.mask.front"' in svg
+    assert "M 5.0000 0.0000 L 6.0000 0.0000" in svg
+    assert "M 7.0000 0.0000 L 8.0000 0.0000" in svg
+    assert 'data-role="cad.empty.front"' not in svg
+
+
 def test_annotation_css_present() -> None:
     """Annotation CSS block appears when annotations are provided."""
     board = _make_board_with_component()
@@ -1753,15 +2025,17 @@ def test_resolve_annotations_uses_requested_font_size(board: Pcb) -> None:
 class TestParseRenderSettings:
     def test_render_settings_schema_is_json_schema_object(self) -> None:
         schema = render_settings_schema()
+        properties = _as_object_dict(schema["properties"])
+        custom_css = _as_object_dict(properties["custom_css"])
         assert isinstance(schema["$schema"], str)
         assert schema["$schema"].startswith("https://json-schema.org/")
         assert schema["type"] == "object"
         assert schema["additionalProperties"] is False
-        assert schema["properties"]["custom_css"]["type"] == "string"
+        assert custom_css["type"] == "string"
 
     def test_render_settings_schema_is_v2_without_theme(self) -> None:
         schema = render_settings_schema()
-        props = schema["properties"]
+        props = _as_object_dict(schema["properties"])
         assert "theme" not in props
         assert "font_size" not in props
         assert "font_size_px" in props
@@ -1770,7 +2044,7 @@ class TestParseRenderSettings:
         assert "style_rules" in props
         assert "custom_css" in props
         assert "phosphor:simplified-high-contrast" in json.dumps(schema["examples"])
-        example = schema["examples"][0]
+        example = _as_object_dict(_as_object_list(schema["examples"])[0])
         assert "include" in example
         assert "highlight_behavior" in example
         assert "style_rules" in example
@@ -1946,7 +2220,7 @@ class TestParseRenderSettings:
             )
 
     def test_all_fields(self) -> None:
-        data = {
+        data: dict[str, object] = {
             "side": "back",
             "width": 1200,
             "font_size_px": 24,
@@ -2290,8 +2564,10 @@ def test_load_render_settings_file_detects_extend_cycles(tmp_path: Path) -> None
 
 def test_render_settings_schema_documents_extends() -> None:
     schema = render_settings_schema()
+    properties = _as_object_dict(schema["properties"])
+    extends = _as_object_dict(properties["extends"])
 
-    assert schema["properties"]["extends"]["type"] == "string"
+    assert extends["type"] == "string"
     assert "phosphor:simplified-high-contrast" in json.dumps(schema["examples"])
 
 
