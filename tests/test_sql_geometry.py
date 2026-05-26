@@ -24,6 +24,8 @@ from phosphor_eda.sql.geometry import (
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SWD_SWITCH_PCB = FIXTURES / "swd_switch.kicad_pcb"
+ORANGECRAB_PCB = FIXTURES / "orangecrab.kicad_pcb"
+PI_MX8_PCB = FIXTURES / "altium" / "pi-mx8" / "PCB" / "PiMX8MP_r0.3.PcbDoc"
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +253,32 @@ def test_board_outline_closed() -> None:
     assert isinstance(geom, Polygon)
     assert geom.is_valid
     assert geom.area > 0
+
+
+def test_board_outline_closes_orangecrab_fractional_arc_ring() -> None:
+    """KiCad outline arcs can miss line endpoints by floating-point noise."""
+    from phosphor_eda.kicad.pcb_parser import parse_kicad_pcb
+
+    pcb = parse_kicad_pcb(ORANGECRAB_PCB)
+    geom = board_outline_polygon(pcb.outline_lines, pcb.outline_arcs)
+
+    assert geom is not None
+    assert isinstance(geom, Polygon)
+    assert geom.is_valid
+    assert geom.area == pytest.approx(1155.74176, rel=1e-6)
+
+
+def test_board_outline_closes_pi_mx8_altium_fractional_arc_ring() -> None:
+    """Altium mil conversion leaves outline arc endpoints a few nanometres apart."""
+    from phosphor_eda.altium.pcb_parser import parse_altium_pcb
+
+    pcb = parse_altium_pcb(PI_MX8_PCB)
+    geom = board_outline_polygon(pcb.outline_lines, pcb.outline_arcs)
+
+    assert geom is not None
+    assert isinstance(geom, Polygon)
+    assert geom.is_valid
+    assert geom.area == pytest.approx(2192.26296, rel=1e-6)
 
 
 # ---------------------------------------------------------------------------

@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING
 
 from shapely import LineString, Point, Polygon
 from shapely.affinity import rotate
-from shapely.ops import polygonize
+
+from phosphor_eda.shapely_geometry import normalize_geometry, robust_polygonize
 
 if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry
@@ -246,7 +247,11 @@ def polygon_geometry(poly: PcbPolygon) -> Polygon | None:
     if len(poly.points) < 3:
         return None
     holes = [h for h in poly.holes if len(h) >= 3]
-    return Polygon(poly.points, holes=holes or None)
+    geometry = Polygon(poly.points, holes=holes or None)
+    normalized = normalize_geometry(geometry)
+    if not normalized.is_empty and isinstance(normalized, Polygon):
+        return normalized
+    return geometry
 
 
 # ---------------------------------------------------------------------------
@@ -284,12 +289,7 @@ def board_outline_polygon(lines: list[PcbLine], arcs: list[PcbArc]) -> Polygon |
     if not segments:
         return None
 
-    polygons = list(polygonize(segments))
-    if not polygons:
-        return None
-
-    # Return the largest polygon (in case of multiple disconnected rings)
-    return max(polygons, key=lambda p: p.area)
+    return robust_polygonize(segments)
 
 
 # ---------------------------------------------------------------------------

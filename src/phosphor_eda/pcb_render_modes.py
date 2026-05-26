@@ -7,9 +7,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from shapely import GeometryCollection
-from shapely.errors import GEOSException
-from shapely.ops import unary_union
-from shapely.validation import make_valid
 
 from phosphor_eda.pcb import PcbVia
 from phosphor_eda.pcb_render_artwork import (
@@ -22,6 +19,11 @@ from phosphor_eda.pcb_render_artwork import (
 )
 from phosphor_eda.pcb_render_geometry import GeometryKind, GeometryLayer
 from phosphor_eda.pcb_render_tokens import VisualRole, resolve_layer_style
+from phosphor_eda.shapely_geometry import (
+    robust_difference,
+    robust_intersection,
+    robust_union,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -579,11 +581,11 @@ def _resolved_group_geometry(
 
     geometry = _union_or_empty(item.artwork.geometry for item in group)
     if not board.is_empty:
-        geometry = geometry.intersection(board)
+        geometry = _intersection(geometry, board)
     if layer.role == "copper":
         drills = drill_geometry_for_layer(store, layer_name=layer.name)
         if not drills.is_empty:
-            geometry = geometry.difference(drills)
+            geometry = _difference(geometry, drills)
     return geometry
 
 
@@ -615,19 +617,19 @@ def _surface_drill_geometry(store: PcbGeometryStore) -> BaseGeometry:
 def _clip_to_board(geometry: BaseGeometry, board: BaseGeometry) -> BaseGeometry:
     if geometry.is_empty or board.is_empty:
         return geometry
-    return geometry.intersection(board)
+    return _intersection(geometry, board)
 
 
 def _difference(geometry: BaseGeometry, subtractive: BaseGeometry) -> BaseGeometry:
     if geometry.is_empty or subtractive.is_empty:
         return geometry
-    return geometry.difference(subtractive)
+    return robust_difference(geometry, subtractive)
 
 
 def _intersection(left: BaseGeometry, right: BaseGeometry) -> BaseGeometry:
     if left.is_empty or right.is_empty:
         return GeometryCollection()
-    return left.intersection(right)
+    return robust_intersection(left, right)
 
 
 def _outline_geometry(board: BaseGeometry) -> BaseGeometry:
@@ -642,10 +644,7 @@ def _union_or_empty(geometries: Iterable[BaseGeometry]) -> BaseGeometry:
         return GeometryCollection()
     if len(geometry_tuple) == 1:
         return geometry_tuple[0]
-    try:
-        return unary_union(geometry_tuple)
-    except GEOSException:
-        return unary_union(tuple(make_valid(geometry) for geometry in geometry_tuple))
+    return robust_union(geometry_tuple)
 
 
 def _derived_layer_id(role: VisualRole) -> str:

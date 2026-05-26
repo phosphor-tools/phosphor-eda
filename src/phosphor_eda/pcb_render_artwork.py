@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, cast
 
 from shapely import GeometryCollection, LineString, Point, Polygon
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import unary_union
 
 from phosphor_eda.pcb import (
     Pcb,
@@ -26,6 +25,7 @@ from phosphor_eda.pcb import (
 from phosphor_eda.pcb_render_geometry import (
     GeometryKind,
 )
+from phosphor_eda.shapely_geometry import normalize_geometry, robust_union
 from phosphor_eda.sql.geometry import (
     arc_to_polyline,
     board_outline_polygon,
@@ -384,7 +384,7 @@ def _circle_geometry(circle: PcbCircle) -> BaseGeometry:
 def _zone_geometry(zone: PcbZone) -> BaseGeometry | None:
     if len(zone.boundary) < 3:
         return None
-    return Polygon(zone.boundary)
+    return normalize_geometry(Polygon(zone.boundary))
 
 
 def _pad_drill_geometry(payload: object, *, layer_name: str | None) -> BaseGeometry | None:
@@ -474,8 +474,8 @@ def _union_or_empty(geometries: list[BaseGeometry]) -> BaseGeometry:
     if not geometries:
         return GeometryCollection()
     if len(geometries) == 1:
-        return geometries[0]
-    return unary_union(geometries)
+        return normalize_geometry(geometries[0])
+    return robust_union(geometries)
 
 
 def _derived_layer_id(role: VisualRole) -> str:
