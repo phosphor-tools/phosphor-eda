@@ -121,7 +121,6 @@ _REALISTIC_LAYER_ORDER = (
     "silkscreen",
     "boardOutline",
 )
-_TRACE_BUFFER_QUAD_SEGS = 4
 
 
 def build_cad_layers(
@@ -617,9 +616,8 @@ def _trace_artwork_from_items(items: list[RenderableGeometry]) -> ArtworkItem | 
     )
     geometry = merged.buffer(
         _trace_width(items[0]) / 2,
-        cap_style="round",
-        join_style="round",
-        quad_segs=_TRACE_BUFFER_QUAD_SEGS,
+        cap_style="flat",
+        join_style="mitre",
     )
     if geometry.is_empty:
         return None

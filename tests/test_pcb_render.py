@@ -506,14 +506,14 @@ def test_copper_layer_paints_traces_zones_then_pads() -> None:
     assert front_layer_svg.count("<path") == 1
 
 
-def test_cad_trace_bends_are_buffered_as_joined_linework() -> None:
+def test_cad_trace_bends_are_buffered_as_mitered_joined_linework() -> None:
     board = Pcb(
         name="trace-bend",
         nets={0: PcbNet(0, ""), 1: PcbNet(1, "SIG")},
         footprints=[],
         segments=[
             PcbSegment(5.0, 5.0, 6.0, 5.0, 0.2, "F.Cu", 1),
-            PcbSegment(6.0, 5.0, 6.0, 6.0, 0.2, "F.Cu", 1),
+            PcbSegment(6.0, 5.0, 7.0, 6.0, 0.2, "F.Cu", 1),
         ],
         vias=[],
         outline_lines=[
@@ -546,8 +546,9 @@ def test_cad_trace_bends_are_buffered_as_joined_linework() -> None:
 
     assert len(layers) == 1
     copper = layers[0].geometry
-    assert copper.contains(Point(6.07, 4.93))
-    assert not copper.contains(Point(6.095, 4.905))
+    assert copper.contains(Point(6.0, 5.11))
+    assert copper.contains(Point(6.08, 4.98))
+    assert not copper.contains(Point(6.12, 4.94))
 
 
 def test_review_preset_matches_legacy_mask_without_body_context() -> None:
