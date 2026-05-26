@@ -66,7 +66,7 @@ def test_missing_normal_fill_token_raises_with_role_and_property() -> None:
     role = VisualRole(namespace="cad", function="copper", side="front")
 
     with pytest.raises(ValueError, match=r"cad\.copper\.front.*fill"):
-        resolve_layer_style({}, role, dimmed=False, warn=lambda _message: None)
+        _ = resolve_layer_style({}, role, dimmed=False, warn=lambda _message: None)
 
 
 def test_missing_dimmed_token_warns_and_falls_back_to_normal_token() -> None:
@@ -86,10 +86,51 @@ def test_missing_dimmed_token_warns_and_falls_back_to_normal_token() -> None:
     ]
 
 
+def test_missing_dimmed_token_warns_once_when_tracker_is_reused() -> None:
+    warnings: list[str] = []
+    warned_tokens: set[str] = set()
+    role = VisualRole(namespace="cad", function="copper", side="front")
+
+    for _ in range(2):
+        style = resolve_layer_style(
+            {"cad.copper.front.fill": "#d17a22"},
+            role,
+            dimmed=True,
+            warn=warnings.append,
+            warned_missing_dimmed_tokens=warned_tokens,
+        )
+        assert style.fill == "#d17a22"
+
+    assert warnings == [
+        "Missing dimmed style token cad.dimmed.copper.front.fill; using cad.copper.front.fill"
+    ]
+
+
 def test_explicit_highlight_color_overrides_fill_but_retains_other_tokens() -> None:
     style = resolve_layer_style(
         {
             "highlight.copper.front.fill": "#ff8a00",
+            "highlight.copper.front.opacity": 0.85,
+            "highlight.copper.front.stroke": "none",
+            "highlight.copper.front.strokeWidthMm": 0,
+        },
+        VisualRole(namespace="highlight", function="copper", side="front"),
+        dimmed=False,
+        warn=lambda _message: None,
+        highlight_color="#ff3b30",
+    )
+
+    assert style == ResolvedStyle(
+        fill="#ff3b30",
+        stroke="none",
+        opacity=0.85,
+        stroke_width_mm=0.0,
+    )
+
+
+def test_explicit_highlight_color_does_not_require_layer_fill_token() -> None:
+    style = resolve_layer_style(
+        {
             "highlight.copper.front.opacity": 0.85,
             "highlight.copper.front.stroke": "none",
             "highlight.copper.front.strokeWidthMm": 0,

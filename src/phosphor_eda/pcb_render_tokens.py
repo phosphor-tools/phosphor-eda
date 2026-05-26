@@ -41,22 +41,34 @@ def resolve_layer_style(
     dimmed: bool,
     warn: WarningCallback,
     highlight_color: str = "",
+    warned_missing_dimmed_tokens: set[str] | None = None,
 ) -> ResolvedStyle:
     """Resolve paint style tokens for a visual layer role."""
-    fill_resolution = _resolve_required_token(tokens, role, "fill")
-    style_values: dict[str, object] = {
-        "fill": _resolve_dimmed_value(tokens, fill_resolution, dimmed, warn)
-    }
+    style_values: dict[str, object] = {}
+    if highlight_color:
+        style_values["fill"] = highlight_color
+    else:
+        fill_resolution = _resolve_required_token(tokens, role, "fill")
+        style_values["fill"] = _resolve_dimmed_value(
+            tokens,
+            fill_resolution,
+            dimmed,
+            warn,
+            warned_missing_dimmed_tokens,
+        )
 
     for prop in _STYLE_PROPERTIES:
         if prop == "fill":
             continue
         resolution = _resolve_optional_token(tokens, role, prop)
         if resolution is not None:
-            style_values[prop] = _resolve_dimmed_value(tokens, resolution, dimmed, warn)
-
-    if highlight_color:
-        style_values["fill"] = highlight_color
+            style_values[prop] = _resolve_dimmed_value(
+                tokens,
+                resolution,
+                dimmed,
+                warn,
+                warned_missing_dimmed_tokens,
+            )
 
     return ResolvedStyle(
         fill=_as_optional_string(style_values.get("fill"), "fill"),
@@ -113,6 +125,7 @@ def _resolve_dimmed_value(
     resolution: _TokenResolution,
     dimmed: bool,
     warn: WarningCallback,
+    warned_missing_dimmed_tokens: set[str] | None,
 ) -> object:
     if not dimmed:
         return resolution.value
@@ -121,7 +134,10 @@ def _resolve_dimmed_value(
     if dimmed_token in tokens:
         return tokens[dimmed_token]
 
-    warn(f"Missing dimmed style token {dimmed_token}; using {resolution.token}")
+    if warned_missing_dimmed_tokens is None or dimmed_token not in warned_missing_dimmed_tokens:
+        warn(f"Missing dimmed style token {dimmed_token}; using {resolution.token}")
+        if warned_missing_dimmed_tokens is not None:
+            warned_missing_dimmed_tokens.add(dimmed_token)
     return resolution.value
 
 

@@ -13,8 +13,14 @@ from phosphor_eda.pcb_render_geometry import (
     PcbGeometryStore,
     RenderableGeometry,
 )
-from phosphor_eda.pcb_render_modes import build_cad_layers, build_realistic_layers
+from phosphor_eda.pcb_render_modes import (
+    build_cad_layers,
+    build_highlight_layers,
+    build_realistic_layers,
+)
 from phosphor_eda.pcb_render_settings import (
+    DimmingSettings,
+    HighlightSpec,
     LayerMatch,
     LayerSelectionRule,
     RenderSettings,
@@ -458,16 +464,220 @@ def test_realistic_projection_uses_visible_side_only() -> None:
     assert not covered_copper.geometry.contains(Point(3.0, 1.0))
 
 
+def test_highlight_projection_creates_one_group_per_request_with_layers() -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "front-pad",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=1.0, y=1.0, net_name="SIG", footprint_ref="J1"),
+                tags=GeometryTags(
+                    source_collection="pads",
+                    component_ref="J1",
+                    pad_number="1",
+                    net_name="SIG",
+                ),
+            ),
+            _renderable(
+                "back-pad",
+                GeometryKind.PAD,
+                "B.Cu",
+                "copper",
+                "back",
+                geometry=_pad(x=3.0, y=1.0, net_name="SIG", footprint_ref="J2"),
+                tags=GeometryTags(
+                    source_collection="pads",
+                    component_ref="J2",
+                    pad_number="1",
+                    net_name="SIG",
+                ),
+            ),
+            _renderable(
+                "component-pad",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=5.0, y=1.0, net_name="GND", footprint_ref="U1"),
+                tags=GeometryTags(
+                    source_collection="pads",
+                    component_ref="U1",
+                    pad_number="1",
+                    net_name="GND",
+                ),
+            ),
+        )
+    )
+
+    groups = build_highlight_layers(
+        store,
+        _settings(
+            rules=(LayerSelectionRule(match=LayerMatch(function="copper")),),
+            tokens={
+                "highlight.copper.front.fill": "#ff8a00",
+                "highlight.copper.back.fill": "#0095ff",
+            },
+            highlights=(
+                HighlightSpec(net="SIG"),
+                HighlightSpec(component="U1", color="#ff3b30"),
+            ),
+        ),
+        warn=lambda _message: None,
+    )
+
+    assert len(groups) == 2
+    assert groups[0].target == "net:SIG"
+    assert [layer.id for layer in groups[0].layers] == [
+        "highlight:copper:back",
+        "highlight:copper:front",
+    ]
+    assert [layer.source_ids for layer in groups[0].layers] == [("back-pad",), ("front-pad",)]
+    assert [layer.style.fill for layer in groups[0].layers if layer.style is not None] == [
+        "#0095ff",
+        "#ff8a00",
+    ]
+    assert groups[1].target == "component:U1"
+    assert len(groups[1].layers) == 1
+    assert groups[1].layers[0].style == ResolvedStyle(fill="#ff3b30")
+    assert groups[1].layers[0].data["data-highlight-target"] == "component:U1"
+
+
+def test_highlight_projection_supports_pad_targets_stroke_tokens_and_drill_clipping() -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "pad-1",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(
+                    x=0.0,
+                    y=0.0,
+                    width=4.0,
+                    height=4.0,
+                    drill=0.8,
+                    footprint_ref="J1",
+                    net_name="SIG",
+                ),
+                tags=GeometryTags(
+                    source_collection="pads",
+                    component_ref="J1",
+                    pad_number="1",
+                    net_name="SIG",
+                ),
+            ),
+            _renderable(
+                "drill-1",
+                GeometryKind.DRILL,
+                "drills",
+                "drill",
+                "",
+                geometry=_pad(
+                    x=0.0,
+                    y=0.0,
+                    width=4.0,
+                    height=4.0,
+                    drill=0.8,
+                    footprint_ref="J1",
+                    net_name="SIG",
+                ),
+            ),
+        )
+    )
+
+    groups = build_highlight_layers(
+        store,
+        _settings(
+            rules=(LayerSelectionRule(match=LayerMatch(function="copper")),),
+            tokens={
+                "highlight.copper.front.fill": "#ff8a00",
+                "highlight.copper.front.opacity": 0.85,
+                "highlight.copper.front.stroke": "none",
+                "highlight.copper.front.strokeWidthMm": 0,
+            },
+            highlights=(HighlightSpec(pad="J1.1"),),
+        ),
+        warn=lambda _message: None,
+    )
+
+    layer = groups[0].layers[0]
+
+    assert groups[0].target == "pad:J1.1"
+    assert layer.style == ResolvedStyle(
+        fill="#ff8a00",
+        stroke="none",
+        opacity=0.85,
+        stroke_width_mm=0.0,
+    )
+    assert _board_polygon().covers(layer.geometry)
+    assert not layer.geometry.contains(Point(0.0, 0.0))
+    assert layer.geometry.area < 4.0
+
+
+def test_base_layers_dim_only_when_dimming_enabled_and_highlights_exist() -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "pad-1",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=1.0, y=1.0),
+                tags=GeometryTags(source_collection="pads", net_name="SIG"),
+            ),
+        )
+    )
+    tokens: dict[str, str | int | float | bool] = {
+        "cad.copper.front.fill": "#d17a22",
+        "cad.dimmed.copper.front.fill": "#6f5b48",
+    }
+
+    without_highlights = build_cad_layers(
+        store,
+        _settings(
+            rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
+            tokens=tokens,
+            dimming_enabled=True,
+        ),
+        warn=lambda _message: None,
+    )
+    with_highlights = build_cad_layers(
+        store,
+        _settings(
+            rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
+            tokens=tokens,
+            dimming_enabled=True,
+            highlights=(HighlightSpec(net="SIG"),),
+        ),
+        warn=lambda _message: None,
+    )
+
+    assert without_highlights[0].style == ResolvedStyle(fill="#d17a22")
+    assert with_highlights[0].style == ResolvedStyle(fill="#6f5b48")
+
+
 def _settings(
     *,
     rules: tuple[LayerSelectionRule, ...],
     tokens: dict[str, str | int | float | bool],
     side: str = "",
+    highlights: tuple[HighlightSpec, ...] = (),
+    dimming_enabled: bool = False,
 ) -> RenderSettings:
     return RenderSettings(
         side=side,
         source=SourceSelection(layers=list(rules)),
         tokens=tokens,
+        dimming=DimmingSettings(enabled=dimming_enabled),
+        highlights=list(highlights),
     )
 
 
@@ -493,6 +703,7 @@ def _renderable(
     *,
     stack_index: int = 0,
     geometry: object | None = None,
+    tags: GeometryTags | None = None,
 ) -> RenderableGeometry:
     return RenderableGeometry(
         id=geometry_id,
@@ -503,7 +714,7 @@ def _renderable(
             side=side,
             stack_index=stack_index,
         ),
-        tags=GeometryTags(source_collection=kind.value),
+        tags=GeometryTags(source_collection=kind.value) if tags is None else tags,
         payload=Point(1, 1) if geometry is None else geometry,
         source=geometry,
     )
@@ -556,6 +767,8 @@ def _pad(
     width: float = 1.0,
     height: float = 1.0,
     drill: float = 0.0,
+    footprint_ref: str = "J1",
+    net_name: str = "GND",
 ) -> PcbPad:
     return PcbPad(
         number="1",
@@ -566,7 +779,7 @@ def _pad(
         shape="rect",
         layers=["F.Cu", "B.Cu"],
         net_number=1,
-        net_name="GND",
-        footprint_ref="J1",
+        net_name=net_name,
+        footprint_ref=footprint_ref,
         drill=drill,
     )

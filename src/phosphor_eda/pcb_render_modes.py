@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry
 
     from phosphor_eda.pcb_render_geometry import PcbGeometryStore, RenderableGeometry
-    from phosphor_eda.pcb_render_settings import LayerSelectionRule, RenderSettings
+    from phosphor_eda.pcb_render_settings import HighlightSpec, LayerSelectionRule, RenderSettings
 
 
 @dataclass(frozen=True)
@@ -42,6 +42,12 @@ class _LayerGroupKey:
 class _GroupedArtwork:
     artwork: ArtworkItem
     layer: GeometryLayer
+
+
+@dataclass(frozen=True)
+class HighlightGroup:
+    target: str
+    layers: tuple[DerivedLayer, ...]
 
 
 _SOURCE_FUNCTION_TO_LAYER_ROLE = {
@@ -79,6 +85,8 @@ def build_cad_layers(
     )
     grouped_artwork = _groupable_artwork(store, selected_items, settings.source.layers)
     board = board_outline_geometry(store)
+    dimmed = _should_dim_base_layers(store, settings)
+    warned_missing_dimmed_tokens: set[str] = set()
 
     groups: dict[_LayerGroupKey, list[_GroupedArtwork]] = defaultdict(list)
     for item in grouped_artwork:
@@ -99,8 +107,9 @@ def build_cad_layers(
         style = resolve_layer_style(
             settings.tokens,
             role,
-            dimmed=settings.dimming.enabled,
+            dimmed=dimmed,
             warn=warn,
+            warned_missing_dimmed_tokens=warned_missing_dimmed_tokens,
         )
         source_layers = _unique_ordered(
             layer for item in group for layer in item.artwork.source_layers
@@ -136,6 +145,8 @@ def build_realistic_layers(
     grouped_artwork = _groupable_artwork(store, selected_items, settings.source.layers)
     board = board_outline_geometry(store)
     surface_drills = _surface_drill_geometry(store)
+    dimmed = _should_dim_base_layers(store, settings)
+    warned_missing_dimmed_tokens: set[str] = set()
 
     mask_artwork = _side_artwork(selected_items, role="mask", side=side)
     copper_artwork = tuple(
@@ -206,8 +217,9 @@ def build_realistic_layers(
         style = resolve_layer_style(
             settings.tokens,
             role,
-            dimmed=settings.dimming.enabled,
+            dimmed=dimmed,
             warn=warn,
+            warned_missing_dimmed_tokens=warned_missing_dimmed_tokens,
         )
         layers.append(
             DerivedLayer(
@@ -222,6 +234,75 @@ def build_realistic_layers(
     return tuple(layers)
 
 
+def build_highlight_layers(
+    store: PcbGeometryStore,
+    settings: RenderSettings,
+    *,
+    warn: Callable[[str], None],
+) -> tuple[HighlightGroup, ...]:
+    """Build derived highlight overlay groups from selected raw source geometry."""
+    board = board_outline_geometry(store)
+    groups: list[HighlightGroup] = []
+
+    for highlight in settings.highlights:
+        selected_items = _selected_highlight_items(store, settings, highlight)
+        selected_vias = _selected_highlight_vias(store, settings, highlight)
+        grouped_artwork = _groupable_artwork(
+            store,
+            selected_items,
+            settings.source.layers,
+            via_items=selected_vias,
+        )
+        if not grouped_artwork:
+            continue
+
+        by_layer: dict[_LayerGroupKey, list[_GroupedArtwork]] = defaultdict(list)
+        for item in grouped_artwork:
+            by_layer[_group_key(item.layer)].append(item)
+
+        target = _highlight_target(highlight)
+        layers: list[DerivedLayer] = []
+        for key, layer_group in sorted(by_layer.items(), key=_group_sort_key):
+            geometry = _resolved_group_geometry(store, layer_group, board)
+            if geometry.is_empty:
+                continue
+            role = VisualRole(
+                namespace="highlight",
+                function=key.function,
+                side=key.side,
+                inner_index=key.inner_index,
+                source_layer_name=key.source_layer_name,
+            )
+            style = resolve_layer_style(
+                settings.tokens,
+                role,
+                dimmed=False,
+                warn=warn,
+                highlight_color=highlight.color,
+            )
+            layers.append(
+                DerivedLayer(
+                    id=_derived_layer_id(role),
+                    role=role,
+                    geometry=geometry,
+                    source_layers=_unique_ordered(
+                        layer for item in layer_group for layer in item.artwork.source_layers
+                    ),
+                    source_ids=_source_ids_by_store_order(store, layer_group),
+                    style=style,
+                    data={
+                        "data-highlight-target": target,
+                        "source-layer": key.source_layer_name,
+                    },
+                )
+            )
+
+        if layers:
+            groups.append(HighlightGroup(target=target, layers=tuple(layers)))
+
+    return tuple(groups)
+
+
 @dataclass(frozen=True)
 class _RealisticLayerInput:
     geometry: BaseGeometry
@@ -233,6 +314,8 @@ def _groupable_artwork(
     store: PcbGeometryStore,
     selected_items: Iterable[RenderableGeometry],
     rules: Iterable[LayerSelectionRule],
+    *,
+    via_items: Iterable[RenderableGeometry] | None = None,
 ) -> tuple[_GroupedArtwork, ...]:
     grouped: list[_GroupedArtwork] = []
     selected_non_vias = tuple(item for item in selected_items if item.kind is not GeometryKind.VIA)
@@ -243,7 +326,8 @@ def _groupable_artwork(
         grouped.append(_GroupedArtwork(artwork=artwork, layer=item.layer))
 
     selected_copper_layers = _selected_copper_layers(store, rules)
-    for item in store.by_kind(GeometryKind.VIA):
+    selected_via_items = store.by_kind(GeometryKind.VIA) if via_items is None else tuple(via_items)
+    for item in selected_via_items:
         artwork = geometry_to_artwork(item)
         if artwork is None:
             continue
@@ -263,6 +347,78 @@ def _groupable_artwork(
                 )
             )
     return tuple(grouped)
+
+
+def _should_dim_base_layers(store: PcbGeometryStore, settings: RenderSettings) -> bool:
+    if not settings.dimming.enabled:
+        return False
+    return any(
+        _selected_highlight_items(store, settings, highlight)
+        or _selected_highlight_vias(store, settings, highlight)
+        for highlight in settings.highlights
+    )
+
+
+def _selected_highlight_items(
+    store: PcbGeometryStore,
+    settings: RenderSettings,
+    highlight: HighlightSpec,
+) -> tuple[RenderableGeometry, ...]:
+    selected_items = _filter_excluded_components(
+        select_source_artwork(store, settings.source.layers),
+        settings.source.exclude_components,
+    )
+    return tuple(
+        item
+        for item in selected_items
+        if item.kind is not GeometryKind.VIA and _matches_highlight(item, highlight)
+    )
+
+
+def _selected_highlight_vias(
+    store: PcbGeometryStore,
+    settings: RenderSettings,
+    highlight: HighlightSpec,
+) -> tuple[RenderableGeometry, ...]:
+    selected_copper_layers = _selected_copper_layers(store, settings.source.layers)
+    if not selected_copper_layers:
+        return ()
+    return tuple(
+        item
+        for item in store.by_kind(GeometryKind.VIA)
+        if _matches_highlight(item, highlight)
+        and _via_intersects_selected_layers(item, selected_copper_layers)
+    )
+
+
+def _matches_highlight(item: RenderableGeometry, highlight: HighlightSpec) -> bool:
+    if highlight.net:
+        return item.tags.net_name.casefold() == highlight.net.casefold()
+    if highlight.component:
+        return item.tags.component_ref.casefold() == highlight.component.casefold()
+    if highlight.pad:
+        component, _separator, pad_number = highlight.pad.partition(".")
+        return (
+            item.tags.component_ref.casefold() == component.casefold()
+            and item.tags.pad_number.casefold() == pad_number.casefold()
+        )
+    return False
+
+
+def _via_intersects_selected_layers(
+    item: RenderableGeometry,
+    selected_layers: Iterable[GeometryLayer],
+) -> bool:
+    via_layers = _via_layers(item)
+    return any(layer.name in via_layers or "*.Cu" in via_layers for layer in selected_layers)
+
+
+def _highlight_target(highlight: HighlightSpec) -> str:
+    if highlight.net:
+        return f"net:{highlight.net}"
+    if highlight.component:
+        return f"component:{highlight.component}"
+    return f"pad:{highlight.pad}"
 
 
 def _filter_excluded_components(
