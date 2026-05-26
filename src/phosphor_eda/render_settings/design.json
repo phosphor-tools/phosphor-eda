@@ -1,122 +1,35 @@
 {
-  "include": {
-    "board_outline": "visible",
-    "drills": "visible",
-    "vias": "visible",
+  "renderMode": "cad",
+  "source": {
     "layers": [
-      {
-        "role": "copper",
-        "side": "any",
-        "objects": {
-          "pads": "visible",
-          "traces": "visible",
-          "zones": "visible"
-        }
-      },
-      {
-        "role": "silkscreen",
-        "side": "active",
-        "objects": "visible"
-      },
-      {
-        "role": "fabrication",
-        "side": "any",
-        "objects": "never"
-      }
+      { "match": { "function": "copper" } },
+      { "match": { "function": "silkscreen" } },
+      { "match": { "function": "edge" } }
     ]
   },
-  "style_rules": [
-    {
-      "match": { "object": "board_outline" },
-      "style": {
-        "fill": "none",
-        "stroke": "#d0d2cd",
-        "stroke_width_mm": 0.15
-      }
-    },
-    {
-      "match": { "role": "copper", "side": "front", "object": "trace" },
-      "style": { "stroke": "#c83434", "opacity": 0.35 }
-    },
-    {
-      "match": { "role": "copper", "side": "front", "object": "trace_arc" },
-      "style": { "stroke": "#c83434", "opacity": 0.35 }
-    },
-    {
-      "match": { "role": "copper", "side": "front", "object": "pad" },
-      "style": { "fill": "#c83434", "opacity": 0.35 }
-    },
-    {
-      "match": { "role": "copper", "side": "front", "object": "via" },
-      "style": { "fill": "#c83434" }
-    },
-    {
-      "match": { "role": "copper", "side": "front", "object": "zone" },
-      "style": { "fill": "#c83434", "opacity": 0.35 }
-    },
-    {
-      "match": { "role": "copper", "side": "back", "object": "trace" },
-      "style": { "stroke": "#4d7fc4", "opacity": 0.35 }
-    },
-    {
-      "match": { "role": "copper", "side": "back", "object": "trace_arc" },
-      "style": { "stroke": "#4d7fc4", "opacity": 0.35 }
-    },
-    {
-      "match": { "role": "copper", "side": "back", "object": "pad" },
-      "style": { "fill": "#4d7fc4", "opacity": 0.35 }
-    },
-    {
-      "match": { "role": "copper", "side": "back", "object": "via" },
-      "style": { "fill": "#4d7fc4" }
-    },
-    {
-      "match": { "role": "copper", "side": "back", "object": "zone" },
-      "style": { "fill": "#4d7fc4", "opacity": 0.35 }
-    },
-    {
-      "match": { "role": "copper", "side": "inner", "object": "trace" },
-      "style": { "stroke": "phosphor:design-inner-copper", "opacity": 0.35 }
-    },
-    {
-      "match": { "role": "copper", "side": "inner", "object": "trace_arc" },
-      "style": { "stroke": "phosphor:design-inner-copper", "opacity": 0.35 }
-    },
-    {
-      "match": { "role": "copper", "side": "inner", "object": "pad" },
-      "style": { "fill": "phosphor:design-inner-copper", "opacity": 0.35 }
-    },
-    {
-      "match": { "role": "copper", "side": "inner", "object": "via" },
-      "style": { "fill": "phosphor:design-inner-copper" }
-    },
-    {
-      "match": { "role": "copper", "side": "inner", "object": "zone" },
-      "style": { "fill": "phosphor:design-inner-copper", "opacity": 0.35 }
-    },
-    {
-      "match": { "role": "silkscreen", "side": "front", "object": "silk" },
-      "style": { "stroke": "#ffffff", "fill": "#ffffff" }
-    },
-    {
-      "match": { "role": "silkscreen", "side": "back", "object": "silk" },
-      "style": { "stroke": "#ffffff", "fill": "#ffffff" }
-    },
-    {
-      "match": { "object": "board_graphic_text" },
-      "style": { "fill": "#ffffff", "stroke": "none" }
-    },
-    {
-      "match": { "object": "user_text" },
-      "style": { "fill": "#ffffff", "stroke": "none" }
-    },
-    {
-      "match": { "object": "ref_text" },
-      "style": { "fill": "#ffffff", "stroke": "none" }
-    },
-    {
-      "match": { "object": "value_text" },
-      "style": { "fill": "#ffffff", "stroke": "none" }
-    }
-  ]
+  "tokens": {
+    "cad.copper.front.fill": "#c83434",
+    "cad.copper.front.opacity": 0.35,
+    "cad.copper.back.fill": "#4d7fc4",
+    "cad.copper.back.opacity": 0.35,
+    "cad.copper.inner.default.fill": "#7fc87f",
+    "cad.copper.inner.default.opacity": 0.35,
+    "cad.silkscreen.front.fill": "#ffffff",
+    "cad.silkscreen.back.fill": "#ffffff",
+    "cad.edge.fill": "none",
+    "cad.edge.stroke": "#d0d2cd",
+    "cad.edge.strokeWidthMm": 0.15,
+    "highlight.copper.front.fill": "#ff8a00",
+    "highlight.copper.front.opacity": 0.85,
+    "highlight.copper.front.stroke": "none",
+    "highlight.copper.front.strokeWidthMm": 0,
+    "highlight.copper.back.fill": "#5aa7ff",
+    "highlight.copper.back.opacity": 0.85,
+    "highlight.copper.back.stroke": "none",
+    "highlight.copper.back.strokeWidthMm": 0,
+    "highlight.copper.inner.default.fill": "#ffe066",
+    "highlight.copper.inner.default.opacity": 0.85,
+    "highlight.copper.inner.default.stroke": "none",
+    "highlight.copper.inner.default.strokeWidthMm": 0
+  }
 }

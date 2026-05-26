@@ -1,99 +1,41 @@
 {
-  "include": {
-    "board_outline": "visible",
-    "drills": "visible",
-    "vias": "visible",
+  "renderMode": "realistic",
+  "source": {
     "layers": [
-      {
-        "role": "copper",
-        "side": "active",
-        "objects": {
-          "pads": "visible",
-          "traces": "visible",
-          "zones": "visible"
-        }
-      },
-      {
-        "role": "silkscreen",
-        "side": "active",
-        "objects": "visible"
-      },
-      {
-        "role": "fabrication",
-        "side": "active",
-        "objects": "never"
-      }
+      { "match": { "function": "copper" } },
+      { "match": { "function": "solder_mask" } },
+      { "match": { "function": "silkscreen" } },
+      { "match": { "function": "edge" } }
     ]
   },
-  "style_rules": [
-    {
-      "match": { "object": "board_material" },
-      "style": { "fill": "#1a5c2a", "stroke": "none" }
-    },
-    {
-      "match": { "object": "board_outline" },
-      "style": { "fill": "#1a5c2a", "stroke": "#1a5c2a" }
-    },
-    {
-      "match": { "role": "copper", "object": "trace" },
-      "style": { "stroke": "#145222", "opacity": 0.6 }
-    },
-    {
-      "match": { "role": "copper", "object": "trace_arc" },
-      "style": { "stroke": "#145222", "opacity": 0.6 }
-    },
-    {
-      "match": { "role": "copper", "object": "pad" },
-      "style": { "fill": "#b87333", "opacity": 0.6 }
-    },
-    {
-      "match": { "role": "copper", "object": "via" },
-      "style": { "fill": "#b87333" }
-    },
-    {
-      "match": { "role": "copper", "object": "zone" },
-      "style": { "fill": "#145222", "opacity": 0.6 }
-    },
-    {
-      "match": { "role": "silkscreen", "object": "silk" },
-      "style": { "stroke": "#ffffff", "fill": "#ffffff" }
-    },
-    {
-      "match": { "role": "fabrication", "object": "body" },
-      "style": {
-        "fill": "#3d3530",
-        "stroke": "#5a504a",
-        "stroke_width_mm": 0.06
-      }
-    },
-    {
-      "match": { "object": "ref_text" },
-      "style": { "fill": "#ffffff", "stroke": "none" }
-    },
-    {
-      "match": { "object": "value_text" },
-      "style": { "fill": "#ffffff", "stroke": "none" }
-    },
-    {
-      "match": { "object": "user_text" },
-      "style": { "fill": "#ffffff", "stroke": "none" }
-    },
-    {
-      "match": { "object": "board_graphic_text" },
-      "style": { "fill": "#ffffff", "stroke": "none" }
-    },
-    {
-      "match": { "annotation": "label" },
-      "style": {
-        "fill": "#fff",
-        "text_halo": "#1a5c2a",
-        "text_halo_width_px": 3,
-        "font_weight": 650
-      }
-    },
-    {
-      "match": { "annotation": "connector" },
-      "style": { "stroke": "#ffffffcc", "stroke_width_px": 3 }
-    }
-  ]
+  "tokens": {
+    "realistic.substrate.fill": "#1a5c2a",
+    "realistic.solderMask.fill": "#1f7a3a",
+    "realistic.coveredCopper.fill": "#145222",
+    "realistic.coveredCopper.opacity": 0.6,
+    "realistic.exposedCopper.fill": "#b87333",
+    "realistic.exposedCopper.opacity": 0.9,
+    "realistic.silkscreen.fill": "#ffffff",
+    "realistic.boardOutline.fill": "none",
+    "realistic.boardOutline.stroke": "#1a5c2a",
+    "realistic.boardOutline.strokeWidthMm": 0.12,
+    "highlight.copper.front.fill": "#ff8a00",
+    "highlight.copper.front.opacity": 0.85,
+    "highlight.copper.front.stroke": "none",
+    "highlight.copper.front.strokeWidthMm": 0,
+    "highlight.copper.back.fill": "#5aa7ff",
+    "highlight.copper.back.opacity": 0.85,
+    "highlight.copper.back.stroke": "none",
+    "highlight.copper.back.strokeWidthMm": 0,
+    "highlight.copper.inner.default.fill": "#ffe066",
+    "highlight.copper.inner.default.opacity": 0.85,
+    "highlight.copper.inner.default.stroke": "none",
+    "highlight.copper.inner.default.strokeWidthMm": 0,
+    "annotation.label.fill": "#fff",
+    "annotation.label.textHalo": "#1a5c2a",
+    "annotation.label.textHaloWidthPx": 3,
+    "annotation.label.fontWeight": 650,
+    "annotation.connector.stroke": "#ffffffcc",
+    "annotation.connector.strokeWidthPx": 3
+  }
 }

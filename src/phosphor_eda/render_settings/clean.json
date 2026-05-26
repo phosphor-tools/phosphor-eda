@@ -1,51 +1,40 @@
 {
-  "extends": "phosphor:review",
-  "include": {
-    "vias": "hidden",
+  "renderMode": "realistic",
+  "source": {
     "layers": [
-      {
-        "role": "copper",
-        "side": "active",
-        "objects": {
-          "pads": "hidden",
-          "traces": "hidden",
-          "zones": "hidden"
-        }
-      },
-      {
-        "role": "silkscreen",
-        "side": "active",
-        "objects": "visible"
-      },
-      {
-        "role": "fabrication",
-        "side": "active",
-        "objects": "never"
-      }
-    ]
+      { "match": { "function": "copper" } },
+      { "match": { "function": "solder_mask" } },
+      { "match": { "function": "silkscreen" } },
+      { "match": { "function": "edge" } }
+    ],
+    "excludeComponents": ["R", "C", "L", "TP"]
   },
-  "highlight_behavior": {
-    "overlay": true,
-    "dim_unhighlighted": false
-  },
-  "exclude_component_prefixes": ["R", "C", "L", "TP"],
-  "style_rules": [
-    {
-      "match": { "object": "board_material" },
-      "style": { "fill": "#1a5c2a", "stroke": "none" }
-    },
-    {
-      "match": { "role": "copper", "object": "pad" },
-      "style": { "fill": "#31443a", "stroke": "none", "opacity": 0.6 }
-    },
-    {
-      "match": { "annotation": "label" },
-      "style": {
-        "fill": "#fff",
-        "text_halo": "#1a5c2a",
-        "text_halo_width_px": 4,
-        "font_weight": 650
-      }
-    }
-  ]
+  "tokens": {
+    "realistic.substrate.fill": "#1a5c2a",
+    "realistic.solderMask.fill": "#1f7a3a",
+    "realistic.coveredCopper.fill": "#31443a",
+    "realistic.coveredCopper.opacity": 0.55,
+    "realistic.exposedCopper.fill": "#b87333",
+    "realistic.exposedCopper.opacity": 0.85,
+    "realistic.silkscreen.fill": "#ffffff",
+    "realistic.boardOutline.fill": "none",
+    "realistic.boardOutline.stroke": "#1a5c2a",
+    "realistic.boardOutline.strokeWidthMm": 0.12,
+    "highlight.copper.front.fill": "#ff8a00",
+    "highlight.copper.front.opacity": 0.85,
+    "highlight.copper.front.stroke": "none",
+    "highlight.copper.front.strokeWidthMm": 0,
+    "highlight.copper.back.fill": "#5aa7ff",
+    "highlight.copper.back.opacity": 0.85,
+    "highlight.copper.back.stroke": "none",
+    "highlight.copper.back.strokeWidthMm": 0,
+    "highlight.copper.inner.default.fill": "#ffe066",
+    "highlight.copper.inner.default.opacity": 0.85,
+    "highlight.copper.inner.default.stroke": "none",
+    "highlight.copper.inner.default.strokeWidthMm": 0,
+    "annotation.label.fill": "#fff",
+    "annotation.label.textHalo": "#1a5c2a",
+    "annotation.label.textHaloWidthPx": 4,
+    "annotation.label.fontWeight": 650
+  }
 }

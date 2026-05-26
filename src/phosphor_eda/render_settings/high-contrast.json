@@ -1,66 +1,43 @@
 {
-  "include": {
-    "board_outline": "visible",
-    "drills": "visible",
-    "vias": "visible",
+  "renderMode": "cad",
+  "source": {
     "layers": [
-      {
-        "role": "copper",
-        "side": "active",
-        "objects": {
-          "pads": "visible",
-          "traces": "visible",
-          "zones": "visible"
-        }
-      },
-      {
-        "role": "silkscreen",
-        "side": "active",
-        "objects": "visible"
-      },
-      {
-        "role": "fabrication",
-        "side": "active",
-        "objects": "visible"
-      }
+      { "match": { "function": "copper" } },
+      { "match": { "function": "silkscreen" } },
+      { "match": { "function": "fab" } },
+      { "match": { "function": "mechanical" } },
+      { "match": { "function": "edge" } }
     ]
   },
-  "style_rules": [
-    {
-      "match": { "object": "board_outline" },
-      "style": {
-        "fill": "transparent",
-        "stroke": "#444",
-        "stroke_width_mm": 0.12
-      }
-    },
-    {
-      "match": { "role": "copper", "object": "trace" },
-      "style": { "stroke": "#222" }
-    },
-    {
-      "match": { "role": "copper", "object": "trace_arc" },
-      "style": { "stroke": "#222" }
-    },
-    {
-      "match": { "role": "copper", "object": "pad" },
-      "style": {
-        "fill": "#111",
-        "stroke": "#fff",
-        "stroke_width_mm": 0.03
-      }
-    },
-    {
-      "match": { "role": "copper", "object": "via" },
-      "style": {
-        "fill": "#111"
-      }
-    },
-    {
-      "match": { "role": "copper", "object": "zone" },
-      "style": {
-        "fill": "#777"
-      }
-    }
-  ]
+  "tokens": {
+    "cad.copper.front.fill": "#111111",
+    "cad.copper.back.fill": "#111111",
+    "cad.copper.inner.default.fill": "#444444",
+    "cad.silkscreen.front.fill": "#000000",
+    "cad.silkscreen.back.fill": "#000000",
+    "cad.fabrication.front.fill": "#666666",
+    "cad.fabrication.back.fill": "#666666",
+    "cad.mechanical.fill": "#777777",
+    "cad.edge.fill": "none",
+    "cad.edge.stroke": "#444444",
+    "cad.edge.strokeWidthMm": 0.12,
+    "highlight.copper.front.fill": "#000000",
+    "highlight.copper.front.opacity": 1,
+    "highlight.copper.front.stroke": "none",
+    "highlight.copper.front.strokeWidthMm": 0,
+    "highlight.copper.back.fill": "#000000",
+    "highlight.copper.back.opacity": 1,
+    "highlight.copper.back.stroke": "none",
+    "highlight.copper.back.strokeWidthMm": 0,
+    "highlight.copper.inner.default.fill": "#000000",
+    "highlight.copper.inner.default.opacity": 1,
+    "highlight.copper.inner.default.stroke": "none",
+    "highlight.copper.inner.default.strokeWidthMm": 0,
+    "annotation.label.fill": "#000",
+    "annotation.label.textHalo": "#fff",
+    "annotation.label.textHaloWidthPx": 4,
+    "annotation.label.fontWeight": 650,
+    "annotation.connector.stroke": "#333",
+    "annotation.connector.strokeWidthPx": 3
+  }
 }

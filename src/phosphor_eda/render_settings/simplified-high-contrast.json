@@ -1,52 +1,46 @@
 {
-  "extends": "phosphor:high-contrast",
-  "font_size_px": 40,
-  "include": {
-    "vias": "when-highlighted",
+  "renderMode": "cad",
+  "fontSizePx": 40,
+  "source": {
     "layers": [
-      {
-        "role": "copper",
-        "side": "active",
-        "objects": {
-          "pads": "visible",
-          "traces": "when-highlighted",
-          "zones": "hidden"
-        }
-      },
-      {
-        "role": "silkscreen",
-        "side": "active",
-        "objects": "visible"
-      },
-      {
-        "role": "fabrication",
-        "side": "active",
-        "objects": "visible"
-      }
+      { "match": { "function": "copper" } },
+      { "match": { "function": "silkscreen" } },
+      { "match": { "function": "fab" } },
+      { "match": { "function": "mechanical" } },
+      { "match": { "function": "edge" } }
     ]
   },
-  "highlight_behavior": {
-    "overlay": true,
-    "dim_unhighlighted": false
-  },
-  "style_rules": [
-    {
-      "match": { "annotation": "label" },
-      "style": {
-        "fill": "#000",
-        "text_halo": "#fff",
-        "text_halo_width_px": 4,
-        "font_weight": 650,
-        "pill_visible": false
-      }
-    },
-    {
-      "match": { "annotation": "connector" },
-      "style": {
-        "stroke": "#333",
-        "stroke_width_px": 3,
-        "dot_visible": false
-      }
-    }
-  ]
+  "tokens": {
+    "cad.copper.front.fill": "#111111",
+    "cad.copper.back.fill": "#111111",
+    "cad.copper.inner.default.fill": "#444444",
+    "cad.silkscreen.front.fill": "#000000",
+    "cad.silkscreen.back.fill": "#000000",
+    "cad.fabrication.front.fill": "#666666",
+    "cad.fabrication.back.fill": "#666666",
+    "cad.mechanical.fill": "#777777",
+    "cad.edge.fill": "none",
+    "cad.edge.stroke": "#444444",
+    "cad.edge.strokeWidthMm": 0.12,
+    "highlight.copper.front.fill": "#000000",
+    "highlight.copper.front.opacity": 1,
+    "highlight.copper.front.stroke": "none",
+    "highlight.copper.front.strokeWidthMm": 0,
+    "highlight.copper.back.fill": "#000000",
+    "highlight.copper.back.opacity": 1,
+    "highlight.copper.back.stroke": "none",
+    "highlight.copper.back.strokeWidthMm": 0,
+    "highlight.copper.inner.default.fill": "#000000",
+    "highlight.copper.inner.default.opacity": 1,
+    "highlight.copper.inner.default.stroke": "none",
+    "highlight.copper.inner.default.strokeWidthMm": 0,
+    "annotation.label.fill": "#000",
+    "annotation.label.textHalo": "#fff",
+    "annotation.label.textHaloWidthPx": 4,
+    "annotation.label.fontWeight": 650,
+    "annotation.label.pillVisible": false,
+    "annotation.connector.stroke": "#333",
+    "annotation.connector.strokeWidthPx": 3,
+    "annotation.connector.dotVisible": false
+  }
 }

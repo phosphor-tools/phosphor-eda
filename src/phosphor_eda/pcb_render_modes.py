@@ -7,7 +7,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from shapely import GeometryCollection
+from shapely.errors import GEOSException
 from shapely.ops import unary_union
+from shapely.validation import make_valid
 
 from phosphor_eda.pcb import PcbVia
 from phosphor_eda.pcb_render_artwork import (
@@ -604,7 +606,10 @@ def _union_or_empty(geometries: Iterable[BaseGeometry]) -> BaseGeometry:
         return GeometryCollection()
     if len(geometry_tuple) == 1:
         return geometry_tuple[0]
-    return unary_union(geometry_tuple)
+    try:
+        return unary_union(geometry_tuple)
+    except GEOSException:
+        return unary_union(tuple(make_valid(geometry) for geometry in geometry_tuple))
 
 
 def _derived_layer_id(role: VisualRole) -> str:

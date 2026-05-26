@@ -329,16 +329,35 @@ def _make_plan_board() -> Pcb:
     )
 
 
-def _print_callout_settings():
+def _sparse_legacy_callout_settings():
     return load_render_settings_json(
-        '{"extends": "phosphor:print-callout", "highlights": [{"net": "/SWDIO_TMS"}]}'
+        json.dumps(
+            {
+                "include": {
+                    "vias": "when-highlighted",
+                    "layers": [
+                        {
+                            "role": "copper",
+                            "side": "any",
+                            "objects": {
+                                "pads": "visible",
+                                "traces": "when-highlighted",
+                                "trace_arcs": "when-highlighted",
+                                "zones": "when-highlighted",
+                            },
+                        }
+                    ],
+                },
+                "highlights": [{"net": "/SWDIO_TMS"}],
+            }
+        )
     )
 
 
-def test_build_render_plan_print_callout_keeps_sparse_base_and_clip() -> None:
+def test_legacy_include_policy_keeps_sparse_base_and_clip() -> None:
     plan = build_render_plan(
         _make_plan_board(),
-        settings=_print_callout_settings(),
+        settings=_sparse_legacy_callout_settings(),
         side="front",
         width_px=1000,
     )
@@ -356,9 +375,28 @@ def test_build_render_plan_print_callout_keeps_sparse_base_and_clip() -> None:
     assert plan.height_px == 666
 
 
-def test_print_callout_plan_omits_unhighlighted_traces_and_zones() -> None:
+def test_legacy_include_policy_omits_unhighlighted_traces_and_zones() -> None:
     board = parse_kicad_pcb(FIXTURE)
-    settings = load_render_settings_json('{"extends": "phosphor:print-callout"}')
+    settings = load_render_settings_json(
+        json.dumps(
+            {
+                "include": {
+                    "vias": "when-highlighted",
+                    "layers": [
+                        {
+                            "role": "copper",
+                            "side": "any",
+                            "objects": {
+                                "pads": "visible",
+                                "traces": "when-highlighted",
+                                "zones": "when-highlighted",
+                            },
+                        }
+                    ],
+                }
+            }
+        )
+    )
 
     plan = build_render_plan(board, settings=settings, side="front", width_px=1200)
 
@@ -370,9 +408,23 @@ def test_print_callout_plan_omits_unhighlighted_traces_and_zones() -> None:
     assert " A " in plan.clip.board_path_d
 
 
-def test_print_callout_plan_emits_highlighted_trace_overlay() -> None:
+def test_legacy_include_policy_emits_highlighted_trace_overlay() -> None:
     board = parse_kicad_pcb(FIXTURE)
-    settings = load_render_settings_json('{"extends": "phosphor:print-callout"}')
+    settings = load_render_settings_json(
+        json.dumps(
+            {
+                "include": {
+                    "layers": [
+                        {
+                            "role": "copper",
+                            "side": "any",
+                            "objects": {"traces": "when-highlighted"},
+                        }
+                    ]
+                }
+            }
+        )
+    )
     settings.highlights.append(HighlightSpec(net="/SWDIO_TMS", color="#c00000"))
 
     plan = build_render_plan(board, settings=settings, side="front", width_px=1200)
@@ -381,10 +433,10 @@ def test_print_callout_plan_emits_highlighted_trace_overlay() -> None:
     assert all(item.reason is InclusionReason.HIGHLIGHT for item in plan.overlay)
 
 
-def test_build_render_plan_print_callout_overlays_highlighted_net_geometry() -> None:
+def test_legacy_include_policy_overlays_highlighted_net_geometry() -> None:
     plan = build_render_plan(
         _make_plan_board(),
-        settings=_print_callout_settings(),
+        settings=_sparse_legacy_callout_settings(),
         side="front",
         width_px=1000,
     )
@@ -405,7 +457,10 @@ def test_build_render_plan_print_callout_overlays_highlighted_net_geometry() -> 
 
 
 def test_build_render_plan_ignores_malformed_pad_highlight() -> None:
-    settings = load_render_settings_json('{"extends": "phosphor:print-callout"}')
+    settings = load_render_settings_json(
+        '{"include": {"layers": [{"role": "copper", "side": "any", '
+        '"objects": {"pads": "when-highlighted"}}]}}'
+    )
     settings.highlights.append(HighlightSpec(pad="U1"))
 
     plan = build_render_plan(_make_plan_board(), settings=settings, side="front", width_px=1000)
@@ -416,8 +471,11 @@ def test_build_render_plan_ignores_malformed_pad_highlight() -> None:
     )
 
 
-def test_build_render_plan_print_includes_vias_and_classifies_zone_sources() -> None:
-    settings = load_render_settings_json('{"extends": "phosphor:print"}')
+def test_build_render_plan_includes_vias_and_classifies_zone_sources() -> None:
+    settings = load_render_settings_json(
+        '{"include": {"vias": "visible", "layers": [{"role": "copper", "side": "any", '
+        '"objects": {"zones": "visible"}}]}}'
+    )
 
     plan = build_render_plan(_make_plan_board(), settings=settings, side="front", width_px=1000)
 
@@ -459,7 +517,7 @@ def test_build_render_plan_includes_outline_arcs_in_clip_path() -> None:
     board.outline_arcs = [
         PcbArc(10.0, 0.0, 12.0, 2.5, 10.0, 5.0, "Edge.Cuts", 0.1),
     ]
-    settings = load_render_settings_json('{"extends": "phosphor:print"}')
+    settings = load_render_settings_json('{"include": {"board_outline": "visible"}}')
 
     plan = build_render_plan(board, settings=settings, side="front", width_px=1000)
 
@@ -508,7 +566,8 @@ def test_back_side_plan_uses_rendered_view_x_coordinates() -> None:
 def test_style_rule_can_target_specific_pad() -> None:
     board = parse_kicad_pcb(FIXTURE)
     settings = load_render_settings_json(
-        '{"extends": "phosphor:print-callout", '
+        '{"include": {"layers": [{"role": "copper", "side": "any", '
+        '"objects": {"pads": "visible"}}]}, '
         '"style_rules": ['
         '{"match": {"pad": "TP3.1"}, '
         '"style": {"fill": "#123456", "pad_expansion_mm": 0.25}}'
