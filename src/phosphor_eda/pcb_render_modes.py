@@ -131,6 +131,8 @@ def build_cad_layers(
                     group,
                     board,
                     drill_cache=drill_cache,
+                    profiler=profiler,
+                    profile_prefix="cad",
                 )
         if geometry.is_empty:
             continue
@@ -389,6 +391,8 @@ def build_highlight_layers(
                         layer_group,
                         board,
                         drill_cache=drill_cache,
+                        profiler=profiler,
+                        profile_prefix="highlight",
                     )
             if geometry.is_empty:
                 continue
@@ -708,18 +712,58 @@ def _resolved_group_geometry(
     board: BaseGeometry,
     *,
     drill_cache: dict[str, BaseGeometry] | None = None,
+    profiler: RenderProfiler | None = None,
+    profile_prefix: str = "",
 ) -> BaseGeometry:
     layer = group[0].layer
     if layer.role == "edge":
         return _outline_geometry(board)
 
-    geometry = _union_or_empty(item.artwork.geometry for item in group)
+    if profiler is None:
+        geometry = _union_or_empty(item.artwork.geometry for item in group)
+    else:
+        with profiler.span(
+            f"{profile_prefix}.resolve_group.union",
+            layer=layer.name,
+            function=layer.role,
+            side=layer.side,
+            items=len(group),
+        ):
+            geometry = _union_or_empty(item.artwork.geometry for item in group)
     if not board.is_empty:
-        geometry = _intersection(geometry, board)
+        if profiler is None:
+            geometry = _intersection(geometry, board)
+        else:
+            with profiler.span(
+                f"{profile_prefix}.resolve_group.board_intersection",
+                layer=layer.name,
+                function=layer.role,
+                side=layer.side,
+            ):
+                geometry = _intersection(geometry, board)
     if layer.role == "copper":
-        drills = _drill_geometry_for_layer(store, layer.name, drill_cache=drill_cache)
+        if profiler is None:
+            drills = _drill_geometry_for_layer(store, layer.name, drill_cache=drill_cache)
+        else:
+            with profiler.span(
+                f"{profile_prefix}.resolve_group.drills",
+                layer=layer.name,
+                function=layer.role,
+                side=layer.side,
+                cached=drill_cache is not None and layer.name in drill_cache,
+            ):
+                drills = _drill_geometry_for_layer(store, layer.name, drill_cache=drill_cache)
         if not drills.is_empty:
-            geometry = _difference(geometry, drills)
+            if profiler is None:
+                geometry = _difference(geometry, drills)
+            else:
+                with profiler.span(
+                    f"{profile_prefix}.resolve_group.drill_difference",
+                    layer=layer.name,
+                    function=layer.role,
+                    side=layer.side,
+                ):
+                    geometry = _difference(geometry, drills)
     return geometry
 
 
