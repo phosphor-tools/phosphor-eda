@@ -719,6 +719,105 @@ def test_render_mode_union_can_prefer_disjoint_subset_union(
     assert calls == [True]
 
 
+def test_cad_layer_processing_keeps_union_strategy_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "pad-1",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=1.0, y=1.0),
+            ),
+            _renderable(
+                "pad-2",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=3.0, y=1.0),
+            ),
+        )
+    )
+    calls: list[bool] = []
+
+    def fake_robust_union(
+        geometries: tuple[object, ...],
+        *,
+        prefer_disjoint_subsets: bool = False,
+    ) -> Polygon:
+        calls.append(prefer_disjoint_subsets)
+        assert len(geometries) == 2
+        return Polygon([(0.5, 0.5), (3.5, 0.5), (3.5, 1.5), (0.5, 1.5)])
+
+    monkeypatch.setattr(render_modes, "robust_union", fake_robust_union)
+
+    _ = build_cad_layers(
+        store,
+        _settings(
+            rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
+            tokens={"cad.copper.front.fill": "#d17a22"},
+        ),
+        warn=lambda _message: None,
+    )
+
+    assert calls[0] is False
+
+
+def test_realistic_layer_processing_prefers_disjoint_subset_union(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "pad-1",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=1.0, y=1.0),
+            ),
+            _renderable(
+                "pad-2",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=3.0, y=1.0),
+            ),
+        )
+    )
+    calls: list[bool] = []
+
+    def fake_robust_union(
+        geometries: tuple[object, ...],
+        *,
+        prefer_disjoint_subsets: bool = False,
+    ) -> Polygon:
+        calls.append(prefer_disjoint_subsets)
+        assert len(geometries) == 2
+        return Polygon([(0.5, 0.5), (3.5, 0.5), (3.5, 1.5), (0.5, 1.5)])
+
+    monkeypatch.setattr(render_modes, "robust_union", fake_robust_union)
+
+    _ = build_realistic_layers(
+        store,
+        _settings(
+            side="front",
+            rules=(LayerSelectionRule(match=LayerMatch(function="copper", side="front")),),
+            tokens=_realistic_tokens(),
+        ),
+        warn=lambda _message: None,
+    )
+
+    assert calls[0] is True
+
+
 def test_highlight_layers_cache_drill_geometry_per_layer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

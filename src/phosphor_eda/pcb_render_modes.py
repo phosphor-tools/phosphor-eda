@@ -50,6 +50,15 @@ class _GroupedArtwork:
 
 
 @dataclass(frozen=True)
+class _LayerProcessingProfile:
+    event_prefix: str
+    layer: str
+    function: str
+    side: str
+    items: int
+
+
+@dataclass(frozen=True)
 class HighlightGroup:
     target: str
     layers: tuple[DerivedLayer, ...]
@@ -211,52 +220,67 @@ def build_realistic_layers(
         profiler.metric("realistic.copper_artwork", count=len(copper_artwork))
         profiler.metric("realistic.silkscreen_artwork", count=len(silkscreen_artwork))
     if profiler is None:
-        mask_openings = _clip_to_board(
-            _union_or_empty(
-                (item.geometry for item in mask_artwork),
-                prefer_disjoint_subsets=True,
-            ),
+        mask_openings = _process_artwork_layer(
+            store,
+            (item.geometry for item in mask_artwork),
             board,
+            prefer_disjoint_subsets=True,
         )
-        outer_copper = _clip_to_board(
-            _union_or_empty(
-                (item.geometry for item in copper_artwork),
-                prefer_disjoint_subsets=True,
-            ),
+        outer_copper = _process_artwork_layer(
+            store,
+            (item.geometry for item in copper_artwork),
             board,
+            prefer_disjoint_subsets=True,
         )
-        silkscreen = _clip_to_board(
-            _union_or_empty(
-                (item.geometry for item in silkscreen_artwork),
-                prefer_disjoint_subsets=True,
-            ),
+        silkscreen = _process_artwork_layer(
+            store,
+            (item.geometry for item in silkscreen_artwork),
             board,
+            prefer_disjoint_subsets=True,
         )
     else:
-        with profiler.span("realistic.union_mask_openings", items=len(mask_artwork)):
-            mask_openings = _clip_to_board(
-                _union_or_empty(
-                    (item.geometry for item in mask_artwork),
-                    prefer_disjoint_subsets=True,
-                ),
-                board,
-            )
-        with profiler.span("realistic.union_outer_copper", items=len(copper_artwork)):
-            outer_copper = _clip_to_board(
-                _union_or_empty(
-                    (item.geometry for item in copper_artwork),
-                    prefer_disjoint_subsets=True,
-                ),
-                board,
-            )
-        with profiler.span("realistic.union_silkscreen", items=len(silkscreen_artwork)):
-            silkscreen = _clip_to_board(
-                _union_or_empty(
-                    (item.geometry for item in silkscreen_artwork),
-                    prefer_disjoint_subsets=True,
-                ),
-                board,
-            )
+        mask_openings = _process_artwork_layer(
+            store,
+            (item.geometry for item in mask_artwork),
+            board,
+            prefer_disjoint_subsets=True,
+            profiler=profiler,
+            profile=_LayerProcessingProfile(
+                event_prefix="realistic.mask_openings",
+                layer="mask",
+                function="mask",
+                side=side,
+                items=len(mask_artwork),
+            ),
+        )
+        outer_copper = _process_artwork_layer(
+            store,
+            (item.geometry for item in copper_artwork),
+            board,
+            prefer_disjoint_subsets=True,
+            profiler=profiler,
+            profile=_LayerProcessingProfile(
+                event_prefix="realistic.outer_copper",
+                layer="copper",
+                function="copper",
+                side=side,
+                items=len(copper_artwork),
+            ),
+        )
+        silkscreen = _process_artwork_layer(
+            store,
+            (item.geometry for item in silkscreen_artwork),
+            board,
+            prefer_disjoint_subsets=True,
+            profiler=profiler,
+            profile=_LayerProcessingProfile(
+                event_prefix="realistic.silkscreen",
+                layer="silkscreen",
+                function="silkscreen",
+                side=side,
+                items=len(silkscreen_artwork),
+            ),
+        )
 
     layer_inputs = {
         "substrate": _RealisticLayerInput(
@@ -719,49 +743,94 @@ def _resolved_group_geometry(
     if layer.role == "edge":
         return _outline_geometry(board)
 
-    if profiler is None:
-        geometry = _union_or_empty(item.artwork.geometry for item in group)
+    return _process_artwork_layer(
+        store,
+        (item.artwork.geometry for item in group),
+        board,
+        layer_name=layer.name,
+        subtract_drills=layer.role == "copper",
+        drill_cache=drill_cache,
+        # Dense CAD copper is drill-subtracted after union; disjoint subset unions
+        # made the subsequent GEOS differences slower on large boards.
+        prefer_disjoint_subsets=False,
+        profiler=profiler,
+        profile=(
+            _LayerProcessingProfile(
+                event_prefix=f"{profile_prefix}.resolve_group",
+                layer=layer.name,
+                function=layer.role,
+                side=layer.side,
+                items=len(group),
+            )
+            if profiler is not None
+            else None
+        ),
+    )
+
+
+def _process_artwork_layer(
+    store: PcbGeometryStore,
+    geometries: Iterable[BaseGeometry],
+    board: BaseGeometry,
+    *,
+    layer_name: str | None = None,
+    subtract_drills: bool = False,
+    drill_cache: dict[str, BaseGeometry] | None = None,
+    prefer_disjoint_subsets: bool = True,
+    profiler: RenderProfiler | None = None,
+    profile: _LayerProcessingProfile | None = None,
+) -> BaseGeometry:
+    geometry_tuple = tuple(geometries)
+    profile_data = (
+        {
+            "layer": profile.layer,
+            "function": profile.function,
+            "side": profile.side,
+            "items": profile.items,
+        }
+        if profile is not None
+        else {}
+    )
+
+    if profiler is None or profile is None:
+        geometry = _union_or_empty(
+            geometry_tuple,
+            prefer_disjoint_subsets=prefer_disjoint_subsets,
+        )
     else:
-        with profiler.span(
-            f"{profile_prefix}.resolve_group.union",
-            layer=layer.name,
-            function=layer.role,
-            side=layer.side,
-            items=len(group),
-        ):
-            geometry = _union_or_empty(item.artwork.geometry for item in group)
+        with profiler.span(f"{profile.event_prefix}.union", **profile_data):
+            geometry = _union_or_empty(
+                geometry_tuple,
+                prefer_disjoint_subsets=prefer_disjoint_subsets,
+            )
+
     if not board.is_empty:
-        if profiler is None:
+        if profiler is None or profile is None:
             geometry = _intersection(geometry, board)
         else:
             with profiler.span(
-                f"{profile_prefix}.resolve_group.board_intersection",
-                layer=layer.name,
-                function=layer.role,
-                side=layer.side,
+                f"{profile.event_prefix}.board_intersection",
+                **profile_data,
             ):
                 geometry = _intersection(geometry, board)
-    if layer.role == "copper":
-        if profiler is None:
-            drills = _drill_geometry_for_layer(store, layer.name, drill_cache=drill_cache)
+
+    if subtract_drills and layer_name is not None:
+        if profiler is None or profile is None:
+            drills = _drill_geometry_for_layer(store, layer_name, drill_cache=drill_cache)
         else:
             with profiler.span(
-                f"{profile_prefix}.resolve_group.drills",
-                layer=layer.name,
-                function=layer.role,
-                side=layer.side,
-                cached=drill_cache is not None and layer.name in drill_cache,
+                f"{profile.event_prefix}.drills",
+                **profile_data,
+                cached=drill_cache is not None and layer_name in drill_cache,
             ):
-                drills = _drill_geometry_for_layer(store, layer.name, drill_cache=drill_cache)
+                drills = _drill_geometry_for_layer(store, layer_name, drill_cache=drill_cache)
         if not drills.is_empty:
-            if profiler is None:
+            if profiler is None or profile is None:
                 geometry = _difference(geometry, drills)
             else:
                 with profiler.span(
-                    f"{profile_prefix}.resolve_group.drill_difference",
-                    layer=layer.name,
-                    function=layer.role,
-                    side=layer.side,
+                    f"{profile.event_prefix}.drill_difference",
+                    **profile_data,
                 ):
                     geometry = _difference(geometry, drills)
     return geometry
@@ -803,12 +872,6 @@ def _drill_geometry_for_layer(
     if layer_name not in drill_cache:
         drill_cache[layer_name] = drill_geometry_for_layer(store, layer_name=layer_name)
     return drill_cache[layer_name]
-
-
-def _clip_to_board(geometry: BaseGeometry, board: BaseGeometry) -> BaseGeometry:
-    if geometry.is_empty or board.is_empty:
-        return geometry
-    return _intersection(geometry, board)
 
 
 def _difference(geometry: BaseGeometry, subtractive: BaseGeometry) -> BaseGeometry:
