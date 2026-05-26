@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from shapely import GeometryCollection, Point, Polygon
 
+import phosphor_eda.pcb_render_modes as render_modes
 from phosphor_eda.kicad.pcb_parser import parse_kicad_pcb
 from phosphor_eda.pcb import PcbArc, PcbLine, PcbPad, PcbText, PcbVia, PcbZone
 from phosphor_eda.pcb_render_artwork import DerivedLayer, geometry_to_artwork
@@ -31,6 +33,9 @@ from phosphor_eda.pcb_render_settings import (
     SourceSelection,
 )
 from phosphor_eda.pcb_render_tokens import ResolvedStyle
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def test_cad_front_copper_artwork_collapses_to_one_union_layer() -> None:
@@ -689,6 +694,86 @@ def test_base_layers_dim_only_when_dimming_enabled_and_highlights_exist() -> Non
 
     assert without_highlights[0].style == ResolvedStyle(fill="#d17a22")
     assert with_highlights[0].style == ResolvedStyle(fill="#6f5b48")
+
+
+def test_render_mode_union_can_prefer_disjoint_subset_union(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[bool] = []
+
+    def fake_robust_union(
+        geometries: tuple[object, ...],
+        *,
+        prefer_disjoint_subsets: bool = False,
+    ) -> GeometryCollection:
+        calls.append(prefer_disjoint_subsets)
+        return GeometryCollection(geometries)
+
+    monkeypatch.setattr(render_modes, "robust_union", fake_robust_union)
+
+    _ = render_modes._union_or_empty(
+        (Point(1, 1), Point(2, 2)),
+        prefer_disjoint_subsets=True,
+    )
+
+    assert calls == [True]
+
+
+def test_highlight_layers_cache_drill_geometry_per_layer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "pad-1",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=1.0, y=1.0, net_name="SIG1"),
+                tags=GeometryTags(source_collection="pads", net_name="SIG1"),
+            ),
+            _renderable(
+                "pad-2",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=3.0, y=1.0, net_name="SIG2"),
+                tags=GeometryTags(source_collection="pads", net_name="SIG2"),
+            ),
+        )
+    )
+    requested_layers: list[str | None] = []
+
+    def fake_drill_geometry_for_layer(
+        _store: PcbGeometryStore,
+        *,
+        layer_name: str | None = None,
+    ) -> GeometryCollection:
+        requested_layers.append(layer_name)
+        return GeometryCollection()
+
+    monkeypatch.setattr(
+        render_modes,
+        "drill_geometry_for_layer",
+        fake_drill_geometry_for_layer,
+    )
+
+    _ = build_highlight_layers(
+        store,
+        _settings(
+            rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
+            tokens={
+                "highlight.copper.front.fill": "#ff0000",
+            },
+            highlights=(HighlightSpec(net="SIG1"), HighlightSpec(net="SIG2")),
+        ),
+        warn=lambda _message: None,
+    )
+
+    assert requested_layers == ["F.Cu"]
 
 
 def _settings(

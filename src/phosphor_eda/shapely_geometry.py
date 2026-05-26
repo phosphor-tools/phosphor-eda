@@ -35,13 +35,30 @@ def normalize_geometry(geometry: BaseGeometry) -> BaseGeometry:
         return repaired
 
 
-def robust_union(geometries: Iterable[BaseGeometry]) -> BaseGeometry:
+def robust_union(
+    geometries: Iterable[BaseGeometry],
+    *,
+    prefer_disjoint_subsets: bool = False,
+) -> BaseGeometry:
     """Union geometries after applying the PCB topology grid."""
     geometry_tuple = tuple(geometry for geometry in geometries if not geometry.is_empty)
     if not geometry_tuple:
         return GeometryCollection()
     if len(geometry_tuple) == 1:
         return normalize_geometry(geometry_tuple[0])
+    if prefer_disjoint_subsets:
+        try:
+            valid_geometries = tuple(
+                geometry if geometry.is_valid else make_valid(geometry)
+                for geometry in geometry_tuple
+            )
+            return normalize_geometry(
+                shapely.disjoint_subset_union_all(  # pyright: ignore[reportUnknownMemberType]
+                    valid_geometries
+                )
+            )
+        except GEOSException:
+            pass
     try:
         return normalize_geometry(unary_union(tuple(normalize_geometry(g) for g in geometry_tuple)))
     except GEOSException:

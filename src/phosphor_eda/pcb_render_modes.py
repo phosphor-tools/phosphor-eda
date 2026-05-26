@@ -103,6 +103,7 @@ def build_cad_layers(
     board = board_outline_geometry(store)
     dimmed = _should_dim_base_layers(store, settings)
     warned_missing_dimmed_tokens: set[str] = set()
+    drill_cache: dict[str, BaseGeometry] = {}
 
     groups: dict[_LayerGroupKey, list[_GroupedArtwork]] = defaultdict(list)
     for item in grouped_artwork:
@@ -111,7 +112,12 @@ def build_cad_layers(
     layers: list[DerivedLayer] = []
     for key, group in sorted(groups.items(), key=_group_sort_key):
         if profiler is None:
-            geometry = _resolved_group_geometry(store, group, board)
+            geometry = _resolved_group_geometry(
+                store,
+                group,
+                board,
+                drill_cache=drill_cache,
+            )
         else:
             with profiler.span(
                 "cad.resolve_group",
@@ -120,7 +126,12 @@ def build_cad_layers(
                 side=key.side,
                 items=len(group),
             ):
-                geometry = _resolved_group_geometry(store, group, board)
+                geometry = _resolved_group_geometry(
+                    store,
+                    group,
+                    board,
+                    drill_cache=drill_cache,
+                )
         if geometry.is_empty:
             continue
         role = VisualRole(
@@ -199,31 +210,49 @@ def build_realistic_layers(
         profiler.metric("realistic.silkscreen_artwork", count=len(silkscreen_artwork))
     if profiler is None:
         mask_openings = _clip_to_board(
-            _union_or_empty(item.geometry for item in mask_artwork),
+            _union_or_empty(
+                (item.geometry for item in mask_artwork),
+                prefer_disjoint_subsets=True,
+            ),
             board,
         )
         outer_copper = _clip_to_board(
-            _union_or_empty(item.geometry for item in copper_artwork),
+            _union_or_empty(
+                (item.geometry for item in copper_artwork),
+                prefer_disjoint_subsets=True,
+            ),
             board,
         )
         silkscreen = _clip_to_board(
-            _union_or_empty(item.geometry for item in silkscreen_artwork),
+            _union_or_empty(
+                (item.geometry for item in silkscreen_artwork),
+                prefer_disjoint_subsets=True,
+            ),
             board,
         )
     else:
         with profiler.span("realistic.union_mask_openings", items=len(mask_artwork)):
             mask_openings = _clip_to_board(
-                _union_or_empty(item.geometry for item in mask_artwork),
+                _union_or_empty(
+                    (item.geometry for item in mask_artwork),
+                    prefer_disjoint_subsets=True,
+                ),
                 board,
             )
         with profiler.span("realistic.union_outer_copper", items=len(copper_artwork)):
             outer_copper = _clip_to_board(
-                _union_or_empty(item.geometry for item in copper_artwork),
+                _union_or_empty(
+                    (item.geometry for item in copper_artwork),
+                    prefer_disjoint_subsets=True,
+                ),
                 board,
             )
         with profiler.span("realistic.union_silkscreen", items=len(silkscreen_artwork)):
             silkscreen = _clip_to_board(
-                _union_or_empty(item.geometry for item in silkscreen_artwork),
+                _union_or_empty(
+                    (item.geometry for item in silkscreen_artwork),
+                    prefer_disjoint_subsets=True,
+                ),
                 board,
             )
 
@@ -308,6 +337,7 @@ def build_highlight_layers(
     """Build derived highlight overlay groups from selected raw source geometry."""
     board = board_outline_geometry(store)
     groups: list[HighlightGroup] = []
+    drill_cache: dict[str, BaseGeometry] = {}
 
     for highlight in settings.highlights:
         selected_items = _selected_highlight_items(store, settings, highlight)
@@ -339,7 +369,12 @@ def build_highlight_layers(
         layers: list[DerivedLayer] = []
         for key, layer_group in sorted(by_layer.items(), key=_group_sort_key):
             if profiler is None:
-                geometry = _resolved_group_geometry(store, layer_group, board)
+                geometry = _resolved_group_geometry(
+                    store,
+                    layer_group,
+                    board,
+                    drill_cache=drill_cache,
+                )
             else:
                 with profiler.span(
                     "highlight.resolve_group",
@@ -349,7 +384,12 @@ def build_highlight_layers(
                     side=key.side,
                     items=len(layer_group),
                 ):
-                    geometry = _resolved_group_geometry(store, layer_group, board)
+                    geometry = _resolved_group_geometry(
+                        store,
+                        layer_group,
+                        board,
+                        drill_cache=drill_cache,
+                    )
             if geometry.is_empty:
                 continue
             role = VisualRole(
@@ -666,6 +706,8 @@ def _resolved_group_geometry(
     store: PcbGeometryStore,
     group: list[_GroupedArtwork],
     board: BaseGeometry,
+    *,
+    drill_cache: dict[str, BaseGeometry] | None = None,
 ) -> BaseGeometry:
     layer = group[0].layer
     if layer.role == "edge":
@@ -675,7 +717,7 @@ def _resolved_group_geometry(
     if not board.is_empty:
         geometry = _intersection(geometry, board)
     if layer.role == "copper":
-        drills = drill_geometry_for_layer(store, layer_name=layer.name)
+        drills = _drill_geometry_for_layer(store, layer.name, drill_cache=drill_cache)
         if not drills.is_empty:
             geometry = _difference(geometry, drills)
     return geometry
@@ -706,6 +748,19 @@ def _surface_drill_geometry(store: PcbGeometryStore) -> BaseGeometry:
     return drill_geometry_for_layer(store)
 
 
+def _drill_geometry_for_layer(
+    store: PcbGeometryStore,
+    layer_name: str,
+    *,
+    drill_cache: dict[str, BaseGeometry] | None,
+) -> BaseGeometry:
+    if drill_cache is None:
+        return drill_geometry_for_layer(store, layer_name=layer_name)
+    if layer_name not in drill_cache:
+        drill_cache[layer_name] = drill_geometry_for_layer(store, layer_name=layer_name)
+    return drill_cache[layer_name]
+
+
 def _clip_to_board(geometry: BaseGeometry, board: BaseGeometry) -> BaseGeometry:
     if geometry.is_empty or board.is_empty:
         return geometry
@@ -730,13 +785,17 @@ def _outline_geometry(board: BaseGeometry) -> BaseGeometry:
     return board.boundary
 
 
-def _union_or_empty(geometries: Iterable[BaseGeometry]) -> BaseGeometry:
+def _union_or_empty(
+    geometries: Iterable[BaseGeometry],
+    *,
+    prefer_disjoint_subsets: bool = False,
+) -> BaseGeometry:
     geometry_tuple = tuple(geometries)
     if not geometry_tuple:
         return GeometryCollection()
     if len(geometry_tuple) == 1:
         return geometry_tuple[0]
-    return robust_union(geometry_tuple)
+    return robust_union(geometry_tuple, prefer_disjoint_subsets=prefer_disjoint_subsets)
 
 
 def _derived_layer_id(role: VisualRole) -> str:
