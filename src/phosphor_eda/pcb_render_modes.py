@@ -7,8 +7,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from shapely import GeometryCollection, LineString, MultiLineString, MultiPolygon, Polygon
+from shapely.ops import linemerge
 
-from phosphor_eda.pcb import PcbVia
+from phosphor_eda.pcb import PcbSegment, PcbTraceArc, PcbVia
 from phosphor_eda.pcb_render_artwork import (
     ArtworkItem,
     DerivedLayer,
@@ -24,6 +25,7 @@ from phosphor_eda.shapely_geometry import (
     robust_intersection,
     robust_union,
 )
+from phosphor_eda.sql.geometry import arc_to_polyline
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -47,6 +49,14 @@ class _LayerGroupKey:
 class _GroupedArtwork:
     artwork: ArtworkItem
     layer: GeometryLayer
+
+
+@dataclass(frozen=True)
+class _TraceArtworkKey:
+    layer_name: str
+    net_number: int | None
+    net_name: str
+    width: float
 
 
 @dataclass(frozen=True)
@@ -111,6 +121,7 @@ _REALISTIC_LAYER_ORDER = (
     "silkscreen",
     "boardOutline",
 )
+_TRACE_BUFFER_QUAD_SEGS = 4
 
 
 def build_cad_layers(
@@ -502,15 +513,26 @@ def _groupable_artwork(
 ) -> tuple[_GroupedArtwork, ...]:
     grouped: list[_GroupedArtwork] = []
     selected_non_vias = tuple(item for item in selected_items if item.kind is not GeometryKind.VIA)
+    trace_groups: dict[_TraceArtworkKey, list[RenderableGeometry]] = defaultdict(list)
+    selected_other_items: list[RenderableGeometry] = []
+    for item in selected_non_vias:
+        trace_key = _trace_artwork_key(item)
+        if trace_key is None:
+            selected_other_items.append(item)
+        else:
+            trace_groups[trace_key].append(item)
+
     if profiler is None:
-        for item in selected_non_vias:
+        _append_trace_artwork_groups(grouped, trace_groups)
+        for item in selected_other_items:
             artwork = geometry_to_artwork(item)
             if artwork is None:
                 continue
             grouped.append(_GroupedArtwork(artwork=artwork, layer=item.layer))
     else:
         with profiler.span("artwork.convert_non_vias", items=len(selected_non_vias)):
-            for item in selected_non_vias:
+            _append_trace_artwork_groups(grouped, trace_groups)
+            for item in selected_other_items:
                 artwork = geometry_to_artwork(item)
                 if artwork is None:
                     continue
@@ -550,6 +572,88 @@ def _groupable_artwork(
         ):
             append_vias()
     return tuple(grouped)
+
+
+def _trace_artwork_key(item: RenderableGeometry) -> _TraceArtworkKey | None:
+    payload = item.payload if item.payload is not None else item.source
+    if item.kind in (GeometryKind.TRACE, GeometryKind.TRACE_ARC) and isinstance(
+        payload, PcbSegment | PcbTraceArc
+    ):
+        width = payload.width
+    else:
+        return None
+    return _TraceArtworkKey(
+        layer_name=item.layer.name,
+        net_number=item.tags.net_number,
+        net_name=item.tags.net_name,
+        width=width,
+    )
+
+
+def _append_trace_artwork_groups(
+    grouped: list[_GroupedArtwork],
+    trace_groups: dict[_TraceArtworkKey, list[RenderableGeometry]],
+) -> None:
+    for items in trace_groups.values():
+        artwork = _trace_artwork_from_items(items)
+        if artwork is not None:
+            grouped.append(_GroupedArtwork(artwork=artwork, layer=items[0].layer))
+
+
+def _trace_artwork_from_items(items: list[RenderableGeometry]) -> ArtworkItem | None:
+    centerlines: list[LineString] = []
+    for item in items:
+        centerline = _trace_centerline(item)
+        if centerline is not None and not centerline.is_empty:
+            centerlines.append(centerline)
+    if not centerlines:
+        return None
+
+    unioned_centerlines = robust_union(centerlines)
+    merged = (
+        unioned_centerlines
+        if isinstance(unioned_centerlines, LineString)
+        else linemerge(cast("MultiLineString", unioned_centerlines))
+    )
+    geometry = merged.buffer(
+        _trace_width(items[0]) / 2,
+        cap_style="round",
+        join_style="round",
+        quad_segs=_TRACE_BUFFER_QUAD_SEGS,
+    )
+    if geometry.is_empty:
+        return None
+    return ArtworkItem(
+        geometry=geometry,
+        source_ids=tuple(item.id for item in items),
+        source_layers=_unique_ordered(item.layer.name for item in items),
+        tags=items[0].tags,
+    )
+
+
+def _trace_centerline(item: RenderableGeometry) -> LineString | None:
+    payload = item.payload if item.payload is not None else item.source
+    if item.kind is GeometryKind.TRACE and isinstance(payload, PcbSegment):
+        return LineString([(payload.start_x, payload.start_y), (payload.end_x, payload.end_y)])
+    if item.kind is GeometryKind.TRACE_ARC and isinstance(payload, PcbTraceArc):
+        return LineString(
+            arc_to_polyline(
+                payload.start_x,
+                payload.start_y,
+                payload.mid_x,
+                payload.mid_y,
+                payload.end_x,
+                payload.end_y,
+            )
+        )
+    return None
+
+
+def _trace_width(item: RenderableGeometry) -> float:
+    payload = item.payload if item.payload is not None else item.source
+    if isinstance(payload, PcbSegment | PcbTraceArc):
+        return payload.width
+    return 0.0
 
 
 def _should_dim_base_layers(store: PcbGeometryStore, settings: RenderSettings) -> bool:

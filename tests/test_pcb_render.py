@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 import pytest
-from shapely import GeometryCollection, MultiPolygon, Polygon
+from shapely import GeometryCollection, MultiPolygon, Point, Polygon
 
 import phosphor_eda.pcb_render as pcb_render_module
 from phosphor_eda.altium.pcb_parser import parse_altium_pcb
@@ -51,6 +51,7 @@ from phosphor_eda.pcb_render_geometry import (
     build_geometry_store,
     geometry_matches_selector,
 )
+from phosphor_eda.pcb_render_modes import build_cad_layers
 from phosphor_eda.pcb_render_plan import DerivedRenderPlan, ViewBox
 from phosphor_eda.pcb_render_settings import is_json_dict, is_json_list
 from phosphor_eda.pcb_render_tokens import ResolvedStyle, VisualRole
@@ -503,6 +504,50 @@ def test_copper_layer_paints_traces_zones_then_pads() -> None:
     ]
     assert front_layer_svg.startswith('data-source-layers="F.Cu"')
     assert front_layer_svg.count("<path") == 1
+
+
+def test_cad_trace_bends_are_buffered_as_joined_linework() -> None:
+    board = Pcb(
+        name="trace-bend",
+        nets={0: PcbNet(0, ""), 1: PcbNet(1, "SIG")},
+        footprints=[],
+        segments=[
+            PcbSegment(5.0, 5.0, 6.0, 5.0, 0.2, "F.Cu", 1),
+            PcbSegment(6.0, 5.0, 6.0, 6.0, 0.2, "F.Cu", 1),
+        ],
+        vias=[],
+        outline_lines=[
+            PcbLine(0, 0, 10, 0, "Edge.Cuts", 0.1),
+            PcbLine(10, 0, 10, 10, "Edge.Cuts", 0.1),
+            PcbLine(10, 10, 0, 10, "Edge.Cuts", 0.1),
+            PcbLine(0, 10, 0, 0, "Edge.Cuts", 0.1),
+        ],
+        outline_arcs=[],
+        layers=[
+            PcbLayer("F.Cu", LayerFunction.COPPER, side="front", number=1),
+            PcbLayer("Edge.Cuts", LayerFunction.EDGE),
+        ],
+    )
+    settings = load_render_settings_json(
+        json.dumps(
+            {
+                "renderMode": "cad",
+                "source": {"layers": [{"match": {"name": "F.Cu"}}]},
+                "tokens": {"cad.layer[F.Cu].fill": "#ff6600"},
+            }
+        )
+    )
+
+    layers = build_cad_layers(
+        build_geometry_store(board, side="front"),
+        settings,
+        warn=lambda _msg: None,
+    )
+
+    assert len(layers) == 1
+    copper = layers[0].geometry
+    assert copper.contains(Point(6.07, 4.93))
+    assert not copper.contains(Point(6.095, 4.905))
 
 
 def test_review_preset_matches_legacy_mask_without_body_context() -> None:
