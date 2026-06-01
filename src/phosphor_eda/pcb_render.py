@@ -549,10 +549,26 @@ def _render_derived_layers(
     profiler: RenderProfiler | None = None,
     group: str,
 ) -> None:
+    clip_ids_by_object: dict[int, str] = {}
     for layer in layers:
         path_d = _geometry_to_svg_path_d(layer.geometry)
         if not path_d:
             continue
+        clip_key = id(layer.clip) if layer.clip is not None else 0
+        clip_already_rendered = clip_key in clip_ids_by_object
+        clip_id = ""
+        if layer.clip is not None:
+            clip_id = clip_ids_by_object.setdefault(
+                clip_key,
+                _layer_clip_id(group, len(clip_ids_by_object), layer),
+            )
+        if layer.clip is not None:
+            _render_layer_clip_mask(
+                svg,
+                clip_id,
+                layer,
+                already_rendered=clip_already_rendered,
+            )
         if profiler is not None:
             profiler.metric(
                 "svg.layer_path",
@@ -564,9 +580,50 @@ def _render_derived_layers(
                 move_commands=path_d.count("M "),
                 line_commands=path_d.count("L "),
             )
-        svg.group_start(attrs=_derived_layer_group_attrs(layer))
+        attrs = _derived_layer_group_attrs(layer)
+        if clip_id:
+            attrs["mask"] = f"url(#{clip_id})"
+        svg.group_start(attrs=attrs)
         svg.path(path_d, attrs=_derived_layer_path_attrs(layer.style))
         svg.group_end()
+
+
+def _render_layer_clip_mask(
+    svg: _Svg,
+    clip_id: str,
+    layer: DerivedLayer,
+    *,
+    already_rendered: bool,
+) -> None:
+    if already_rendered:
+        return
+    if layer.clip is None:
+        return
+    board_path = _geometry_to_svg_path_d(layer.clip.board)
+    if not board_path:
+        return
+    min_x, min_y, max_x, max_y = layer.clip.board.bounds
+    pad = max(max_x - min_x, max_y - min_y, 1.0) * 0.05
+    svg.raw(
+        f'<defs><mask id="{xml_escape(clip_id)}" maskUnits="userSpaceOnUse" '
+        f'x="{min_x - pad:.4f}" y="{min_y - pad:.4f}" '
+        f'width="{(max_x - min_x) + 2 * pad:.4f}" '
+        f'height="{(max_y - min_y) + 2 * pad:.4f}">'
+    )
+    svg.path(board_path, attrs={"fill": "white", "fill-rule": "evenodd"})
+    for circle in layer.clip.drill_circles:
+        svg.raw(
+            f'<circle cx="{circle.cx:.4f}" cy="{circle.cy:.4f}" '
+            f'r="{circle.radius:.4f}" fill="black"/>'
+        )
+    if not layer.clip.drill_circles and (drill_path := _geometry_to_svg_path_d(layer.clip.drills)):
+        svg.path(drill_path, attrs={"fill": "black", "fill-rule": "evenodd"})
+    svg.raw("</mask></defs>")
+
+
+def _layer_clip_id(group: str, index: int, layer: DerivedLayer) -> str:
+    raw = f"layer-clip-{group}-{index}-{layer.id}"
+    return re.sub(r"[^A-Za-z0-9_-]+", "-", raw)
 
 
 def _derived_layer_group_attrs(layer: DerivedLayer) -> dict[str, str]:

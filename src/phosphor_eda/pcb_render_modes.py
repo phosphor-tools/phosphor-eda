@@ -9,10 +9,12 @@ from typing import TYPE_CHECKING, cast
 from shapely import GeometryCollection, LineString, MultiLineString, MultiPolygon, Polygon
 from shapely.ops import linemerge
 
-from phosphor_eda.pcb import PcbSegment, PcbTraceArc, PcbVia
+from phosphor_eda.pcb import PcbPad, PcbSegment, PcbTraceArc, PcbVia
 from phosphor_eda.pcb_render_artwork import (
     ArtworkItem,
     DerivedLayer,
+    LayerClip,
+    LayerClipCircle,
     board_outline_geometry,
     drill_geometry_for_layer,
     geometry_to_artwork,
@@ -153,6 +155,7 @@ def build_cad_layers(
     if profiler is not None:
         profiler.metric("cad.grouped_artwork", count=len(grouped_artwork))
     board = board_outline_geometry(store)
+    layer_clip = _layer_clip(store, board)
     dimmed = _should_dim_base_layers(store, settings)
     warned_missing_dimmed_tokens: set[str] = set()
     drill_cache: dict[str, BaseGeometry] = {}
@@ -167,7 +170,6 @@ def build_cad_layers(
             geometry = _resolved_group_geometry(
                 store,
                 group,
-                board,
                 drill_cache=drill_cache,
             )
         else:
@@ -181,7 +183,6 @@ def build_cad_layers(
                 geometry = _resolved_group_geometry(
                     store,
                     group,
-                    board,
                     drill_cache=drill_cache,
                     profiler=profiler,
                     profile_prefix="cad",
@@ -215,6 +216,7 @@ def build_cad_layers(
                 source_ids=source_ids,
                 style=style,
                 data={"source-layer": key.source_layer_name},
+                clip=None if key.function == "edge" else layer_clip,
             )
         )
 
@@ -247,6 +249,11 @@ def build_realistic_layers(
         profiler.metric("realistic.grouped_artwork", count=len(grouped_artwork))
     board = board_outline_geometry(store)
     surface_drills = _surface_drill_geometry(store)
+    layer_clip = LayerClip(
+        board=board,
+        drills=surface_drills,
+        drill_circles=_surface_drill_circles(store),
+    )
     dimmed = _should_dim_base_layers(store, settings)
     warned_missing_dimmed_tokens: set[str] = set()
 
@@ -266,26 +273,22 @@ def build_realistic_layers(
         mask_openings = _process_artwork_layer(
             store,
             (item.geometry for item in mask_artwork),
-            board,
             prefer_disjoint_subsets=True,
         )
         outer_copper = _process_artwork_layer(
             store,
             (item.geometry for item in copper_artwork),
-            board,
             prefer_disjoint_subsets=True,
         )
         silkscreen = _process_artwork_layer(
             store,
             (item.geometry for item in silkscreen_artwork),
-            board,
             prefer_disjoint_subsets=True,
         )
     else:
         mask_openings = _process_artwork_layer(
             store,
             (item.geometry for item in mask_artwork),
-            board,
             prefer_disjoint_subsets=True,
             profiler=profiler,
             profile=_LayerProcessingProfile(
@@ -299,7 +302,6 @@ def build_realistic_layers(
         outer_copper = _process_artwork_layer(
             store,
             (item.geometry for item in copper_artwork),
-            board,
             prefer_disjoint_subsets=True,
             profiler=profiler,
             profile=_LayerProcessingProfile(
@@ -313,7 +315,6 @@ def build_realistic_layers(
         silkscreen = _process_artwork_layer(
             store,
             (item.geometry for item in silkscreen_artwork),
-            board,
             prefer_disjoint_subsets=True,
             profiler=profiler,
             profile=_LayerProcessingProfile(
@@ -370,8 +371,6 @@ def build_realistic_layers(
     for function in _REALISTIC_LAYER_ORDER:
         layer_input = layer_inputs[function]
         geometry = layer_input.geometry
-        if function != "boardOutline":
-            geometry = _difference(geometry, surface_drills)
         if geometry.is_empty:
             continue
 
@@ -391,6 +390,7 @@ def build_realistic_layers(
                 source_layers=layer_input.source_layers,
                 source_ids=layer_input.source_ids,
                 style=style,
+                clip=None if function == "boardOutline" else layer_clip,
             )
         )
     return tuple(layers)
@@ -405,6 +405,7 @@ def build_highlight_layers(
 ) -> tuple[HighlightGroup, ...]:
     """Build derived highlight overlay groups from selected raw source geometry."""
     board = board_outline_geometry(store)
+    layer_clip = _layer_clip(store, board)
     groups: list[HighlightGroup] = []
     drill_cache: dict[str, BaseGeometry] = {}
 
@@ -441,7 +442,6 @@ def build_highlight_layers(
                 geometry = _resolved_group_geometry(
                     store,
                     layer_group,
-                    board,
                     drill_cache=drill_cache,
                 )
             else:
@@ -456,7 +456,6 @@ def build_highlight_layers(
                     geometry = _resolved_group_geometry(
                         store,
                         layer_group,
-                        board,
                         drill_cache=drill_cache,
                         profiler=profiler,
                         profile_prefix="highlight",
@@ -491,6 +490,7 @@ def build_highlight_layers(
                         "data-highlight-target": target,
                         "source-layer": key.source_layer_name,
                     },
+                    clip=None if key.function == "edge" else layer_clip,
                 )
             )
 
@@ -907,7 +907,6 @@ def _group_sort_key(item: tuple[_LayerGroupKey, list[_GroupedArtwork]]) -> tuple
 def _resolved_group_geometry(
     store: PcbGeometryStore,
     group: list[_GroupedArtwork],
-    board: BaseGeometry,
     *,
     drill_cache: dict[str, BaseGeometry] | None = None,
     profiler: RenderProfiler | None = None,
@@ -915,17 +914,15 @@ def _resolved_group_geometry(
 ) -> BaseGeometry:
     layer = group[0].layer
     if layer.role == "edge":
+        board = board_outline_geometry(store)
         return _outline_geometry(board)
 
     return _process_artwork_layer(
         store,
         (item.artwork.geometry for item in group),
-        board,
         layer_name=layer.name,
-        subtract_drills=layer.role == "copper",
+        subtract_drills=False,
         drill_cache=drill_cache,
-        # Dense CAD copper is drill-subtracted after union; disjoint subset unions
-        # made the subsequent GEOS differences slower on large boards.
         prefer_disjoint_subsets=False,
         profiler=profiler,
         profile=(
@@ -945,7 +942,6 @@ def _resolved_group_geometry(
 def _process_artwork_layer(
     store: PcbGeometryStore,
     geometries: Iterable[BaseGeometry],
-    board: BaseGeometry,
     *,
     layer_name: str | None = None,
     subtract_drills: bool = False,
@@ -982,16 +978,6 @@ def _process_artwork_layer(
                 geometry_tuple,
                 prefer_disjoint_subsets=prefer_disjoint_subsets,
             )
-
-    if not board.is_empty:
-        if profiler is None or profile is None:
-            geometry = _intersection(geometry, board)
-        else:
-            with profiler.span(
-                f"{profile.event_prefix}.board_intersection",
-                **profile_data,
-            ):
-                geometry = _intersection(geometry, board)
 
     if subtract_drills and layer_name is not None:
         if profiler is None or profile is None:
@@ -1091,6 +1077,32 @@ def _surface_drill_geometry(store: PcbGeometryStore) -> BaseGeometry:
     filtering and tenting semantics can be added behind this helper later.
     """
     return drill_geometry_for_layer(store)
+
+
+def _layer_clip(store: PcbGeometryStore, board: BaseGeometry) -> LayerClip | None:
+    if board.is_empty:
+        return None
+    return LayerClip(
+        board=board,
+        drills=_surface_drill_geometry(store),
+        drill_circles=_surface_drill_circles(store),
+    )
+
+
+def _surface_drill_circles(store: PcbGeometryStore) -> tuple[LayerClipCircle, ...]:
+    circles: list[LayerClipCircle] = []
+    for item in store.items:
+        payload = item.payload if item.payload is not None else item.source
+        is_drilled_pad = item.kind is GeometryKind.DRILL and isinstance(payload, PcbPad)
+        is_drilled_via = item.kind is GeometryKind.VIA and isinstance(payload, PcbVia)
+        if not (is_drilled_pad or is_drilled_via):
+            continue
+        drill_payload = cast("PcbPad | PcbVia", payload)
+        if drill_payload.drill > 0:
+            circles.append(
+                LayerClipCircle(drill_payload.x, drill_payload.y, drill_payload.drill / 2)
+            )
+    return tuple(circles)
 
 
 def _drill_geometry_for_layer(

@@ -245,7 +245,7 @@ def test_cad_via_only_copper_selection_builds_layer_for_selected_source_layer() 
     assert layers[0].source_ids == ("via-1",)
 
 
-def test_cad_geometry_is_clipped_to_board_and_cut_by_drill_holes() -> None:
+def test_cad_geometry_keeps_unclipped_artwork_and_tracks_layer_clip() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -279,9 +279,12 @@ def test_cad_geometry_is_clipped_to_board_and_cut_by_drill_holes() -> None:
 
     geometry = layers[0].geometry
 
-    assert _board_polygon().covers(geometry)
-    assert not geometry.contains(Point(0.0, 0.0))
-    assert geometry.area < 4.0
+    assert not _board_polygon().covers(geometry)
+    assert geometry.contains(Point(0.0, 0.0))
+    assert geometry.area == 16.0
+    assert layers[0].clip is not None
+    assert layers[0].clip.board.equals(_board_polygon())
+    assert layers[0].clip.drills.contains(Point(0.0, 0.0))
 
 
 def test_cad_drill_clipping_handles_kicad_symbol_layer_names() -> None:
@@ -302,8 +305,10 @@ def test_cad_drill_clipping_handles_kicad_symbol_layer_names() -> None:
         layer for layer in layers if layer.role.function == "copper" and layer.role.side == "front"
     )
 
-    assert not front_copper.geometry.covers(Point(137.05, 111.84))
-    assert not front_copper.geometry.covers(Point(137.05, 94.06))
+    assert front_copper.geometry.covers(Point(137.05, 111.84))
+    assert front_copper.geometry.covers(Point(137.05, 94.06))
+    assert front_copper.clip is not None
+    assert not front_copper.clip.drills.is_empty
     assert all(layer.role.inner_index != 5000 for layer in layers)
 
 
@@ -434,16 +439,18 @@ def test_realistic_front_layers_project_physical_stack_in_order() -> None:
 
     assert _board_polygon().covers(substrate)
     drill_center = Point(1.0, 1.0)
-    assert not substrate.contains(drill_center)
+    assert substrate.contains(drill_center)
     assert not solder_mask.contains(drill_center)
+    assert by_id["realistic:substrate"].clip is not None
+    assert by_id["realistic:substrate"].clip.drills.contains(drill_center)
     assert solder_mask.intersection(mask_opening).area == 0.0
     assert solder_mask.intersection(bare_substrate_opening).area == 0.0
     copper_artwork = geometry_to_artwork(_require_renderable(store, "copper-pad"))
     assert copper_artwork is not None
-    assert exposed_copper.area < copper_artwork.geometry.area
-    assert covered_copper.area < copper_artwork.geometry.area
-    assert not exposed_copper.contains(drill_center)
-    assert not covered_copper.contains(drill_center)
+    assert exposed_copper.area == copper_artwork.geometry.area
+    assert covered_copper.area == copper_artwork.geometry.area
+    assert exposed_copper.contains(drill_center)
+    assert covered_copper.contains(drill_center)
     assert silkscreen.intersection(mask_opening).area == 0.0
     assert not silkscreen.contains(drill_center)
     assert board_outline.equals(_board_polygon().boundary)
@@ -648,9 +655,11 @@ def test_highlight_projection_supports_pad_targets_stroke_tokens_and_drill_clipp
         opacity=0.85,
         stroke_width_mm=0.0,
     )
-    assert _board_polygon().covers(layer.geometry)
-    assert not layer.geometry.contains(Point(0.0, 0.0))
-    assert layer.geometry.area < 4.0
+    assert not _board_polygon().covers(layer.geometry)
+    assert layer.geometry.contains(Point(0.0, 0.0))
+    assert layer.geometry.area == 16.0
+    assert layer.clip is not None
+    assert layer.clip.drills.contains(Point(0.0, 0.0))
 
 
 def test_base_layers_dim_only_when_dimming_enabled_and_highlights_exist() -> None:
@@ -948,7 +957,7 @@ def test_profiler_reports_converted_artwork_complexity_by_source_kind() -> None:
     assert by_kind["via"]["layer"] == "F.Cu"
 
 
-def test_highlight_layers_cache_drill_geometry_per_layer(
+def test_highlight_layers_reuse_surface_drill_clip_geometry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = PcbGeometryStore(
@@ -1002,7 +1011,7 @@ def test_highlight_layers_cache_drill_geometry_per_layer(
         warn=lambda _message: None,
     )
 
-    assert requested_layers == ["F.Cu"]
+    assert requested_layers == [None]
 
 
 def _settings(

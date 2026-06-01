@@ -58,6 +58,20 @@ class ArtworkItem:
     tags: GeometryTags
 
 
+@dataclass(frozen=True)
+class LayerClipCircle:
+    cx: float
+    cy: float
+    radius: float
+
+
+@dataclass(frozen=True)
+class LayerClip:
+    board: BaseGeometry
+    drills: BaseGeometry = field(default_factory=GeometryCollection)
+    drill_circles: tuple[LayerClipCircle, ...] = ()
+
+
 def _empty_data() -> dict[str, str]:
     return {}
 
@@ -71,6 +85,7 @@ class DerivedLayer:
     source_ids: tuple[str, ...]
     style: ResolvedStyle | None = None
     data: Mapping[str, str] = field(default_factory=_empty_data)
+    clip: LayerClip | None = None
 
 
 _FUNCTION_ROLE_ALIASES = {

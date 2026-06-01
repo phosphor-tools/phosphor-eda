@@ -149,14 +149,17 @@ def test_valid_svg(board: Pcb) -> None:
     assert svg.strip().endswith("</svg>")
 
 
-def test_via_drill_hole_is_in_drill_clip_without_mask_layers() -> None:
-    """Derived realistic presets subtract via drills without legacy clip paths."""
+def test_via_drill_hole_is_serialized_as_layer_mask_without_mask_layers() -> None:
+    """Derived presets clip physical artwork with reusable layer masks."""
     board = _make_board_with_inner_layers()
     settings = load_render_settings_json('{"extends": "phosphor:review"}')
 
     svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
 
-    assert '<clipPath id="drill-clip"' not in svg
+    assert '<mask id="layer-clip-' in svg
+    assert 'fill="white"' in svg
+    assert 'fill="black"' in svg
+    assert "<circle " in svg
     assert 'data-role="realistic.substrate"' in svg
     assert 'data-role="realistic.solderMask"' in svg
 
@@ -1463,8 +1466,8 @@ def test_derived_cad_svg_groups_by_role_source_layers_and_style(board: Pcb) -> N
     assert '<g data-role="cad.copper.front" data-source-layers="F.Cu"' in svg
     assert 'style="fill: #ff6600; opacity: 0.7500"' in svg
     assert 'data-source-ids="' in svg
-    assert "board-clip" not in svg
-    assert "drill-clip" not in svg
+    assert '<mask id="layer-clip-' in svg
+    assert 'mask="url(#layer-clip-' in svg
 
 
 def test_derived_realistic_svg_uses_derived_path(board: Pcb) -> None:
@@ -1497,8 +1500,8 @@ def test_derived_realistic_svg_uses_derived_path(board: Pcb) -> None:
 
     assert '<g data-role="realistic.substrate"' in svg
     assert '<g data-role="realistic.boardOutline"' in svg
-    assert "board-clip" not in svg
-    assert "drill-clip" not in svg
+    assert '<mask id="layer-clip-' in svg
+    assert 'mask="url(#layer-clip-' in svg
 
 
 def test_derived_serializer_does_not_use_raw_source_kind_branches(
