@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Protocol
 import sexpdata
 
 from phosphor_eda.kicad import sexp
+from phosphor_eda.kicad.resolver import resolve_kicad_source
 from phosphor_eda.kicad.source import (
     KiCadGlobalLabel,
     KiCadHierarchicalLabel,
@@ -189,6 +190,14 @@ class _PinCandidate:
     source_index: int
     component_source_id: str
     component_reference: str
+    component_value: str
+    component_footprint: str
+    component_datasheet: str
+    component_description: str
+    component_x: float | None
+    component_y: float | None
+    component_rotation: float
+    component_mirror: bool
     pin_designator: str
     pin_name: str
     location: KiCadPoint
@@ -212,18 +221,9 @@ class _HasLocalNetId(Protocol):
 
 
 def kicad_to_design(path: Path, name: str = "") -> Schematic:
-    """Parse a KiCad schematic into the public model.
-
-    The previous generic conversion depended on public ``Port`` and
-    ``merge_pages`` types that have already been removed. Task 9 will route
-    this through the KiCad resolver.
-    """
+    """Parse a KiCad schematic into the public model."""
     source = kicad_to_source(path, name)
-    msg = (
-        "KiCad public schematic conversion requires the Task 9 KiCad resolver; "
-        f"source extraction loaded {len(source.sheet_instances)} sheet instance(s)."
-    )
-    raise NotImplementedError(msg)
+    return resolve_kicad_source(source)
 
 
 def kicad_to_source(path: Path, name: str = "") -> KiCadSourceDesign:
@@ -257,7 +257,7 @@ def kicad_to_source(path: Path, name: str = "") -> KiCadSourceDesign:
     sheet_pins: list[KiCadSheetPin] = []
 
     for loaded in loaded_sheets:
-        extracted = _extract_sheet_sources(loaded, all_lib_pins)
+        extracted = _extract_sheet_sources(loaded, all_lib_pins, all_lib_descs)
         local_nets.extend(extracted.local_nets)
         pin_occurrences.extend(extracted.pin_occurrences)
         local_labels.extend(extracted.local_labels)
@@ -336,8 +336,7 @@ def _load_sheet_tree(
         child_resolved_path = child_path.resolve()
         if child_resolved_path in ancestor_files:
             print(
-                f"Warning: child sheet cycle skipped: {child_file} "
-                f"(resolved to {child_path})",
+                f"Warning: child sheet cycle skipped: {child_file} (resolved to {child_path})",
                 file=sys.stderr,
             )
             continue
@@ -374,7 +373,11 @@ def _parse_sheet_info(sheet_node: SExpNode) -> tuple[str, str]:
     return sheet_name, sheet_file
 
 
-def _extract_sheet_sources(loaded: _LoadedSheet, lib_pins: _LibPins) -> _ExtractedSheet:
+def _extract_sheet_sources(
+    loaded: _LoadedSheet,
+    lib_pins: _LibPins,
+    lib_descs: dict[str, str],
+) -> _ExtractedSheet:
     scope_id = loaded.instance.scope_id
     data = loaded.data
     uf = _UnionFind()
@@ -446,6 +449,7 @@ def _extract_sheet_sources(loaded: _LoadedSheet, lib_pins: _LibPins) -> _Extract
         data,
         scope_id,
         lib_pins,
+        lib_descs,
         uf,
         wire_segments,
         wire_points,
@@ -522,6 +526,14 @@ def _extract_sheet_sources(loaded: _LoadedSheet, lib_pins: _LibPins) -> _Extract
             local_net_id=root_to_net_id[uf.find(candidate.location)],
             component_source_id=candidate.component_source_id,
             component_reference=candidate.component_reference,
+            component_value=candidate.component_value,
+            component_footprint=candidate.component_footprint,
+            component_datasheet=candidate.component_datasheet,
+            component_description=candidate.component_description,
+            component_x=candidate.component_x,
+            component_y=candidate.component_y,
+            component_rotation=candidate.component_rotation,
+            component_mirror=candidate.component_mirror,
             pin_designator=candidate.pin_designator,
             pin_name=candidate.pin_name,
             location=candidate.location,
@@ -715,6 +727,7 @@ def _pin_candidates(
     data: SExpNode,
     scope_id: ScopeId,
     lib_pins: _LibPins,
+    lib_descs: dict[str, str],
     uf: _UnionFind,
     wire_segments: list[tuple[KiCadPoint, KiCadPoint]],
     wire_points: set[KiCadPoint],
@@ -728,12 +741,17 @@ def _pin_candidates(
             continue
         lib_id_node = sexp.find(sym_node[1:], "lib_id")
         lib_id = sexp.val(lib_id_node) if lib_id_node is not None else ""
+        value = sexp.find_property(sym_node[1:], "Value")
+        footprint = sexp.find_property(sym_node[1:], "Footprint")
+        datasheet = sexp.find_property(sym_node[1:], "Datasheet")
+        description = _lib_description(lib_id, lib_descs)
         at_node = sexp.find(sym_node[1:], "at")
         comp_x = sexp.num(at_node, 1) if at_node is not None else 0.0
         comp_y = sexp.num(at_node, 2) if at_node is not None else 0.0
         comp_rot = sexp.num(at_node, 3) if at_node is not None and len(at_node) > 3 else 0.0
         mirror_node = sexp.find(sym_node[1:], "mirror")
         mirror = sexp.val(mirror_node) if mirror_node is not None else None
+        mirrored = mirror is not None
         unit_node = sexp.find(sym_node[1:], "unit")
         inst_unit = int(sexp.num(unit_node, 1)) if unit_node is not None else 1
         symbol_uuid = _node_value(sym_node[1:], "uuid") or ref or str(source_index)
@@ -753,6 +771,14 @@ def _pin_candidates(
                     source_index=source_index,
                     component_source_id=component_source_id,
                     component_reference=ref,
+                    component_value=value,
+                    component_footprint=footprint,
+                    component_datasheet=datasheet,
+                    component_description=description,
+                    component_x=comp_x,
+                    component_y=comp_y,
+                    component_rotation=comp_rot,
+                    component_mirror=mirrored,
                     pin_designator=pnum,
                     pin_name=pname,
                     location=location,
@@ -762,6 +788,17 @@ def _pin_candidates(
             )
             source_index += 1
     return candidates
+
+
+def _lib_description(lib_id: str, lib_descs: dict[str, str]) -> str:
+    if lib_id in lib_descs:
+        return lib_descs[lib_id]
+    base = lib_id.split(":")[-1] if ":" in lib_id else lib_id
+    for key, description in lib_descs.items():
+        key_base = _LIB_ID_SUFFIX_RE.sub("", key)
+        if key_base == base:
+            return description
+    return ""
 
 
 def _pin_uuids_by_designator(sym_node: SExpNode) -> dict[str, str]:
@@ -787,8 +824,7 @@ def _no_connect_positions(data: SExpNode) -> set[KiCadPoint]:
 
 def _matches_point(point: KiCadPoint, points: set[KiCadPoint]) -> bool:
     return any(
-        abs(other[0] - point[0]) < 0.01 and abs(other[1] - point[1]) < 0.01
-        for other in points
+        abs(other[0] - point[0]) < 0.01 and abs(other[1] - point[1]) < 0.01 for other in points
     )
 
 

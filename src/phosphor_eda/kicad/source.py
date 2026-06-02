@@ -105,6 +105,14 @@ class KiCadPinOccurrence:
     pin_name: str
     location: KiCadPoint
     no_connect: bool = False
+    component_value: str = ""
+    component_footprint: str = ""
+    component_datasheet: str = ""
+    component_description: str = ""
+    component_x: float | None = None
+    component_y: float | None = None
+    component_rotation: float = 0.0
+    component_mirror: bool = False
 
 
 @dataclass(slots=True)
