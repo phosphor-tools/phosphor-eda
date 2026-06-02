@@ -475,9 +475,7 @@ def _load_components(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> No
         )
 
 
-def _load_component_occurrences(
-    con: duckdb.DuckDBPyConnection, schematic: Schematic
-) -> None:
+def _load_component_occurrences(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
     for comp in schematic.components:
         for occurrence in comp.occurrences:
             _ = con.execute(

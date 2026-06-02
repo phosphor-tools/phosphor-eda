@@ -256,12 +256,29 @@ def _duplicate_reference_design() -> Schematic:
         description="Processor",
         pages=[page_b],
     )
-    bus = Net(id="net:shared-bus", name="SYNC", pages=[page_a, page_b])
+    bus = Net(
+        id="net:shared-bus",
+        name="SYNC",
+        pages=[page_a, page_b],
+        metadata={
+            "selected_name_source": "global_label",
+            "selected_name_source_id": "net-occ:shared-bus",
+            "source_format": "constructed",
+            "source_local_net_ids": "N$2,N$3",
+            "source_scope_ids": "/root/mcu_a,/root/mcu_b",
+        },
+    )
     reset_a = Net(
         id="net:mcu-a:reset",
         name="RESET",
         pages=[page_a],
-        metadata={"resolver": "scoped"},
+        metadata={
+            "selected_name_source": "local_label",
+            "selected_name_source_id": "net-occ:mcu-a:reset",
+            "source_format": "constructed",
+            "source_local_net_ids": "N$1",
+            "source_scope_ids": "/root/mcu_a",
+        },
     )
     reset_b = Net(id="net:mcu-b:reset", name="RESET", pages=[page_b])
     pin_a_10 = Pin(id="pin:mcu-a:u7:10", designator="10", name="SYNC", component=comp_a, net=bus)
@@ -428,12 +445,29 @@ def test_duplicate_net_names_are_separate_blocks_with_minimal_marker():
     assert text.count("[name_not_unique: true]") == 2
 
 
-def test_net_provenance_is_not_printed_as_default_ids():
+def test_net_detail_prints_resolver_provenance_metadata():
+    detail = format_net_detail(_duplicate_reference_design(), "SYNC")
+    assert "[selected_name_source: global_label]" in detail
+    assert "[selected_name_source_id: net-occ:shared-bus]" in detail
+    assert "[source_format: constructed]" in detail
+    assert "[source_local_net_ids: N$2,N$3]" in detail
+    assert "[source_scope_ids: /root/mcu_a,/root/mcu_b]" in detail
+
+
+def test_net_provenance_is_not_printed_as_default_ids_in_summary_or_tables():
     text = serialize_design(_duplicate_reference_design())
-    assert "[resolver: scoped]" in text
-    assert "source_local_net_id" not in text
+    summary = text.split("=== COMPONENTS ===", maxsplit=1)[0]
+    table = format_net_table(_duplicate_reference_design())
+    assert "source_local_net_ids" not in summary
+    assert "/root/mcu_a" not in summary
+    assert "net-occ:mcu-a:reset" not in summary
+    assert "source_local_net_ids" not in text
+    assert "/root/mcu_a" not in text
+    assert "net-occ:mcu-a:reset" not in text
+    assert "source_local_net_ids" not in table
+    assert "/root/mcu_a" not in table
+    assert "net-occ:mcu-a:reset" not in table
     assert "local-label" not in text
-    assert "net-occ:" not in text
 
 
 def test_serialize_suppresses_electrical_passive():

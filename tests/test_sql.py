@@ -74,19 +74,37 @@ def _constructed_schematic() -> Schematic:
         name="SYNC",
         pages=[power_page, control_page],
         aliases={"GLOBAL_SYNC", "SYNC_IN"},
-        metadata={"resolver": "constructed", "scope_rule": "global_label"},
+        metadata={
+            "selected_name_source": "global_label",
+            "selected_name_source_id": "net-occurrence:sync:power",
+            "source_format": "constructed",
+            "source_local_net_ids": "control/local-8,power/local-12",
+            "source_scope_ids": "/root/control,/root/power",
+        },
     )
     reset_power = Net(
         id="net:reset:power",
         name="RESET",
         pages=[power_page],
-        metadata={"resolver": "constructed", "scope_rule": "sheet_local"},
+        metadata={
+            "selected_name_source": "local_label",
+            "selected_name_source_id": "net-occurrence:reset:power",
+            "source_format": "constructed",
+            "source_local_net_ids": "power/local-2",
+            "source_scope_ids": "/root/power",
+        },
     )
     reset_control = Net(
         id="net:reset:control",
         name="RESET",
         pages=[control_page],
-        metadata={"resolver": "constructed", "scope_rule": "sheet_local"},
+        metadata={
+            "selected_name_source": "local_label",
+            "selected_name_source_id": "net-occurrence:reset:control",
+            "source_format": "constructed",
+            "source_local_net_ids": "control/local-2",
+            "source_scope_ids": "/root/control",
+        },
     )
 
     controller_sync = Pin(
@@ -488,6 +506,13 @@ class TestConstructedSchematicSql:
             ),
         ]
 
+        alias_rows = constructed_db.execute(
+            "SELECT net_id, aliases FROM nets WHERE aliases IS NOT NULL ORDER BY net_id"
+        ).fetchall()
+        assert alias_rows == [
+            ("net:sync", "GLOBAL_SYNC,SYNC_IN"),
+        ]
+
         metadata_rows = constructed_db.execute(
             """
             SELECT component_id, reference, key, value
@@ -503,12 +528,36 @@ class TestConstructedSchematicSql:
             "SELECT net_id, name, key, value FROM net_metadata ORDER BY net_id, key"
         ).fetchall()
         assert metadata_rows == [
-            ("net:reset:control", "RESET", "resolver", "constructed"),
-            ("net:reset:control", "RESET", "scope_rule", "sheet_local"),
-            ("net:reset:power", "RESET", "resolver", "constructed"),
-            ("net:reset:power", "RESET", "scope_rule", "sheet_local"),
-            ("net:sync", "SYNC", "resolver", "constructed"),
-            ("net:sync", "SYNC", "scope_rule", "global_label"),
+            ("net:reset:control", "RESET", "selected_name_source", "local_label"),
+            (
+                "net:reset:control",
+                "RESET",
+                "selected_name_source_id",
+                "net-occurrence:reset:control",
+            ),
+            ("net:reset:control", "RESET", "source_format", "constructed"),
+            ("net:reset:control", "RESET", "source_local_net_ids", "control/local-2"),
+            ("net:reset:control", "RESET", "source_scope_ids", "/root/control"),
+            ("net:reset:power", "RESET", "selected_name_source", "local_label"),
+            (
+                "net:reset:power",
+                "RESET",
+                "selected_name_source_id",
+                "net-occurrence:reset:power",
+            ),
+            ("net:reset:power", "RESET", "source_format", "constructed"),
+            ("net:reset:power", "RESET", "source_local_net_ids", "power/local-2"),
+            ("net:reset:power", "RESET", "source_scope_ids", "/root/power"),
+            ("net:sync", "SYNC", "selected_name_source", "global_label"),
+            ("net:sync", "SYNC", "selected_name_source_id", "net-occurrence:sync:power"),
+            ("net:sync", "SYNC", "source_format", "constructed"),
+            (
+                "net:sync",
+                "SYNC",
+                "source_local_net_ids",
+                "control/local-8,power/local-12",
+            ),
+            ("net:sync", "SYNC", "source_scope_ids", "/root/control,/root/power"),
         ]
 
     def test_net_summary_groups_schematic_by_net_id_and_joins_pcb_by_name(
@@ -806,7 +855,7 @@ class TestJetsonDesignRules:
 
 class TestJetsonSchematic:
     def test_components_count(self, jetson_db: duckdb.DuckDBPyConnection) -> None:
-        assert _count(jetson_db, "SELECT count(*) FROM components") == 669
+        assert _count(jetson_db, "SELECT count(*) FROM components") == 675
 
     def test_nets_have_net_class(self, jetson_db: duckdb.DuckDBPyConnection) -> None:
         count = _count(jetson_db, "SELECT count(*) FROM nets WHERE net_class IS NOT NULL")

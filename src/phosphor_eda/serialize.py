@@ -34,6 +34,14 @@ _IC_METADATA_ALLOWLIST = frozenset(
     }
 )
 
+_DEFAULT_NET_METADATA_HIDDEN = frozenset(
+    {
+        "selected_name_source_id",
+        "source_local_net_ids",
+        "source_scope_ids",
+    }
+)
+
 
 def _filter_metadata(comp: Component) -> dict[str, str]:
     """Filter component metadata based on component type."""
@@ -49,6 +57,12 @@ def _filter_metadata(comp: Component) -> dict[str, str]:
         if key in _IC_METADATA_ALLOWLIST or value.startswith("http"):
             result[key] = value
     return result
+
+
+def _filter_default_net_metadata(net: Net) -> dict[str, str]:
+    return {
+        key: value for key, value in net.metadata.items() if key not in _DEFAULT_NET_METADATA_HIDDEN
+    }
 
 
 def _pin_net_str(pin: Pin) -> str:
@@ -214,7 +228,7 @@ def _format_nets(design: Schematic) -> list[str]:
         if _net_name_is_ambiguous(design, net):
             lines.append("  [name_not_unique: true]")
 
-        for key, value in sorted(net.metadata.items()):
+        for key, value in sorted(_filter_default_net_metadata(net).items()):
             lines.append(f"  [{key}: {value}]")
 
         for pin in sorted(net.pins, key=lambda p: (_pin_label(design, p, net), p.designator)):
