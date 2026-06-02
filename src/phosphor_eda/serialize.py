@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from phosphor_eda.classify import PASSIVE_PREFIXES, is_power_net, ref_prefix
+from phosphor_eda.trace import find_paths, is_two_pin_passive, other_pin, trace_from_net
 from phosphor_eda.validate import Severity, validate_design
 
 # Re-export classify utilities so existing importers don't break
@@ -56,6 +57,58 @@ def _pin_net_str(pin: Pin) -> str:
     if pin.net is None:
         return "(unconnected)"
     return pin.net.name
+
+
+def _component_reference_is_ambiguous(design: Schematic, comp: Component) -> bool:
+    return sum(1 for candidate in design.components if candidate.reference == comp.reference) > 1
+
+
+def _same_component(left: Component, right: Component) -> bool:
+    return left.id == right.id
+
+
+def _page_names(pages: list[Page]) -> list[str]:
+    return sorted({page.name for page in pages})
+
+
+def _net_page_names(net: Net) -> list[str]:
+    if net.pages:
+        return _page_names(net.pages)
+    return sorted({page.name for pin in net.pins for page in pin.component.pages})
+
+
+def _pin_context_page(pin: Pin, net: Net | None = None) -> str:
+    pages = pin.component.pages
+    if net is not None and net.pages:
+        net_page_ids = {page.id for page in net.pages}
+        matching_pages = [page for page in pages if page.id in net_page_ids]
+        if matching_pages:
+            pages = matching_pages
+    names = _page_names(pages)
+    if len(names) == 1:
+        return names[0]
+    if names:
+        return "/".join(names)
+    return "?"
+
+
+def _pin_label(design: Schematic, pin: Pin, net: Net | None = None) -> str:
+    label = f"{pin.component.reference}.{pin.designator}"
+    if _component_reference_is_ambiguous(design, pin.component):
+        return f"{_pin_context_page(pin, net)}/{label}"
+    return label
+
+
+def _component_label(design: Schematic, comp: Component) -> str:
+    if _component_reference_is_ambiguous(design, comp):
+        names = _page_names(comp.pages)
+        page_name = names[0] if names else "?"
+        return f"{page_name}/{comp.reference}"
+    return comp.reference
+
+
+def _net_name_is_ambiguous(design: Schematic, net: Net) -> bool:
+    return sum(1 for candidate in design.nets if candidate.name == net.name) > 1
 
 
 def _format_summary(design: Schematic) -> list[str]:
@@ -111,7 +164,7 @@ def _format_summary(design: Schematic) -> list[str]:
 def _format_components(design: Schematic) -> list[str]:
     lines = ["=== COMPONENTS ===", ""]
     for comp in sorted(design.components, key=lambda c: c.reference):
-        page_names = ", ".join(p.name for p in comp.pages)
+        page_names = ", ".join(_page_names(comp.pages))
         lines.append(
             f"COMPONENT: {comp.reference} | {comp.part} | {comp.description} | Pages: {page_names}"
         )
@@ -130,7 +183,7 @@ def _format_components(design: Schematic) -> list[str]:
             if filtered:
                 meta_str = "  " + "  ".join(f"{k}={v}" for k, v in sorted(filtered.items()))
 
-            dest_str = _trace_destinations(pin, comp)
+            dest_str = _trace_destinations(design, pin, comp)
 
             if pin.name:
                 lines.append(
@@ -149,7 +202,7 @@ def _format_components(design: Schematic) -> list[str]:
 def _format_nets(design: Schematic) -> list[str]:
     lines = ["=== NETS ===", ""]
     for net in sorted(design.nets, key=lambda n: n.name):
-        net_pages = sorted({p.name for pin in net.pins for p in pin.component.pages})
+        net_pages = _net_page_names(net)
         if len(net_pages) > 5:
             page_str = ", ".join(net_pages[:4]) + f", ... ({len(net_pages)} pages)"
         else:
@@ -158,11 +211,14 @@ def _format_nets(design: Schematic) -> list[str]:
         alias_str = f" | Also: {', '.join(sorted(net.aliases))}" if net.aliases else ""
         lines.append(f"NET: {net.name}{alias_str} | Pages: {page_str}")
 
+        if _net_name_is_ambiguous(design, net):
+            lines.append("  [name_not_unique: true]")
+
         for key, value in sorted(net.metadata.items()):
             lines.append(f"  [{key}: {value}]")
 
-        for pin in sorted(net.pins, key=lambda p: (p.component.reference, p.designator)):
-            ref_pin = f"{pin.component.reference}.{pin.designator}"
+        for pin in sorted(net.pins, key=lambda p: (_pin_label(design, p, net), p.designator)):
+            ref_pin = _pin_label(design, pin, net)
             if pin.name:
                 lines.append(f"  {ref_pin:<10s} {pin.name}")
             else:
@@ -214,7 +270,7 @@ def serialize_design(design: Schematic) -> str:
 
 def write_design(design: Schematic, output_path: Path) -> None:
     """Write a Schematic to a text file."""
-    output_path.write_text(serialize_design(design), encoding="utf-8")
+    _ = output_path.write_text(serialize_design(design), encoding="utf-8")
 
 
 # ---- Filters ----
@@ -222,7 +278,7 @@ def write_design(design: Schematic, output_path: Path) -> None:
 
 def _net_pages(net: Net) -> set[str]:
     """Page names a net spans."""
-    return {p.name for pin in net.pins for p in pin.component.pages}
+    return set(_net_page_names(net))
 
 
 def _net_components(net: Net) -> set[str]:
@@ -241,8 +297,6 @@ def filter_nets(
     trace: bool = False,
 ) -> list[Net]:
     """Filter nets from a design.  All criteria are AND-composed."""
-    from phosphor_eda.trace import trace_from_net
-
     result = list(design.nets)
 
     if power is True:
@@ -336,53 +390,52 @@ def filter_pages(
 
 def _find_net(design: Schematic, name: str) -> Net:
     """Find a net by name or alias.  Raises ValueError if not found."""
-    for n in design.nets:
-        if n.name == name:
-            return n
-    for n in design.nets:
-        if name in n.aliases:
-            return n
-    raise ValueError(f"Net '{name}' not found in design.")
+    matches = [net for net in design.nets if net.name == name]
+    if not matches:
+        matches = [net for net in design.nets if name in net.aliases]
+    if not matches:
+        raise ValueError(f"Net '{name}' not found in design.")
+    if len(matches) > 1:
+        page_parts = [f"{net.name} on {', '.join(_net_page_names(net))}" for net in matches]
+        raise ValueError(f"Net '{name}' is ambiguous; matches: {', '.join(page_parts)}.")
+    return matches[0]
 
 
 # ---- Trace-aware inline destinations ----
 
 
-def _trace_destinations(pin: Pin, comp: Component) -> str:
+def _trace_destinations(design: Schematic, pin: Pin, comp: Component) -> str:
     """Format inline destinations, tracing through 2-pin passives."""
-    from phosphor_eda.trace import is_two_pin_passive, trace_from_net
-
     if pin.net is None or is_power_net(pin.net.name, pin.net):
         return ""
 
     parts: list[str] = []
     for p in sorted(pin.net.pins, key=lambda p: (p.component.reference, p.designator)):
-        if p.component is comp:
+        if _same_component(p.component, comp):
             continue
         if is_two_pin_passive(p.component):
             continue
-        parts.append(f"{p.component.reference}.{p.designator}")
+        parts.append(_pin_label(design, p, pin.net))
 
     # Trace through passives to find active endpoints
     for tr in trace_from_net(pin.net, origin_comp=comp):
         if tr.terminal_pin is None:
             continue
-        waypoints = ", ".join(w.component.reference for w in tr.series_path)
-        dest = f"{tr.terminal_pin.component.reference}.{tr.terminal_pin.designator}"
+        waypoints = ", ".join(_component_label(design, w.component) for w in tr.series_path)
+        dest = _pin_label(design, tr.terminal_pin, tr.terminal_pin.net)
         parts.append(f"{waypoints} -> {dest}")
 
     # Shunt passives on this net
     shunt_parts: list[str] = []
     for p in pin.net.pins:
-        if p.component is comp:
+        if _same_component(p.component, comp):
             continue
         if not is_two_pin_passive(p.component):
             continue
-        from phosphor_eda.trace import other_pin
 
         other = other_pin(p.component, p)
         if other.net is not None and is_power_net(other.net.name, other.net):
-            shunt_parts.append(f"{p.component.reference} to {other.net.name}")
+            shunt_parts.append(f"{_component_label(design, p.component)} to {other.net.name}")
 
     result = ""
     if parts:
@@ -397,27 +450,25 @@ def _trace_destinations(pin: Pin, comp: Component) -> str:
 
 def format_trace(design: Schematic, ref_a: str, ref_b: str) -> str:
     """Format signal paths between two components."""
-    from phosphor_eda.trace import find_paths
-
     paths = find_paths(design, ref_a, ref_b)
     if not paths:
         return f"No signal paths between {ref_a} and {ref_b}."
 
     lines: list[str] = []
     for path in paths:
-        left = f"{path.left_pin.component.reference}.{path.left_pin.designator}"
+        left = _pin_label(design, path.left_pin, path.left_pin.net)
         left_name = path.left_pin.name or ""
-        right = f"{path.right_pin.component.reference}.{path.right_pin.designator}"
+        right = _pin_label(design, path.right_pin, path.right_pin.net)
         right_name = path.right_pin.name or ""
 
         if path.series:
-            via = " -- " + " -- ".join(c.reference for c in path.series) + " -- "
+            via = " -- " + " -- ".join(_component_label(design, c) for c in path.series) + " -- "
         else:
             via = " ---------- "
 
         line = f"{left:<10s} {left_name:<15s}{via}{right:<10s} {right_name}"
         if path.shunts:
-            shunt_strs = [f"{c.reference} to {n.name}" for c, n in path.shunts]
+            shunt_strs = [f"{_component_label(design, c)} to {n.name}" for c, n in path.shunts]
             line += f"  ({', '.join(shunt_strs)})"
         lines.append(line)
 
@@ -466,7 +517,7 @@ def format_net_table(
     rows: list[tuple[str, ...]] = []
     for net in sorted(source, key=lambda n: n.name):
         aliases = ", ".join(sorted(net.aliases)) if net.aliases else ""
-        pages = sorted({p.name for pin in net.pins for p in pin.component.pages})
+        pages = _net_page_names(net)
         rows.append((net.name, aliases, str(len(net.pins)), ", ".join(pages)))
     if not rows:
         return "No nets found."
@@ -487,15 +538,18 @@ def format_page_table(
 
 def format_component_detail(design: Schematic, ref: str) -> str:
     """Format full detail for a single component. Raises ValueError if not found."""
-    comp: Component | None = None
-    for c in design.components:
-        if c.reference == ref:
-            comp = c
-            break
-    if comp is None:
+    matches = [comp for comp in design.components if comp.reference == ref]
+    if not matches:
         raise ValueError(f"Component '{ref}' not found in design.")
+    if len(matches) > 1:
+        page_parts = [
+            f"{_component_label(design, comp)} on {', '.join(_page_names(comp.pages))}"
+            for comp in matches
+        ]
+        raise ValueError(f"Component '{ref}' is ambiguous; matches: {', '.join(page_parts)}.")
+    comp = matches[0]
 
-    page_names = ", ".join(p.name for p in comp.pages)
+    page_names = ", ".join(_page_names(comp.pages))
     lines = [
         f"COMPONENT: {comp.reference} | {comp.part} | {comp.description} | Pages: {page_names}"
     ]
@@ -505,7 +559,7 @@ def format_component_detail(design: Schematic, ref: str) -> str:
 
     for pin in sorted(comp.pins, key=lambda p: p.designator):
         net_str = _pin_net_str(pin)
-        dest_str = _trace_destinations(pin, comp)
+        dest_str = _trace_destinations(design, pin, comp)
         if pin.name:
             lines.append(f"  Pin {pin.designator:<5s}  {pin.name:<15s} -> {net_str}{dest_str}")
         else:
@@ -516,28 +570,20 @@ def format_component_detail(design: Schematic, ref: str) -> str:
 
 def format_net_detail(design: Schematic, name: str) -> str:
     """Format full detail for a single net. Raises ValueError if not found."""
-    net: Net | None = None
-    for n in design.nets:
-        if n.name == name:
-            net = n
-            break
-    if net is None:
-        for n in design.nets:
-            if name in n.aliases:
-                net = n
-                break
-    if net is None:
-        raise ValueError(f"Net '{name}' not found in design.")
+    net = _find_net(design, name)
 
-    net_pages = sorted({p.name for pin in net.pins for p in pin.component.pages})
+    net_pages = _net_page_names(net)
     alias_str = f" | Also: {', '.join(sorted(net.aliases))}" if net.aliases else ""
     lines = [f"NET: {net.name}{alias_str} | Pages: {', '.join(net_pages)}"]
+
+    if _net_name_is_ambiguous(design, net):
+        lines.append("  [name_not_unique: true]")
 
     for key, value in sorted(net.metadata.items()):
         lines.append(f"  [{key}: {value}]")
 
-    for pin in sorted(net.pins, key=lambda p: (p.component.reference, p.designator)):
-        ref_pin = f"{pin.component.reference}.{pin.designator}"
+    for pin in sorted(net.pins, key=lambda p: (_pin_label(design, p, net), p.designator)):
+        ref_pin = _pin_label(design, pin, net)
         comp_desc = pin.component.description or pin.component.part
         if pin.name:
             lines.append(f"  {ref_pin:<12s} {pin.name:<15s} ({comp_desc})")
@@ -579,7 +625,7 @@ def format_page_detail(design: Schematic, page_name: str) -> str:
         lines.append("")
         lines.append("Nets:")
         for net in sorted(page.nets, key=lambda n: n.name):
-            pin_strs = [f"{p.component.reference}.{p.designator}" for p in net.pins]
+            pin_strs = [_pin_label(design, pin, net) for pin in net.pins]
             lines.append(f"  {net.name:20s} {', '.join(pin_strs)}")
 
     return "\n".join(lines)

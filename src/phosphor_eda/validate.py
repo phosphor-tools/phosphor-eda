@@ -18,10 +18,10 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum, auto
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, final, override
 
 if TYPE_CHECKING:
-    from phosphor_eda.schematic import Schematic
+    from phosphor_eda.schematic import Net, Page, Pin, Schematic
 
 # ---------------------------------------------------------------------------
 # Finding data types
@@ -35,6 +35,8 @@ class Severity(StrEnum):
 
 
 class Category(StrEnum):
+    DUPLICATE_ID = auto()
+    RELATIONSHIP_MISMATCH = auto()
     EMPTY_NET = auto()
     SINGLE_PIN_NET = auto()
     EMPTY_NET_NAME = auto()
@@ -42,16 +44,23 @@ class Category(StrEnum):
     DUPLICATE_PIN_DESIGNATOR = auto()
     COMPONENT_NO_PINS = auto()
     COMPONENT_ALL_UNCONNECTED = auto()
-    ORPHAN_PORT = auto()
     POWER_PIN_UNCONNECTED = auto()
     HIGH_UNCONNECTED_RATIO = auto()
     NAME_RESIDUAL_MARKUP = auto()
 
 
+@final
 class Finding:
     """A single validation finding."""
 
-    __slots__ = ("severity", "category", "message", "component", "net", "pin")
+    __slots__: tuple[str, ...] = ("severity", "category", "message", "component", "net", "pin")
+
+    severity: Severity
+    category: Category
+    message: str
+    component: str
+    net: str
+    pin: str
 
     def __init__(
         self,
@@ -70,6 +79,7 @@ class Finding:
         self.net = net
         self.pin = pin
 
+    @override
     def __repr__(self) -> str:
         parts = [
             f"severity={self.severity.value!r}",
@@ -96,6 +106,162 @@ _HIGH_UNCONNECTED_FRACTION = 0.80
 
 # Pattern for residual Altium markup or non-printable chars
 _BAD_NAME_RE = re.compile(r"[\\~\x00-\x1f\x7f-\x9f]")
+
+
+def _append_duplicate_id_findings(
+    items: list[tuple[str, str]],
+    field_name: str,
+    findings: list[Finding],
+) -> None:
+    seen: set[str] = set()
+    reported: set[str] = set()
+    for item_id, label in items:
+        if item_id in seen and item_id not in reported:
+            findings.append(
+                Finding(
+                    Severity.ERROR,
+                    Category.DUPLICATE_ID,
+                    f"duplicate {field_name}: {item_id}",
+                    component=label if field_name == "Component.id" else "",
+                    net=label if field_name == "Net.id" else "",
+                    pin=label if field_name == "Pin.id" else "",
+                )
+            )
+            reported.add(item_id)
+        seen.add(item_id)
+
+
+def _all_component_pins(design: Schematic) -> list[Pin]:
+    pins: list[Pin] = []
+    for comp in design.components:
+        pins.extend(comp.pins)
+    return pins
+
+
+def _find_page_by_id(design: Schematic, page_id: str) -> Page | None:
+    for page in design.pages:
+        if page.id == page_id:
+            return page
+    return None
+
+
+def _find_net_by_id(design: Schematic, net_id: str) -> Net | None:
+    for net in design.nets:
+        if net.id == net_id:
+            return net
+    return None
+
+
+def _has_component_id(page: Page, component_id: str) -> bool:
+    return any(comp.id == component_id for comp in page.components)
+
+
+def _has_page_id(pages: list[Page], page_id: str) -> bool:
+    return any(page.id == page_id for page in pages)
+
+
+def _has_pin_id(net: Net, pin_id: str) -> bool:
+    return any(pin.id == pin_id for pin in net.pins)
+
+
+def _check_identity_and_links(design: Schematic, findings: list[Finding]) -> None:
+    """Check stable IDs and bidirectional object links."""
+    _append_duplicate_id_findings(
+        [(page.id, page.name) for page in design.pages],
+        "Page.id",
+        findings,
+    )
+    _append_duplicate_id_findings(
+        [(comp.id, comp.reference) for comp in design.components],
+        "Component.id",
+        findings,
+    )
+    _append_duplicate_id_findings(
+        [(net.id, net.name) for net in design.nets],
+        "Net.id",
+        findings,
+    )
+    _append_duplicate_id_findings(
+        [
+            (pin.id, f"{pin.component.reference}.{pin.designator}")
+            for pin in _all_component_pins(design)
+        ],
+        "Pin.id",
+        findings,
+    )
+
+    for comp in design.components:
+        for page in comp.pages:
+            target_page = _find_page_by_id(design, page.id) or page
+            if not _has_component_id(target_page, comp.id):
+                message = (
+                    f"Component.pages does not match Page.components: {comp.reference} "
+                    + f"lists page '{page.name}', but page does not list component"
+                )
+                findings.append(
+                    Finding(
+                        Severity.ERROR,
+                        Category.RELATIONSHIP_MISMATCH,
+                        message,
+                        component=comp.reference,
+                    )
+                )
+
+    for page in design.pages:
+        for comp in page.components:
+            if not _has_page_id(comp.pages, page.id):
+                message = (
+                    f"Page.components does not match Component.pages: page '{page.name}' "
+                    + f"lists {comp.reference}, but component does not list page"
+                )
+                findings.append(
+                    Finding(
+                        Severity.ERROR,
+                        Category.RELATIONSHIP_MISMATCH,
+                        message,
+                        component=comp.reference,
+                    )
+                )
+
+    for pin in _all_component_pins(design):
+        if pin.net is not None:
+            target_net = _find_net_by_id(design, pin.net.id) or pin.net
+            if _has_pin_id(target_net, pin.id):
+                continue
+            message = (
+                f"Pin.net does not match Net.pins: {pin.component.reference}."
+                + f"{pin.designator} points to net '{pin.net.name}', but the net does not "
+                + "list the pin"
+            )
+            findings.append(
+                Finding(
+                    Severity.ERROR,
+                    Category.RELATIONSHIP_MISMATCH,
+                    message,
+                    component=pin.component.reference,
+                    net=pin.net.name,
+                    pin=pin.designator,
+                )
+            )
+
+    for net in design.nets:
+        for pin in net.pins:
+            if pin.net is None or pin.net.id != net.id:
+                actual = pin.net.name if pin.net is not None else "(none)"
+                message = (
+                    f"Net.pins does not match Pin.net: net '{net.name}' lists "
+                    + f"{pin.component.reference}.{pin.designator}, but Pin.net is {actual}"
+                )
+                findings.append(
+                    Finding(
+                        Severity.ERROR,
+                        Category.RELATIONSHIP_MISMATCH,
+                        message,
+                        component=pin.component.reference,
+                        net=net.name,
+                        pin=pin.designator,
+                    )
+                )
 
 
 def _check_nets(design: Schematic, findings: list[Finding]) -> None:
@@ -139,29 +305,35 @@ def _check_nets(design: Schematic, findings: list[Finding]) -> None:
         elif len(net.pins) == 1:
             pin = net.pins[0]
             if not pin.no_connect:
+                message = (
+                    f"Net '{net.name}' has only 1 pin: "
+                    + f"{pin.component.reference}.{pin.designator}"
+                )
                 findings.append(
                     Finding(
                         Severity.WARNING,
                         Category.SINGLE_PIN_NET,
-                        f"Net '{net.name}' has only 1 pin: "
-                        f"{pin.component.reference}.{pin.designator}",
+                        message,
                         net=net.name,
                         component=pin.component.reference,
                         pin=pin.designator,
                     )
                 )
 
-        # Duplicate component.designator on the same net
+        # Duplicate logical component pin identity on the same net
         seen: set[tuple[str, str]] = set()
         for pin in net.pins:
-            key = (pin.component.reference, pin.designator)
+            key = (pin.component.id, pin.designator)
             if key in seen:
+                message = (
+                    f"Net '{net.name}' has duplicate pin {pin.component.reference}."
+                    + f"{pin.designator} (component.id, pin.designator)"
+                )
                 findings.append(
                     Finding(
                         Severity.ERROR,
                         Category.DUPLICATE_PIN_ON_NET,
-                        f"Net '{net.name}' has duplicate pin "
-                        f"{pin.component.reference}.{pin.designator}",
+                        message,
                         net=net.name,
                         component=pin.component.reference,
                         pin=pin.designator,
@@ -195,11 +367,15 @@ def _check_components(design: Schematic, findings: list[Finding]) -> None:
             desig_counts[pin.designator] = desig_counts.get(pin.designator, 0) + 1
         for desig, count in desig_counts.items():
             if count > 1:
+                message = (
+                    f"Component {comp.reference} has {count}x pin '{desig}' "
+                    + "duplicate (component.id, pin.designator)"
+                )
                 findings.append(
                     Finding(
                         Severity.ERROR,
                         Category.DUPLICATE_PIN_DESIGNATOR,
-                        f"Component {comp.reference} has {count}x pin '{desig}'",
+                        message,
                         component=comp.reference,
                         pin=desig,
                     )
@@ -225,13 +401,15 @@ def _check_components(design: Schematic, findings: list[Finding]) -> None:
         elif n_pins > _MAJOR_IC_THRESHOLD and n_unconnected > 0:
             ratio = n_unconnected / n_pins
             if ratio > _HIGH_UNCONNECTED_FRACTION:
+                message = (
+                    f"Component {comp.reference} ({comp.part}): {n_unconnected}/{n_pins} "
+                    + f"pins ({ratio:.0%}) unconnected"
+                )
                 findings.append(
                     Finding(
                         Severity.WARNING,
                         Category.HIGH_UNCONNECTED_RATIO,
-                        f"Component {comp.reference} ({comp.part}): "
-                        f"{n_unconnected}/{n_pins} pins "
-                        f"({ratio:.0%}) unconnected",
+                        message,
                         component=comp.reference,
                     )
                 )
@@ -240,12 +418,15 @@ def _check_components(design: Schematic, findings: list[Finding]) -> None:
         for pin in comp.pins:
             elec = pin.metadata.get("electrical")
             if elec == "power" and pin.net is None and not pin.no_connect:
+                message = (
+                    f"{comp.reference}.{pin.designator} ({pin.name}) is a power pin "
+                    + "with no net"
+                )
                 findings.append(
                     Finding(
                         Severity.WARNING,
                         Category.POWER_PIN_UNCONNECTED,
-                        f"{comp.reference}.{pin.designator} ({pin.name}) "
-                        f"is a power pin with no net",
+                        message,
                         component=comp.reference,
                         pin=pin.designator,
                     )
@@ -257,37 +438,19 @@ def _check_pin_names(design: Schematic, findings: list[Finding]) -> None:
     for comp in design.components:
         for pin in comp.pins:
             if pin.name and _BAD_NAME_RE.search(pin.name):
+                message = (
+                    f"Pin name contains residual markup: {comp.reference}."
+                    + f"{pin.designator} = {pin.name!r}"
+                )
                 findings.append(
                     Finding(
                         Severity.ERROR,
                         Category.NAME_RESIDUAL_MARKUP,
-                        f"Pin name contains residual markup: "
-                        f"{comp.reference}.{pin.designator} = {pin.name!r}",
+                        message,
                         component=comp.reference,
                         pin=pin.designator,
                     )
                 )
-
-
-def _check_ports(design: Schematic, findings: list[Finding]) -> None:
-    """Check port-level anomalies."""
-    # Count how many distinct pages each port name appears on
-    port_pages: dict[str, set[str]] = {}
-    for page in design.pages:
-        for port in page.ports:
-            port_pages.setdefault(port.name, set()).add(page.name)
-
-    for port_name, pages in port_pages.items():
-        if len(pages) < 2:
-            findings.append(
-                Finding(
-                    Severity.WARNING,
-                    Category.ORPHAN_PORT,
-                    f"Port '{port_name}' appears on only 1 page "
-                    f"({next(iter(pages))}), no bridging occurred",
-                    net=port_name,
-                )
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -302,10 +465,10 @@ def validate_design(design: Schematic) -> list[Finding]:
     then by category, then by message.
     """
     findings: list[Finding] = []
+    _check_identity_and_links(design, findings)
     _check_nets(design, findings)
     _check_components(design, findings)
     _check_pin_names(design, findings)
-    _check_ports(design, findings)
 
     # Sort: errors first, then warnings, then info; within each, by category
     severity_order = {Severity.ERROR: 0, Severity.WARNING: 1, Severity.INFO: 2}

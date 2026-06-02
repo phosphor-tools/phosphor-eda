@@ -1,8 +1,29 @@
 """Tests for the schematic text serializer."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import pytest
 
-from phosphor_eda.schematic import Component, Net, Page, Pin, Schematic
+from phosphor_eda.schematic import (
+    Component as DomainComponent,
+)
+from phosphor_eda.schematic import (
+    ComponentOccurrence,
+    NetOccurrence,
+    Schematic,
+    ScopeId,
+)
+from phosphor_eda.schematic import (
+    Net as DomainNet,
+)
+from phosphor_eda.schematic import (
+    Page as DomainPage,
+)
+from phosphor_eda.schematic import (
+    Pin as DomainPin,
+)
 from phosphor_eda.serialize import (
     filter_components,
     filter_nets,
@@ -16,6 +37,108 @@ from phosphor_eda.serialize import (
     format_trace,
     serialize_design,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from pathlib import Path
+
+
+class Page(DomainPage):
+    def __init__(
+        self,
+        *,
+        name: str,
+        id: str = "",
+        source_file: str = "",
+        scope_id: ScopeId | None = None,
+        components: list[DomainComponent] | None = None,
+        nets: list[DomainNet] | None = None,
+        annotations: list[str] | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(
+            id=id or f"page:{name}",
+            name=name,
+            source_file=source_file,
+            scope_id=scope_id or ScopeId(path=()),
+            components=components or [],
+            nets=nets or [],
+            annotations=annotations or [],
+            metadata=metadata or {},
+        )
+
+
+class Component(DomainComponent):
+    def __init__(
+        self,
+        *,
+        reference: str,
+        part: str,
+        description: str,
+        id: str = "",
+        pins: list[DomainPin] | None = None,
+        pages: list[DomainPage] | None = None,
+        occurrences: list[ComponentOccurrence] | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(
+            id=id or f"component:{reference}",
+            reference=reference,
+            part=part,
+            description=description,
+            pins=pins or [],
+            pages=pages or [],
+            occurrences=occurrences or [],
+            metadata=metadata or {},
+        )
+
+
+class Net(DomainNet):
+    def __init__(
+        self,
+        *,
+        name: str,
+        id: str = "",
+        pins: list[DomainPin] | None = None,
+        pages: list[DomainPage] | None = None,
+        occurrences: list[NetOccurrence] | None = None,
+        aliases: set[str] | None = None,
+        bus: str | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(
+            id=id or f"net:{name}",
+            name=name,
+            pins=pins or [],
+            pages=pages or [],
+            occurrences=occurrences or [],
+            aliases=aliases or set(),
+            bus=bus,
+            metadata=metadata or {},
+        )
+
+
+class Pin(DomainPin):
+    def __init__(
+        self,
+        *,
+        designator: str,
+        name: str,
+        component: DomainComponent,
+        id: str = "",
+        net: DomainNet | None = None,
+        no_connect: bool = False,
+        metadata: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(
+            id=id or f"pin:{component.id}:{designator}",
+            designator=designator,
+            name=name,
+            component=component,
+            net=net,
+            no_connect=no_connect,
+            metadata=metadata or {},
+        )
 
 
 def _simple_design():
@@ -50,6 +173,8 @@ def _simple_design():
 
     net_sclk.pins = [pin_u7_10, pin_r1_1]
     net_gnd.pins = [pin_u7_7, pin_r1_2]
+    net_sclk.pages = [page]
+    net_gnd.pages = [page]
 
     page.components = [comp_u7, comp_r1]
     page.nets = [net_sclk, net_gnd]
@@ -60,6 +185,125 @@ def _simple_design():
         nets=[net_gnd, net_sclk],
         components=[comp_r1, comp_u7],
         metadata={"Revision": "1.0"},
+    )
+
+
+def _multi_page_component_design() -> Schematic:
+    page_a = Page(name="A", scope_id=ScopeId(path=("root", "a")))
+    page_b = Page(name="B", scope_id=ScopeId(path=("root", "b")))
+    comp = Component(reference="U7", part="AD7768-1", description="ADC", pages=[page_a, page_b])
+    net = Net(name="DRDY", pages=[page_a, page_b])
+    pin = Pin(designator="10", name="DRDY", component=comp, net=net)
+    comp.pins = [pin]
+    net.pins = [pin]
+    comp.occurrences = [
+        ComponentOccurrence(
+            id="occ:u7:a",
+            component=comp,
+            page=page_a,
+            scope_id=page_a.scope_id,
+            source_id="source-u7-a",
+            part_id="A",
+        ),
+        ComponentOccurrence(
+            id="occ:u7:b",
+            component=comp,
+            page=page_b,
+            scope_id=page_b.scope_id,
+            source_id="source-u7-b",
+            part_id="B",
+        ),
+    ]
+    net.occurrences = [
+        NetOccurrence(
+            id="net-occ:drdy:a",
+            net=net,
+            page=page_a,
+            scope_id=page_a.scope_id,
+            source_local_net_id="local-a",
+            source_names={"DRDY"},
+        ),
+        NetOccurrence(
+            id="net-occ:drdy:b",
+            net=net,
+            page=page_b,
+            scope_id=page_b.scope_id,
+            source_local_net_id="local-b",
+            source_names={"DRDY"},
+        ),
+    ]
+    page_a.components = [comp]
+    page_b.components = [comp]
+    page_a.nets = [net]
+    page_b.nets = [net]
+    return Schematic(name="MULTI", pages=[page_a, page_b], nets=[net], components=[comp])
+
+
+def _duplicate_reference_design() -> Schematic:
+    page_a = Page(name="MCU_A", id="page:mcu-a", scope_id=ScopeId(path=("root", "mcu_a")))
+    page_b = Page(name="MCU_B", id="page:mcu-b", scope_id=ScopeId(path=("root", "mcu_b")))
+    comp_a = Component(
+        id="component:mcu-a:u7",
+        reference="U7",
+        part="MCU",
+        description="Processor",
+        pages=[page_a],
+    )
+    comp_b = Component(
+        id="component:mcu-b:u7",
+        reference="U7",
+        part="MCU",
+        description="Processor",
+        pages=[page_b],
+    )
+    bus = Net(id="net:shared-bus", name="SYNC", pages=[page_a, page_b])
+    reset_a = Net(
+        id="net:mcu-a:reset",
+        name="RESET",
+        pages=[page_a],
+        metadata={"resolver": "scoped"},
+    )
+    reset_b = Net(id="net:mcu-b:reset", name="RESET", pages=[page_b])
+    pin_a_10 = Pin(id="pin:mcu-a:u7:10", designator="10", name="SYNC", component=comp_a, net=bus)
+    pin_b_10 = Pin(id="pin:mcu-b:u7:10", designator="10", name="SYNC", component=comp_b, net=bus)
+    pin_a_1 = Pin(id="pin:mcu-a:u7:1", designator="1", name="RST", component=comp_a, net=reset_a)
+    pin_b_1 = Pin(id="pin:mcu-b:u7:1", designator="1", name="RST", component=comp_b, net=reset_b)
+    comp_a.pins = [pin_a_10, pin_a_1]
+    comp_b.pins = [pin_b_10, pin_b_1]
+    bus.pins = [pin_a_10, pin_b_10]
+    reset_a.pins = [pin_a_1]
+    reset_b.pins = [pin_b_1]
+    reset_a.occurrences = [
+        NetOccurrence(
+            id="net-occ:mcu-a:reset",
+            net=reset_a,
+            page=page_a,
+            scope_id=page_a.scope_id,
+            source_local_net_id="N$1",
+            source_names={"RESET"},
+            metadata={"source": "local-label"},
+        )
+    ]
+    reset_b.occurrences = [
+        NetOccurrence(
+            id="net-occ:mcu-b:reset",
+            net=reset_b,
+            page=page_b,
+            scope_id=page_b.scope_id,
+            source_local_net_id="N$1",
+            source_names={"RESET"},
+            metadata={"source": "local-label"},
+        )
+    ]
+    page_a.components = [comp_a]
+    page_b.components = [comp_b]
+    page_a.nets = [bus, reset_a]
+    page_b.nets = [bus, reset_b]
+    return Schematic(
+        name="DUPLICATES",
+        pages=[page_a, page_b],
+        nets=[bus, reset_a, reset_b],
+        components=[comp_a, comp_b],
     )
 
 
@@ -90,6 +334,7 @@ def test_serialize_contains_net_section():
     assert "NET: ADC_SCLK" in text
     assert "U7.10" in text
     assert "R1.1" in text
+    assert "ADC/U7.10" not in text
 
 
 def test_serialize_grep_friendly():
@@ -100,7 +345,7 @@ def test_serialize_grep_friendly():
     assert len(lines_with_sclk) >= 3  # U7 pin, R1 pin, NET header
 
 
-def test_serialize_to_file(tmp_path):
+def test_serialize_to_file(tmp_path: Path):
     from phosphor_eda.serialize import write_design
 
     design = _simple_design()
@@ -109,6 +354,86 @@ def test_serialize_to_file(tmp_path):
     assert out.exists()
     text = out.read_text()
     assert "=== DESIGN SUMMARY ===" in text
+
+
+def test_serialize_normal_output_hides_ids_and_scope_paths():
+    text = serialize_design(_duplicate_reference_design())
+    assert "component:mcu-a:u7" not in text
+    assert "net:mcu-a:reset" not in text
+    assert "pin:mcu-a:u7:10" not in text
+    assert "net-occ:mcu-a:reset" not in text
+    assert "/root/mcu_a" not in text
+    assert "N$1" not in text
+
+
+def test_serialize_multi_page_logical_component_is_single_block():
+    text = serialize_design(_multi_page_component_design())
+    assert text.count("COMPONENT: U7 | AD7768-1 | ADC | Pages: A, B") == 1
+
+
+def test_net_detail_qualifies_duplicate_component_references_only_when_ambiguous():
+    simple_detail = format_net_detail(_simple_design(), "ADC_SCLK")
+    assert "U7.10" in simple_detail
+    assert "ADC/U7.10" not in simple_detail
+
+    duplicate_detail = format_net_detail(_duplicate_reference_design(), "SYNC")
+    assert "MCU_A/U7.10" in duplicate_detail
+    assert "MCU_B/U7.10" in duplicate_detail
+
+
+def test_pin_context_page_uses_page_id_identity_for_duplicate_references():
+    page_a = Page(id="page:a", name="A")
+    page_b = Page(id="page:b", name="B")
+    same_page_b = Page(id=page_b.id, name=page_b.name)
+    page_c = Page(id="page:c", name="C")
+    comp_a = Component(
+        id="component:a:u7",
+        reference="U7",
+        part="MCU",
+        description="",
+        pages=[page_a, page_b],
+    )
+    comp_b = Component(
+        id="component:c:u7",
+        reference="U7",
+        part="MCU",
+        description="",
+        pages=[page_c],
+    )
+    net = Net(id="net:sig", name="SIG", pages=[same_page_b])
+    pin = Pin(designator="10", name="SIG", component=comp_a, net=net)
+    comp_a.pins = [pin]
+    net.pins = [pin]
+    page_a.components = [comp_a]
+    page_b.components = [comp_a]
+    page_c.components = [comp_b]
+    page_b.nets = [net]
+    design = Schematic(
+        name="PAGE_IDS",
+        pages=[page_a, page_b, page_c],
+        nets=[net],
+        components=[comp_a, comp_b],
+    )
+
+    detail = format_net_detail(design, "SIG")
+
+    assert "B/U7.10" in detail
+    assert "A/B/U7.10" not in detail
+
+
+def test_duplicate_net_names_are_separate_blocks_with_minimal_marker():
+    text = serialize_design(_duplicate_reference_design())
+    reset_headers = [line for line in text.splitlines() if line.startswith("NET: RESET")]
+    assert reset_headers == ["NET: RESET | Pages: MCU_A", "NET: RESET | Pages: MCU_B"]
+    assert text.count("[name_not_unique: true]") == 2
+
+
+def test_net_provenance_is_not_printed_as_default_ids():
+    text = serialize_design(_duplicate_reference_design())
+    assert "[resolver: scoped]" in text
+    assert "source_local_net_id" not in text
+    assert "local-label" not in text
+    assert "net-occ:" not in text
 
 
 def test_serialize_suppresses_electrical_passive():
@@ -319,7 +644,7 @@ def test_format_component_detail():
 def test_format_component_detail_not_found():
     design = _simple_design()
     with pytest.raises(ValueError, match="not found"):
-        format_component_detail(design, "U99")
+        _ = format_component_detail(design, "U99")
 
 
 def test_format_net_detail():
@@ -333,7 +658,7 @@ def test_format_net_detail():
 def test_format_net_detail_not_found():
     design = _simple_design()
     with pytest.raises(ValueError, match="not found"):
-        format_net_detail(design, "NONEXISTENT")
+        _ = format_net_detail(design, "NONEXISTENT")
 
 
 def test_format_page_detail():
@@ -347,7 +672,7 @@ def test_format_page_detail():
 def test_format_page_detail_not_found():
     design = _simple_design()
     with pytest.raises(ValueError, match="not found"):
-        format_page_detail(design, "NONEXISTENT")
+        _ = format_page_detail(design, "NONEXISTENT")
 
 
 # ---- Filterable design helper ----
@@ -415,7 +740,7 @@ def _filterable_design():
     # TP1 on SPI_CLK
     spi_clk_b = Net(name="SPI_CLK_B")
 
-    def connect(pin, net):
+    def connect(pin: DomainPin, net: DomainNet) -> None:
         pin.net = net
         net.pins.append(pin)
 
@@ -474,14 +799,14 @@ def _filterable_design():
     page_power.nets = [p3v3, gnd]
 
     # P3V3 spans both pages (U1.VDD is on SPI page, vreg/C1 on Power page)
-    all_nets = [spi_clk, spi_clk_b, spi_mosi, p3v3, gnd]
-    all_comps = [u1, u2, r1, r2, c1, tp1, vreg]
+    all_nets: Sequence[DomainNet] = [spi_clk, spi_clk_b, spi_mosi, p3v3, gnd]
+    all_comps: Sequence[DomainComponent] = [u1, u2, r1, r2, c1, tp1, vreg]
 
     return Schematic(
         name="FILTER_TEST",
         pages=[page_power, page_spi],
-        nets=all_nets,
-        components=all_comps,
+        nets=list(all_nets),
+        components=list(all_comps),
     )
 
 
@@ -670,6 +995,11 @@ def test_format_trace_shunts_shown():
     # R2 is a pull-up on SPI_CLK
     assert "R2" in output
     assert "P3V3" in output
+
+
+def test_format_trace_duplicate_reference_lookup_is_ambiguous():
+    with pytest.raises(ValueError, match="ambiguous"):
+        _ = format_trace(_duplicate_reference_design(), "U7", "U7")
 
 
 def test_format_component_detail_trace_through():

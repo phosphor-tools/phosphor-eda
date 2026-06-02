@@ -1,28 +1,330 @@
 """Tests for schematic validation smoke checks."""
 
-from phosphor_eda.schematic import Component, Net, Page, Pin, Port, Schematic
-from phosphor_eda.validate import Category, Severity, validate_design
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from phosphor_eda.schematic import (
+    Component as DomainComponent,
+)
+from phosphor_eda.schematic import (
+    Net as DomainNet,
+)
+from phosphor_eda.schematic import (
+    Page as DomainPage,
+)
+from phosphor_eda.schematic import (
+    Pin as DomainPin,
+)
+from phosphor_eda.schematic import (
+    Schematic,
+    ScopeId,
+)
+from phosphor_eda.validate import Category, Finding, Severity, validate_design
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
-def _make_pin(comp: Component, desig: str, name: str, net: Net | None) -> Pin:
+class Page(DomainPage):
+    def __init__(
+        self,
+        *,
+        name: str,
+        id: str = "",
+        source_file: str = "",
+        scope_id: ScopeId | None = None,
+        components: list[DomainComponent] | None = None,
+        nets: list[DomainNet] | None = None,
+        annotations: list[str] | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(
+            id=id or f"page:{name}",
+            name=name,
+            source_file=source_file,
+            scope_id=scope_id or ScopeId(path=()),
+            components=components or [],
+            nets=nets or [],
+            annotations=annotations or [],
+            metadata=metadata or {},
+        )
+
+
+class Component(DomainComponent):
+    def __init__(
+        self,
+        *,
+        reference: str,
+        part: str,
+        description: str,
+        id: str = "",
+        pins: list[DomainPin] | None = None,
+        pages: list[DomainPage] | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(
+            id=id or f"component:{reference}",
+            reference=reference,
+            part=part,
+            description=description,
+            pins=pins or [],
+            pages=pages or [],
+            metadata=metadata or {},
+        )
+
+
+class Net(DomainNet):
+    def __init__(
+        self,
+        *,
+        name: str,
+        id: str = "",
+        pins: list[DomainPin] | None = None,
+        pages: list[DomainPage] | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(
+            id=id or f"net:{name}",
+            name=name,
+            pins=pins or [],
+            pages=pages or [],
+            metadata=metadata or {},
+        )
+
+
+class Pin(DomainPin):
+    def __init__(
+        self,
+        *,
+        designator: str,
+        name: str,
+        component: DomainComponent,
+        id: str = "",
+        net: DomainNet | None = None,
+        no_connect: bool = False,
+        metadata: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(
+            id=id or f"pin:{component.id}:{designator}",
+            designator=designator,
+            name=name,
+            component=component,
+            net=net,
+            no_connect=no_connect,
+            metadata=metadata or {},
+        )
+
+
+def _make_pin(comp: Component, desig: str, name: str, net: Net | None) -> None:
     pin = Pin(designator=desig, name=name, component=comp, net=net, metadata={})
     comp.pins.append(pin)
     if net is not None:
         net.pins.append(pin)
-    return pin
 
 
 def _simple_design(
-    nets: list[Net] | None = None,
-    components: list[Component] | None = None,
-    pages: list[Page] | None = None,
+    nets: Sequence[DomainNet] | None = None,
+    components: Sequence[DomainComponent] | None = None,
+    pages: Sequence[DomainPage] | None = None,
 ) -> Schematic:
     return Schematic(
         name="test",
-        nets=nets or [],
-        components=components or [],
-        pages=pages or [Page(name="Main")],
+        nets=list(nets) if nets is not None else [],
+        components=list(components) if components is not None else [],
+        pages=list(pages) if pages is not None else [Page(name="Main")],
     )
+
+
+def _errors(findings: Sequence[Finding]) -> list[Finding]:
+    return [finding for finding in findings if finding.severity == Severity.ERROR]
+
+
+def _assert_error(findings: Sequence[Finding], category: Category, message_part: str) -> None:
+    matches = [
+        finding
+        for finding in findings
+        if finding.severity == Severity.ERROR
+        and finding.category == category
+        and message_part in finding.message
+    ]
+    assert matches, findings
+
+
+# --- Structural identity/link checks ---
+
+
+def test_duplicate_component_id_is_error():
+    page = Page(name="A")
+    c1 = Component(
+        id="component:duplicate",
+        reference="U1",
+        part="IC",
+        description="",
+        pages=[page],
+    )
+    c2 = Component(
+        id="component:duplicate",
+        reference="U2",
+        part="IC",
+        description="",
+        pages=[page],
+    )
+    page.components = [c1, c2]
+    findings = validate_design(_simple_design(components=[c1, c2], pages=[page]))
+    _assert_error(findings, Category.DUPLICATE_ID, "duplicate Component.id")
+
+
+def test_duplicate_page_id_is_error():
+    page_a = Page(id="page:duplicate", name="A")
+    page_b = Page(id="page:duplicate", name="B")
+    findings = validate_design(_simple_design(pages=[page_a, page_b]))
+    _assert_error(findings, Category.DUPLICATE_ID, "duplicate Page.id")
+
+
+def test_duplicate_pin_id_is_error():
+    page = Page(name="A")
+    net = Net(name="SIG", pages=[page])
+    comp = Component(reference="U1", part="IC", description="", pages=[page])
+    pin_a = Pin(id="pin:duplicate", designator="1", name="A", component=comp, net=net)
+    pin_b = Pin(id="pin:duplicate", designator="2", name="B", component=comp, net=net)
+    comp.pins = [pin_a, pin_b]
+    net.pins = [pin_a, pin_b]
+    page.components = [comp]
+    page.nets = [net]
+    findings = validate_design(_simple_design(nets=[net], components=[comp], pages=[page]))
+    _assert_error(findings, Category.DUPLICATE_ID, "duplicate Pin.id")
+
+
+def test_duplicate_net_id_is_error():
+    page = Page(name="A")
+    net_a = Net(id="net:duplicate", name="A", pages=[page])
+    net_b = Net(id="net:duplicate", name="B", pages=[page])
+    page.nets = [net_a, net_b]
+    findings = validate_design(_simple_design(nets=[net_a, net_b], pages=[page]))
+    _assert_error(findings, Category.DUPLICATE_ID, "duplicate Net.id")
+
+
+def test_duplicate_component_references_across_independent_scopes_are_allowed():
+    page_a = Page(name="MCU_A", id="page:mcu-a", scope_id=ScopeId(path=("mcu_a",)))
+    page_b = Page(name="MCU_B", id="page:mcu-b", scope_id=ScopeId(path=("mcu_b",)))
+    comp_a = Component(
+        id="component:mcu-a:u7",
+        reference="U7",
+        part="MCU",
+        description="",
+        pages=[page_a],
+    )
+    comp_b = Component(
+        id="component:mcu-b:u7",
+        reference="U7",
+        part="MCU",
+        description="",
+        pages=[page_b],
+    )
+    net_a = Net(id="net:mcu-a:sig", name="SIG", pages=[page_a])
+    net_b = Net(id="net:mcu-b:sig", name="SIG", pages=[page_b])
+    _make_pin(comp_a, "1", "SIG", net_a)
+    _make_pin(comp_b, "1", "SIG", net_b)
+    page_a.components = [comp_a]
+    page_b.components = [comp_b]
+    page_a.nets = [net_a]
+    page_b.nets = [net_b]
+    findings = validate_design(
+        _simple_design(
+            nets=[net_a, net_b],
+            components=[comp_a, comp_b],
+            pages=[page_a, page_b],
+        )
+    )
+    assert not _errors(findings)
+
+
+def test_duplicate_component_id_pin_designator_is_error():
+    page = Page(name="A")
+    net = Net(name="SIG", pages=[page])
+    comp = Component(reference="U1", part="IC", description="", pages=[page])
+    _make_pin(comp, "1", "A", net)
+    _make_pin(comp, "1", "B", net)
+    page.components = [comp]
+    page.nets = [net]
+    findings = validate_design(_simple_design(nets=[net], components=[comp], pages=[page]))
+    _assert_error(findings, Category.DUPLICATE_PIN_DESIGNATOR, "(component.id, pin.designator)")
+
+
+def test_pin_net_missing_from_net_pins_is_error():
+    page = Page(name="A")
+    net = Net(name="SIG", pages=[page])
+    comp = Component(reference="U1", part="IC", description="", pages=[page])
+    pin = Pin(designator="1", name="SIG", component=comp, net=net)
+    comp.pins = [pin]
+    page.components = [comp]
+    page.nets = [net]
+    findings = validate_design(_simple_design(nets=[net], components=[comp], pages=[page]))
+    _assert_error(findings, Category.RELATIONSHIP_MISMATCH, "Pin.net does not match Net.pins")
+
+
+def test_net_pin_missing_pin_net_is_error():
+    page = Page(name="A")
+    net = Net(name="SIG", pages=[page])
+    comp = Component(reference="U1", part="IC", description="", pages=[page])
+    pin = Pin(designator="1", name="SIG", component=comp, net=None)
+    comp.pins = [pin]
+    net.pins = [pin]
+    page.components = [comp]
+    page.nets = [net]
+    findings = validate_design(_simple_design(nets=[net], components=[comp], pages=[page]))
+    _assert_error(findings, Category.RELATIONSHIP_MISMATCH, "Net.pins does not match Pin.net")
+
+
+def test_component_page_missing_from_page_components_is_error():
+    page = Page(name="A")
+    comp = Component(reference="U1", part="IC", description="", pages=[page])
+    findings = validate_design(_simple_design(components=[comp], pages=[page]))
+    _assert_error(
+        findings,
+        Category.RELATIONSHIP_MISMATCH,
+        "Component.pages does not match Page.components",
+    )
+
+
+def test_page_component_missing_from_component_pages_is_error():
+    page = Page(name="A")
+    comp = Component(reference="U1", part="IC", description="", pages=[])
+    page.components = [comp]
+    findings = validate_design(_simple_design(components=[comp], pages=[page]))
+    _assert_error(
+        findings,
+        Category.RELATIONSHIP_MISMATCH,
+        "Page.components does not match Component.pages",
+    )
+
+
+def test_pin_net_relationship_uses_net_id_identity():
+    page = Page(name="A")
+    net = Net(id="net:sig", name="SIG", pages=[page])
+    same_net = Net(id=net.id, name=net.name, pages=[page])
+    comp = Component(reference="U1", part="IC", description="", pages=[page])
+    pin = Pin(designator="1", name="SIG", component=comp, net=same_net)
+    comp.pins = [pin]
+    net.pins = [pin]
+    page.components = [comp]
+    page.nets = [net]
+
+    findings = validate_design(_simple_design(nets=[net], components=[comp], pages=[page]))
+
+    assert not any(f.category == Category.RELATIONSHIP_MISMATCH for f in findings)
+
+
+def test_component_page_relationship_uses_page_id_identity():
+    page = Page(id="page:a", name="A")
+    same_page = Page(id=page.id, name=page.name)
+    comp = Component(reference="U1", part="IC", description="", pages=[same_page])
+    page.components = [comp]
+
+    findings = validate_design(_simple_design(components=[comp], pages=[page]))
+
+    assert not any(f.category == Category.RELATIONSHIP_MISMATCH for f in findings)
 
 
 # --- Net checks ---
@@ -195,34 +497,11 @@ def test_clean_names_no_markup_findings():
     assert not any(f.category == Category.NAME_RESIDUAL_MARKUP for f in findings)
 
 
-# --- Port checks ---
+# --- Removed port checks ---
 
 
-def test_orphan_port():
-    page_a = Page(name="ADC")
-    net = Net(name="SIG")
-    port = Port(name="SCLK", page=page_a, net=net)
-    page_a.ports = [port]
-    page_a.nets = [net]
-    design = _simple_design(nets=[net], pages=[page_a])
-    findings = validate_design(design)
-    assert any(f.category == Category.ORPHAN_PORT for f in findings)
-
-
-def test_bridged_port_not_orphan():
-    page_a = Page(name="ADC")
-    page_b = Page(name="TopLevel")
-    net_a = Net(name="SIG_A")
-    net_b = Net(name="SIG_B")
-    port_a = Port(name="SCLK", page=page_a, net=net_a)
-    port_b = Port(name="SCLK", page=page_b, net=net_b)
-    page_a.ports = [port_a]
-    page_a.nets = [net_a]
-    page_b.ports = [port_b]
-    page_b.nets = [net_b]
-    design = _simple_design(nets=[net_a, net_b], pages=[page_a, page_b])
-    findings = validate_design(design)
-    assert not any(f.category == Category.ORPHAN_PORT for f in findings)
+def test_orphan_port_validation_category_is_gone():
+    assert "ORPHAN_PORT" not in Category.__members__
 
 
 # --- Sorting ---

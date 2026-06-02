@@ -66,8 +66,7 @@ class Component:
     @override
     def __repr__(self) -> str:
         return (
-            f"Component({self.id!r}, {self.reference!r}, "
-            f"part={self.part!r}, pins={len(self.pins)})"
+            f"Component({self.id!r}, {self.reference!r}, part={self.part!r}, pins={len(self.pins)})"
         )
 
 
