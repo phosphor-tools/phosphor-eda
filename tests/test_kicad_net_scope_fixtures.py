@@ -9,6 +9,7 @@ from phosphor_eda.schematic import Net
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 HIERARCHY_ROOT = FIXTURES / "kicad-hierarchy" / "root.kicad_sch"
 REPEATED_ROOT = FIXTURES / "kicad-repeated-sheet" / "root.kicad_sch"
+NET_SCOPE_ROOT = FIXTURES / "kicad-net-scope" / "root.kicad_sch"
 
 
 def _net_for_reference(nets: list[Net], reference: str) -> Net:
@@ -16,6 +17,10 @@ def _net_for_reference(nets: list[Net], reference: str) -> Net:
         if any(pin.component.reference == reference for pin in net.pins):
             return net
     raise AssertionError(f"No net found for {reference}")
+
+
+def _nets_for_reference(nets: list[Net], reference: str) -> list[Net]:
+    return [net for net in nets if any(pin.component.reference == reference for pin in net.pins)]
 
 
 def _refs(net: Net) -> set[str]:
@@ -49,3 +54,37 @@ def test_repeated_sheet_fixture_unconnected_global_label_does_not_emit_empty_net
     design = resolve_kicad_source(kicad_to_source(REPEATED_ROOT))
 
     assert all(net.name != "SYNC" for net in design.nets)
+
+
+def test_net_scope_fixture_keeps_local_labels_on_sibling_sheets_separate() -> None:
+    design = resolve_kicad_source(kicad_to_source(NET_SCOPE_ROOT))
+
+    assert _refs(_net_for_reference(design.nets, "R_LOCAL_A")) == {"R_LOCAL_A"}
+    assert _refs(_net_for_reference(design.nets, "R_LOCAL_B")) == {"R_LOCAL_B"}
+
+
+def test_net_scope_fixture_merges_global_labels_on_sibling_sheets() -> None:
+    design = resolve_kicad_source(kicad_to_source(NET_SCOPE_ROOT))
+
+    assert _refs(_net_for_reference(design.nets, "R_GLOBAL_A")) == {
+        "R_GLOBAL_A",
+        "R_GLOBAL_B",
+    }
+
+
+def test_net_scope_fixture_keeps_repeated_sheet_instances_distinct_without_parent_connection() -> (
+    None
+):
+    design = resolve_kicad_source(kicad_to_source(NET_SCOPE_ROOT))
+    iso_nets = _nets_for_reference(design.nets, "R_ISO")
+
+    assert len(iso_nets) == 2
+    assert all(len(net.pins) == 1 for net in iso_nets)
+
+
+def test_net_scope_fixture_parent_sheet_pins_merge_matching_child_hierarchical_labels() -> None:
+    design = resolve_kicad_source(kicad_to_source(NET_SCOPE_ROOT))
+    bus_nets = _nets_for_reference(design.nets, "R_BUS")
+
+    assert len(bus_nets) == 1
+    assert len(bus_nets[0].pins) == 2
