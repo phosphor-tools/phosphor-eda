@@ -201,7 +201,7 @@ def _child_sheets_by_source_file(
 ) -> dict[str, list[AltiumSheetSource]]:
     result: dict[str, list[AltiumSheetSource]] = {}
     for sheet in source.sheets.values():
-        result.setdefault(sheet.source_file, []).append(sheet)
+        result.setdefault(_source_file_key(sheet.source_file), []).append(sheet)
         result.setdefault(sheet.name, []).append(sheet)
     return result
 
@@ -211,9 +211,8 @@ def _repeated_child_source_files(source: AltiumSourceDesign) -> set[str]:
     for sheet in source.sheets.values():
         for symbol in sheet.sheet_symbols:
             if symbol.child_source_file:
-                symbol_counts[symbol.child_source_file] = (
-                    symbol_counts.get(symbol.child_source_file, 0) + 1
-                )
+                child_source_file = _source_file_key(symbol.child_source_file)
+                symbol_counts[child_source_file] = symbol_counts.get(child_source_file, 0) + 1
     return {child_source_file for child_source_file, count in symbol_counts.items() if count > 1}
 
 
@@ -222,7 +221,7 @@ def _child_sheets_for_symbol(
     repeated_child_files: set[str],
     sheet_symbol: AltiumSheetSymbol,
 ) -> list[AltiumSheetSource]:
-    child_sheets = child_sheets_by_file.get(sheet_symbol.child_source_file, [])
+    child_sheets = child_sheets_by_file.get(_source_file_key(sheet_symbol.child_source_file), [])
     instance_scoped = [
         sheet
         for sheet in child_sheets
@@ -230,7 +229,7 @@ def _child_sheets_for_symbol(
     ]
     if instance_scoped:
         return instance_scoped
-    if sheet_symbol.child_source_file in repeated_child_files:
+    if _source_file_key(sheet_symbol.child_source_file) in repeated_child_files:
         return []
     return child_sheets
 
@@ -436,7 +435,17 @@ def _build_components(
 def _sheet_for_scope(source: AltiumSourceDesign, path: tuple[str, ...]) -> AltiumSheetSource | None:
     if not path:
         return None
-    return source.sheets.get(path[-1])
+    sheet = source.sheets.get(path[-1])
+    if sheet is not None:
+        return sheet
+    for candidate in source.sheets.values():
+        if candidate.scope_id.path == path:
+            return candidate
+    return None
+
+
+def _source_file_key(source_file: str) -> str:
+    return source_file.replace("\\", "/")
 
 
 def _group_has_pins(

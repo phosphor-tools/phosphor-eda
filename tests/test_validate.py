@@ -300,6 +300,29 @@ def test_page_component_missing_from_component_pages_is_error():
     )
 
 
+def test_page_net_missing_from_net_pages_is_error():
+    page = Page(name="A")
+    net = Net(name="SIG", pages=[])
+    page.nets = [net]
+    findings = validate_design(_simple_design(nets=[net], pages=[page]))
+    _assert_error(
+        findings,
+        Category.RELATIONSHIP_MISMATCH,
+        "Page.nets does not match Net.pages",
+    )
+
+
+def test_net_page_missing_from_page_nets_is_error():
+    page = Page(name="A")
+    net = Net(name="SIG", pages=[page])
+    findings = validate_design(_simple_design(nets=[net], pages=[page]))
+    _assert_error(
+        findings,
+        Category.RELATIONSHIP_MISMATCH,
+        "Net.pages does not match Page.nets",
+    )
+
+
 def test_pin_net_relationship_uses_net_id_identity():
     page = Page(name="A")
     net = Net(id="net:sig", name="SIG", pages=[page])

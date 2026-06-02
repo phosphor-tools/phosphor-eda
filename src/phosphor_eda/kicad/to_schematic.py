@@ -2,8 +2,8 @@
 
 The source extractor keeps KiCad labels, sheet pins, sheet instances, power
 symbols, and local wire groups separate. It intentionally does not construct
-the public schematic graph; Task 9 will resolve these source objects into the
-public ``Schematic`` model.
+the public schematic graph; the resolver converts these source objects into
+the public ``Schematic`` model.
 """
 
 from __future__ import annotations

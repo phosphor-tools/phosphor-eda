@@ -779,4 +779,4 @@ def build_page(
     nc_wire_coords: set[tuple[int, int]] | None = None,
 ) -> Page:
     """Legacy public page builder removed with the old public Port model."""
-    raise NotImplementedError("Altium public conversion is handled by the Task 7 resolver")
+    raise NotImplementedError("Altium public conversion is handled by the source resolver")

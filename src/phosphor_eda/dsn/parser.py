@@ -7,6 +7,7 @@ Based on the reverse-engineering work of the OpenOrCadParser C++ project:
 https://github.com/Werni2A/OpenOrCadParser
 """
 
+import logging
 import struct
 from pathlib import Path
 
@@ -32,6 +33,8 @@ from phosphor_eda.dsn.models import (
     SchematicPage,
     Wire,
 )
+
+logger = logging.getLogger(__name__)
 
 # --- Structure parsers ---
 
@@ -312,13 +315,13 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
             # Checkpoint: source_package string
             r.try_read_preamble()
             inst.source_package = r.read_string_len_zero()
+            page.instances.append(inst)
         except (struct.error, IndexError, ValueError) as e:
-            print(f"    Warning: PlacedInstance parse error: {e}")
+            logger.warning("PlacedInstance parse error: %s", e)
 
         # Jump to end_offset for safety
         if end_offset > 0:
             r.pos = end_offset
-        page.instances.append(inst)
 
     # Ports
     num_ports = r.read_uint16()
@@ -336,7 +339,7 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
                     has_name_indices=False,
                 )
             except (struct.error, IndexError, ValueError) as e:
-                print(f"    Warning: Port parse error: {e}")
+                logger.warning("Port parse error: %s", e)
         if end_offset > 0:
             r.pos = end_offset
         if port is not None:
@@ -361,7 +364,7 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
                 )
             r.skip(1)  # unknownFlag (0x21 for Global)
         except (struct.error, IndexError, ValueError) as e:
-            print(f"    Warning: Global parse error: {e}")
+            logger.warning("Global parse error: %s", e)
 
         if end_offset > 0:
             r.pos = end_offset
@@ -386,7 +389,7 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
                 )
                 r.skip(1)  # unknownFlag, same trailing flag shape as globals
             except (struct.error, IndexError, ValueError) as e:
-                print(f"    Warning: Off-page connector parse error: {e}")
+                logger.warning("Off-page connector parse error: %s", e)
         if end_offset > 0:
             r.pos = end_offset
         if connector is not None:

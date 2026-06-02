@@ -217,7 +217,7 @@ def _build_nets(
 
 
 def select_kicad_net_name(local_nets: Iterable[KiCadLocalNet]) -> str:
-    """Select a public net name using the Task 9 KiCad priority order."""
+    """Select a public net name using KiCad source-name priority."""
     evidence = _combined_name_evidence(local_nets)
     for names in (
         evidence.global_labels,
@@ -410,9 +410,6 @@ def _component_metadata(pin_occurrence: KiCadPinOccurrence) -> dict[str, str]:
 
 def _component_identity(pin_occurrence: KiCadPinOccurrence) -> str:
     scope_key = _scope_key(pin_occurrence.scope_id)
-    source_id = pin_occurrence.component_source_id
-    if source_id:
-        return f"kicad:component:{scope_key}:{source_id}"
     return f"kicad:component:{scope_key}:{pin_occurrence.component_reference}"
 
 

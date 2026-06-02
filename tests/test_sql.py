@@ -560,7 +560,7 @@ class TestConstructedSchematicSql:
             ("net:sync", "SYNC", "source_scope_ids", "/root/control,/root/power"),
         ]
 
-    def test_net_summary_groups_schematic_by_net_id_and_joins_pcb_by_name(
+    def test_net_summary_groups_schematic_by_net_id_without_name_joined_pcb_counts(
         self, constructed_db: duckdb.DuckDBPyConnection
     ) -> None:
         rows = constructed_db.execute(
@@ -572,8 +572,8 @@ class TestConstructedSchematicSql:
             """
         ).fetchall()
         assert rows == [
-            ("net:reset:control", "RESET", 1, 1, 1, 10.0),
-            ("net:reset:power", "RESET", 2, 1, 1, 10.0),
+            ("net:reset:control", "RESET", 1, 0, 0, 0.0),
+            ("net:reset:power", "RESET", 2, 0, 0, 0.0),
         ]
 
     def test_loader_referential_integrity(self, constructed_db: duckdb.DuckDBPyConnection) -> None:
@@ -855,7 +855,7 @@ class TestJetsonDesignRules:
 
 class TestJetsonSchematic:
     def test_components_count(self, jetson_db: duckdb.DuckDBPyConnection) -> None:
-        assert _count(jetson_db, "SELECT count(*) FROM components") == 675
+        assert _count(jetson_db, "SELECT count(*) FROM components") == 666
 
     def test_nets_have_net_class(self, jetson_db: duckdb.DuckDBPyConnection) -> None:
         count = _count(jetson_db, "SELECT count(*) FROM nets WHERE net_class IS NOT NULL")

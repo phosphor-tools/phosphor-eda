@@ -25,11 +25,7 @@ def load_project_sheets(
     path: Path,
     ctx: ParseContext | None = None,
 ) -> dict[str, SheetRecords]:
-    """Load raw typed schematic sheets from a project or single sheet.
-
-    This remains for netlist/import compatibility. Public conversion no longer
-    builds pages from these records in Task 6.
-    """
+    """Load raw typed schematic records for netlist and import compatibility."""
     if ctx is None:
         ctx = ParseContext()
     sheets: dict[str, SheetRecords] = {}
@@ -62,7 +58,7 @@ def load_project_source(
     path: Path,
     ctx: ParseContext | None = None,
 ) -> tuple[AltiumSourceDesign, ParseContext]:
-    """Load an Altium project as source objects for the Task 7 resolver."""
+    """Load an Altium project as source objects for scoped net resolution."""
     if ctx is None:
         ctx = ParseContext()
     project, sheets = load_project_source_sheets(path, ctx=ctx)

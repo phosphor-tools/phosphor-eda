@@ -56,12 +56,14 @@ def test_rp2040_has_pins(design):
 
 def test_rp2040_pins_have_names(design):
     u3 = _find_component(design, "U3")
+    assert u3 is not None
     named = [p for p in u3.pins if p.name]
     assert len(named) > 40  # most pins should have names
 
 
 def test_component_source_metadata(design):
     u3 = _find_component(design, "U3")
+    assert u3 is not None
     assert "kicad_component_source_ids" in u3.metadata
     assert u3.metadata["Value"] == "RP2040"
 
@@ -128,6 +130,7 @@ def test_3v3_net_exists(design):
 
 def test_pin_source_metadata(design):
     u3 = _find_component(design, "U3")
+    assert u3 is not None
     pins_with_source = [p for p in u3.pins if "kicad_pin_source_id" in p.metadata]
     assert len(pins_with_source) == len(u3.pins)
 
@@ -148,6 +151,7 @@ def test_single_page(design):
 
 
 def test_page_metadata(design):
+    assert design.pages
     page = design.pages[0]
     assert "kicad_sheet_symbol_id" in page.metadata
     assert page.source_file.endswith("RP2040_minimal_r2.kicad_sch")
@@ -163,6 +167,7 @@ def test_design_metadata(design):
 def test_component_placement_belongs_to_occurrence_model(design):
     c1 = _find_component(design, "C1")
     assert c1 is not None
+    assert c1.occurrences
     assert not hasattr(c1, "x")
     assert c1.occurrences[0].x == pytest.approx(58.42)
     assert c1.occurrences[0].y == pytest.approx(49.53)
@@ -171,11 +176,13 @@ def test_component_placement_belongs_to_occurrence_model(design):
 def test_component_rotation_belongs_to_occurrence_model(design):
     c1 = _find_component(design, "C1")
     assert c1 is not None
+    assert c1.occurrences
     assert not hasattr(c1, "rotation")
     assert c1.occurrences[0].rotation == 0.0
 
     r1 = _find_component(design, "R1")
     assert r1 is not None
+    assert r1.occurrences
     assert r1.occurrences[0].rotation == 270.0
 
 

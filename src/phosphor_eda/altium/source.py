@@ -181,6 +181,17 @@ def _source_id(sheet_id: str, kind: str, source_index: int) -> str:
     return f"{sheet_id}:{kind}:{source_index}"
 
 
+def _source_file_key(source_file: str) -> str:
+    return source_file.replace("\\", "/")
+
+
+def _default_sheet_id(sheet: SheetRecords, source_file: str) -> str:
+    source_key = _source_file_key(source_file)
+    if source_key:
+        return f"sheet:{source_key}"
+    return f"sheet:{sheet.name}"
+
+
 def _sheet_symbol_sources(
     sheet: SheetRecords,
     sheet_id: str,
@@ -333,9 +344,12 @@ def _root_for_point(
 def _source_sheet(
     sheet: SheetRecords,
     source_file: str,
+    *,
+    sheet_id: str = "",
+    scope_id: ScopeId | None = None,
 ) -> AltiumSheetSource:
-    sheet_id = f"sheet:{sheet.name}"
-    scope_id = ScopeId(path=(sheet.name,))
+    sheet_id = sheet_id or _default_sheet_id(sheet, source_file)
+    scope_id = scope_id or ScopeId(path=(sheet.name,))
     symbols, symbol_ids_by_owner = _sheet_symbol_sources(sheet, sheet_id, scope_id)
     sheet_entries_by_index = _sheet_entry_sources(
         sheet,
@@ -476,11 +490,12 @@ def load_project_source_sheets(
     if path.suffix.lower() == ".prjpcb":
         project = parse_prjpcb_file(str(path))
         project_dir = path.parent
+        records_by_source_file: dict[str, SheetRecords] = {}
         for rel_path in project.schematic_paths:
-            schdoc = project_dir / rel_path.replace("\\", "/")
+            source_file = _source_file_key(rel_path)
+            schdoc = project_dir / source_file
             if schdoc.exists():
-                sheet_records = load_sheet(str(schdoc), ctx=ctx)
-                sheets[sheet_records.name] = _source_sheet(sheet_records, rel_path)
+                records_by_source_file[source_file] = load_sheet(str(schdoc), ctx=ctx)
             else:
                 ctx.warn(
                     "missing_sheet",
@@ -490,11 +505,51 @@ def load_project_source_sheets(
                     f"Warning: schematic sheet not found: {rel_path} (resolved to {schdoc})",
                     file=sys.stderr,
                 )
+
+        base_sources_by_file = {
+            source_file: _source_sheet(sheet_records, source_file)
+            for source_file, sheet_records in records_by_source_file.items()
+        }
+        child_source_counts: dict[str, int] = {}
+        for source in base_sources_by_file.values():
+            for symbol in source.sheet_symbols:
+                child_source_file = _source_file_key(symbol.child_source_file)
+                if child_source_file:
+                    child_source_counts[child_source_file] = (
+                        child_source_counts.get(child_source_file, 0) + 1
+                    )
+        repeated_child_files = {
+            source_file for source_file, count in child_source_counts.items() if count > 1
+        }
+
+        for source_file, source in base_sources_by_file.items():
+            if source_file not in repeated_child_files:
+                sheets[source.id] = source
+
+        parents = list(sheets.values())
+        for parent in parents:
+            for symbol in parent.sheet_symbols:
+                child_source_file = _source_file_key(symbol.child_source_file)
+                child_records = records_by_source_file.get(child_source_file)
+                if child_records is None or child_source_file not in repeated_child_files:
+                    continue
+                child_base_id = _default_sheet_id(child_records, child_source_file)
+                child_sheet_id = f"{parent.id}:{symbol.id}:{child_base_id}"
+                child_scope_id = ScopeId(
+                    path=(*parent.scope_id.path, symbol.id, child_sheet_id),
+                )
+                sheets[child_sheet_id] = _source_sheet(
+                    child_records,
+                    child_source_file,
+                    sheet_id=child_sheet_id,
+                    scope_id=child_scope_id,
+                )
         return project, sheets
 
     sheet_records = load_sheet(str(path), ctx=ctx)
     project = AltiumProject(schematic_paths=[path.name])
-    sheets[sheet_records.name] = _source_sheet(sheet_records, path.name)
+    source = _source_sheet(sheet_records, path.name)
+    sheets[source.id] = source
     return project, sheets
 
 

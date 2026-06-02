@@ -43,7 +43,7 @@ def test_repeated_sheet_fixture_keeps_unwired_child_instances_distinct() -> None
     sig_nets = [
         net
         for net in r1_nets
-        if any(occurrence.source_names == {"SIG_IN"} for occurrence in net.occurrences)
+        if any("SIG_IN" in occurrence.source_names for occurrence in net.occurrences)
     ]
 
     assert len(sig_nets) == 2

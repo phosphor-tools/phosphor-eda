@@ -328,14 +328,10 @@ VIEW_DDL: dict[str, str] = {
             n.is_power,
             n.net_class,
             n.diff_pair,
-            COUNT(DISTINCT p.reference || '.' || p.pad_number) AS pcb_pad_count,
-            COUNT(DISTINCT v.rowid) AS pcb_via_count,
-            COALESCE((
-                SELECT SUM(s.length_mm) FROM segments s WHERE s.net_name = n.name
-            ), 0) AS trace_length_mm
+            0 AS pcb_pad_count,
+            0 AS pcb_via_count,
+            0.0 AS trace_length_mm
         FROM nets n
-        LEFT JOIN pads p ON p.net_name = n.name
-        LEFT JOIN vias v ON v.net_name = n.name
         GROUP BY n.net_id, n.name, n.pin_count, n.is_power, n.net_class, n.diff_pair
     """,
     "width_violations": """

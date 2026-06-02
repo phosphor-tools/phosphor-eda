@@ -11,7 +11,10 @@ QFSAE_PRJPCB = FIXTURES / "altium/qfsae-debugger/Debugger.PrjPcb"
 
 def _sheet_by_name(source_name: str):
     source = altium_to_source(QFSAE_PRJPCB)
-    return source.sheets[source_name]
+    for sheet in source.sheets.values():
+        if sheet.name == source_name:
+            return sheet
+    raise AssertionError(f"No Altium source sheet named {source_name}")
 
 
 def test_altium_to_source_preserves_project_options():

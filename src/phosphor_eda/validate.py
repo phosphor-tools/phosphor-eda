@@ -53,7 +53,7 @@ class Category(StrEnum):
 class Finding:
     """A single validation finding."""
 
-    __slots__: tuple[str, ...] = ("severity", "category", "message", "component", "net", "pin")
+    __slots__: tuple[str, ...] = ("category", "component", "message", "net", "pin", "severity")
 
     severity: Severity
     category: Category
@@ -164,6 +164,10 @@ def _has_pin_id(net: Net, pin_id: str) -> bool:
     return any(pin.id == pin_id for pin in net.pins)
 
 
+def _has_net_id(page: Page, net_id: str) -> bool:
+    return any(net.id == net_id for net in page.nets)
+
+
 def _check_identity_and_links(design: Schematic, findings: list[Finding]) -> None:
     """Check stable IDs and bidirectional object links."""
     _append_duplicate_id_findings(
@@ -222,6 +226,42 @@ def _check_identity_and_links(design: Schematic, findings: list[Finding]) -> Non
                         component=comp.reference,
                     )
                 )
+
+    for page in design.pages:
+        for net in page.nets:
+            target_net = _find_net_by_id(design, net.id) or net
+            if _has_page_id(target_net.pages, page.id):
+                continue
+            message = (
+                f"Page.nets does not match Net.pages: page '{page.name}' "
+                + f"lists net '{net.name}', but net does not list page"
+            )
+            findings.append(
+                Finding(
+                    Severity.ERROR,
+                    Category.RELATIONSHIP_MISMATCH,
+                    message,
+                    net=net.name,
+                )
+            )
+
+    for net in design.nets:
+        for page in net.pages:
+            target_page = _find_page_by_id(design, page.id) or page
+            if _has_net_id(target_page, net.id):
+                continue
+            message = (
+                f"Net.pages does not match Page.nets: net '{net.name}' "
+                + f"lists page '{page.name}', but page does not list net"
+            )
+            findings.append(
+                Finding(
+                    Severity.ERROR,
+                    Category.RELATIONSHIP_MISMATCH,
+                    message,
+                    net=net.name,
+                )
+            )
 
     for pin in _all_component_pins(design):
         if pin.net is not None:
