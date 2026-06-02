@@ -186,45 +186,91 @@ TABLE_DDL: dict[str, str] = {
     """,
     "components": """
         CREATE TABLE components (
-            reference VARCHAR,
-            part VARCHAR,
-            description VARCHAR,
-            page_name VARCHAR
+            component_id VARCHAR PRIMARY KEY,
+            reference VARCHAR NOT NULL,
+            part VARCHAR NOT NULL,
+            description VARCHAR NOT NULL,
+            page_names VARCHAR
+        )
+    """,
+    "component_occurrences": """
+        CREATE TABLE component_occurrences (
+            occurrence_id VARCHAR PRIMARY KEY,
+            component_id VARCHAR NOT NULL,
+            reference VARCHAR NOT NULL,
+            page_id VARCHAR NOT NULL,
+            page_name VARCHAR NOT NULL,
+            scope_path VARCHAR NOT NULL,
+            source_id VARCHAR NOT NULL,
+            part_id VARCHAR,
+            x DOUBLE,
+            y DOUBLE,
+            rotation DOUBLE,
+            mirror BOOLEAN
         )
     """,
     "component_metadata": """
         CREATE TABLE component_metadata (
-            reference VARCHAR,
-            key VARCHAR,
-            value VARCHAR
+            component_id VARCHAR NOT NULL,
+            reference VARCHAR NOT NULL,
+            key VARCHAR NOT NULL,
+            value VARCHAR NOT NULL
         )
     """,
     "pins": """
         CREATE TABLE pins (
-            reference VARCHAR,
-            designator VARCHAR,
-            name VARCHAR,
+            pin_id VARCHAR PRIMARY KEY,
+            component_id VARCHAR NOT NULL,
+            reference VARCHAR NOT NULL,
+            designator VARCHAR NOT NULL,
+            name VARCHAR NOT NULL,
+            net_id VARCHAR,
             net_name VARCHAR,
             electrical VARCHAR,
-            no_connect BOOLEAN
+            no_connect BOOLEAN NOT NULL
         )
     """,
     "nets": """
         CREATE TABLE nets (
-            name VARCHAR,
-            pin_count INTEGER,
-            is_power BOOLEAN,
+            net_id VARCHAR PRIMARY KEY,
+            name VARCHAR NOT NULL,
+            pin_count INTEGER NOT NULL,
+            page_names VARCHAR,
+            is_power BOOLEAN NOT NULL,
             net_class VARCHAR,
             diff_pair VARCHAR,
             diff_pair_polarity VARCHAR,
             aliases VARCHAR
         )
     """,
+    "net_occurrences": """
+        CREATE TABLE net_occurrences (
+            occurrence_id VARCHAR PRIMARY KEY,
+            net_id VARCHAR NOT NULL,
+            name VARCHAR NOT NULL,
+            page_id VARCHAR NOT NULL,
+            page_name VARCHAR NOT NULL,
+            scope_path VARCHAR NOT NULL,
+            source_local_net_id VARCHAR NOT NULL,
+            source_names VARCHAR
+        )
+    """,
+    "net_metadata": """
+        CREATE TABLE net_metadata (
+            net_id VARCHAR NOT NULL,
+            name VARCHAR NOT NULL,
+            key VARCHAR NOT NULL,
+            value VARCHAR NOT NULL
+        )
+    """,
     "pages": """
         CREATE TABLE pages (
-            name VARCHAR,
-            component_count INTEGER,
-            net_count INTEGER
+            page_id VARCHAR PRIMARY KEY,
+            name VARCHAR NOT NULL,
+            source_file VARCHAR,
+            scope_path VARCHAR NOT NULL,
+            component_count INTEGER NOT NULL,
+            net_count INTEGER NOT NULL
         )
     """,
     "project": """
@@ -232,6 +278,33 @@ TABLE_DDL: dict[str, str] = {
             key VARCHAR,
             value VARCHAR
         )
+    """,
+}
+
+INDEX_DDL: dict[str, str] = {
+    "idx_components_reference": """
+        CREATE INDEX idx_components_reference ON components(reference)
+    """,
+    "idx_component_occurrences_component_id": """
+        CREATE INDEX idx_component_occurrences_component_id ON component_occurrences(component_id)
+    """,
+    "idx_component_occurrences_page_id": """
+        CREATE INDEX idx_component_occurrences_page_id ON component_occurrences(page_id)
+    """,
+    "idx_pins_component_id": """
+        CREATE INDEX idx_pins_component_id ON pins(component_id)
+    """,
+    "idx_pins_net_id": """
+        CREATE INDEX idx_pins_net_id ON pins(net_id)
+    """,
+    "idx_nets_name": """
+        CREATE INDEX idx_nets_name ON nets(name)
+    """,
+    "idx_net_occurrences_net_id": """
+        CREATE INDEX idx_net_occurrences_net_id ON net_occurrences(net_id)
+    """,
+    "idx_net_occurrences_page_id": """
+        CREATE INDEX idx_net_occurrences_page_id ON net_occurrences(page_id)
     """,
 }
 
@@ -249,6 +322,7 @@ VIEW_DDL: dict[str, str] = {
     "net_summary": """
         CREATE VIEW net_summary AS
         SELECT
+            n.net_id,
             n.name,
             n.pin_count AS sch_pin_count,
             n.is_power,
@@ -262,7 +336,7 @@ VIEW_DDL: dict[str, str] = {
         FROM nets n
         LEFT JOIN pads p ON p.net_name = n.name
         LEFT JOIN vias v ON v.net_name = n.name
-        GROUP BY n.name, n.pin_count, n.is_power, n.net_class, n.diff_pair
+        GROUP BY n.net_id, n.name, n.pin_count, n.is_power, n.net_class, n.diff_pair
     """,
     "width_violations": """
         CREATE VIEW width_violations AS
@@ -294,16 +368,18 @@ VIEW_DDL: dict[str, str] = {
 
 def create_tables(con: duckdb.DuckDBPyConnection) -> None:
     """Install spatial extension and create all tables."""
-    con.execute("INSTALL spatial")
-    con.execute("LOAD spatial")
+    _ = con.execute("INSTALL spatial")
+    _ = con.execute("LOAD spatial")
     for ddl in TABLE_DDL.values():
-        con.execute(ddl)
+        _ = con.execute(ddl)
+    for ddl in INDEX_DDL.values():
+        _ = con.execute(ddl)
 
 
 def create_views(con: duckdb.DuckDBPyConnection) -> None:
     """Create all views (must be called after tables are populated)."""
     for ddl in VIEW_DDL.values():
-        con.execute(ddl)
+        _ = con.execute(ddl)
 
 
 def schema_text() -> str:
@@ -312,6 +388,13 @@ def schema_text() -> str:
     lines.append("-- Tables\n")
     for name, ddl in TABLE_DDL.items():
         # Clean up indentation for display
+        cleaned = "\n".join(line.strip() for line in ddl.strip().splitlines())
+        lines.append(f"-- {name}")
+        lines.append(cleaned)
+        lines.append("")
+
+    lines.append("-- Indexes\n")
+    for name, ddl in INDEX_DDL.items():
         cleaned = "\n".join(line.strip() for line in ddl.strip().splitlines())
         lines.append(f"-- {name}")
         lines.append(cleaned)

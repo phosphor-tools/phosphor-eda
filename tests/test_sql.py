@@ -6,7 +6,18 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from phosphor_eda.convert import load_project
+from phosphor_eda.pcb import Pcb, PcbFootprint, PcbNet, PcbPad, PcbSegment, PcbVia
+from phosphor_eda.project import Project
+from phosphor_eda.schematic import (
+    Component,
+    ComponentOccurrence,
+    Net,
+    NetOccurrence,
+    Page,
+    Pin,
+    Schematic,
+    ScopeId,
+)
 from phosphor_eda.sql import load_database
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -21,6 +32,610 @@ def _count(db: duckdb.DuckDBPyConnection, sql: str) -> int:
     return int(row[0])
 
 
+def _constructed_schematic() -> Schematic:
+    power_page = Page(
+        id="page:power",
+        name="Power",
+        source_file="power.kicad_sch",
+        scope_id=ScopeId(path=("root", "power")),
+    )
+    control_page = Page(
+        id="page:control",
+        name="Control",
+        source_file="control.kicad_sch",
+        scope_id=ScopeId(path=("root", "control")),
+    )
+
+    controller = Component(
+        id="component:u1",
+        reference="U1",
+        part="STM32H7",
+        description="Microcontroller",
+        pages=[power_page, control_page],
+        metadata={"manufacturer": "ST"},
+    )
+    duplicate_a = Component(
+        id="component:power:u7",
+        reference="U7",
+        part="SN74LVC1T45",
+        description="Level translator",
+        pages=[power_page],
+    )
+    duplicate_b = Component(
+        id="component:control:u7",
+        reference="U7",
+        part="SN74LVC1T45",
+        description="Level translator",
+        pages=[control_page],
+    )
+
+    sync = Net(
+        id="net:sync",
+        name="SYNC",
+        pages=[power_page, control_page],
+        aliases={"GLOBAL_SYNC", "SYNC_IN"},
+        metadata={"resolver": "constructed", "scope_rule": "global_label"},
+    )
+    reset_power = Net(
+        id="net:reset:power",
+        name="RESET",
+        pages=[power_page],
+        metadata={"resolver": "constructed", "scope_rule": "sheet_local"},
+    )
+    reset_control = Net(
+        id="net:reset:control",
+        name="RESET",
+        pages=[control_page],
+        metadata={"resolver": "constructed", "scope_rule": "sheet_local"},
+    )
+
+    controller_sync = Pin(
+        id="pin:u1:10",
+        component=controller,
+        designator="10",
+        name="SYNC",
+        net=sync,
+        metadata={"electrical": "input"},
+    )
+    controller_reset = Pin(
+        id="pin:u1:11",
+        component=controller,
+        designator="11",
+        name="RESET_N",
+        net=reset_power,
+        metadata={"electrical": "input"},
+    )
+    duplicate_a_pin = Pin(
+        id="pin:power:u7:1",
+        component=duplicate_a,
+        designator="1",
+        name="A",
+        net=reset_power,
+        metadata={"electrical": "passive"},
+    )
+    duplicate_b_pin = Pin(
+        id="pin:control:u7:1",
+        component=duplicate_b,
+        designator="1",
+        name="A",
+        net=reset_control,
+        metadata={"electrical": "passive"},
+    )
+    unconnected = Pin(
+        id="pin:control:u7:2",
+        component=duplicate_b,
+        designator="2",
+        name="B",
+        no_connect=True,
+    )
+
+    controller.pins = [controller_sync, controller_reset]
+    duplicate_a.pins = [duplicate_a_pin]
+    duplicate_b.pins = [duplicate_b_pin, unconnected]
+    sync.pins = [controller_sync]
+    reset_power.pins = [controller_reset, duplicate_a_pin]
+    reset_control.pins = [duplicate_b_pin]
+
+    controller.occurrences = [
+        ComponentOccurrence(
+            id="occurrence:u1:power",
+            component=controller,
+            page=power_page,
+            scope_id=power_page.scope_id,
+            source_id="power/U1A",
+            part_id="A",
+            x=10.0,
+            y=20.0,
+            rotation=90.0,
+            mirror=False,
+        ),
+        ComponentOccurrence(
+            id="occurrence:u1:control",
+            component=controller,
+            page=control_page,
+            scope_id=control_page.scope_id,
+            source_id="control/U1B",
+            part_id="B",
+            x=30.0,
+            y=40.0,
+            rotation=0.0,
+            mirror=True,
+        ),
+    ]
+    duplicate_a.occurrences = [
+        ComponentOccurrence(
+            id="occurrence:power:u7",
+            component=duplicate_a,
+            page=power_page,
+            scope_id=power_page.scope_id,
+            source_id="power/U7",
+        )
+    ]
+    duplicate_b.occurrences = [
+        ComponentOccurrence(
+            id="occurrence:control:u7",
+            component=duplicate_b,
+            page=control_page,
+            scope_id=control_page.scope_id,
+            source_id="control/U7",
+        )
+    ]
+
+    sync.occurrences = [
+        NetOccurrence(
+            id="net-occurrence:sync:power",
+            net=sync,
+            page=power_page,
+            scope_id=power_page.scope_id,
+            source_local_net_id="power/local-12",
+            source_names={"SYNC", "GLOBAL_SYNC"},
+        ),
+        NetOccurrence(
+            id="net-occurrence:sync:control",
+            net=sync,
+            page=control_page,
+            scope_id=control_page.scope_id,
+            source_local_net_id="control/local-8",
+            source_names={"SYNC_IN"},
+        ),
+    ]
+    reset_power.occurrences = [
+        NetOccurrence(
+            id="net-occurrence:reset:power",
+            net=reset_power,
+            page=power_page,
+            scope_id=power_page.scope_id,
+            source_local_net_id="power/local-2",
+            source_names={"RESET"},
+        )
+    ]
+    reset_control.occurrences = [
+        NetOccurrence(
+            id="net-occurrence:reset:control",
+            net=reset_control,
+            page=control_page,
+            scope_id=control_page.scope_id,
+            source_local_net_id="control/local-2",
+            source_names={"RESET"},
+        )
+    ]
+
+    power_page.components = [controller, duplicate_a]
+    control_page.components = [controller, duplicate_b]
+    power_page.nets = [sync, reset_power]
+    control_page.nets = [sync, reset_control]
+
+    return Schematic(
+        name="Constructed SQL",
+        pages=[power_page, control_page],
+        components=[controller, duplicate_a, duplicate_b],
+        nets=[sync, reset_power, reset_control],
+    )
+
+
+def _constructed_pcb() -> Pcb:
+    reset_pad = PcbPad(
+        number="1",
+        x=1.0,
+        y=1.0,
+        width=1.0,
+        height=1.0,
+        shape="rect",
+        layers=["F.Cu"],
+        net_number=1,
+        net_name="RESET",
+        footprint_ref="J1",
+    )
+    return Pcb(
+        name="Constructed PCB",
+        nets={1: PcbNet(number=1, name="RESET")},
+        footprints=[
+            PcbFootprint(
+                reference="J1",
+                footprint_lib="Connector_Test",
+                x=1.0,
+                y=1.0,
+                rotation=0.0,
+                layer="F.Cu",
+                pads=[reset_pad],
+            )
+        ],
+        segments=[
+            PcbSegment(
+                start_x=0.0,
+                start_y=0.0,
+                end_x=10.0,
+                end_y=0.0,
+                width=0.2,
+                layer="F.Cu",
+                net_number=1,
+            )
+        ],
+        vias=[PcbVia(x=5.0, y=0.0, size=0.8, drill=0.4, layers=["F.Cu", "B.Cu"], net_number=1)],
+        outline_lines=[],
+        outline_arcs=[],
+    )
+
+
+@pytest.fixture
+def constructed_db() -> Iterator[duckdb.DuckDBPyConnection]:
+    project = Project(
+        name="Constructed SQL",
+        schematic=_constructed_schematic(),
+        pcb=_constructed_pcb(),
+    )
+    con = load_database(project)
+    try:
+        yield con
+    finally:
+        con.close()
+
+
+class TestConstructedSchematicSql:
+    def test_logical_components_and_occurrences(
+        self, constructed_db: duckdb.DuckDBPyConnection
+    ) -> None:
+        component_rows = constructed_db.execute(
+            """
+            SELECT component_id, reference, page_names
+            FROM components
+            ORDER BY component_id
+            """
+        ).fetchall()
+        assert component_rows == [
+            ("component:control:u7", "U7", "Control"),
+            ("component:power:u7", "U7", "Power"),
+            ("component:u1", "U1", "Control,Power"),
+        ]
+        assert _count(constructed_db, "SELECT count(*) FROM components WHERE reference = 'U1'") == 1
+
+        occurrence_rows = constructed_db.execute(
+            """
+            SELECT component_id, reference, page_id, page_name, scope_path, source_id, part_id
+            FROM component_occurrences
+            WHERE component_id = 'component:u1'
+            ORDER BY occurrence_id
+            """
+        ).fetchall()
+        assert occurrence_rows == [
+            (
+                "component:u1",
+                "U1",
+                "page:control",
+                "Control",
+                "/root/control",
+                "control/U1B",
+                "B",
+            ),
+            (
+                "component:u1",
+                "U1",
+                "page:power",
+                "Power",
+                "/root/power",
+                "power/U1A",
+                "A",
+            ),
+        ]
+        assert _count(constructed_db, "SELECT count(*) FROM component_occurrences") == 4
+
+    def test_duplicate_references_have_distinct_component_ids(
+        self, constructed_db: duckdb.DuckDBPyConnection
+    ) -> None:
+        rows = constructed_db.execute(
+            """
+            SELECT component_id, reference
+            FROM components
+            WHERE reference = 'U7'
+            ORDER BY component_id
+            """
+        ).fetchall()
+        assert rows == [
+            ("component:control:u7", "U7"),
+            ("component:power:u7", "U7"),
+        ]
+
+    def test_pins_link_by_ids_and_keep_friendly_columns(
+        self, constructed_db: duckdb.DuckDBPyConnection
+    ) -> None:
+        rows = constructed_db.execute(
+            """
+            SELECT
+                pin_id, component_id, reference, designator, name,
+                net_id, net_name, electrical, no_connect
+            FROM pins
+            ORDER BY pin_id
+            """
+        ).fetchall()
+        assert rows == [
+            (
+                "pin:control:u7:1",
+                "component:control:u7",
+                "U7",
+                "1",
+                "A",
+                "net:reset:control",
+                "RESET",
+                "passive",
+                False,
+            ),
+            (
+                "pin:control:u7:2",
+                "component:control:u7",
+                "U7",
+                "2",
+                "B",
+                None,
+                None,
+                None,
+                True,
+            ),
+            (
+                "pin:power:u7:1",
+                "component:power:u7",
+                "U7",
+                "1",
+                "A",
+                "net:reset:power",
+                "RESET",
+                "passive",
+                False,
+            ),
+            (
+                "pin:u1:10",
+                "component:u1",
+                "U1",
+                "10",
+                "SYNC",
+                "net:sync",
+                "SYNC",
+                "input",
+                False,
+            ),
+            (
+                "pin:u1:11",
+                "component:u1",
+                "U1",
+                "11",
+                "RESET_N",
+                "net:reset:power",
+                "RESET",
+                "input",
+                False,
+            ),
+        ]
+
+    def test_nets_occurrences_and_metadata_preserve_identity_and_provenance(
+        self, constructed_db: duckdb.DuckDBPyConnection
+    ) -> None:
+        duplicate_name_rows = constructed_db.execute(
+            "SELECT net_id, name, page_names FROM nets WHERE name = 'RESET' ORDER BY net_id"
+        ).fetchall()
+        assert duplicate_name_rows == [
+            ("net:reset:control", "RESET", "Control"),
+            ("net:reset:power", "RESET", "Power"),
+        ]
+
+        occurrence_rows = constructed_db.execute(
+            """
+            SELECT
+                occurrence_id, net_id, name, page_id, page_name,
+                scope_path, source_local_net_id, source_names
+            FROM net_occurrences
+            ORDER BY occurrence_id
+            """
+        ).fetchall()
+        assert occurrence_rows == [
+            (
+                "net-occurrence:reset:control",
+                "net:reset:control",
+                "RESET",
+                "page:control",
+                "Control",
+                "/root/control",
+                "control/local-2",
+                "RESET",
+            ),
+            (
+                "net-occurrence:reset:power",
+                "net:reset:power",
+                "RESET",
+                "page:power",
+                "Power",
+                "/root/power",
+                "power/local-2",
+                "RESET",
+            ),
+            (
+                "net-occurrence:sync:control",
+                "net:sync",
+                "SYNC",
+                "page:control",
+                "Control",
+                "/root/control",
+                "control/local-8",
+                "SYNC_IN",
+            ),
+            (
+                "net-occurrence:sync:power",
+                "net:sync",
+                "SYNC",
+                "page:power",
+                "Power",
+                "/root/power",
+                "power/local-12",
+                "GLOBAL_SYNC,SYNC",
+            ),
+        ]
+
+        metadata_rows = constructed_db.execute(
+            """
+            SELECT component_id, reference, key, value
+            FROM component_metadata
+            ORDER BY component_id, key
+            """
+        ).fetchall()
+        assert metadata_rows == [
+            ("component:u1", "U1", "manufacturer", "ST"),
+        ]
+
+        metadata_rows = constructed_db.execute(
+            "SELECT net_id, name, key, value FROM net_metadata ORDER BY net_id, key"
+        ).fetchall()
+        assert metadata_rows == [
+            ("net:reset:control", "RESET", "resolver", "constructed"),
+            ("net:reset:control", "RESET", "scope_rule", "sheet_local"),
+            ("net:reset:power", "RESET", "resolver", "constructed"),
+            ("net:reset:power", "RESET", "scope_rule", "sheet_local"),
+            ("net:sync", "SYNC", "resolver", "constructed"),
+            ("net:sync", "SYNC", "scope_rule", "global_label"),
+        ]
+
+    def test_net_summary_groups_schematic_by_net_id_and_joins_pcb_by_name(
+        self, constructed_db: duckdb.DuckDBPyConnection
+    ) -> None:
+        rows = constructed_db.execute(
+            """
+            SELECT net_id, name, sch_pin_count, pcb_pad_count, pcb_via_count, trace_length_mm
+            FROM net_summary
+            WHERE name = 'RESET'
+            ORDER BY net_id
+            """
+        ).fetchall()
+        assert rows == [
+            ("net:reset:control", "RESET", 1, 1, 1, 10.0),
+            ("net:reset:power", "RESET", 2, 1, 1, 10.0),
+        ]
+
+    def test_loader_referential_integrity(self, constructed_db: duckdb.DuckDBPyConnection) -> None:
+        page_names = {
+            name for (name,) in constructed_db.execute("SELECT name FROM pages").fetchall()
+        }
+        component_page_names = constructed_db.execute(
+            "SELECT component_id, page_names FROM components WHERE page_names IS NOT NULL"
+        ).fetchall()
+        for component_id, page_names_csv in component_page_names:
+            for page_name in str(page_names_csv).split(","):
+                assert page_name in page_names, component_id
+
+        assert (
+            _count(
+                constructed_db,
+                """
+                SELECT count(*)
+                FROM component_occurrences co
+                LEFT JOIN components c ON c.component_id = co.component_id
+                WHERE c.component_id IS NULL
+                """,
+            )
+            == 0
+        )
+        assert (
+            _count(
+                constructed_db,
+                """
+                SELECT count(*)
+                FROM component_occurrences co
+                LEFT JOIN pages p ON p.page_id = co.page_id
+                WHERE p.page_id IS NULL
+                """,
+            )
+            == 0
+        )
+        assert (
+            _count(
+                constructed_db,
+                """
+                SELECT count(*)
+                FROM pins pin
+                LEFT JOIN components c ON c.component_id = pin.component_id
+                WHERE c.component_id IS NULL
+                """,
+            )
+            == 0
+        )
+        assert (
+            _count(
+                constructed_db,
+                """
+                SELECT count(*)
+                FROM pins pin
+                LEFT JOIN nets n ON n.net_id = pin.net_id
+                WHERE pin.net_id IS NOT NULL AND n.net_id IS NULL
+                """,
+            )
+            == 0
+        )
+        assert (
+            _count(
+                constructed_db,
+                """
+                SELECT count(*)
+                FROM component_metadata cm
+                LEFT JOIN components c ON c.component_id = cm.component_id
+                WHERE c.component_id IS NULL
+                """,
+            )
+            == 0
+        )
+        assert (
+            _count(
+                constructed_db,
+                """
+                SELECT count(*)
+                FROM net_occurrences no
+                LEFT JOIN nets n ON n.net_id = no.net_id
+                WHERE n.net_id IS NULL
+                """,
+            )
+            == 0
+        )
+        assert (
+            _count(
+                constructed_db,
+                """
+                SELECT count(*)
+                FROM net_occurrences no
+                LEFT JOIN pages p ON p.page_id = no.page_id
+                WHERE p.page_id IS NULL
+                """,
+            )
+            == 0
+        )
+        assert (
+            _count(
+                constructed_db,
+                """
+                SELECT count(*)
+                FROM net_metadata nm
+                LEFT JOIN nets n ON n.net_id = nm.net_id
+                WHERE n.net_id IS NULL
+                """,
+            )
+            == 0
+        )
+
+
 # ---------------------------------------------------------------------------
 # swd_switch fixture (always available, PCB-only)
 # ---------------------------------------------------------------------------
@@ -28,6 +643,8 @@ def _count(db: duckdb.DuckDBPyConnection, sql: str) -> int:
 
 @pytest.fixture(scope="module")
 def db() -> Iterator[duckdb.DuckDBPyConnection]:
+    from phosphor_eda.convert import load_project
+
     project = load_project(SWD_SWITCH_PCB)
     con = load_database(project)
     try:
@@ -165,6 +782,8 @@ class TestViews:
 
 @pytest.fixture(scope="module")
 def jetson_db() -> Iterator[duckdb.DuckDBPyConnection]:
+    from phosphor_eda.convert import load_project
+
     if not JETSON_ORIN_PRO.exists():
         pytest.skip("Jetson Orin fixture not available")
     project = load_project(JETSON_ORIN_PRO)
