@@ -1683,6 +1683,34 @@ def test_derived_serializer_converts_polygons_multipolygons_holes_and_empty_geom
     assert 'data-role="cad.empty.front"' not in svg
 
 
+def test_derived_serializer_prefers_prebuilt_path_data() -> None:
+    path_data = "M 0 0 C 1 1 2 1 3 0 Z"
+    plan = DerivedRenderPlan(
+        view_box=ViewBox(0.0, 0.0, 10.0, 10.0),
+        width_px=100,
+        height_px=100,
+        base_layers=(
+            DerivedLayer(
+                id="cad:copper:front",
+                role=VisualRole(namespace="cad", function="copper", side="front"),
+                geometry=GeometryCollection(),
+                path_data=path_data,
+                source_layers=("F.Cu",),
+                source_ids=("copper-1",),
+                style=ResolvedStyle(fill="#ff6600"),
+            ),
+        ),
+        highlight_groups=(),
+        annotations=None,
+        warnings=(),
+    )
+
+    svg = pcb_render_module.render_pcb_svg_from_derived_plan(plan)
+
+    assert 'data-role="cad.copper.front"' in svg
+    assert f'd="{path_data}"' in svg
+
+
 def test_annotation_css_present() -> None:
     """Annotation CSS block appears when annotations are provided."""
     board = _make_board_with_component()

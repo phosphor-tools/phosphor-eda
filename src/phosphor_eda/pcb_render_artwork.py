@@ -86,6 +86,7 @@ class DerivedLayer:
     style: ResolvedStyle | None = None
     data: Mapping[str, str] = field(default_factory=_empty_data)
     clip: LayerClip | None = None
+    path_data: str = ""
 
 
 _FUNCTION_ROLE_ALIASES = {

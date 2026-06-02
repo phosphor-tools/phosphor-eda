@@ -551,7 +551,7 @@ def _render_derived_layers(
 ) -> None:
     clip_ids_by_object: dict[int, str] = {}
     for layer in layers:
-        path_d = _geometry_to_svg_path_d(layer.geometry)
+        path_d = layer.path_data or _geometry_to_svg_path_d(layer.geometry)
         if not path_d:
             continue
         clip_key = id(layer.clip) if layer.clip is not None else 0
