@@ -456,7 +456,18 @@ def _convert_conics(path: _Path) -> None:
 
 
 def _layer_in_stack(layer_name: str, layers: list[str]) -> bool:
-    return layer_name in {str(layer) for layer in layers} or "*.Cu" in layers
+    return layer_name in {str(layer) for layer in layers} or (
+        "*.Cu" in layers and _is_copper_layer(layer_name)
+    )
+
+
+def _is_copper_layer(layer_name: str) -> bool:
+    return (
+        layer_name.endswith(".Cu")
+        or _is_front_layer(layer_name)
+        or _is_back_layer(layer_name)
+        or layer_name.startswith("MidLayer")
+    )
 
 
 def _is_front_layer(layer_name: str) -> bool:
