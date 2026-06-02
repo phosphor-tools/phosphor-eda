@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from phosphor_eda.altium.errors import ParseContext
 from phosphor_eda.altium.project import parse_prjpcb_file
+from phosphor_eda.altium.resolver import resolve_altium_source
 from phosphor_eda.altium.sheet_builder import SheetRecords, load_sheet
 from phosphor_eda.altium.source import (
     AltiumSourceDesign,
@@ -75,6 +76,6 @@ def load_project_source(
 
 
 def altium_to_design(path: Path, name: str = "") -> Schematic:
-    """Convert an Altium project after the Task 7 resolver is implemented."""
-    _source = altium_to_source(path, name=name)
-    raise NotImplementedError("Altium public conversion is handled by the Task 7 resolver")
+    """Convert an Altium project into the public schematic domain model."""
+    source = altium_to_source(path, name=name)
+    return resolve_altium_source(source)
