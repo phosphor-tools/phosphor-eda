@@ -507,6 +507,11 @@ def build_highlight_layers(
                 warn=warn,
                 highlight_color=highlight.color,
             )
+            path_data = _highlight_copper_path_data(
+                key,
+                layer_group,
+                profiler=profiler,
+            )
             layers.append(
                 DerivedLayer(
                     id=_derived_layer_id(role),
@@ -522,6 +527,7 @@ def build_highlight_layers(
                         "source-layer": key.source_layer_name,
                     },
                     clip=None if key.function == "edge" else layer_clip,
+                    path_data=path_data,
                 )
             )
 
@@ -958,6 +964,30 @@ def _cad_copper_path_data(
 
     return _copper_path_data(
         event_prefix="cad.skia",
+        layer=key.source_layer_name,
+        function=key.function,
+        side=key.side,
+        items=len(group),
+        sources=(
+            _LayerSkiaSource(source_item, key.source_layer_name)
+            for item in group
+            for source_item in item.source_items
+        ),
+        profiler=profiler,
+    )
+
+
+def _highlight_copper_path_data(
+    key: _LayerGroupKey,
+    group: list[_GroupedArtwork],
+    *,
+    profiler: RenderProfiler | None = None,
+) -> str:
+    if key.function != "copper":
+        return ""
+
+    return _copper_path_data(
+        event_prefix="highlight.skia",
         layer=key.source_layer_name,
         function=key.function,
         side=key.side,

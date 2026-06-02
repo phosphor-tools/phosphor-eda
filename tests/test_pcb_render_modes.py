@@ -704,6 +704,56 @@ def test_highlight_projection_supports_pad_targets_stroke_tokens_and_drill_clipp
     assert layer.clip.drills.contains(Point(0.0, 0.0))
 
 
+def test_highlight_copper_layer_uses_skia_path_data_for_pad_and_via() -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "pad-1",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=1.0, y=1.0, footprint_ref="J1", net_name="SIG"),
+                tags=GeometryTags(
+                    source_collection="pads",
+                    component_ref="J1",
+                    pad_number="1",
+                    net_name="SIG",
+                ),
+            ),
+            _renderable(
+                "via-1",
+                GeometryKind.VIA,
+                "vias",
+                "via",
+                "",
+                geometry=PcbVia(2.0, 1.0, 0.8, 0.3, ["F.Cu"], 1),
+                tags=GeometryTags(source_collection="vias", net_number=1, net_name="SIG"),
+            ),
+        )
+    )
+
+    groups = build_highlight_layers(
+        store,
+        _settings(
+            rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
+            tokens={"highlight.copper.front.fill": "#ff8a00"},
+            highlights=(HighlightSpec(net="SIG"),),
+        ),
+        warn=lambda _message: None,
+    )
+
+    layer = groups[0].layers[0]
+
+    assert groups[0].target == "net:SIG"
+    assert layer.id == "highlight:copper:front"
+    assert layer.source_layers == ("F.Cu",)
+    assert layer.source_ids == ("pad-1", "via-1")
+    assert layer.path_data.startswith("M ")
+    assert not isinstance(layer.geometry, GeometryCollection)
+
+
 def test_base_layers_dim_only_when_dimming_enabled_and_highlights_exist() -> None:
     store = PcbGeometryStore(
         items=(
