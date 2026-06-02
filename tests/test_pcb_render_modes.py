@@ -497,11 +497,13 @@ def test_realistic_front_layers_project_physical_stack_in_order() -> None:
 
     assert by_id["realistic:solderMask"].source_layers == ("F.Mask",)
     assert by_id["realistic:coveredCopper"].source_ids == ("copper-pad",)
+    assert by_id["realistic:coveredCopper"].path_data.startswith("M ")
     assert by_id["realistic:exposedCopper"].source_ids == (
         "mask-copper-opening",
         "mask-substrate-opening",
         "copper-pad",
     )
+    assert by_id["realistic:exposedCopper"].path_data == ""
 
 
 def test_realistic_projection_uses_visible_side_only() -> None:

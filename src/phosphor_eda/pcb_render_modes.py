@@ -70,6 +70,12 @@ class _TraceArtworkKey:
 
 
 @dataclass(frozen=True)
+class _LayerSkiaSource:
+    item: RenderableGeometry
+    target_layer_name: str
+
+
+@dataclass(frozen=True)
 class _LayerProcessingProfile:
     event_prefix: str
     layer: str
@@ -271,6 +277,12 @@ def build_realistic_layers(
         for item in grouped_artwork
         if item.layer.role == "copper" and item.layer.side == side
     )
+    copper_skia_sources = tuple(
+        _LayerSkiaSource(source_item, item.layer.name)
+        for item in grouped_artwork
+        if item.layer.role == "copper" and item.layer.side == side
+        for source_item in item.source_items
+    )
     silkscreen_artwork = _side_artwork(selected_items, role="silkscreen", side=side)
 
     if profiler is not None:
@@ -334,6 +346,15 @@ def build_realistic_layers(
             ),
         )
 
+    covered_copper_path_data = _copper_path_data(
+        event_prefix="realistic.covered_copper.skia",
+        layer=_profile_layer_name(copper_skia_sources),
+        function="coveredCopper",
+        side=side,
+        items=len(copper_artwork),
+        sources=copper_skia_sources,
+        profiler=profiler,
+    )
     layer_inputs = {
         "substrate": _RealisticLayerInput(
             geometry=board,
@@ -349,6 +370,7 @@ def build_realistic_layers(
             geometry=outer_copper,
             source_layers=_source_layers_from_artwork(copper_artwork),
             source_ids=_source_ids_by_store_order_for_artwork(store, copper_artwork),
+            path_data=covered_copper_path_data,
         ),
         "exposedCopper": _RealisticLayerInput(
             geometry=_intersection(outer_copper, mask_openings),
@@ -399,6 +421,7 @@ def build_realistic_layers(
                 source_ids=layer_input.source_ids,
                 style=style,
                 clip=None if function == "boardOutline" else layer_clip,
+                path_data=layer_input.path_data,
             )
         )
     return tuple(layers)
@@ -513,6 +536,7 @@ class _RealisticLayerInput:
     geometry: BaseGeometry
     source_layers: tuple[str, ...]
     source_ids: tuple[str, ...]
+    path_data: str = ""
 
 
 def _groupable_artwork(
@@ -932,48 +956,68 @@ def _cad_copper_path_data(
     if key.function != "copper":
         return ""
 
-    source_items = tuple(source_item for item in group for source_item in item.source_items)
-    if not source_items:
+    return _copper_path_data(
+        event_prefix="cad.skia",
+        layer=key.source_layer_name,
+        function=key.function,
+        side=key.side,
+        items=len(group),
+        sources=(
+            _LayerSkiaSource(source_item, key.source_layer_name)
+            for item in group
+            for source_item in item.source_items
+        ),
+        profiler=profiler,
+    )
+
+
+def _copper_path_data(
+    *,
+    event_prefix: str,
+    layer: str,
+    function: str,
+    side: str,
+    items: int,
+    sources: Iterable[_LayerSkiaSource],
+    profiler: RenderProfiler | None = None,
+) -> str:
+    source_tuple = tuple(sources)
+    if not source_tuple:
         return ""
 
     profile_data = {
-        "layer": key.source_layer_name,
-        "function": key.function,
-        "side": key.side,
-        "items": len(group),
-        "sourceItems": len(source_items),
+        "layer": layer,
+        "function": function,
+        "side": side,
+        "items": items,
+        "sourceItems": len(source_tuple),
     }
     if profiler is not None:
-        profiler.metric("cad.skia.input", **profile_data)
+        profiler.metric(f"{event_prefix}.input", **profile_data)
 
     if profiler is None:
-        skia_artwork = _skia_artwork_for_sources(
-            source_items, target_layer_name=key.source_layer_name
-        )
+        skia_artwork = _skia_artwork_for_layer_sources(source_tuple)
     else:
-        with profiler.span("cad.skia.convert", **profile_data):
-            skia_artwork = _skia_artwork_for_sources(
-                source_items,
-                target_layer_name=key.source_layer_name,
-            )
+        with profiler.span(f"{event_prefix}.convert", **profile_data):
+            skia_artwork = _skia_artwork_for_layer_sources(source_tuple)
 
-    if len(skia_artwork) != len(source_items):
+    if len(skia_artwork) != len(source_tuple):
         if profiler is not None:
             profiler.metric(
-                "cad.skia.fallback",
+                f"{event_prefix}.fallback",
                 **profile_data,
                 convertedItems=len(skia_artwork),
-                unsupportedItems=len(source_items) - len(skia_artwork),
+                unsupportedItems=len(source_tuple) - len(skia_artwork),
             )
         return ""
 
     if profiler is None:
         skia_path_data = union_skia_artwork(skia_artwork)
     else:
-        with profiler.span("cad.skia.union", **profile_data):
+        with profiler.span(f"{event_prefix}.union", **profile_data):
             skia_path_data = union_skia_artwork(skia_artwork)
         profiler.metric(
-            "cad.skia.output",
+            f"{event_prefix}.output",
             **profile_data,
             pathCharacters=skia_path_data.path_characters,
             moveCommands=skia_path_data.move_commands,
@@ -983,20 +1027,23 @@ def _cad_copper_path_data(
     return skia_path_data.d
 
 
-def _skia_artwork_for_sources(
-    source_items: Iterable[RenderableGeometry],
-    *,
-    target_layer_name: str,
+def _skia_artwork_for_layer_sources(
+    sources: Iterable[_LayerSkiaSource],
 ) -> tuple[SkiaArtwork, ...]:
     artwork: list[SkiaArtwork] = []
-    for source_item in source_items:
+    for source in sources:
         skia_artwork = geometry_to_skia_artwork(
-            source_item,
-            target_layer_name=target_layer_name,
+            source.item,
+            target_layer_name=source.target_layer_name,
         )
         if skia_artwork is not None:
             artwork.append(skia_artwork)
     return tuple(artwork)
+
+
+def _profile_layer_name(sources: Iterable[_LayerSkiaSource]) -> str:
+    names = tuple(dict.fromkeys(source.target_layer_name for source in sources))
+    return ",".join(names)
 
 
 def _resolved_group_geometry(
