@@ -21,6 +21,7 @@ from phosphor_eda.pcb_render_artwork import (
     select_source_artwork,
 )
 from phosphor_eda.pcb_render_geometry import GeometryKind, GeometryLayer
+from phosphor_eda.pcb_render_skia import SkiaArtwork, geometry_to_skia_artwork, union_skia_artwork
 from phosphor_eda.pcb_render_tokens import VisualRole, resolve_layer_style
 from phosphor_eda.shapely_geometry import (
     robust_difference,
@@ -51,6 +52,7 @@ class _LayerGroupKey:
 class _GroupedArtwork:
     artwork: ArtworkItem
     layer: GeometryLayer
+    source_items: tuple[RenderableGeometry, ...]
 
 
 @dataclass(frozen=True)
@@ -207,6 +209,11 @@ def build_cad_layers(
             layer for item in group for layer in item.artwork.source_layers
         )
         source_ids = _source_ids_by_store_order(store, group)
+        path_data = _cad_copper_path_data(
+            key,
+            group,
+            profiler=profiler,
+        )
         layers.append(
             DerivedLayer(
                 id=_derived_layer_id(role),
@@ -217,6 +224,7 @@ def build_cad_layers(
                 style=style,
                 data={"source-layer": key.source_layer_name},
                 clip=None if key.function == "edge" else layer_clip,
+                path_data=path_data,
             )
         )
 
@@ -534,7 +542,7 @@ def _groupable_artwork(
             artwork = geometry_to_artwork(item)
             if artwork is None:
                 continue
-            grouped.append(_GroupedArtwork(artwork=artwork, layer=item.layer))
+            grouped.append(_GroupedArtwork(artwork=artwork, layer=item.layer, source_items=(item,)))
     else:
         with profiler.span("artwork.convert_non_vias", items=len(selected_non_vias)):
             trace_artwork = _trace_grouped_artwork(trace_groups)
@@ -546,7 +554,11 @@ def _groupable_artwork(
                 artwork = geometry_to_artwork(item)
                 if artwork is None:
                     continue
-                grouped_item = _GroupedArtwork(artwork=artwork, layer=item.layer)
+                grouped_item = _GroupedArtwork(
+                    artwork=artwork,
+                    layer=item.layer,
+                    source_items=(item,),
+                )
                 grouped.append(grouped_item)
                 profiled_artwork.append(_ProfiledArtwork(kind=item.kind, grouped=grouped_item))
         _profile_artwork_by_kind(profiler, profiled_artwork)
@@ -572,6 +584,7 @@ def _groupable_artwork(
                         tags=artwork.tags,
                     ),
                     layer=layer,
+                    source_items=(item,),
                 )
                 grouped.append(grouped_item)
                 via_profiled_artwork.append(
@@ -615,7 +628,13 @@ def _trace_grouped_artwork(
     for items in trace_groups.values():
         artwork = _trace_artwork_from_items(items)
         if artwork is not None:
-            grouped.append(_GroupedArtwork(artwork=artwork, layer=items[0].layer))
+            grouped.append(
+                _GroupedArtwork(
+                    artwork=artwork,
+                    layer=items[0].layer,
+                    source_items=tuple(items),
+                )
+            )
     return tuple(grouped)
 
 
@@ -902,6 +921,82 @@ def _group_sort_key(item: tuple[_LayerGroupKey, list[_GroupedArtwork]]) -> tuple
     key, group = item
     stack_index = group[0].layer.stack_index if group else 0
     return (stack_index, len(group), key.source_layer_name)
+
+
+def _cad_copper_path_data(
+    key: _LayerGroupKey,
+    group: list[_GroupedArtwork],
+    *,
+    profiler: RenderProfiler | None = None,
+) -> str:
+    if key.function != "copper":
+        return ""
+
+    source_items = tuple(source_item for item in group for source_item in item.source_items)
+    if not source_items:
+        return ""
+
+    profile_data = {
+        "layer": key.source_layer_name,
+        "function": key.function,
+        "side": key.side,
+        "items": len(group),
+        "sourceItems": len(source_items),
+    }
+    if profiler is not None:
+        profiler.metric("cad.skia.input", **profile_data)
+
+    if profiler is None:
+        skia_artwork = _skia_artwork_for_sources(
+            source_items, target_layer_name=key.source_layer_name
+        )
+    else:
+        with profiler.span("cad.skia.convert", **profile_data):
+            skia_artwork = _skia_artwork_for_sources(
+                source_items,
+                target_layer_name=key.source_layer_name,
+            )
+
+    if len(skia_artwork) != len(source_items):
+        if profiler is not None:
+            profiler.metric(
+                "cad.skia.fallback",
+                **profile_data,
+                convertedItems=len(skia_artwork),
+                unsupportedItems=len(source_items) - len(skia_artwork),
+            )
+        return ""
+
+    if profiler is None:
+        skia_path_data = union_skia_artwork(skia_artwork)
+    else:
+        with profiler.span("cad.skia.union", **profile_data):
+            skia_path_data = union_skia_artwork(skia_artwork)
+        profiler.metric(
+            "cad.skia.output",
+            **profile_data,
+            pathCharacters=skia_path_data.path_characters,
+            moveCommands=skia_path_data.move_commands,
+            lineCommands=skia_path_data.line_commands,
+            curveCommands=skia_path_data.curve_commands,
+        )
+    return skia_path_data.d
+
+
+def _skia_artwork_for_sources(
+    source_items: Iterable[RenderableGeometry],
+    *,
+    target_layer_name: str,
+) -> tuple[SkiaArtwork, ...]:
+    artwork: list[SkiaArtwork] = []
+    for source_item in source_items:
+        skia_artwork = geometry_to_skia_artwork(
+            source_item,
+            target_layer_name=target_layer_name,
+        )
+        if skia_artwork is not None:
+            artwork.append(skia_artwork)
+    return tuple(artwork)
 
 
 def _resolved_group_geometry(

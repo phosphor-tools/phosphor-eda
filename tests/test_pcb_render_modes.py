@@ -245,6 +245,46 @@ def test_cad_via_only_copper_selection_builds_layer_for_selected_source_layer() 
     assert layers[0].source_ids == ("via-1",)
 
 
+def test_cad_copper_layer_uses_skia_path_data_for_pad_and_via() -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "pad-1",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=1.0, y=1.0),
+            ),
+            _renderable(
+                "via-1",
+                GeometryKind.VIA,
+                "vias",
+                "via",
+                "",
+                geometry=PcbVia(2.0, 1.0, 0.8, 0.3, ["F.Cu", "B.Cu"], 1),
+            ),
+        )
+    )
+
+    layers = build_cad_layers(
+        store,
+        _settings(
+            rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
+            tokens={"cad.copper.front.fill": "#d17a22"},
+        ),
+        warn=lambda _message: None,
+    )
+
+    assert len(layers) == 1
+    layer = layers[0]
+    assert layer.id == "cad:copper:front"
+    assert layer.source_ids == ("pad-1", "via-1")
+    assert layer.path_data.startswith("M ")
+    assert not isinstance(layer.geometry, GeometryCollection)
+
+
 def test_cad_geometry_keeps_unclipped_artwork_and_tracks_layer_clip() -> None:
     store = PcbGeometryStore(
         items=(
@@ -955,6 +995,51 @@ def test_profiler_reports_converted_artwork_complexity_by_source_kind() -> None:
     assert isinstance(by_kind["zone"]["coordinates"], int)
     assert by_kind["zone"]["coordinates"] > 0
     assert by_kind["via"]["layer"] == "F.Cu"
+
+
+def test_profiler_reports_skia_path_metrics_for_cad_copper() -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "pad-1",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=1.0, y=1.0),
+            ),
+            _renderable(
+                "via-1",
+                GeometryKind.VIA,
+                "vias",
+                "via",
+                "",
+                geometry=PcbVia(2.0, 1.0, 0.8, 0.3, ["F.Cu"], 1),
+            ),
+        )
+    )
+    profiler = RenderProfiler()
+
+    _ = build_cad_layers(
+        store,
+        _settings(
+            rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
+            tokens={"cad.copper.front.fill": "#d17a22"},
+        ),
+        warn=lambda _message: None,
+        profiler=profiler,
+    )
+
+    profile_events = cast("list[dict[str, object]]", profiler.to_dict()["events"])
+    by_name = {event["name"]: event for event in profile_events}
+    input_data = cast("dict[str, object]", by_name["cad.skia.input"]["data"])
+    output_data = cast("dict[str, object]", by_name["cad.skia.output"]["data"])
+
+    assert "cad.skia.union" in by_name
+    assert input_data["sourceItems"] == 2
+    assert output_data["pathCharacters"] > 0
+    assert output_data["moveCommands"] > 0
 
 
 def test_highlight_layers_reuse_surface_drill_clip_geometry(
