@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from phosphor_eda.convert import convert
+from phosphor_eda.eagle import eagle_to_design
 from phosphor_eda.validate import Severity, validate_design
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -13,15 +15,11 @@ ADAFRUIT_SCH = FIXTURES / "eagle/adafruit_rgblcdshield.sch"
 
 @pytest.fixture(scope="module")
 def design():
-    from phosphor_eda.eagle import eagle_to_design
-
     return eagle_to_design(BME280_SCH)
 
 
 @pytest.fixture(scope="module")
 def adafruit_design():
-    from phosphor_eda.eagle import eagle_to_design
-
     return eagle_to_design(ADAFRUIT_SCH)
 
 
@@ -37,6 +35,196 @@ def _find_net(design, name: str):
         if n.name == name:
             return n
     return None
+
+
+def _write_multisheet_eagle_same_name_net(tmp_path: Path) -> Path:
+    schematic = tmp_path / "same-name-net.sch"
+    schematic.write_text(
+        """<?xml version="1.0" encoding="utf-8"?>
+<eagle version="9.6.2">
+  <drawing>
+    <schematic>
+      <libraries>
+        <library name="test">
+          <symbols>
+            <symbol name="RES">
+              <pin name="A" direction="pas"/>
+            </symbol>
+          </symbols>
+          <devicesets>
+            <deviceset name="R" prefix="R">
+              <gates>
+                <gate name="G$1" symbol="RES"/>
+              </gates>
+              <devices>
+                <device name="" package="R0603">
+                  <connects>
+                    <connect gate="G$1" pin="A" pad="1"/>
+                  </connects>
+                </device>
+              </devices>
+            </deviceset>
+          </devicesets>
+        </library>
+      </libraries>
+      <parts>
+        <part name="R1" library="test" deviceset="R" device=""/>
+        <part name="R2" library="test" deviceset="R" device=""/>
+      </parts>
+      <sheets>
+        <sheet>
+          <instances>
+            <instance part="R1" gate="G$1" x="1" y="2"/>
+          </instances>
+          <nets>
+            <net name="SHARED" class="0">
+              <segment>
+                <pinref part="R1" gate="G$1" pin="A"/>
+              </segment>
+            </net>
+          </nets>
+        </sheet>
+        <sheet>
+          <instances>
+            <instance part="R2" gate="G$1" x="3" y="4"/>
+          </instances>
+          <nets>
+            <net name="SHARED" class="0">
+              <segment>
+                <pinref part="R2" gate="G$1" pin="A"/>
+              </segment>
+            </net>
+          </nets>
+        </sheet>
+      </sheets>
+    </schematic>
+  </drawing>
+</eagle>
+""",
+        encoding="utf-8",
+    )
+    return schematic
+
+
+def _write_multipart_eagle_component(tmp_path: Path) -> Path:
+    schematic = tmp_path / "multipart.sch"
+    schematic.write_text(
+        """<?xml version="1.0" encoding="utf-8"?>
+<eagle version="9.6.2">
+  <drawing>
+    <schematic>
+      <libraries>
+        <library name="test">
+          <symbols>
+            <symbol name="AMP">
+              <pin name="IN" direction="in"/>
+              <pin name="OUT" direction="out"/>
+            </symbol>
+          </symbols>
+          <devicesets>
+            <deviceset name="DUAL">
+              <gates>
+                <gate name="A" symbol="AMP"/>
+                <gate name="B" symbol="AMP"/>
+              </gates>
+              <devices>
+                <device name="" package="SOIC8">
+                  <connects>
+                    <connect gate="A" pin="IN" pad="1"/>
+                    <connect gate="A" pin="OUT" pad="2"/>
+                    <connect gate="B" pin="IN" pad="3"/>
+                    <connect gate="B" pin="OUT" pad="4"/>
+                  </connects>
+                </device>
+              </devices>
+            </deviceset>
+          </devicesets>
+        </library>
+      </libraries>
+      <parts>
+        <part name="U1" library="test" deviceset="DUAL" device="" value="LM358"/>
+      </parts>
+      <sheets>
+        <sheet>
+          <instances>
+            <instance part="U1" gate="A" x="1" y="2"/>
+            <instance part="U1" gate="B" x="3" y="4" rot="MR90"/>
+          </instances>
+          <nets>
+            <net name="AIN" class="0">
+              <segment><pinref part="U1" gate="A" pin="IN"/></segment>
+            </net>
+            <net name="AOUT" class="0">
+              <segment><pinref part="U1" gate="A" pin="OUT"/></segment>
+            </net>
+            <net name="BIN" class="0">
+              <segment><pinref part="U1" gate="B" pin="IN"/></segment>
+            </net>
+            <net name="BOUT" class="0">
+              <segment><pinref part="U1" gate="B" pin="OUT"/></segment>
+            </net>
+          </nets>
+        </sheet>
+      </sheets>
+    </schematic>
+  </drawing>
+</eagle>
+""",
+        encoding="utf-8",
+    )
+    return schematic
+
+
+def _write_eagle_net_without_pinrefs(tmp_path: Path) -> Path:
+    schematic = tmp_path / "empty-net.sch"
+    schematic.write_text(
+        """<?xml version="1.0" encoding="utf-8"?>
+<eagle version="9.6.2">
+  <drawing>
+    <schematic>
+      <libraries>
+        <library name="test">
+          <symbols>
+            <symbol name="RES"><pin name="A" direction="pas"/></symbol>
+          </symbols>
+          <devicesets>
+            <deviceset name="R">
+              <gates><gate name="G$1" symbol="RES"/></gates>
+              <devices>
+                <device name="" package="R0603">
+                  <connects><connect gate="G$1" pin="A" pad="1"/></connects>
+                </device>
+              </devices>
+            </deviceset>
+          </devicesets>
+        </library>
+      </libraries>
+      <parts>
+        <part name="R1" library="test" deviceset="R" device=""/>
+      </parts>
+      <sheets>
+        <sheet>
+          <instances><instance part="R1" gate="G$1" x="1" y="2"/></instances>
+          <nets>
+            <net name="USED" class="0">
+              <segment><pinref part="R1" gate="G$1" pin="A"/></segment>
+            </net>
+            <net name="USED" class="0">
+              <segment><wire x1="0" y1="0" x2="1" y2="0" width="0.1524" layer="91"/></segment>
+            </net>
+            <net name="EMPTY" class="0">
+              <segment><wire x1="0" y1="1" x2="1" y2="1" width="0.1524" layer="91"/></segment>
+            </net>
+          </nets>
+        </sheet>
+      </sheets>
+    </schematic>
+  </drawing>
+</eagle>
+""",
+        encoding="utf-8",
+    )
+    return schematic
 
 
 # --- Components ---
@@ -138,6 +326,72 @@ def test_single_page(design):
     assert len(design.pages) == 1
 
 
+def test_public_model_links_are_bidirectional(design):
+    for page in design.pages:
+        assert page.id
+        for component in page.components:
+            assert component.id
+            assert page in component.pages
+        for net in page.nets:
+            assert net.id
+            assert page in net.pages
+
+    for component in design.components:
+        assert component.pages
+        assert component.occurrences
+        for pin in component.pins:
+            assert pin.id
+            assert pin.component is component
+            if pin.net is not None:
+                assert pin in pin.net.pins
+
+    for net in design.nets:
+        assert net.pages
+        assert net.occurrences
+        for pin in net.pins:
+            assert pin.net is net
+
+
+def test_eagle_same_named_nets_are_global_across_sheets(tmp_path):
+    """Eagle connects net segments with the same net name across sheets."""
+    design = eagle_to_design(_write_multisheet_eagle_same_name_net(tmp_path))
+
+    shared = _find_net(design, "SHARED")
+    assert shared is not None
+    assert len(design.pages) == 2
+    assert len([net for net in design.nets if net.name == "SHARED"]) == 1
+    assert {pin.component.reference for pin in shared.pins} == {"R1", "R2"}
+    assert {page.name for page in shared.pages} == {"Sheet 1", "Sheet 2"}
+
+
+def test_multipart_eagle_component_collects_gate_occurrences(tmp_path):
+    design = eagle_to_design(_write_multipart_eagle_component(tmp_path))
+
+    component = _find_component(design, "U1")
+    assert component is not None
+    assert len([candidate for candidate in design.components if candidate.reference == "U1"]) == 1
+    assert [pin.designator for pin in component.pins] == ["1", "2", "3", "4"]
+    assert len(component.occurrences) == 2
+    assert {occurrence.metadata["eagle_gate"] for occurrence in component.occurrences} == {"A", "B"}
+    assert {pin.net.name for pin in component.pins if pin.net is not None} == {
+        "AIN",
+        "AOUT",
+        "BIN",
+        "BOUT",
+    }
+
+
+def test_eagle_named_net_without_pinrefs_does_not_create_empty_occurrence(tmp_path):
+    design = eagle_to_design(_write_eagle_net_without_pinrefs(tmp_path))
+
+    assert _find_net(design, "EMPTY") is None
+    used = _find_net(design, "USED")
+    assert used is not None
+    assert [net.name for net in design.nets] == ["USED"]
+    assert [net.name for net in design.pages[0].nets] == ["USED"]
+    assert len(used.occurrences) == 1
+
+
 # --- Validation ---
 
 
@@ -168,8 +422,6 @@ def test_adafruit_no_errors(adafruit_design):
 
 
 def test_convert_api():
-    from phosphor_eda.convert import convert
-
     text = convert(BME280_SCH)
     assert "DESIGN SUMMARY" in text
     assert "COMPONENTS" in text
