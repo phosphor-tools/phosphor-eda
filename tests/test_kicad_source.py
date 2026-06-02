@@ -71,9 +71,7 @@ def test_pin_occurrences_keep_scope_and_local_net_id() -> None:
     source = kicad_to_source(REPEATED_ROOT)
     local_nets_by_id = {local_net.id: local_net for local_net in source.local_nets}
 
-    child_pins = [
-        pin for pin in source.pin_occurrences if pin.component_reference == "R1"
-    ]
+    child_pins = [pin for pin in source.pin_occurrences if pin.component_reference == "R1"]
     child_pin_scopes = {pin.scope_id for pin in child_pins}
 
     assert len(child_pins) == 4

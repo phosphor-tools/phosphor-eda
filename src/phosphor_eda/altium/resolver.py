@@ -544,10 +544,7 @@ def _sheet_entry_names(local_net: AltiumLocalNet) -> list[str]:
 
 
 def _harness_member_names(local_net: AltiumLocalNet) -> list[str]:
-    return _dedupe(
-        _mergeable_name(member.name) or ""
-        for member in local_net.harness_members
-    )
+    return _dedupe(_mergeable_name(member.name) or "" for member in local_net.harness_members)
 
 
 def _mergeable_name(name: str) -> str | None:
