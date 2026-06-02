@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from phosphor_eda.dsn.resolver import resolve_dsn_source
 from phosphor_eda.dsn.source import (
     DsnGlobal,
     DsnHierarchyMapping,
@@ -17,15 +18,7 @@ from phosphor_eda.dsn.source import (
     DsnWireAlias,
     dsn_name_key,
 )
-from phosphor_eda.schematic import (
-    Component,
-    ComponentOccurrence,
-    Net,
-    Page,
-    Pin,
-    Schematic,
-    ScopeId,
-)
+from phosphor_eda.schematic import Schematic, ScopeId
 from phosphor_eda.text import strip_overline
 
 if TYPE_CHECKING:
@@ -59,6 +52,20 @@ def _pin_name(pin_number: str, symbol_pin_names: list[str]) -> str:
 
 def _source_net_ids_at(raw_page: RawPage, location: tuple[int, int]) -> list[int]:
     return sorted(raw_page.wire_net_map.get(location, set()))
+
+
+def _pin_source_net_id(
+    raw_page: RawPage,
+    page_net_ids: set[int],
+    pin_net_id: int,
+    location: tuple[int, int],
+) -> int:
+    if pin_net_id in page_net_ids:
+        return pin_net_id
+    coord_net_ids = _source_net_ids_at(raw_page, location)
+    if coord_net_ids:
+        return coord_net_ids[0]
+    return pin_net_id
 
 
 def _source_props(props: dict[str, str]) -> dict[str, str]:
@@ -179,6 +186,7 @@ def _source_page(raw_page: RawPage, raw: RawDesign) -> DsnPageSource:
         )
         page_source.nets.append(page_net)
         page_nets_by_id[raw_net.net_id] = page_net
+    source_page_net_ids = set(page_nets_by_id)
 
     for index, raw_wire in enumerate(raw_page.wires):
         page_net = _add_page_net_if_missing(
@@ -221,24 +229,31 @@ def _source_page(raw_page: RawPage, raw: RawDesign) -> DsnPageSource:
         sym_pins = raw.symbol_pin_names.get(pkg, [])
         component_source_id = f"{page_id}:component:{raw_inst.db_id or instance_index}"
         for pin_index, raw_pin in enumerate(raw_inst.pin_connections):
+            location = (raw_pin.pin_x, raw_pin.pin_y)
+            source_net_id = _pin_source_net_id(
+                raw_page,
+                source_page_net_ids,
+                raw_pin.net_id,
+                location,
+            )
             page_net = _add_page_net_if_missing(
                 page_nets_by_id=page_nets_by_id,
                 page_source=page_source,
                 page_id=page_id,
                 scope_id=scope_id,
-                net_id=raw_pin.net_id,
+                net_id=source_net_id,
             )
             pin = DsnPinOccurrence(
                 id=f"{component_source_id}:pin:{pin_index}",
                 scope_id=scope_id,
                 local_net_id=page_net.id,
-                source_net_id=raw_pin.net_id,
+                source_net_id=source_net_id,
                 component_source_id=component_source_id,
                 component_reference=raw_inst.reference,
                 component_part=pkg,
                 pin_designator=raw_pin.pin_number,
                 pin_name=_pin_name(raw_pin.pin_number, sym_pins),
-                location=(raw_pin.pin_x, raw_pin.pin_y),
+                location=location,
             )
             page_source.pin_occurrences.append(pin)
             page_net.pin_ids.append(pin.id)
@@ -292,93 +307,4 @@ def dsn_to_source(raw: RawDesign, name: str = "") -> DsnSourceDesign:
 
 def dsn_to_design(raw: RawDesign, name: str = "") -> Schematic:
     """Convert a raw DSN ParsedDesign to a Schematic."""
-    pin_names_map = raw.symbol_pin_names
-    pages: list[Page] = []
-    design_nets: list[Net] = []
-    design_components: list[Component] = []
-
-    for raw_page in raw.pages:
-        page_id = _page_id(raw_page)
-        scope_id = ScopeId(path=(_page_scope_name(raw_page),))
-        page = Page(id=page_id, name=raw_page.name, scope_id=scope_id)
-        net_by_id: dict[int, Net] = {}
-
-        for raw_net in raw_page.nets:
-            net = Net(
-                id=_local_net_id(page_id, raw_net.net_id),
-                name=raw_net.name,
-                pages=[page],
-            )
-            net_by_id[raw_net.net_id] = net
-            page.nets.append(net)
-            design_nets.append(net)
-
-        # Build coord -> net lookup from wire_net_map.
-        # Wire net IDs not in the page's named net list are unnamed nets
-        # (wires connecting components without an explicit net label).
-        # Create synthetic nets for these so pins stay connected.
-        coord_to_nets: dict[tuple[int, int], list[Net]] = {}
-        for coord, net_ids in raw_page.wire_net_map.items():
-            for nid in sorted(net_ids):
-                if nid not in net_by_id:
-                    unnamed = Net(
-                        id=_local_net_id(page_id, nid),
-                        name=f"N{nid:08d}",
-                        pages=[page],
-                    )
-                    net_by_id[nid] = unnamed
-                    page.nets.append(unnamed)
-                    design_nets.append(unnamed)
-                coord_to_nets.setdefault(coord, []).append(net_by_id[nid])
-
-        for instance_index, raw_inst in enumerate(raw_page.instances):
-            pkg = raw_inst.package_name.replace(".Normal", "")
-            sym_pins = pin_names_map.get(pkg, [])
-
-            component_id = f"{page_id}:component:{raw_inst.db_id or instance_index}"
-            comp = Component(
-                id=component_id,
-                reference=raw_inst.reference,
-                part=pkg,
-                description="",
-                pages=[page],
-            )
-            comp.occurrences.append(
-                ComponentOccurrence(
-                    id=f"{component_id}:occurrence:0",
-                    component=comp,
-                    page=page,
-                    scope_id=scope_id,
-                    source_id=component_id,
-                    part_id=pkg,
-                    x=float(raw_inst.loc_x),
-                    y=float(raw_inst.loc_y),
-                ),
-            )
-
-            for pin_index, raw_pin in enumerate(raw_inst.pin_connections):
-                pin_name = _pin_name(raw_pin.pin_number, sym_pins)
-
-                coord = (raw_pin.pin_x, raw_pin.pin_y)
-                net = net_by_id.get(raw_pin.net_id)
-                if net is None:
-                    nets = coord_to_nets.get(coord, [])
-                    net = nets[0] if nets else None
-
-                pin = Pin(
-                    id=f"{component_id}:pin:{pin_index}",
-                    designator=raw_pin.pin_number,
-                    name=pin_name,
-                    component=comp,
-                    net=net,
-                )
-                comp.pins.append(pin)
-                if net is not None:
-                    net.pins.append(pin)
-
-            page.components.append(comp)
-            design_components.append(comp)
-
-        pages.append(page)
-
-    return Schematic(name=name, pages=pages, nets=design_nets, components=design_components)
+    return resolve_dsn_source(dsn_to_source(raw, name=name))
