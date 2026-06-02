@@ -31,6 +31,7 @@ class WireAlias:
 
 @dataclass
 class Wire:
+    type_id: int = 0
     wire_id: int = 0
     color: int = 0
     start_x: int = 0
@@ -72,6 +73,7 @@ class PlacedInstance:
 class GraphicInst:
     """Base for Port, Global, OffPageConnector."""
 
+    type_id: int = 0
     name: str = ""
     db_id: int = 0
     loc_x: int = 0
