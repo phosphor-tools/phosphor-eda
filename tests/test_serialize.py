@@ -819,6 +819,36 @@ def test_format_page_detail_filters_unified_component_pins_by_pin_occurrence():
     assert "U1.2" not in detail
 
 
+def test_format_page_detail_ignores_pin_source_id_metadata_for_page_membership():
+    page_a = Page(name="Core", id="page:core", source_file="core.kicad_sch")
+    page_b = Page(name="IO", id="page:io", source_file="io.kicad_sch")
+    comp = Component(reference="U1", part="MCU", description="Processor", pages=[page_a])
+    net = Net(name="P3V3", pages=[page_a, page_b])
+    pin = Pin(
+        designator="1",
+        name="VDD",
+        component=comp,
+        net=net,
+        metadata={"kicad_pin_source_id": "symbol:u1:page:io:io.kicad_sch:pin-1"},
+    )
+    comp.pins = [pin]
+    net.pins = [pin]
+    page_a.components = [comp]
+    page_a.nets = [net]
+    page_b.nets = [net]
+    design = Schematic(
+        name="METADATA_PAGE_IDS",
+        pages=[page_a, page_b],
+        nets=[net],
+        components=[comp],
+    )
+
+    detail = format_page_detail(design, "IO")
+
+    assert "P3V3" in detail
+    assert "U1.1" not in detail
+
+
 def test_format_page_detail_rejects_ambiguous_duplicate_page_names():
     first = Page(name="Channel", id="page:channel-a", scope_id=ScopeId(path=("root", "a")))
     second = Page(name="Channel", id="page:channel-b", scope_id=ScopeId(path=("root", "b")))
