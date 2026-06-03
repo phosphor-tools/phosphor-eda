@@ -6,16 +6,14 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from phosphor_eda.net_union import NetUnion
-from phosphor_eda.schematic import (
-    Component,
-    ComponentOccurrence,
-    Net,
-    NetOccurrence,
-    Page,
-    Pin,
-    PinOccurrence,
-    Schematic,
-    ScopeId,
+from phosphor_eda.resolved_graph import (
+    ResolutionInputError,
+    ResolvedComponentOccurrenceInput,
+    ResolvedLocalNetInput,
+    ResolvedNetInput,
+    ResolvedPageInput,
+    ResolvedPinInput,
+    build_resolved_schematic,
 )
 
 if TYPE_CHECKING:
@@ -27,11 +25,11 @@ if TYPE_CHECKING:
         DsnPinOccurrence,
         DsnSourceDesign,
     )
+    from phosphor_eda.schematic import Net, Schematic, ScopeId
 
 
 @dataclass(slots=True)
 class _LocalNetRef:
-    page: DsnPageSource
     local_net: DsnPageNet
 
 
@@ -48,6 +46,8 @@ def resolve_dsn_source(source: DsnSourceDesign) -> Schematic:
     """Resolve an OrCAD DSN source design into the public schematic graph."""
     local_refs = _collect_local_refs(source.pages)
     local_net_ids = {ref.local_net.id for ref in local_refs}
+    local_nets_by_id = {ref.local_net.id: ref.local_net for ref in local_refs}
+    _validate_evidence_refs(source.pages, local_nets_by_id)
     net_union = NetUnion(ref.local_net.id for ref in local_refs)
     pin_occurrences = _collect_pin_occurrences(source.pages)
 
@@ -55,16 +55,21 @@ def resolve_dsn_source(source: DsnSourceDesign) -> Schematic:
     _merge_globals(source.pages, net_union, local_net_ids)
     _merge_known_scope_off_page_connectors(source.pages, net_union, local_net_ids)
 
-    pages = _build_pages(source.pages)
     name_evidence = _collect_name_evidence(source.pages)
-    nets_by_local_id = _build_nets(local_refs, net_union, pages, name_evidence)
-    components = _build_components(pages, nets_by_local_id, pin_occurrences)
-
-    return Schematic(
+    return build_resolved_schematic(
         name=source.name,
-        pages=list(pages.values()),
-        nets=_ordered_nets(nets_by_local_id),
-        components=components,
+        pages=_page_inputs(source.pages),
+        local_nets=_local_net_inputs(local_refs, name_evidence),
+        pins=_pin_inputs(pin_occurrences),
+        net_union=net_union,
+        net_factory=lambda net_index, root_id, group_local_nets: _dsn_net_input_for_group(
+            name_evidence,
+            net_index,
+            root_id,
+            group_local_nets,
+        ),
+        include_net=_include_dsn_net,
+        net_ordering=_order_dsn_nets,
         metadata={
             "dsn_resolver": "source",
         },
@@ -74,12 +79,22 @@ def resolve_dsn_source(source: DsnSourceDesign) -> Schematic:
 def _collect_local_refs(pages: Iterable[DsnPageSource]) -> list[_LocalNetRef]:
     refs: list[_LocalNetRef] = []
     seen: set[str] = set()
+    scopes = {page.scope_id for page in pages}
     for page in pages:
         for local_net in page.nets:
             if local_net.id in seen:
                 continue
+            if local_net.scope_id not in scopes:
+                msg = f"local net {local_net.id!r} references unknown scope {local_net.scope_id}"
+                raise ResolutionInputError(msg)
+            if local_net.scope_id != page.scope_id:
+                msg = (
+                    f"local net {local_net.id!r} scope {local_net.scope_id} "
+                    f"does not match page scope {page.scope_id}"
+                )
+                raise ResolutionInputError(msg)
             seen.add(local_net.id)
-            refs.append(_LocalNetRef(page=page, local_net=local_net))
+            refs.append(_LocalNetRef(local_net=local_net))
     return refs
 
 
@@ -140,6 +155,92 @@ def _merge_known_scope_off_page_connectors(
         _merge_ids(net_union, net_ids)
 
 
+def _validate_evidence_refs(
+    pages: Iterable[DsnPageSource],
+    local_nets_by_id: dict[str, DsnPageNet],
+) -> None:
+    scopes = {page.scope_id for page in pages}
+    for page in pages:
+        for wire in page.wires:
+            _validate_scoped_local_net_ref(
+                kind="wire",
+                id_=wire.id,
+                scope_id=wire.scope_id,
+                local_net_id=wire.local_net_id,
+                page_scope_id=page.scope_id,
+                scopes=scopes,
+                local_nets_by_id=local_nets_by_id,
+            )
+            for alias in wire.aliases:
+                if alias.scope_id != wire.scope_id:
+                    msg = (
+                        f"wire alias {alias.id!r} scope {alias.scope_id} "
+                        f"does not match wire scope {wire.scope_id}"
+                    )
+                    raise ResolutionInputError(msg)
+                if alias.scope_id not in scopes:
+                    msg = f"wire alias {alias.id!r} references unknown scope {alias.scope_id}"
+                    raise ResolutionInputError(msg)
+        for port in page.ports:
+            _validate_scoped_local_net_ref(
+                kind="port",
+                id_=port.id,
+                scope_id=port.scope_id,
+                local_net_id=port.local_net_id,
+                page_scope_id=page.scope_id,
+                scopes=scopes,
+                local_nets_by_id=local_nets_by_id,
+            )
+        for global_ in page.globals:
+            _validate_scoped_local_net_ref(
+                kind="global",
+                id_=global_.id,
+                scope_id=global_.scope_id,
+                local_net_id=global_.local_net_id,
+                page_scope_id=page.scope_id,
+                scopes=scopes,
+                local_nets_by_id=local_nets_by_id,
+            )
+        for connector in page.off_page_connectors:
+            _validate_scoped_local_net_ref(
+                kind="off-page connector",
+                id_=connector.id,
+                scope_id=connector.scope_id,
+                local_net_id=connector.local_net_id,
+                page_scope_id=page.scope_id,
+                scopes=scopes,
+                local_nets_by_id=local_nets_by_id,
+            )
+
+
+def _validate_scoped_local_net_ref(
+    *,
+    kind: str,
+    id_: str,
+    scope_id: ScopeId,
+    local_net_id: str,
+    page_scope_id: ScopeId,
+    scopes: set[ScopeId],
+    local_nets_by_id: dict[str, DsnPageNet],
+) -> None:
+    if scope_id not in scopes:
+        msg = f"{kind} {id_!r} references unknown scope {scope_id}"
+        raise ResolutionInputError(msg)
+    if scope_id != page_scope_id:
+        msg = f"{kind} {id_!r} scope {scope_id} does not match page scope {page_scope_id}"
+        raise ResolutionInputError(msg)
+    local_net = local_nets_by_id.get(local_net_id)
+    if local_net is None:
+        msg = f"{kind} {id_!r} references unknown local net {local_net_id!r}"
+        raise ResolutionInputError(msg)
+    if local_net.scope_id != scope_id:
+        msg = (
+            f"{kind} {id_!r} scope {scope_id} does not match "
+            f"local net {local_net_id!r} scope {local_net.scope_id}"
+        )
+        raise ResolutionInputError(msg)
+
+
 def _off_page_scope_key(scope_id: ScopeId) -> tuple[str, ...]:
     if len(scope_id.path) > 1:
         return scope_id.path[:-1]
@@ -154,15 +255,15 @@ def _merge_ids(net_union: NetUnion, net_ids: list[str]) -> None:
         _ = net_union.union(first_id, net_id)
 
 
-def _build_pages(source_pages: Iterable[DsnPageSource]) -> dict[ScopeId, Page]:
-    pages: dict[ScopeId, Page] = {}
-    for source_page in source_pages:
-        pages[source_page.scope_id] = Page(
+def _page_inputs(source_pages: Iterable[DsnPageSource]) -> list[ResolvedPageInput]:
+    return [
+        ResolvedPageInput(
             id=source_page.id,
             name=source_page.name,
             scope_id=source_page.scope_id,
         )
-    return pages
+        for source_page in source_pages
+    ]
 
 
 def _collect_name_evidence(pages: Iterable[DsnPageSource]) -> dict[str, _NameEvidence]:
@@ -186,55 +287,78 @@ def _collect_name_evidence(pages: Iterable[DsnPageSource]) -> dict[str, _NameEvi
     return evidence_by_local_id
 
 
-def _build_nets(
+def _local_net_inputs(
     local_refs: list[_LocalNetRef],
-    net_union: NetUnion,
-    pages: dict[ScopeId, Page],
     name_evidence: dict[str, _NameEvidence],
-) -> dict[str, Net]:
-    refs_by_group: dict[str, list[_LocalNetRef]] = {}
-    for ref in local_refs:
-        refs_by_group.setdefault(net_union.find(ref.local_net.id), []).append(ref)
-
-    result: dict[str, Net] = {}
-    page_net_ids: dict[str, set[str]] = {
-        page.id: {net.id for net in page.nets} for page in pages.values()
-    }
-    for net_index, (root_id, group_refs) in enumerate(refs_by_group.items(), start=1):
-        evidences = [name_evidence.get(ref.local_net.id, _NameEvidence()) for ref in group_refs]
-        name = _select_net_name(root_id, evidences)
-        aliases = _all_alias_names(evidences)
-        aliases.discard(name)
-        net = Net(
-            id=f"dsn:net:{net_index:04d}",
-            name=name,
-            aliases=aliases,
+) -> list[ResolvedLocalNetInput]:
+    return [
+        ResolvedLocalNetInput(
+            id=ref.local_net.id,
+            scope_id=ref.local_net.scope_id,
+            source_names=frozenset(
+                _source_names(name_evidence.get(ref.local_net.id, _NameEvidence()))
+            ),
             metadata={
-                "dsn_root_local_net_id": root_id,
+                "dsn_source_net_id": str(ref.local_net.net_id),
             },
         )
-        net_page_ids: set[str] = set()
-        for ref in group_refs:
-            page = _page_for_scope(pages, ref.page.scope_id)
-            occurrence = NetOccurrence(
-                id=f"{net.id}:occ:{len(net.occurrences) + 1:04d}",
-                net=net,
-                page=page,
-                scope_id=ref.local_net.scope_id,
-                source_local_net_id=ref.local_net.id,
-                source_names=_source_names(name_evidence.get(ref.local_net.id, _NameEvidence())),
-                metadata={
-                    "dsn_source_net_id": str(ref.local_net.net_id),
+        for ref in local_refs
+    ]
+
+
+def _dsn_net_input_for_group(
+    name_evidence: dict[str, _NameEvidence],
+    net_index: int,
+    root_id: str,
+    group_local_nets: tuple[ResolvedLocalNetInput, ...],
+) -> ResolvedNetInput:
+    evidences = [name_evidence.get(local_net.id, _NameEvidence()) for local_net in group_local_nets]
+    name = _select_net_name(root_id, evidences)
+    aliases = _all_alias_names(evidences)
+    aliases.discard(name)
+    return ResolvedNetInput(
+        id=f"dsn:net:{net_index:04d}",
+        name=name,
+        aliases=frozenset(aliases),
+        metadata={
+            "dsn_root_local_net_id": root_id,
+        },
+    )
+
+
+def _pin_inputs(pin_occurrences: Iterable[DsnPinOccurrence]) -> list[ResolvedPinInput]:
+    result: list[ResolvedPinInput] = []
+    for pin_occurrence in pin_occurrences:
+        component_id = _component_identity(pin_occurrence)
+        result.append(
+            ResolvedPinInput(
+                id=pin_occurrence.id,
+                scope_id=pin_occurrence.scope_id,
+                local_net_id=pin_occurrence.local_net_id,
+                component_id=component_id,
+                component_reference=pin_occurrence.component_reference,
+                component_part=pin_occurrence.component_part,
+                component_description="",
+                pin_id=f"{component_id}:pin:{pin_occurrence.pin_designator}",
+                pin_designator=pin_occurrence.pin_designator,
+                pin_name=pin_occurrence.pin_name,
+                no_connect=False,
+                component_occurrence=ResolvedComponentOccurrenceInput(
+                    source_id=pin_occurrence.component_source_id,
+                    part_id=pin_occurrence.component_part,
+                ),
+                pin_metadata={
+                    "dsn_pin_source_id": pin_occurrence.id,
+                },
+                pin_occurrence_metadata={
+                    "dsn_source_net_id": str(pin_occurrence.source_net_id),
+                    "dsn_local_net_id": pin_occurrence.local_net_id,
+                },
+                component_metadata={
+                    "dsn_component_source_ids": pin_occurrence.component_source_id,
                 },
             )
-            net.occurrences.append(occurrence)
-            _append_unique_page(net.pages, page, seen_ids=net_page_ids)
-            _append_unique_net(
-                page.nets,
-                net,
-                seen_ids=page_net_ids.setdefault(page.id, {existing.id for existing in page.nets}),
-            )
-            result[ref.local_net.id] = net
+        )
     return result
 
 
@@ -295,118 +419,6 @@ def _is_generated_page_net_name(name: str) -> bool:
     return len(name) == 9 and name.startswith("N") and name[1:].isdigit()
 
 
-def _build_components(
-    pages: dict[ScopeId, Page],
-    nets_by_local_id: dict[str, Net],
-    pin_occurrences: Iterable[DsnPinOccurrence],
-) -> list[Component]:
-    components_by_id: dict[str, Component] = {}
-    occurrences_by_component_page_source: set[tuple[str, str, str]] = set()
-    pins_by_component_designator: dict[tuple[str, str], Pin] = {}
-    component_page_ids: dict[str, set[str]] = {}
-    page_component_ids: dict[str, set[str]] = {
-        page.id: {component.id for component in page.components} for page in pages.values()
-    }
-    net_pin_ids: dict[str, set[str]] = {
-        net.id: {pin.id for pin in net.pins} for net in nets_by_local_id.values()
-    }
-
-    for pin_occurrence in pin_occurrences:
-        page = _page_for_scope(pages, pin_occurrence.scope_id)
-        component_id = _component_identity(pin_occurrence)
-        component = components_by_id.get(component_id)
-        if component is None:
-            component = Component(
-                id=component_id,
-                reference=pin_occurrence.component_reference,
-                part=pin_occurrence.component_part,
-                description="",
-                metadata={
-                    "dsn_component_source_ids": pin_occurrence.component_source_id,
-                },
-            )
-            components_by_id[component_id] = component
-        elif not component.part and pin_occurrence.component_part:
-            component.part = pin_occurrence.component_part
-
-        _append_unique_page(
-            component.pages,
-            page,
-            seen_ids=component_page_ids.setdefault(
-                component.id,
-                {existing.id for existing in component.pages},
-            ),
-        )
-        _append_unique_component(
-            page.components,
-            component,
-            seen_ids=page_component_ids.setdefault(
-                page.id,
-                {existing.id for existing in page.components},
-            ),
-        )
-        occurrence_key = (component.id, page.id, pin_occurrence.component_source_id)
-        if occurrence_key not in occurrences_by_component_page_source:
-            occurrences_by_component_page_source.add(occurrence_key)
-            component.occurrences.append(
-                ComponentOccurrence(
-                    id=f"{component.id}:occ:{len(component.occurrences) + 1:04d}",
-                    component=component,
-                    page=page,
-                    scope_id=pin_occurrence.scope_id,
-                    source_id=pin_occurrence.component_source_id,
-                    part_id=pin_occurrence.component_part,
-                )
-            )
-
-        pin_key = (component.id, pin_occurrence.pin_designator)
-        pin = pins_by_component_designator.get(pin_key)
-        if pin is None:
-            pin = Pin(
-                id=f"{component.id}:pin:{pin_occurrence.pin_designator}",
-                designator=pin_occurrence.pin_designator,
-                name=pin_occurrence.pin_name,
-                component=component,
-                metadata={
-                    "dsn_pin_source_id": pin_occurrence.id,
-                },
-            )
-            pins_by_component_designator[pin_key] = pin
-            component.pins.append(pin)
-        elif not pin.name and pin_occurrence.pin_name:
-            pin.name = pin_occurrence.pin_name
-
-        pin.occurrences.append(
-            PinOccurrence(
-                id=f"{pin.id}:occ:{len(pin.occurrences) + 1:04d}",
-                pin=pin,
-                page=page,
-                scope_id=pin_occurrence.scope_id,
-                source_id=pin_occurrence.id,
-                metadata={
-                    "dsn_source_net_id": str(pin_occurrence.source_net_id),
-                    "dsn_local_net_id": pin_occurrence.local_net_id,
-                },
-            )
-        )
-
-        net = nets_by_local_id.get(pin_occurrence.local_net_id)
-        if net is not None:
-            if pin.net is not None and pin.net.id != net.id:
-                _remove_pin(pin.net.pins, pin)
-            pin.net = net
-            _append_unique_pin(
-                net.pins,
-                pin,
-                seen_ids=net_pin_ids.setdefault(
-                    net.id,
-                    {existing.id for existing in net.pins},
-                ),
-            )
-
-    return list(components_by_id.values())
-
-
 def _component_identity(pin_occurrence: DsnPinOccurrence) -> str:
     if pin_occurrence.component_source_id:
         return f"dsn:component:{pin_occurrence.component_source_id}"
@@ -414,67 +426,20 @@ def _component_identity(pin_occurrence: DsnPinOccurrence) -> str:
     return f"dsn:component:{scope_key}:{pin_occurrence.component_reference}"
 
 
-def _scope_key(scope_id: ScopeId) -> str:
-    return "root" if not scope_id.path else "/".join(scope_id.path)
-
-
-def _page_for_scope(pages: dict[ScopeId, Page], scope_id: ScopeId) -> Page:
-    page = pages.get(scope_id)
-    if page is not None:
-        return page
-    fallback = Page(
-        id=f"page:{_scope_key(scope_id)}",
-        name=str(scope_id),
-        scope_id=scope_id,
-    )
-    pages[scope_id] = fallback
-    return fallback
-
-
-def _ordered_nets(nets_by_local_id: dict[str, Net]) -> list[Net]:
-    nets: list[Net] = []
-    seen: set[str] = set()
-    for net in nets_by_local_id.values():
-        if net.id in seen:
-            continue
-        seen.add(net.id)
-        nets.append(net)
+def _order_dsn_nets(nets: list[Net]) -> list[Net]:
     return sorted(nets, key=lambda net: (len(net.pins) == 0, net.id))
 
 
-def _append_unique_page(pages: list[Page], page: Page, *, seen_ids: set[str]) -> None:
-    if page.id not in seen_ids:
-        seen_ids.add(page.id)
-        pages.append(page)
+def _include_dsn_net(
+    _root_id: str,
+    _local_nets: tuple[ResolvedLocalNetInput, ...],
+    _pins: tuple[ResolvedPinInput, ...],
+) -> bool:
+    return True
 
 
-def _append_unique_net(nets: list[Net], net: Net, *, seen_ids: set[str]) -> None:
-    if net.id not in seen_ids:
-        seen_ids.add(net.id)
-        nets.append(net)
-
-
-def _append_unique_component(
-    components: list[Component],
-    component: Component,
-    *,
-    seen_ids: set[str],
-) -> None:
-    if component.id not in seen_ids:
-        seen_ids.add(component.id)
-        components.append(component)
-
-
-def _append_unique_pin(pins: list[Pin], pin: Pin, *, seen_ids: set[str]) -> None:
-    if pin.id not in seen_ids:
-        seen_ids.add(pin.id)
-        pins.append(pin)
-
-
-def _remove_pin(pins: list[Pin], pin: Pin) -> None:
-    remaining = [existing for existing in pins if existing.id != pin.id]
-    if len(remaining) != len(pins):
-        pins[:] = remaining
+def _scope_key(scope_id: ScopeId) -> str:
+    return "root" if not scope_id.path else "/".join(scope_id.path)
 
 
 def _dedupe(names: Iterable[str]) -> list[str]:
