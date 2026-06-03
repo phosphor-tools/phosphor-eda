@@ -5,17 +5,30 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-from shapely import GeometryCollection, Point, Polygon
+from shapely import Point, Polygon
 
 import phosphor_eda.pcb_render_modes as render_modes
 from phosphor_eda.kicad.pcb_parser import parse_kicad_pcb
-from phosphor_eda.pcb import PcbArc, PcbLine, PcbPad, PcbSegment, PcbText, PcbVia, PcbZone
+from phosphor_eda.pcb import (
+    LayerFunction,
+    Pcb,
+    PcbArc,
+    PcbLayer,
+    PcbLine,
+    PcbNet,
+    PcbPad,
+    PcbSegment,
+    PcbText,
+    PcbVia,
+    PcbZone,
+)
 from phosphor_eda.pcb_render_geometry import (
     GeometryKind,
     GeometryLayer,
     GeometryTags,
     PcbGeometryStore,
     RenderableGeometry,
+    RenderPoint,
     build_geometry_store,
 )
 from phosphor_eda.pcb_render_modes import (
@@ -1096,6 +1109,9 @@ def test_highlight_layer_contents_do_not_use_artwork_resolution_or_union() -> No
 
     assert len(groups) == 1
     assert tuple(primitive.source_id for primitive in groups[0].layers[0].primitives) == ("pad-1",)
+    assert not hasattr(render_modes, "board_outline_geometry")
+    assert not hasattr(render_modes, "drill_geometry_for_layer")
+    assert not hasattr(render_modes, "svg_primitives_from_geometry")
 
 
 def test_base_layers_dim_only_when_dimming_enabled_and_highlights_exist() -> None:
@@ -1179,6 +1195,9 @@ def test_cad_layer_contents_do_not_use_artwork_resolution_or_union() -> None:
         "pad-1",
         "pad-2",
     )
+    assert not hasattr(render_modes, "board_outline_geometry")
+    assert not hasattr(render_modes, "drill_geometry_for_layer")
+    assert not hasattr(render_modes, "svg_primitives_from_geometry")
 
 
 def test_realistic_layer_contents_do_not_use_artwork_resolution_or_boolean_geometry() -> None:
@@ -1205,6 +1224,9 @@ def test_realistic_layer_contents_do_not_use_artwork_resolution_or_boolean_geome
     )
     assert not hasattr(render_modes, "_difference")
     assert not hasattr(render_modes, "_intersection")
+    assert not hasattr(render_modes, "board_outline_geometry")
+    assert not hasattr(render_modes, "drill_geometry_for_layer")
+    assert not hasattr(render_modes, "svg_primitives_from_geometry")
 
     layers = build_realistic_layers(
         store,
@@ -1400,9 +1422,7 @@ def test_profiler_reports_primitive_metrics_for_cad_copper() -> None:
     assert path_characters > 0
 
 
-def test_highlight_layers_reuse_surface_drill_clip_geometry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_highlight_layers_reuse_surface_drill_mask_primitives() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -1424,25 +1444,19 @@ def test_highlight_layers_reuse_surface_drill_clip_geometry(
                 geometry=_pad(x=3.0, y=1.0, net_name="SIG2"),
                 tags=GeometryTags(source_collection="pads", net_name="SIG2"),
             ),
+            _renderable(
+                "drill-1",
+                GeometryKind.DRILL,
+                "drills",
+                "drill",
+                "",
+                geometry=_pad(x=1.0, y=1.0, drill=0.4, net_name="SIG1"),
+                tags=GeometryTags(source_collection="pad_drills", net_name="SIG1"),
+            ),
         )
     )
-    requested_layers: list[str | None] = []
 
-    def fake_drill_geometry_for_layer(
-        _store: PcbGeometryStore,
-        *,
-        layer_name: str | None = None,
-    ) -> GeometryCollection:
-        requested_layers.append(layer_name)
-        return GeometryCollection()
-
-    monkeypatch.setattr(
-        render_modes,
-        "drill_geometry_for_layer",
-        fake_drill_geometry_for_layer,
-    )
-
-    _ = build_highlight_layers(
+    groups = build_highlight_layers(
         store,
         _settings(
             rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
@@ -1454,7 +1468,73 @@ def test_highlight_layers_reuse_surface_drill_clip_geometry(
         warn=lambda _message: None,
     )
 
-    assert requested_layers == [None]
+    assert groups[0].layers[0].mask is not None
+    assert tuple(primitive.source_id for primitive in groups[0].layers[0].mask.drills) == (
+        "drill-1",
+    )
+
+
+def test_layer_masks_reconstruct_board_material_from_source_outline_not_points() -> None:
+    board = Pcb(
+        name="outline-test",
+        nets={0: PcbNet(0, "")},
+        footprints=[],
+        segments=[],
+        vias=[],
+        outline_lines=[
+            PcbLine(0.0, 0.0, 10.0, 0.0, "Edge.Cuts", 0.1),
+            PcbLine(10.0, 0.0, 10.0, 5.0, "Edge.Cuts", 0.1),
+            PcbLine(10.0, 5.0, 0.0, 5.0, "Edge.Cuts", 0.1),
+            PcbLine(0.0, 5.0, 0.0, 0.0, "Edge.Cuts", 0.1),
+        ],
+        outline_arcs=[],
+        layers=[PcbLayer("F.Cu", LayerFunction.COPPER, side="front")],
+    )
+    board_layer = GeometryLayer("Edge.Cuts", "edge", "", -300)
+    store = PcbGeometryStore(
+        items=(
+            RenderableGeometry(
+                id="board-material",
+                kind=GeometryKind.BOARD_MATERIAL,
+                layer=board_layer,
+                tags=GeometryTags(source_collection="board"),
+                payload=board.bbox(),
+                source=board,
+                points=(
+                    RenderPoint(0.0, 0.0),
+                    RenderPoint(10.0, 0.0),
+                    RenderPoint(0.0, 5.0),
+                    RenderPoint(10.0, 5.0),
+                ),
+                bbox=board.bbox(),
+            ),
+            _renderable(
+                "pad-1",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=1.0, y=1.0),
+            ),
+        )
+    )
+
+    layers = build_cad_layers(
+        store,
+        _settings(
+            rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
+            tokens={
+                "cad.copper.front.fill": "#ff6600",
+                "cad.copper.front.opacity": 1.0,
+            },
+        ),
+        warn=lambda _message: None,
+    )
+
+    assert layers[0].mask is not None
+    assert tuple(primitive.d for primitive in layers[0].mask.board) == (
+        "M 0.0000 0.0000 L 10.0000 0.0000 L 10.0000 5.0000 L 0.0000 5.0000 Z",
+    )
 
 
 def _settings(

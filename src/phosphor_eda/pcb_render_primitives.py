@@ -9,7 +9,16 @@ from typing import TYPE_CHECKING, cast
 from shapely import GeometryCollection, LineString, MultiLineString, MultiPolygon, Polygon
 from shapely.geometry.base import BaseGeometry
 
-from phosphor_eda.pcb import Pcb, PcbArc, PcbCircle, PcbGraphicText, PcbLine, PcbPad, PcbText
+from phosphor_eda.pcb import (
+    Pcb,
+    PcbArc,
+    PcbCircle,
+    PcbGraphicText,
+    PcbLine,
+    PcbPad,
+    PcbText,
+    PcbVia,
+)
 from phosphor_eda.pcb_render_geometry import GeometryKind, RenderPoint
 from phosphor_eda.pcb_render_skia import geometry_to_skia_artwork, skia_path_to_svg_d
 from phosphor_eda.sql.geometry import arc_to_polyline
@@ -59,6 +68,26 @@ def geometry_to_svg_primitive(
         source_id=item.id,
         source_layer=target_layer_name,
         kind=item.kind,
+        tags=item.tags,
+    )
+
+
+def drill_to_svg_primitive(item: RenderableGeometry) -> SvgPrimitive | None:
+    """Convert one drill-capable source item into a drill-hole mask primitive."""
+    payload = item.payload if item.payload is not None else item.source
+    if (item.kind is GeometryKind.DRILL and isinstance(payload, PcbPad)) or (
+        item.kind is GeometryKind.VIA and isinstance(payload, PcbVia)
+    ):
+        d = _circle_path_d(payload.x, payload.y, payload.drill / 2.0)
+    else:
+        return None
+    if not d:
+        return None
+    return SvgPrimitive(
+        d=d,
+        source_id=item.id,
+        source_layer="drills",
+        kind=GeometryKind.DRILL,
         tags=item.tags,
     )
 
@@ -126,6 +155,8 @@ def _pad_copper_target_layer_name(pad: PcbPad, fallback_layer_name: str, side: s
 
 
 def _non_skia_svg_path_d(item: RenderableGeometry) -> str:
+    if item.kind is GeometryKind.BOARD_MATERIAL:
+        return _board_material_svg_path_d(item)
     if item.kind is GeometryKind.BOARD_OUTLINE:
         return _board_outline_svg_path_d(item)
     payload = item.payload if item.payload is not None else item.source
@@ -142,17 +173,39 @@ def _non_skia_svg_path_d(item: RenderableGeometry) -> str:
     return ""
 
 
-def _board_outline_svg_path_d(item: RenderableGeometry) -> str:
-    if item.points:
-        return _points_to_closed_svg_path_d(item.points)
+def _board_material_svg_path_d(item: RenderableGeometry) -> str:
+    outline = _outline_for_item(item)
+    if outline is not None:
+        lines, arcs = outline
+        d = _filled_outline_svg_path_d(lines, arcs)
+        if d:
+            return d
+    if item.bbox is not None:
+        min_x, min_y, max_x, max_y = item.bbox
+        return _closed_point_pairs_to_svg_path_d(
+            ((min_x, min_y), (max_x, min_y), (max_x, max_y), (min_x, max_y))
+        )
     payload = item.payload if item.payload is not None else item.source
-    outline = _outline_payload(payload)
-    if outline is None and isinstance(item.source, Pcb):
-        outline = (item.source.outline_lines, item.source.outline_arcs)
+    bbox = _bbox_payload(payload)
+    if bbox is None:
+        return ""
+    min_x, min_y, max_x, max_y = bbox
+    return _closed_point_pairs_to_svg_path_d(
+        ((min_x, min_y), (max_x, min_y), (max_x, max_y), (min_x, max_y))
+    )
+
+
+def _board_outline_svg_path_d(item: RenderableGeometry) -> str:
+    outline = _outline_for_item(item)
     if outline is None:
+        if item.points:
+            return _points_to_closed_svg_path_d(item.points)
         return ""
 
     lines, arcs = outline
+    d = _filled_outline_svg_path_d(lines, arcs)
+    if d:
+        return d
     commands: list[str] = []
     for line in lines:
         commands.append(
@@ -176,6 +229,80 @@ def _board_outline_svg_path_d(item: RenderableGeometry) -> str:
         if points:
             commands.append(_points_to_open_svg_path_d(points))
     return " ".join(command for command in commands if command)
+
+
+def _outline_for_item(item: RenderableGeometry) -> tuple[list[PcbLine], list[PcbArc]] | None:
+    payload = item.payload if item.payload is not None else item.source
+    outline = _outline_payload(payload)
+    if outline is not None:
+        return outline
+    if isinstance(payload, Pcb):
+        return payload.outline_lines, payload.outline_arcs
+    if isinstance(item.source, Pcb):
+        return item.source.outline_lines, item.source.outline_arcs
+    return None
+
+
+def _filled_outline_svg_path_d(lines: list[PcbLine], arcs: list[PcbArc]) -> str:
+    segments: list[tuple[tuple[float, float], ...]] = []
+    for line in lines:
+        segment = ((line.start_x, line.start_y), (line.end_x, line.end_y))
+        if not _points_equal(segment[0], segment[1]):
+            segments.append(segment)
+    for arc in arcs:
+        points = tuple(
+            arc_to_polyline(
+                arc.start_x,
+                arc.start_y,
+                arc.mid_x,
+                arc.mid_y,
+                arc.end_x,
+                arc.end_y,
+                num_points=32,
+            )
+        )
+        if len(points) >= 2:
+            segments.append(points)
+
+    contours = _stitch_outline_segments(segments)
+    return " ".join(_closed_point_pairs_to_svg_path_d(contour) for contour in contours)
+
+
+def _stitch_outline_segments(
+    segments: list[tuple[tuple[float, float], ...]],
+) -> tuple[tuple[tuple[float, float], ...], ...]:
+    unused = [list(segment) for segment in segments if len(segment) >= 2]
+    contours: list[tuple[tuple[float, float], ...]] = []
+    while unused:
+        contour = unused.pop(0)
+        extended = True
+        while extended:
+            extended = False
+            end = contour[-1]
+            for index, segment in enumerate(unused):
+                if _points_equal(end, segment[0]):
+                    contour.extend(segment[1:])
+                    _ = unused.pop(index)
+                    extended = True
+                    break
+                if _points_equal(end, segment[-1]):
+                    contour.extend(reversed(segment[:-1]))
+                    _ = unused.pop(index)
+                    extended = True
+                    break
+        if len(contour) >= 3 and _points_equal(contour[0], contour[-1]):
+            contour = contour[:-1]
+        if len(contour) >= 3:
+            contours.append(tuple(contour))
+    return tuple(contours)
+
+
+def _points_equal(first: tuple[float, float], second: tuple[float, float]) -> bool:
+    return math.isclose(first[0], second[0], abs_tol=1e-6) and math.isclose(
+        first[1],
+        second[1],
+        abs_tol=1e-6,
+    )
 
 
 def _points_to_closed_svg_path_d(points: tuple[RenderPoint, ...]) -> str:
@@ -327,6 +454,20 @@ def _outline_payload(payload: object) -> tuple[list[PcbLine], list[PcbArc]] | No
             return None
         arcs.append(arc)
     return lines, arcs
+
+
+def _bbox_payload(payload: object) -> tuple[float, float, float, float] | None:
+    if not isinstance(payload, tuple):
+        return None
+    payload_values = cast("tuple[object, ...]", payload)
+    if len(payload_values) != 4:
+        return None
+    values: list[float] = []
+    for value in payload_values:
+        if not isinstance(value, int | float):
+            return None
+        values.append(float(value))
+    return values[0], values[1], values[2], values[3]
 
 
 _LINE_KINDS = frozenset(

@@ -6,29 +6,23 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from shapely import GeometryCollection
-
 from phosphor_eda.pcb import PcbVia
 from phosphor_eda.pcb_render_artwork import (
     DerivedLayer,
-    board_outline_geometry,
-    drill_geometry_for_layer,
     select_source_artwork,
 )
-from phosphor_eda.pcb_render_geometry import GeometryKind, GeometryLayer, GeometryTags
+from phosphor_eda.pcb_render_geometry import GeometryKind, GeometryLayer
 from phosphor_eda.pcb_render_primitives import (
     LayerMask,
     SvgPrimitive,
+    drill_to_svg_primitive,
     geometry_to_svg_primitive,
     pad_solder_mask_opening_primitive,
-    svg_primitives_from_geometry,
 )
 from phosphor_eda.pcb_render_tokens import VisualRole, resolve_layer_style
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
-
-    from shapely.geometry.base import BaseGeometry
 
     from phosphor_eda.pcb_render_geometry import PcbGeometryStore, RenderableGeometry
     from phosphor_eda.pcb_render_profile import RenderProfiler
@@ -100,8 +94,7 @@ def build_cad_layers(
     )
     if profiler is not None:
         profiler.metric("cad.layer_items", count=len(layer_items))
-    board = board_outline_geometry(store)
-    layer_mask = _layer_mask(store, board)
+    layer_mask = _layer_mask(store)
     dimmed = _should_dim_base_layers(store, settings)
     warned_missing_dimmed_tokens: set[str] = set()
 
@@ -174,19 +167,8 @@ def build_realistic_layers(
     )
     if profiler is not None:
         profiler.metric("realistic.layer_items", count=len(layer_items))
-    board = board_outline_geometry(store)
-    board_primitives = _mask_primitives_from_geometry(
-        board,
-        kind=GeometryKind.BOARD_MATERIAL,
-        source_ids=_board_source_ids(store),
-        source_layers=_board_source_layers(store),
-    )
-    drill_primitives = _mask_primitives_from_geometry(
-        _surface_drill_geometry(store),
-        kind=GeometryKind.DRILL,
-        source_ids=_drill_source_ids(store),
-        source_layers=("drills",),
-    )
+    board_primitives = _board_mask_primitives(store)
+    drill_primitives = _drill_mask_primitives(store)
     dimmed = _should_dim_base_layers(store, settings)
     warned_missing_dimmed_tokens: set[str] = set()
 
@@ -257,12 +239,7 @@ def build_realistic_layers(
             ),
         ),
         "boardOutline": _RealisticLayerInput(
-            primitives=_mask_primitives_from_geometry(
-                _outline_geometry(board),
-                kind=GeometryKind.BOARD_OUTLINE,
-                source_ids=_board_source_ids(store),
-                source_layers=_board_source_layers(store),
-            ),
+            primitives=_board_outline_primitives(store),
             source_layers=_board_source_layers(store),
             source_ids=_board_source_ids(store),
             mask=None,
@@ -305,8 +282,7 @@ def build_highlight_layers(
     profiler: RenderProfiler | None = None,
 ) -> tuple[HighlightGroup, ...]:
     """Build derived highlight overlay groups from selected raw source geometry."""
-    board = board_outline_geometry(store)
-    layer_mask = _layer_mask(store, board)
+    layer_mask = _layer_mask(store)
     groups: list[HighlightGroup] = []
 
     for highlight in settings.highlights:
@@ -769,54 +745,59 @@ def _source_ids_for_primitives(
     return _unique_ordered(primitive.source_id for primitive in fallback if primitive.source_id)
 
 
-def _mask_primitives_from_geometry(
-    geometry: BaseGeometry,
-    *,
-    kind: GeometryKind,
-    source_ids: Iterable[str],
-    source_layers: Iterable[str],
-) -> tuple[SvgPrimitive, ...]:
-    return svg_primitives_from_geometry(
-        geometry,
-        source_ids=source_ids,
-        source_layers=source_layers,
-        kind=kind,
-        tags=GeometryTags(),
+def _board_mask_primitives(store: PcbGeometryStore) -> tuple[SvgPrimitive, ...]:
+    primitives = tuple(
+        primitive
+        for item in store.by_kind(GeometryKind.BOARD_MATERIAL)
+        if (
+            primitive := geometry_to_svg_primitive(
+                item,
+                target_layer_name=item.layer.name,
+            )
+        )
+        is not None
+    )
+    if primitives:
+        return primitives
+    return _board_outline_primitives(store)
+
+
+def _board_outline_primitives(store: PcbGeometryStore) -> tuple[SvgPrimitive, ...]:
+    return tuple(
+        primitive
+        for item in store.by_kind(GeometryKind.BOARD_OUTLINE)
+        if (
+            primitive := geometry_to_svg_primitive(
+                item,
+                target_layer_name=item.layer.name,
+            )
+        )
+        is not None
     )
 
 
-def _surface_drill_geometry(store: PcbGeometryStore) -> BaseGeometry:
-    """Return drills visible through board surfaces.
+def _drill_mask_primitives(store: PcbGeometryStore) -> tuple[SvgPrimitive, ...]:
+    """Return drill-hole mask primitives visible through board surfaces.
 
     V1 treats parsed drills and vias as through-board openings. Span-aware
     filtering and tenting semantics can be added behind this helper later.
     """
-    return drill_geometry_for_layer(store)
-
-
-def _layer_mask(store: PcbGeometryStore, board: BaseGeometry) -> LayerMask | None:
-    if board.is_empty:
-        return None
-    return LayerMask(
-        board=_mask_primitives_from_geometry(
-            board,
-            kind=GeometryKind.BOARD_MATERIAL,
-            source_ids=_board_source_ids(store),
-            source_layers=_board_source_layers(store),
-        ),
-        drills=_mask_primitives_from_geometry(
-            _surface_drill_geometry(store),
-            kind=GeometryKind.DRILL,
-            source_ids=_drill_source_ids(store),
-            source_layers=("drills",),
-        ),
+    return tuple(
+        primitive
+        for item in store.items
+        if item.kind in {GeometryKind.DRILL, GeometryKind.VIA}
+        if (primitive := drill_to_svg_primitive(item)) is not None
     )
 
 
-def _outline_geometry(board: BaseGeometry) -> BaseGeometry:
-    if board.is_empty:
-        return GeometryCollection()
-    return board.boundary
+def _layer_mask(store: PcbGeometryStore) -> LayerMask | None:
+    board_primitives = _board_mask_primitives(store)
+    if not board_primitives:
+        return None
+    return LayerMask(
+        board=board_primitives,
+        drills=_drill_mask_primitives(store),
+    )
 
 
 def _derived_layer_id(role: VisualRole) -> str:
@@ -841,16 +822,16 @@ def _source_ids_by_store_order_for_primitives(
 
 
 def _board_source_layers(store: PcbGeometryStore) -> tuple[str, ...]:
-    return _unique_ordered(item.layer.name for item in store.by_kind(GeometryKind.BOARD_OUTLINE))
+    return _unique_ordered(
+        item.layer.name
+        for item in store.items
+        if item.kind in {GeometryKind.BOARD_MATERIAL, GeometryKind.BOARD_OUTLINE}
+    )
 
 
 def _board_source_ids(store: PcbGeometryStore) -> tuple[str, ...]:
-    return tuple(item.id for item in store.by_kind(GeometryKind.BOARD_OUTLINE))
-
-
-def _drill_source_ids(store: PcbGeometryStore) -> tuple[str, ...]:
     return tuple(
         item.id
         for item in store.items
-        if item.kind is GeometryKind.DRILL or item.kind is GeometryKind.VIA
+        if item.kind in {GeometryKind.BOARD_MATERIAL, GeometryKind.BOARD_OUTLINE}
     )
