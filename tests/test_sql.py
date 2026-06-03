@@ -52,7 +52,7 @@ def _constructed_schematic() -> Schematic:
         reference="U1",
         part="STM32H7",
         description="Microcontroller",
-        pages=[power_page, control_page],
+        pages=[power_page, control_page, power_page],
         metadata={"manufacturer": "ST"},
     )
     duplicate_a = Component(
@@ -73,8 +73,8 @@ def _constructed_schematic() -> Schematic:
     sync = Net(
         id="net:sync",
         name="SYNC",
-        pages=[power_page, control_page],
-        aliases={"GLOBAL_SYNC", "SYNC_IN"},
+        pages=[power_page, control_page, power_page],
+        aliases={"GLOBAL_SYNC", "SYNC,ALT", "SYNC_IN"},
         metadata={
             "selected_name_source": "global_label",
             "selected_name_source_id": "net-occurrence:sync:power",
@@ -242,7 +242,7 @@ def _constructed_schematic() -> Schematic:
             page=power_page,
             scope_id=power_page.scope_id,
             source_local_net_id="power/local-12",
-            source_names={"SYNC", "GLOBAL_SYNC"},
+            source_names={"SYNC", "GLOBAL,SYNC", "GLOBAL_SYNC"},
             metadata={"source_label_kind": "global", "source_sheet": "Power"},
         ),
         NetOccurrence(
@@ -629,7 +629,7 @@ class TestConstructedSchematicSql:
                 "Power",
                 "/root/power",
                 "power/local-12",
-                "GLOBAL_SYNC,SYNC",
+                "GLOBAL,SYNC,GLOBAL_SYNC,SYNC",
             ),
         ]
 
@@ -651,7 +651,66 @@ class TestConstructedSchematicSql:
             "SELECT net_id, aliases FROM nets WHERE aliases IS NOT NULL ORDER BY net_id"
         ).fetchall()
         assert alias_rows == [
-            ("net:sync", "GLOBAL_SYNC,SYNC_IN"),
+            ("net:sync", "GLOBAL_SYNC,SYNC,ALT,SYNC_IN"),
+        ]
+
+    def test_normalized_component_and_net_page_tables(
+        self, constructed_db: duckdb.DuckDBPyConnection
+    ) -> None:
+        component_rows = constructed_db.execute(
+            """
+            SELECT component_id, reference, page_id, page_name
+            FROM component_pages
+            ORDER BY component_id, page_id
+            """
+        ).fetchall()
+        assert component_rows == [
+            ("component:control:u7", "U7", "page:control", "Control"),
+            ("component:power:u7", "U7", "page:power", "Power"),
+            ("component:u1", "U1", "page:control", "Control"),
+            ("component:u1", "U1", "page:power", "Power"),
+        ]
+
+        net_rows = constructed_db.execute(
+            """
+            SELECT net_id, name, page_id, page_name
+            FROM net_pages
+            ORDER BY net_id, page_id
+            """
+        ).fetchall()
+        assert net_rows == [
+            ("net:reset:control", "RESET", "page:control", "Control"),
+            ("net:reset:power", "RESET", "page:power", "Power"),
+            ("net:sync", "SYNC", "page:control", "Control"),
+            ("net:sync", "SYNC", "page:power", "Power"),
+        ]
+
+    def test_normalized_net_aliases_and_source_names_are_exact_rows(
+        self, constructed_db: duckdb.DuckDBPyConnection
+    ) -> None:
+        alias_rows = constructed_db.execute(
+            """
+            SELECT alias
+            FROM net_aliases
+            WHERE net_id = 'net:sync'
+            ORDER BY alias
+            """
+        ).fetchall()
+        assert alias_rows == [("GLOBAL_SYNC",), ("SYNC,ALT",), ("SYNC_IN",)]
+
+        source_name_rows = constructed_db.execute(
+            """
+            SELECT occurrence_id, source_name
+            FROM net_occurrence_source_names
+            WHERE net_id = 'net:sync'
+            ORDER BY occurrence_id, source_name
+            """
+        ).fetchall()
+        assert source_name_rows == [
+            ("net-occurrence:sync:control", "SYNC_IN"),
+            ("net-occurrence:sync:power", "GLOBAL,SYNC"),
+            ("net-occurrence:sync:power", "GLOBAL_SYNC"),
+            ("net-occurrence:sync:power", "SYNC"),
         ]
 
         metadata_rows = constructed_db.execute(
@@ -737,6 +796,30 @@ class TestConstructedSchematicSql:
             for page_id in str(page_ids_csv).split(","):
                 assert page_id in page_ids, component_id
 
+        assert (
+            _count(
+                constructed_db,
+                """
+                SELECT count(*)
+                FROM component_pages cp
+                LEFT JOIN components c ON c.component_id = cp.component_id
+                WHERE c.component_id IS NULL
+                """,
+            )
+            == 0
+        )
+        assert (
+            _count(
+                constructed_db,
+                """
+                SELECT count(*)
+                FROM component_pages cp
+                LEFT JOIN pages p ON p.page_id = cp.page_id
+                WHERE p.page_id IS NULL
+                """,
+            )
+            == 0
+        )
         assert (
             _count(
                 constructed_db,
@@ -869,6 +952,54 @@ class TestConstructedSchematicSql:
                 FROM net_occurrences no
                 LEFT JOIN pages p ON p.page_id = no.page_id
                 WHERE p.page_id IS NULL
+                """,
+            )
+            == 0
+        )
+        assert (
+            _count(
+                constructed_db,
+                """
+                SELECT count(*)
+                FROM net_pages np
+                LEFT JOIN nets n ON n.net_id = np.net_id
+                WHERE n.net_id IS NULL
+                """,
+            )
+            == 0
+        )
+        assert (
+            _count(
+                constructed_db,
+                """
+                SELECT count(*)
+                FROM net_pages np
+                LEFT JOIN pages p ON p.page_id = np.page_id
+                WHERE p.page_id IS NULL
+                """,
+            )
+            == 0
+        )
+        assert (
+            _count(
+                constructed_db,
+                """
+                SELECT count(*)
+                FROM net_aliases na
+                LEFT JOIN nets n ON n.net_id = na.net_id
+                WHERE n.net_id IS NULL
+                """,
+            )
+            == 0
+        )
+        assert (
+            _count(
+                constructed_db,
+                """
+                SELECT count(*)
+                FROM net_occurrence_source_names nosn
+                LEFT JOIN net_occurrences no ON no.occurrence_id = nosn.occurrence_id
+                WHERE no.occurrence_id IS NULL
                 """,
             )
             == 0

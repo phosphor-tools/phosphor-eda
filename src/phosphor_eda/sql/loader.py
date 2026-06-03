@@ -63,11 +63,15 @@ def load_database(project: Project) -> duckdb.DuckDBPyConnection:
     if project.schematic:
         _load_pages(con, project.schematic)
         _load_components(con, project.schematic)
+        _load_component_pages(con, project.schematic)
         _load_component_occurrences(con, project.schematic)
         _load_component_occurrence_metadata(con, project.schematic)
         _load_component_metadata(con, project.schematic)
         _load_nets(con, project.schematic, project)
+        _load_net_pages(con, project.schematic)
+        _load_net_aliases(con, project.schematic)
         _load_net_occurrences(con, project.schematic)
+        _load_net_occurrence_source_names(con, project.schematic)
         _load_net_occurrence_metadata(con, project.schematic)
         _load_net_metadata(con, project.schematic)
         _load_pins(con, project.schematic)
@@ -469,6 +473,17 @@ def _csv(values: set[str]) -> str | None:
     return ",".join(sorted(values)) if values else None
 
 
+def _unique_pages(pages: list[Page]) -> list[Page]:
+    result: list[Page] = []
+    seen: set[str] = set()
+    for page in sorted(pages, key=lambda page: page.id):
+        if page.id in seen:
+            continue
+        seen.add(page.id)
+        result.append(page)
+    return result
+
+
 def _load_components(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
     for comp in schematic.components:
         _ = con.execute(
@@ -482,6 +497,15 @@ def _load_components(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> No
                 _page_names(comp.pages),
             ],
         )
+
+
+def _load_component_pages(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    for comp in schematic.components:
+        for page in _unique_pages(comp.pages):
+            _ = con.execute(
+                "INSERT INTO component_pages VALUES (?, ?, ?, ?)",
+                [comp.id, comp.reference, page.id, page.name],
+            )
 
 
 def _load_component_occurrences(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
@@ -610,6 +634,24 @@ def _load_nets(con: duckdb.DuckDBPyConnection, schematic: Schematic, project: Pr
         )
 
 
+def _load_net_pages(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    for net in schematic.nets:
+        for page in _unique_pages(net.pages):
+            _ = con.execute(
+                "INSERT INTO net_pages VALUES (?, ?, ?, ?)",
+                [net.id, net.name, page.id, page.name],
+            )
+
+
+def _load_net_aliases(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    for net in schematic.nets:
+        for alias in sorted(net.aliases):
+            _ = con.execute(
+                "INSERT INTO net_aliases VALUES (?, ?, ?)",
+                [net.id, net.name, alias],
+            )
+
+
 def _load_net_occurrences(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
     for net in schematic.nets:
         for occurrence in net.occurrences:
@@ -626,6 +668,16 @@ def _load_net_occurrences(con: duckdb.DuckDBPyConnection, schematic: Schematic) 
                     _csv(occurrence.source_names),
                 ],
             )
+
+
+def _load_net_occurrence_source_names(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    for net in schematic.nets:
+        for occurrence in net.occurrences:
+            for source_name in sorted(occurrence.source_names):
+                _ = con.execute(
+                    "INSERT INTO net_occurrence_source_names VALUES (?, ?, ?)",
+                    [occurrence.id, net.id, source_name],
+                )
 
 
 def _load_net_occurrence_metadata(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
