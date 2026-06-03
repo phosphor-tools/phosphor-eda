@@ -8,8 +8,6 @@ the public ``Schematic`` model.
 
 from __future__ import annotations
 
-import math
-import re
 import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
@@ -17,6 +15,14 @@ from typing import TYPE_CHECKING, Protocol
 import sexpdata
 
 from phosphor_eda.kicad import sexp
+from phosphor_eda.kicad.lib_symbols import (
+    LibPins,
+    lib_description,
+    parse_lib_symbols,
+    resolve_lib_pins,
+    strip_kicad_markup,
+    transform_pin,
+)
 from phosphor_eda.kicad.resolver import resolve_kicad_source
 from phosphor_eda.kicad.source import (
     KiCadGlobalLabel,
@@ -40,102 +46,10 @@ if TYPE_CHECKING:
     from phosphor_eda.schematic import Schematic
 
 
-type _PinDefinition = tuple[str, str, str, float, float]
-type _LibPins = dict[str, dict[int, list[_PinDefinition]]]
-
-# KiCad overline: ~{TEXT} means TEXT with overline bar.
-# Bare ~ means "no name" (unnamed pin).
-_OVERLINE_RE = re.compile(r"~\{([^}]+)\}")
-_SUB_SYMBOL_UNIT_RE = re.compile(r"_(\d+)_(\d+)$")
-_LIB_ID_SUFFIX_RE = re.compile(r"_\d+$")
-
-
-def _strip_kicad_markup(name: str) -> str:
-    """Strip KiCad text markup from a name."""
-    if not name or name == "~":
-        return ""
-    return _OVERLINE_RE.sub(r"\1", name)
-
-
 def _atom_text(value: object) -> str:
     if isinstance(value, sexpdata.Symbol):
         return value.value()
     return str(value)
-
-
-def _parse_lib_symbols(
-    lib_syms: SExpNode,
-) -> tuple[_LibPins, dict[str, str]]:
-    """Parse embedded lib_symbols into per-unit pin definitions and descriptions."""
-    pins_result: _LibPins = {}
-    desc_result: dict[str, str] = {}
-    for sym in lib_syms[1:]:
-        if sexp.tag(sym) != "symbol" or not isinstance(sym, list):
-            continue
-        lib_id = str(sym[1])
-        desc = sexp.find_property(sym[2:], "ki_description")
-        if desc:
-            desc_result[lib_id] = desc
-        units: dict[int, list[_PinDefinition]] = {}
-        for child in sym[2:]:
-            if sexp.tag(child) != "symbol" or not isinstance(child, list):
-                continue
-            sub_name = str(child[1])
-            match = _SUB_SYMBOL_UNIT_RE.search(sub_name)
-            unit_num = int(match.group(1)) if match else 1
-            for elem in child[1:]:
-                if sexp.tag(elem) != "pin" or not isinstance(elem, list):
-                    continue
-                pin_type = str(elem[1])
-                pnum = pname = ""
-                px = py = 0.0
-                for pe in elem[3:]:
-                    if not isinstance(pe, list):
-                        continue
-                    t = sexp.tag(pe)
-                    if t == "number":
-                        pnum = sexp.val(pe)
-                    elif t == "name":
-                        pname = _strip_kicad_markup(sexp.val(pe))
-                    elif t == "at":
-                        px = sexp.num(pe, 1)
-                        py = sexp.num(pe, 2)
-                units.setdefault(unit_num, []).append((pnum, pname, pin_type, px, py))
-        pins_result[lib_id] = units
-    return pins_result, desc_result
-
-
-def _resolve_lib_pins(lib_id: str, lib_pins: _LibPins) -> dict[int, list[_PinDefinition]]:
-    """Resolve a placed instance's lib_id to its pin definitions."""
-    if lib_id in lib_pins:
-        return lib_pins[lib_id]
-    base = lib_id.split(":")[-1] if ":" in lib_id else lib_id
-    for key, units in lib_pins.items():
-        key_base = _LIB_ID_SUFFIX_RE.sub("", key)
-        if key_base == base:
-            return units
-    return {}
-
-
-def _transform_pin(
-    lib_x: float,
-    lib_y: float,
-    comp_x: float,
-    comp_y: float,
-    comp_rot: float,
-    mirror: str | None = None,
-) -> KiCadPoint:
-    """Transform a pin from library coordinates to schematic coordinates."""
-    lx, ly = lib_x, lib_y
-    if mirror == "y":
-        lx = -lx
-    elif mirror == "x":
-        ly = -ly
-    ly = -ly
-    rad = math.radians(comp_rot)
-    rx = lx * math.cos(rad) - ly * math.sin(rad)
-    ry = lx * math.sin(rad) + ly * math.cos(rad)
-    return round(comp_x + rx, 4), round(comp_y + ry, 4)
 
 
 class _UnionFind:
@@ -232,7 +146,7 @@ def kicad_to_source(path: Path, name: str = "") -> KiCadSourceDesign:
     """Extract KiCad-native source connectivity from a root schematic file."""
     loaded_sheets: list[_LoadedSheet] = []
     sheet_instances: list[KiCadSheetInstance] = []
-    all_lib_pins: _LibPins = {}
+    all_lib_pins: LibPins = {}
     all_lib_descs: dict[str, str] = {}
     root_scope = ScopeId(path=())
 
@@ -294,7 +208,7 @@ def _load_sheet_tree(
     sheet_symbol_id: str,
     loaded_sheets: list[_LoadedSheet],
     sheet_instances: list[KiCadSheetInstance],
-    lib_pins: _LibPins,
+    lib_pins: LibPins,
     lib_descs: dict[str, str],
     ancestor_files: tuple[Path, ...],
 ) -> None:
@@ -313,7 +227,7 @@ def _load_sheet_tree(
 
     lib_syms_node = sexp.find(data[1:], "lib_symbols")
     if lib_syms_node is not None:
-        sheet_lib_pins, sheet_lib_descs = _parse_lib_symbols(lib_syms_node)
+        sheet_lib_pins, sheet_lib_descs = parse_lib_symbols(lib_syms_node)
         for key, value in sheet_lib_pins.items():
             if key not in lib_pins:
                 lib_pins[key] = value
@@ -377,7 +291,7 @@ def _parse_sheet_info(sheet_node: SExpNode) -> tuple[str, str]:
 
 def _extract_sheet_sources(
     loaded: _LoadedSheet,
-    lib_pins: _LibPins,
+    lib_pins: LibPins,
     lib_descs: dict[str, str],
 ) -> _ExtractedSheet:
     scope_id = loaded.instance.scope_id
@@ -593,7 +507,7 @@ def _label_candidates(
 ) -> list[_LabelCandidate]:
     candidates: list[_LabelCandidate] = []
     for index, label in enumerate(sexp.find_all(data[1:], tag_name)):
-        label_name = _strip_kicad_markup(str(label[1]))
+        label_name = strip_kicad_markup(str(label[1]))
         if "{" in label_name:
             continue
         at_node = sexp.find(label[2:], "at")
@@ -651,7 +565,7 @@ def _sheet_symbol_sources(
         for pin_index, pin_node in enumerate(sexp.find_all(sheet_node[1:], "pin")):
             if len(pin_node) < 3:
                 continue
-            pin_name = _strip_kicad_markup(str(pin_node[1]))
+            pin_name = strip_kicad_markup(str(pin_node[1]))
             if "{" in pin_name:
                 continue
             at_pin = sexp.find(pin_node[3:], "at")
@@ -678,7 +592,7 @@ def _sheet_symbol_sources(
 def _power_symbol_candidates(
     data: SExpNode,
     scope_id: ScopeId,
-    lib_pins: _LibPins,
+    lib_pins: LibPins,
     uf: _UnionFind,
     wire_segments: list[tuple[KiCadPoint, KiCadPoint]],
     wire_points: set[KiCadPoint],
@@ -702,9 +616,9 @@ def _power_symbol_candidates(
         mirror_node = sexp.find(sym_node[1:], "mirror")
         mirror = sexp.val(mirror_node) if mirror_node is not None else None
 
-        unit_pins = _resolve_lib_pins(lib_id, lib_pins)
+        unit_pins = resolve_lib_pins(lib_id, lib_pins)
         pin_locations = [
-            _transform_pin(px, py, comp_x, comp_y, comp_rot, mirror)
+            transform_pin(px, py, comp_x, comp_y, comp_rot, mirror)
             for pins in unit_pins.values()
             for _pnum, _pname, _ptype, px, py in pins
         ]
@@ -734,7 +648,7 @@ def _power_symbol_candidates(
 def _pin_candidates(
     data: SExpNode,
     scope_id: ScopeId,
-    lib_pins: _LibPins,
+    lib_pins: LibPins,
     lib_descs: dict[str, str],
     uf: _UnionFind,
     wire_segments: list[tuple[KiCadPoint, KiCadPoint]],
@@ -752,7 +666,7 @@ def _pin_candidates(
         value = sexp.find_property(sym_node[1:], "Value")
         footprint = sexp.find_property(sym_node[1:], "Footprint")
         datasheet = sexp.find_property(sym_node[1:], "Datasheet")
-        description = _lib_description(lib_id, lib_descs)
+        description = lib_description(lib_id, lib_descs)
         at_node = sexp.find(sym_node[1:], "at")
         comp_x = sexp.num(at_node, 1) if at_node is not None else 0.0
         comp_y = sexp.num(at_node, 2) if at_node is not None else 0.0
@@ -771,10 +685,10 @@ def _pin_candidates(
         )
         pin_uuids = _pin_uuids_by_designator(sym_node)
 
-        unit_pins = _resolve_lib_pins(lib_id, lib_pins)
+        unit_pins = resolve_lib_pins(lib_id, lib_pins)
         sym_pins = unit_pins.get(inst_unit, []) + unit_pins.get(0, [])
         for pnum, pname, ptype, px, py in sym_pins:
-            location = _transform_pin(px, py, comp_x, comp_y, comp_rot, mirror)
+            location = transform_pin(px, py, comp_x, comp_y, comp_rot, mirror)
             _connect_point(uf, location, wire_segments, wire_points)
             pin_uuid = pin_uuids.get(pnum, f"{symbol_uuid}:pin:{pnum}")
             candidates.append(
@@ -824,17 +738,6 @@ def _symbol_instance_path(sym_node: SExpNode) -> str:
         path_node = sexp.find(project_node[1:], "path")
         if path_node is not None:
             return sexp.val(path_node)
-    return ""
-
-
-def _lib_description(lib_id: str, lib_descs: dict[str, str]) -> str:
-    if lib_id in lib_descs:
-        return lib_descs[lib_id]
-    base = lib_id.split(":")[-1] if ":" in lib_id else lib_id
-    for key, description in lib_descs.items():
-        key_base = _LIB_ID_SUFFIX_RE.sub("", key)
-        if key_base == base:
-            return description
     return ""
 
 
