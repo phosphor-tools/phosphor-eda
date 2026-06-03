@@ -115,39 +115,49 @@ def _page_names(pages: list[Page]) -> list[str]:
     return sorted({page.name for page in pages})
 
 
+def _page_name_is_ambiguous(design: Schematic, page: Page) -> bool:
+    return sum(1 for candidate in design.pages if candidate.name == page.name) > 1
+
+
+def _page_label(design: Schematic, page: Page) -> str:
+    if _page_name_is_ambiguous(design, page):
+        return page.id
+    return page.name
+
+
 def _net_page_names(net: Net) -> list[str]:
     if net.pages:
         return _page_names(net.pages)
     return sorted({page.name for pin in net.pins for page in pin.component.pages})
 
 
-def _pin_context_page(pin: Pin, net: Net | None = None) -> str:
+def _pin_context_page(design: Schematic, pin: Pin, net: Net | None = None) -> str:
     pages = pin.component.pages
     if net is not None and net.pages:
         net_page_ids = {page.id for page in net.pages}
         matching_pages = [page for page in pages if page.id in net_page_ids]
         if matching_pages:
             pages = matching_pages
-    names = _page_names(pages)
-    if len(names) == 1:
-        return names[0]
-    if names:
-        return "/".join(names)
+    labels = sorted({_page_label(design, page) for page in pages})
+    if len(labels) == 1:
+        return labels[0]
+    if labels:
+        return "/".join(labels)
     return "?"
 
 
 def _pin_label(design: Schematic, pin: Pin, net: Net | None = None) -> str:
     label = f"{pin.component.reference}.{pin.designator}"
     if _component_reference_is_ambiguous(design, pin.component):
-        return f"{_pin_context_page(pin, net)}/{label}"
+        return f"{_pin_context_page(design, pin, net)}/{label}"
     return label
 
 
 def _component_label(design: Schematic, comp: Component) -> str:
     if _component_reference_is_ambiguous(design, comp):
-        names = _page_names(comp.pages)
-        page_name = names[0] if names else "?"
-        return f"{page_name}/{comp.reference}"
+        labels = sorted({_page_label(design, page) for page in comp.pages})
+        page_label = labels[0] if labels else "?"
+        return f"{page_label}/{comp.reference}"
     return comp.reference
 
 
@@ -434,13 +444,19 @@ def filter_pages(
 
 def _find_net(design: Schematic, name: str) -> Net:
     """Find a net by name or alias.  Raises ValueError if not found."""
+    id_matches = [net for net in design.nets if net.id == name]
+    if len(id_matches) == 1:
+        return id_matches[0]
+
     matches = [net for net in design.nets if net.name == name]
     if not matches:
         matches = [net for net in design.nets if name in net.aliases]
     if not matches:
         raise ValueError(f"Net '{name}' not found in design.")
     if len(matches) > 1:
-        page_parts = [f"{net.name} on {', '.join(_net_page_names(net))}" for net in matches]
+        page_parts = [
+            f"{net.id} ({net.name} on {', '.join(_net_page_names(net))})" for net in matches
+        ]
         raise ValueError(f"Net '{name}' is ambiguous; matches: {', '.join(page_parts)}.")
     return matches[0]
 
@@ -574,6 +590,23 @@ def format_page_table(
 ) -> str:
     """Format a table of pages: PAGE | COMPONENTS | NETS."""
     source = pages if pages is not None else design.pages
+    duplicate_names = {
+        page.name for page in source if sum(1 for p in source if p.name == page.name) > 1
+    }
+    if duplicate_names:
+        rows = [
+            (
+                p.name,
+                p.id if p.name in duplicate_names else "",
+                str(len(p.components)),
+                str(len(p.nets)),
+            )
+            for p in source
+        ]
+        if not rows:
+            return "No pages found."
+        return _tabulate(("PAGE", "PAGE ID", "COMPONENTS", "NETS"), rows)
+
     rows = [(p.name, str(len(p.components)), str(len(p.nets))) for p in source]
     if not rows:
         return "No pages found."

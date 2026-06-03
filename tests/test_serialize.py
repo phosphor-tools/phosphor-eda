@@ -441,6 +441,43 @@ def test_pin_context_page_uses_page_id_identity_for_duplicate_references():
     assert "A/B/U7.10" not in detail
 
 
+def test_duplicate_reference_labels_use_page_ids_when_page_names_are_ambiguous():
+    page_a = Page(id="page:channel-a", name="Channel")
+    page_b = Page(id="page:channel-b", name="Channel")
+    comp_a = Component(
+        id="component:channel-a:u7",
+        reference="U7",
+        part="MCU",
+        description="Processor",
+        pages=[page_a],
+    )
+    comp_b = Component(
+        id="component:channel-b:u7",
+        reference="U7",
+        part="MCU",
+        description="Processor",
+        pages=[page_b],
+    )
+    net = Net(id="net:sync", name="SYNC", pages=[page_a, page_b])
+    pin_a = Pin(id="pin:channel-a:u7:1", designator="1", name="SYNC", component=comp_a, net=net)
+    pin_b = Pin(id="pin:channel-b:u7:1", designator="1", name="SYNC", component=comp_b, net=net)
+    comp_a.pins = [pin_a]
+    comp_b.pins = [pin_b]
+    net.pins = [pin_a, pin_b]
+    design = Schematic(
+        name="DUPLICATE_PAGES",
+        pages=[page_a, page_b],
+        nets=[net],
+        components=[comp_a, comp_b],
+    )
+
+    detail = format_net_detail(design, "SYNC")
+
+    assert "page:channel-a/U7.1" in detail
+    assert "page:channel-b/U7.1" in detail
+    assert detail.count("Channel/U7.1") == 0
+
+
 def test_duplicate_net_names_are_separate_blocks_with_minimal_marker():
     text = serialize_design(_duplicate_reference_design())
     reset_headers = [line for line in text.splitlines() if line.startswith("NET: RESET")]
@@ -663,6 +700,19 @@ def test_format_page_table():
     table = format_page_table(design)
     assert "PAGE" in table
     assert "ADC" in table
+    assert "page:ADC" not in table
+
+
+def test_format_page_table_includes_ids_for_duplicate_page_names():
+    first = Page(name="Channel", id="page:channel-a")
+    second = Page(name="Channel", id="page:channel-b")
+    design = Schematic(name="REPEATED", pages=[first, second])
+
+    table = format_page_table(design)
+
+    assert "PAGE ID" in table
+    assert "page:channel-a" in table
+    assert "page:channel-b" in table
 
 
 # ---- Detail formatter tests ----
@@ -690,6 +740,19 @@ def test_format_net_detail():
     assert "NET: ADC_SCLK" in detail
     assert "U7.10" in detail
     assert "R1.1" in detail
+
+
+def test_format_net_detail_disambiguates_duplicate_net_names_by_id():
+    design = _duplicate_reference_design()
+
+    with pytest.raises(ValueError, match="ambiguous.*net:mcu-a:reset.*net:mcu-b:reset"):
+        _ = format_net_detail(design, "RESET")
+
+    detail = format_net_detail(design, "net:mcu-b:reset")
+
+    assert "NET: RESET" in detail
+    assert "MCU_B/U7.1" in detail
+    assert "MCU_A/U7.1" not in detail
 
 
 def test_format_net_detail_not_found():
