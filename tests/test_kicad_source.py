@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from phosphor_eda.kicad.resolver import resolve_kicad_source
 from phosphor_eda.kicad.source import (
     KiCadGlobalLabel,
     KiCadHierarchicalLabel,
@@ -82,6 +83,85 @@ def test_pin_occurrences_keep_scope_and_local_net_id() -> None:
     for pin in child_pins:
         assert pin.local_net_id
         assert local_nets_by_id[pin.local_net_id].scope_id == pin.scope_id
+
+
+def test_multi_pin_power_symbol_attaches_evidence_to_each_local_net(tmp_path: Path) -> None:
+    schematic_path = tmp_path / "multi_pin_power.kicad_sch"
+    schematic_path.write_text(
+        """
+(kicad_sch (version 20230121) (generator eeschema)
+  (uuid 10000000-0000-0000-0000-000000000001)
+  (paper "A4")
+  (lib_symbols
+    (symbol "Test:OnePin" (pin_names (offset 0)) (in_bom yes) (on_board yes)
+      (property "Reference" "J" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (property "Value" "OnePin" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (symbol "OnePin_1_1"
+        (pin passive line (at 0 0 0) (length 0)
+          (name "~" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27))))
+        )
+      )
+    )
+    (symbol "power:DUAL_VCC" (power) (pin_names (offset 0)) (in_bom yes) (on_board yes)
+      (property "Reference" "#PWR" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+      (property "Value" "VCC" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (symbol "DUAL_VCC_1_1"
+        (pin power_in line (at 0 0 0) (length 0)
+          (name "VCC" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27))))
+        )
+        (pin power_in line (at 20 0 0) (length 0)
+          (name "VCC" (effects (font (size 1.27 1.27))))
+          (number "2" (effects (font (size 1.27 1.27))))
+        )
+      )
+    )
+  )
+  (symbol (lib_id "Test:OnePin") (at 10 10 0) (unit 1)
+    (uuid 10000000-0000-0000-0000-000000000011)
+    (property "Reference" "J1" (at 10 10 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "Probe" (at 10 10 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid 10000000-0000-0000-0000-000000000021))
+  )
+  (symbol (lib_id "Test:OnePin") (at 30 10 0) (unit 1)
+    (uuid 10000000-0000-0000-0000-000000000012)
+    (property "Reference" "J2" (at 30 10 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "Probe" (at 30 10 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid 10000000-0000-0000-0000-000000000022))
+  )
+  (symbol (lib_id "power:DUAL_VCC") (at 10 10 0) (unit 1)
+    (uuid 10000000-0000-0000-0000-000000000031)
+    (property "Reference" "#PWR_MULTI" (at 10 10 0) (effects (font (size 1.27 1.27)) hide))
+    (property "Value" "VCC" (at 10 10 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid 10000000-0000-0000-0000-000000000041))
+    (pin "2" (uuid 10000000-0000-0000-0000-000000000042))
+  )
+  (sheet_instances (path "/" (page "1")))
+)
+""",
+        encoding="utf-8",
+    )
+
+    source = kicad_to_source(schematic_path)
+
+    power_symbols = [symbol for symbol in source.power_symbols if symbol.reference == "#PWR_MULTI"]
+    assert [(symbol.name, symbol.location) for symbol in power_symbols] == [
+        ("VCC", (10.0, 10.0)),
+        ("VCC", (30.0, 10.0)),
+    ]
+    assert [symbol.id for symbol in power_symbols] == [
+        "root:power_symbol:10000000-0000-0000-0000-000000000031:pin:0001",
+        "root:power_symbol:10000000-0000-0000-0000-000000000031:pin:0002",
+    ]
+    assert len({symbol.local_net_id for symbol in power_symbols}) == 2
+
+    design = resolve_kicad_source(source)
+
+    [vcc_net] = [net for net in design.nets if net.name == "VCC"]
+    assert {pin.component.reference for pin in vcc_net.pins} == {"J1", "J2"}
+    assert len(vcc_net.occurrences) == 2
+    assert all("VCC" in occurrence.source_names for occurrence in vcc_net.occurrences)
 
 
 def test_sheet_traversal_skips_ancestor_file_cycles(

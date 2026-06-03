@@ -710,20 +710,24 @@ def _power_symbol_candidates(
         ]
         if not pin_locations:
             pin_locations = [(round(comp_x, 4), round(comp_y, 4))]
-        for location in pin_locations:
-            _connect_point(uf, location, wire_segments, wire_points)
         symbol_uuid = _node_value(sym_node[1:], "uuid") or str(index)
-        candidates.append(
-            _PowerCandidate(
-                id=_source_id(scope_id, "power_symbol", symbol_uuid),
-                scope_id=scope_id,
-                source_index=index,
-                name=value,
-                reference=ref,
-                lib_id=lib_id,
-                location=pin_locations[0],
-            ),
-        )
+        has_multiple_locations = len(pin_locations) > 1
+        for pin_index, location in enumerate(pin_locations, start=1):
+            _connect_point(uf, location, wire_segments, wire_points)
+            source_key = (
+                f"{symbol_uuid}:pin:{pin_index:04d}" if has_multiple_locations else symbol_uuid
+            )
+            candidates.append(
+                _PowerCandidate(
+                    id=_source_id(scope_id, "power_symbol", source_key),
+                    scope_id=scope_id,
+                    source_index=index,
+                    name=value,
+                    reference=ref,
+                    lib_id=lib_id,
+                    location=location,
+                ),
+            )
     return candidates
 
 
