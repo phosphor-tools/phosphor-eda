@@ -341,7 +341,6 @@ def _build_components(
         else:
             if not pin.name and pin_input.pin_name:
                 pin.name = pin_input.pin_name
-            pin.no_connect = pin.no_connect or pin_input.no_connect
             _merge_missing_metadata(pin.metadata, pin_input.pin_metadata)
 
         pin.occurrences.append(

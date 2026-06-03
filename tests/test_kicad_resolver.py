@@ -1,5 +1,7 @@
 """Tests for KiCad source-to-public schematic resolution."""
 
+import pytest
+
 from phosphor_eda.kicad.resolver import resolve_kicad_source, select_kicad_net_name
 from phosphor_eda.kicad.source import (
     KiCadGlobalLabel,
@@ -13,6 +15,7 @@ from phosphor_eda.kicad.source import (
     KiCadSheetSymbol,
     KiCadSourceDesign,
 )
+from phosphor_eda.resolved_graph import ResolutionInputError
 from phosphor_eda.schematic import Net, ScopeId
 
 
@@ -506,7 +509,13 @@ def test_final_name_priority_and_aliases_are_isolated() -> None:
         generated_name="__auto_root_mixed",
     )
 
-    design = resolve_kicad_source(_source([local_net], [pin]))
+    design = resolve_kicad_source(
+        _source(
+            [local_net],
+            [pin],
+            sheet_instances=[_sheet(root, "Root"), _sheet(_scope("child"), "Child")],
+        )
+    )
     resolved = _net_for_reference(design.nets, "U1")
 
     assert resolved.name == "GLOBAL"
@@ -667,3 +676,145 @@ def test_repeated_sheet_instances_with_same_references_produce_separate_logical_
     assert len(design.components) == 2
     assert {component.reference for component in design.components} == {"R1"}
     assert len({component.id for component in design.components}) == 2
+
+
+def test_local_net_with_unknown_scope_fails_resolution() -> None:
+    missing_scope = _scope("missing")
+    net_id = "missing:local:sig"
+    pin = _pin(missing_scope, net_id, "U1")
+
+    with pytest.raises(ResolutionInputError, match="local net .* unknown scope"):
+        resolve_kicad_source(
+            _source(
+                [_local_net(missing_scope, "sig", pins=[pin])],
+                [pin],
+                sheet_instances=[_sheet(_scope(), "Root")],
+            )
+        )
+
+
+def test_pin_occurrence_with_unknown_scope_fails_resolution() -> None:
+    root = _scope()
+    missing_scope = _scope("missing")
+    net_id = "root:local:sig"
+    pin = _pin(missing_scope, net_id, "U1")
+
+    with pytest.raises(ResolutionInputError, match="pin .* unknown scope"):
+        resolve_kicad_source(
+            _source(
+                [_local_net(root, "sig", pins=[pin])],
+                [pin],
+                sheet_instances=[_sheet(root, "Root")],
+            )
+        )
+
+
+def test_pin_occurrence_with_unknown_local_net_fails_resolution() -> None:
+    root = _scope()
+    missing_net_id = "root:local:missing"
+    pin = _pin(root, missing_net_id, "U1")
+
+    with pytest.raises(ResolutionInputError, match="pin .* unknown local net"):
+        resolve_kicad_source(
+            _source(
+                [_local_net(root, "sig")],
+                [pin],
+                sheet_instances=[_sheet(root, "Root")],
+            )
+        )
+
+
+def test_repeated_pin_occurrence_with_unknown_local_net_fails_resolution() -> None:
+    root = _scope()
+    valid_net_id = "root:local:sig"
+    missing_net_id = "root:local:missing"
+    first_pin = _pin(root, valid_net_id, "U1")
+    second_pin = _pin(root, missing_net_id, "U1", index=2)
+
+    with pytest.raises(ResolutionInputError, match="pin .* unknown local net"):
+        resolve_kicad_source(
+            _source(
+                [_local_net(root, "sig", pins=[first_pin])],
+                [first_pin, second_pin],
+                sheet_instances=[_sheet(root, "Root")],
+            )
+        )
+
+
+def test_repeated_logical_pin_preserves_first_no_connect_state() -> None:
+    root = _scope()
+    first_net_id = "root:local:first"
+    second_net_id = "root:local:second"
+    first_pin = _pin(root, first_net_id, "U1", designator="1", index=1)
+    second_pin = _pin(root, second_net_id, "U1", designator="1", index=2)
+    second_pin.no_connect = True
+
+    design = resolve_kicad_source(
+        _source(
+            [
+                _local_net(root, "first", pins=[first_pin]),
+                _local_net(root, "second", pins=[second_pin]),
+            ],
+            [first_pin, second_pin],
+        )
+    )
+
+    [component] = design.components
+    [pin] = component.pins
+    assert pin.no_connect is False
+
+
+def test_global_label_with_unknown_local_net_fails_resolution() -> None:
+    root = _scope()
+    net_id = "root:local:sig"
+    label = _global_label(root, "root:local:missing", "VCC")
+
+    with pytest.raises(ResolutionInputError, match="global label .* unknown local net"):
+        resolve_kicad_source(
+            _source(
+                [_local_net(root, "sig", global_labels=[label])],
+                [_pin(root, net_id, "U1")],
+                sheet_instances=[_sheet(root, "Root")],
+            )
+        )
+
+
+def test_global_label_scope_must_match_local_net_scope() -> None:
+    root = _scope()
+    child = _scope("child")
+    net_id = "root:local:sig"
+    label = _global_label(child, net_id, "VCC")
+    pin = _pin(root, net_id, "U1")
+
+    with pytest.raises(ResolutionInputError, match="global label .* scope .* local net"):
+        resolve_kicad_source(
+            _source(
+                [_local_net(root, "sig", global_labels=[label], pins=[pin])],
+                [pin],
+                sheet_instances=[_sheet(root, "Root"), _sheet(child, "Child")],
+            )
+        )
+
+
+def test_top_level_sheet_pin_with_unknown_local_net_fails_resolution() -> None:
+    root = _scope()
+    child = _scope("child")
+    symbol_id = "root:sheet_symbol:child"
+    child_net_id = "child:local:sig"
+    child_pin = _pin(child, child_net_id, "U1")
+    source = _source(
+        [
+            _local_net(
+                child,
+                "sig",
+                hierarchical_labels=[_hier_label(child, child_net_id, "SIG")],
+                pins=[child_pin],
+            )
+        ],
+        [child_pin],
+        sheet_instances=[_sheet(root, "Root"), _sheet(child, "Child")],
+    )
+    source.sheet_pins.append(_sheet_pin(root, "root:local:missing", "SIG", symbol_id, child))
+
+    with pytest.raises(ResolutionInputError, match="sheet pin .* unknown local net"):
+        resolve_kicad_source(source)

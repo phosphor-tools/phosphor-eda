@@ -6,16 +6,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from phosphor_eda.net_union import NetUnion
-from phosphor_eda.schematic import (
-    Component,
-    ComponentOccurrence,
-    Net,
-    NetOccurrence,
-    Page,
-    Pin,
-    PinOccurrence,
-    Schematic,
-    ScopeId,
+from phosphor_eda.resolved_graph import (
+    ResolutionInputError,
+    ResolvedComponentOccurrenceInput,
+    ResolvedLocalNetInput,
+    ResolvedNetInput,
+    ResolvedPageInput,
+    ResolvedPinInput,
+    build_resolved_schematic,
 )
 
 if TYPE_CHECKING:
@@ -26,6 +24,7 @@ if TYPE_CHECKING:
         KiCadPinOccurrence,
         KiCadSourceDesign,
     )
+    from phosphor_eda.schematic import Schematic, ScopeId
 
 
 @dataclass(slots=True)
@@ -42,6 +41,12 @@ def resolve_kicad_source(source: KiCadSourceDesign) -> Schematic:
     """Resolve a KiCad source design into the public schematic graph."""
     pin_occurrences = list(source.pin_occurrences)
     component_ids_by_source_id = _component_ids_by_source_id(pin_occurrences)
+    component_source_ids_by_component_id = _component_source_ids_by_component_id(
+        pin_occurrences,
+        component_ids_by_source_id,
+    )
+    local_nets_by_id = {local_net.id: local_net for local_net in source.local_nets}
+    _validate_source_refs(source, local_nets_by_id)
     net_union = NetUnion(local_net.id for local_net in source.local_nets)
 
     _merge_repeated_logical_pins(net_union, pin_occurrences, component_ids_by_source_id)
@@ -50,20 +55,23 @@ def resolve_kicad_source(source: KiCadSourceDesign) -> Schematic:
     _merge_power_symbols(net_union, source.local_nets)
     _merge_hierarchical_sheet_pins(source, net_union)
 
-    pages = _build_pages(source)
-    nets_by_local_id = _build_nets(source.local_nets, net_union, pages, pin_occurrences)
-    components = _build_components(
-        pages,
-        nets_by_local_id,
-        pin_occurrences,
-        component_ids_by_source_id,
-    )
-
-    return Schematic(
+    return build_resolved_schematic(
         name=source.name,
-        pages=list(pages.values()),
-        nets=_ordered_nets(nets_by_local_id),
-        components=components,
+        pages=_page_inputs(source),
+        local_nets=_local_net_inputs(source.local_nets),
+        pins=_pin_inputs(
+            pin_occurrences,
+            component_ids_by_source_id,
+            component_source_ids_by_component_id,
+        ),
+        net_union=net_union,
+        net_factory=lambda net_index, root_id, group_local_nets: _kicad_net_input_for_group(
+            local_nets_by_id,
+            net_index,
+            root_id,
+            group_local_nets,
+        ),
+        include_net=_include_kicad_net,
         metadata={
             "kicad_root_source_file": source.root_source_file,
         },
@@ -158,10 +166,186 @@ def _merge_ids(net_union: NetUnion, net_ids: list[str]) -> None:
         _ = net_union.union(first_id, net_id)
 
 
-def _build_pages(source: KiCadSourceDesign) -> dict[ScopeId, Page]:
-    pages: dict[ScopeId, Page] = {}
-    for instance in source.sheet_instances:
-        pages[instance.scope_id] = Page(
+def _validate_source_refs(
+    source: KiCadSourceDesign,
+    local_nets_by_id: dict[str, KiCadLocalNet],
+) -> None:
+    scopes = {instance.scope_id for instance in source.sheet_instances}
+    attached_sheet_pin_local_net_ids: dict[str, str] = {}
+    for local_net in source.local_nets:
+        if local_net.scope_id not in scopes:
+            msg = f"local net {local_net.id!r} references unknown scope {local_net.scope_id}"
+            raise ResolutionInputError(msg)
+        for label in local_net.local_labels:
+            _validate_scoped_local_net_ref(
+                kind="local label",
+                id_=label.id,
+                scope_id=label.scope_id,
+                local_net_id=label.local_net_id,
+                containing_local_net_id=local_net.id,
+                scopes=scopes,
+                local_nets_by_id=local_nets_by_id,
+            )
+        for label in local_net.global_labels:
+            _validate_scoped_local_net_ref(
+                kind="global label",
+                id_=label.id,
+                scope_id=label.scope_id,
+                local_net_id=label.local_net_id,
+                containing_local_net_id=local_net.id,
+                scopes=scopes,
+                local_nets_by_id=local_nets_by_id,
+            )
+        for label in local_net.hierarchical_labels:
+            _validate_scoped_local_net_ref(
+                kind="hierarchical label",
+                id_=label.id,
+                scope_id=label.scope_id,
+                local_net_id=label.local_net_id,
+                containing_local_net_id=local_net.id,
+                scopes=scopes,
+                local_nets_by_id=local_nets_by_id,
+            )
+        for symbol in local_net.power_symbols:
+            _validate_scoped_local_net_ref(
+                kind="power symbol",
+                id_=symbol.id,
+                scope_id=symbol.scope_id,
+                local_net_id=symbol.local_net_id,
+                containing_local_net_id=local_net.id,
+                scopes=scopes,
+                local_nets_by_id=local_nets_by_id,
+            )
+        for sheet_pin in local_net.sheet_pins:
+            _validate_scoped_local_net_ref(
+                kind="sheet pin",
+                id_=sheet_pin.id,
+                scope_id=sheet_pin.scope_id,
+                local_net_id=sheet_pin.local_net_id,
+                containing_local_net_id=local_net.id,
+                scopes=scopes,
+                local_nets_by_id=local_nets_by_id,
+            )
+            if sheet_pin.child_scope_id not in scopes:
+                msg = (
+                    f"sheet pin {sheet_pin.id!r} references unknown child scope "
+                    f"{sheet_pin.child_scope_id}"
+                )
+                raise ResolutionInputError(msg)
+            attached_sheet_pin_local_net_ids[sheet_pin.id] = local_net.id
+    for sheet_pin in source.sheet_pins:
+        _validate_top_level_sheet_pin_ref(
+            id_=sheet_pin.id,
+            scope_id=sheet_pin.scope_id,
+            child_scope_id=sheet_pin.child_scope_id,
+            local_net_id=sheet_pin.local_net_id,
+            scopes=scopes,
+            local_nets_by_id=local_nets_by_id,
+        )
+        attached_local_net_id = attached_sheet_pin_local_net_ids.get(sheet_pin.id)
+        if attached_local_net_id is None:
+            msg = (
+                f"sheet pin {sheet_pin.id!r} is not attached to local net "
+                f"{sheet_pin.local_net_id!r}"
+            )
+            raise ResolutionInputError(msg)
+        if attached_local_net_id != sheet_pin.local_net_id:
+            msg = (
+                f"sheet pin {sheet_pin.id!r} references local net "
+                f"{sheet_pin.local_net_id!r} but is attached to local net "
+                f"{attached_local_net_id!r}"
+            )
+            raise ResolutionInputError(msg)
+    for pin in source.pin_occurrences:
+        _validate_pin_ref(
+            id_=pin.id,
+            scope_id=pin.scope_id,
+            local_net_id=pin.local_net_id,
+            scopes=scopes,
+            local_nets_by_id=local_nets_by_id,
+        )
+
+
+def _validate_top_level_sheet_pin_ref(
+    *,
+    id_: str,
+    scope_id: ScopeId,
+    child_scope_id: ScopeId,
+    local_net_id: str,
+    scopes: set[ScopeId],
+    local_nets_by_id: dict[str, KiCadLocalNet],
+) -> None:
+    _validate_scoped_local_net_ref(
+        kind="sheet pin",
+        id_=id_,
+        scope_id=scope_id,
+        local_net_id=local_net_id,
+        containing_local_net_id=local_net_id,
+        scopes=scopes,
+        local_nets_by_id=local_nets_by_id,
+    )
+    if child_scope_id not in scopes:
+        msg = f"sheet pin {id_!r} references unknown child scope {child_scope_id}"
+        raise ResolutionInputError(msg)
+
+
+def _validate_pin_ref(
+    *,
+    id_: str,
+    scope_id: ScopeId,
+    local_net_id: str,
+    scopes: set[ScopeId],
+    local_nets_by_id: dict[str, KiCadLocalNet],
+) -> None:
+    if scope_id not in scopes:
+        msg = f"pin {id_!r} references unknown scope {scope_id}"
+        raise ResolutionInputError(msg)
+    local_net = local_nets_by_id.get(local_net_id)
+    if local_net is None:
+        msg = f"pin {id_!r} references unknown local net {local_net_id!r}"
+        raise ResolutionInputError(msg)
+    if local_net.scope_id != scope_id:
+        msg = (
+            f"pin {id_!r} scope {scope_id} does not match "
+            f"local net {local_net_id!r} scope {local_net.scope_id}"
+        )
+        raise ResolutionInputError(msg)
+
+
+def _validate_scoped_local_net_ref(
+    *,
+    kind: str,
+    id_: str,
+    scope_id: ScopeId,
+    local_net_id: str,
+    containing_local_net_id: str,
+    scopes: set[ScopeId],
+    local_nets_by_id: dict[str, KiCadLocalNet],
+) -> None:
+    if scope_id not in scopes:
+        msg = f"{kind} {id_!r} references unknown scope {scope_id}"
+        raise ResolutionInputError(msg)
+    local_net = local_nets_by_id.get(local_net_id)
+    if local_net is None:
+        msg = f"{kind} {id_!r} references unknown local net {local_net_id!r}"
+        raise ResolutionInputError(msg)
+    if local_net_id != containing_local_net_id:
+        msg = (
+            f"{kind} {id_!r} references local net {local_net_id!r} "
+            f"but is attached to local net {containing_local_net_id!r}"
+        )
+        raise ResolutionInputError(msg)
+    if local_net.scope_id != scope_id:
+        msg = (
+            f"{kind} {id_!r} scope {scope_id} does not match "
+            f"local net {local_net_id!r} scope {local_net.scope_id}"
+        )
+        raise ResolutionInputError(msg)
+
+
+def _page_inputs(source: KiCadSourceDesign) -> list[ResolvedPageInput]:
+    return [
+        ResolvedPageInput(
             id=instance.id,
             name=instance.sheet_name,
             source_file=instance.source_file,
@@ -170,58 +354,48 @@ def _build_pages(source: KiCadSourceDesign) -> dict[ScopeId, Page]:
                 "kicad_sheet_symbol_id": instance.sheet_symbol_id,
             },
         )
-    return pages
+        for instance in source.sheet_instances
+    ]
 
 
-def _build_nets(
-    local_nets: list[KiCadLocalNet],
-    net_union: NetUnion,
-    pages: dict[ScopeId, Page],
-    pin_occurrences: Iterable[KiCadPinOccurrence],
-) -> dict[str, Net]:
-    pin_counts_by_local_net_id: dict[str, int] = {}
-    for pin_occurrence in pin_occurrences:
-        pin_counts_by_local_net_id[pin_occurrence.local_net_id] = (
-            pin_counts_by_local_net_id.get(pin_occurrence.local_net_id, 0) + 1
+def _local_net_inputs(local_nets: Iterable[KiCadLocalNet]) -> list[ResolvedLocalNetInput]:
+    return [
+        ResolvedLocalNetInput(
+            id=local_net.id,
+            scope_id=local_net.scope_id,
+            source_names=frozenset(_source_names(local_net)),
         )
+        for local_net in local_nets
+    ]
 
-    local_nets_by_group: dict[str, list[KiCadLocalNet]] = {}
-    for local_net in local_nets:
-        root_id = net_union.find(local_net.id)
-        local_nets_by_group.setdefault(root_id, []).append(local_net)
 
-    result: dict[str, Net] = {}
-    net_index = 0
-    for root_id, group_local_nets in local_nets_by_group.items():
-        if not _group_has_pins(group_local_nets, pin_counts_by_local_net_id):
-            continue
-        net_index += 1
-        name = select_kicad_net_name(group_local_nets)
-        aliases = _all_alias_names(group_local_nets)
-        aliases.discard(name)
-        net = Net(
-            id=f"net:{net_index:04d}",
-            name=name,
-            aliases=aliases,
-            metadata={
-                "kicad_root_local_net_id": root_id,
-            },
-        )
-        for local_net in group_local_nets:
-            page = _page_for_scope(pages, local_net.scope_id)
-            occurrence = NetOccurrence(
-                id=f"{net.id}:occ:{len(net.occurrences) + 1:04d}",
-                net=net,
-                page=page,
-                scope_id=local_net.scope_id,
-                source_local_net_id=local_net.id,
-                source_names=_source_names(local_net),
-            )
-            net.occurrences.append(occurrence)
-            _append_unique_page(net.pages, page)
-            _append_unique_net(page.nets, net)
-            result[local_net.id] = net
-    return result
+def _kicad_net_input_for_group(
+    local_nets_by_id: dict[str, KiCadLocalNet],
+    net_index: int,
+    root_id: str,
+    group_local_nets: tuple[ResolvedLocalNetInput, ...],
+) -> ResolvedNetInput:
+    kicad_local_nets = [local_nets_by_id[local_net.id] for local_net in group_local_nets]
+    name = select_kicad_net_name(kicad_local_nets)
+    aliases = _all_alias_names(kicad_local_nets)
+    aliases.discard(name)
+    return ResolvedNetInput(
+        id=f"net:{net_index:04d}",
+        name=name,
+        aliases=frozenset(aliases),
+        metadata={
+            "kicad_root_local_net_id": root_id,
+        },
+    )
+
+
+def _include_kicad_net(
+    _root_id: str,
+    group_local_nets: tuple[ResolvedLocalNetInput, ...],
+    pins: tuple[ResolvedPinInput, ...],
+) -> bool:
+    group_local_net_ids = {local_net.id for local_net in group_local_nets}
+    return any(pin.local_net_id in group_local_net_ids for pin in pins)
 
 
 def select_kicad_net_name(local_nets: Iterable[KiCadLocalNet]) -> str:
@@ -331,96 +505,73 @@ def _dedupe(names: Iterable[str]) -> list[str]:
     return result
 
 
-def _build_components(
-    pages: dict[ScopeId, Page],
-    nets_by_local_id: dict[str, Net],
+def _pin_inputs(
     pin_occurrences: Iterable[KiCadPinOccurrence],
     component_ids_by_source_id: dict[str, str],
-) -> list[Component]:
-    components_by_id: dict[str, Component] = {}
-    occurrences_by_component_page_source: set[tuple[str, str, str]] = set()
-    pin_occurrences_by_pin_source: set[tuple[str, str]] = set()
-    pins_by_component_designator: dict[tuple[str, str], Pin] = {}
-
+    component_source_ids_by_component_id: dict[str, list[str]],
+) -> list[ResolvedPinInput]:
+    result: list[ResolvedPinInput] = []
+    seen_pin_occurrences: set[tuple[str, str]] = set()
     for pin_occurrence in pin_occurrences:
-        page = _page_for_scope(pages, pin_occurrence.scope_id)
         component_id = _component_identity(pin_occurrence, component_ids_by_source_id)
-        component = components_by_id.get(component_id)
-        if component is None:
-            component = Component(
-                id=component_id,
-                reference=pin_occurrence.component_reference,
-                part=pin_occurrence.component_value,
-                description=pin_occurrence.component_description,
-                metadata=_component_metadata(pin_occurrence),
-            )
-            components_by_id[component_id] = component
-        elif not component.part and pin_occurrence.component_value:
-            component.part = pin_occurrence.component_value
-            component.description = pin_occurrence.component_description
-            component.metadata.update(_component_metadata(pin_occurrence))
-        _add_component_source_id(component, pin_occurrence.component_source_id)
-
-        _append_unique_page(component.pages, page)
-        _append_unique_component(page.components, component)
-        occurrence_key = (component.id, page.id, pin_occurrence.component_source_id)
-        if occurrence_key not in occurrences_by_component_page_source:
-            occurrences_by_component_page_source.add(occurrence_key)
-            component.occurrences.append(
-                ComponentOccurrence(
-                    id=f"{component.id}:occ:{len(component.occurrences) + 1:04d}",
-                    component=component,
-                    page=page,
-                    scope_id=pin_occurrence.scope_id,
+        pin_id = f"{component_id}:pin:{pin_occurrence.pin_designator}"
+        pin_occurrence_key = (pin_id, pin_occurrence.id)
+        if pin_occurrence_key in seen_pin_occurrences:
+            continue
+        seen_pin_occurrences.add(pin_occurrence_key)
+        result.append(
+            ResolvedPinInput(
+                id=pin_occurrence.id,
+                scope_id=pin_occurrence.scope_id,
+                local_net_id=pin_occurrence.local_net_id,
+                component_id=component_id,
+                component_reference=pin_occurrence.component_reference,
+                component_part=pin_occurrence.component_value,
+                component_description=pin_occurrence.component_description,
+                pin_id=pin_id,
+                pin_designator=pin_occurrence.pin_designator,
+                pin_name=_clean_name(pin_occurrence.pin_name),
+                no_connect=pin_occurrence.no_connect,
+                component_occurrence=ResolvedComponentOccurrenceInput(
                     source_id=pin_occurrence.component_source_id,
                     part_id=pin_occurrence.component_value,
                     x=pin_occurrence.component_x,
                     y=pin_occurrence.component_y,
                     rotation=pin_occurrence.component_rotation,
                     mirror=pin_occurrence.component_mirror,
-                )
-            )
-
-        pin_key = (component.id, pin_occurrence.pin_designator)
-        pin = pins_by_component_designator.get(pin_key)
-        if pin is None:
-            pin = Pin(
-                id=f"{component.id}:pin:{pin_occurrence.pin_designator}",
-                designator=pin_occurrence.pin_designator,
-                name=_clean_name(pin_occurrence.pin_name),
-                component=component,
-                no_connect=pin_occurrence.no_connect,
-                metadata={
+                ),
+                pin_metadata={
                     "kicad_pin_source_id": pin_occurrence.id,
                 },
+                pin_occurrence_metadata={
+                    "kicad_component_source_id": pin_occurrence.component_source_id,
+                },
+                component_metadata=_component_metadata(
+                    pin_occurrence,
+                    component_source_ids_by_component_id.get(component_id, []),
+                ),
             )
-            pins_by_component_designator[pin_key] = pin
-            component.pins.append(pin)
+        )
+    return result
 
-        pin_occurrence_key = (pin.id, pin_occurrence.id)
-        if pin_occurrence_key not in pin_occurrences_by_pin_source:
-            pin_occurrences_by_pin_source.add(pin_occurrence_key)
-            pin.occurrences.append(
-                PinOccurrence(
-                    id=f"{pin.id}:occ:{len(pin.occurrences) + 1:04d}",
-                    pin=pin,
-                    page=page,
-                    scope_id=pin_occurrence.scope_id,
-                    source_id=pin_occurrence.id,
-                    metadata={
-                        "kicad_component_source_id": pin_occurrence.component_source_id,
-                    },
-                )
-            )
 
-        net = nets_by_local_id.get(pin_occurrence.local_net_id)
-        if net is not None:
-            if pin.net is not None and pin.net.id != net.id:
-                _remove_pin(pin.net.pins, pin)
-            pin.net = net
-            _append_unique_pin(net.pins, pin)
-
-    return list(components_by_id.values())
+def _component_source_ids_by_component_id(
+    pin_occurrences: Iterable[KiCadPinOccurrence],
+    component_ids_by_source_id: dict[str, str],
+) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    seen_by_component_id: dict[str, set[str]] = {}
+    for pin_occurrence in pin_occurrences:
+        source_id = pin_occurrence.component_source_id
+        if not source_id:
+            continue
+        component_id = _component_identity(pin_occurrence, component_ids_by_source_id)
+        seen = seen_by_component_id.setdefault(component_id, set())
+        if source_id in seen:
+            continue
+        seen.add(source_id)
+        result.setdefault(component_id, []).append(source_id)
+    return result
 
 
 def _component_ids_by_source_id(
@@ -473,7 +624,10 @@ def _multi_unit_component_source_ids(
     return source_ids
 
 
-def _component_metadata(pin_occurrence: KiCadPinOccurrence) -> dict[str, str]:
+def _component_metadata(
+    pin_occurrence: KiCadPinOccurrence,
+    component_source_ids: list[str],
+) -> dict[str, str]:
     metadata: dict[str, str] = {}
     if pin_occurrence.component_value:
         metadata["Value"] = pin_occurrence.component_value
@@ -481,6 +635,8 @@ def _component_metadata(pin_occurrence: KiCadPinOccurrence) -> dict[str, str]:
         metadata["Footprint"] = pin_occurrence.component_footprint
     if pin_occurrence.component_datasheet:
         metadata["Datasheet"] = pin_occurrence.component_datasheet
+    if component_source_ids:
+        metadata["kicad_component_source_ids"] = ",".join(component_source_ids)
     return metadata
 
 
@@ -497,71 +653,3 @@ def _component_identity(
 
 def _scope_key(scope_id: ScopeId) -> str:
     return "root" if not scope_id.path else "/".join(scope_id.path)
-
-
-def _add_component_source_id(component: Component, source_id: str) -> None:
-    if not source_id:
-        return
-    existing = component.metadata.get("kicad_component_source_ids", "")
-    source_ids = [value for value in existing.split(",") if value]
-    if source_id in source_ids:
-        return
-    source_ids.append(source_id)
-    component.metadata["kicad_component_source_ids"] = ",".join(source_ids)
-
-
-def _group_has_pins(
-    local_nets: Iterable[KiCadLocalNet],
-    pin_counts_by_local_net_id: dict[str, int],
-) -> bool:
-    return any(pin_counts_by_local_net_id.get(local_net.id, 0) > 0 for local_net in local_nets)
-
-
-def _page_for_scope(pages: dict[ScopeId, Page], scope_id: ScopeId) -> Page:
-    page = pages.get(scope_id)
-    if page is not None:
-        return page
-    fallback = Page(
-        id=f"sheet:{_scope_key(scope_id)}",
-        name=str(scope_id),
-        scope_id=scope_id,
-    )
-    pages[scope_id] = fallback
-    return fallback
-
-
-def _ordered_nets(nets_by_local_id: dict[str, Net]) -> list[Net]:
-    nets: list[Net] = []
-    seen: set[str] = set()
-    for net in nets_by_local_id.values():
-        if net.id in seen:
-            continue
-        seen.add(net.id)
-        nets.append(net)
-    return nets
-
-
-def _append_unique_page(pages: list[Page], page: Page) -> None:
-    if not any(existing.id == page.id for existing in pages):
-        pages.append(page)
-
-
-def _append_unique_net(nets: list[Net], net: Net) -> None:
-    if not any(existing.id == net.id for existing in nets):
-        nets.append(net)
-
-
-def _append_unique_component(components: list[Component], component: Component) -> None:
-    if not any(existing.id == component.id for existing in components):
-        components.append(component)
-
-
-def _append_unique_pin(pins: list[Pin], pin: Pin) -> None:
-    if not any(existing.id == pin.id for existing in pins):
-        pins.append(pin)
-
-
-def _remove_pin(pins: list[Pin], pin: Pin) -> None:
-    remaining = [existing for existing in pins if existing.id != pin.id]
-    if len(remaining) != len(pins):
-        pins[:] = remaining
