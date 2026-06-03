@@ -196,6 +196,7 @@ def union_skia_artwork(artwork: Iterable[SkiaArtwork]) -> SkiaPathData:
 
 _POLYGON_KINDS = frozenset(
     {
+        GeometryKind.ZONE,
         GeometryKind.SILK_POLYGON,
         GeometryKind.FAB_POLYGON,
         GeometryKind.BODY_POLYGON,

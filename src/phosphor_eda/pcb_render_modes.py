@@ -218,6 +218,7 @@ def build_cad_layers(
         path_data = _cad_copper_path_data(
             key,
             group,
+            warn=warn,
             profiler=profiler,
         )
         layers.append(
@@ -353,6 +354,7 @@ def build_realistic_layers(
         side=side,
         items=len(copper_artwork),
         sources=copper_skia_sources,
+        warn=warn,
         profiler=profiler,
     )
     layer_inputs = {
@@ -510,6 +512,7 @@ def build_highlight_layers(
             path_data = _highlight_copper_path_data(
                 key,
                 layer_group,
+                warn=warn,
                 profiler=profiler,
             )
             layers.append(
@@ -957,6 +960,7 @@ def _cad_copper_path_data(
     key: _LayerGroupKey,
     group: list[_GroupedArtwork],
     *,
+    warn: Callable[[str], None],
     profiler: RenderProfiler | None = None,
 ) -> str:
     if key.function != "copper":
@@ -973,6 +977,7 @@ def _cad_copper_path_data(
             for item in group
             for source_item in item.source_items
         ),
+        warn=warn,
         profiler=profiler,
     )
 
@@ -981,6 +986,7 @@ def _highlight_copper_path_data(
     key: _LayerGroupKey,
     group: list[_GroupedArtwork],
     *,
+    warn: Callable[[str], None],
     profiler: RenderProfiler | None = None,
 ) -> str:
     if key.function != "copper":
@@ -997,6 +1003,7 @@ def _highlight_copper_path_data(
             for item in group
             for source_item in item.source_items
         ),
+        warn=warn,
         profiler=profiler,
     )
 
@@ -1009,6 +1016,7 @@ def _copper_path_data(
     side: str,
     items: int,
     sources: Iterable[_LayerSkiaSource],
+    warn: Callable[[str], None],
     profiler: RenderProfiler | None = None,
 ) -> str:
     source_tuple = tuple(sources)
@@ -1032,28 +1040,53 @@ def _copper_path_data(
             skia_artwork = _skia_artwork_for_layer_sources(source_tuple)
 
     if len(skia_artwork) != len(source_tuple):
+        unsupported_items = len(source_tuple) - len(skia_artwork)
         if profiler is not None:
             profiler.metric(
                 f"{event_prefix}.fallback",
                 **profile_data,
                 convertedItems=len(skia_artwork),
-                unsupportedItems=len(source_tuple) - len(skia_artwork),
+                unsupportedItems=unsupported_items,
             )
+        friendly_label = _skia_warning_label(event_prefix)
+        warning = (
+            f"Skia copper path fallback for {friendly_label} layer {layer} "
+            f"({function}/{side or 'all'}): {unsupported_items} unsupported "
+            f"of {len(source_tuple)} source items; using Shapely geometry for whole layer."
+        )
+        warn(warning)
         return ""
 
-    if profiler is None:
-        skia_path_data = union_skia_artwork(skia_artwork)
-    else:
-        with profiler.span(f"{event_prefix}.union", **profile_data):
+    try:
+        if profiler is None:
             skia_path_data = union_skia_artwork(skia_artwork)
-        profiler.metric(
-            f"{event_prefix}.output",
-            **profile_data,
-            pathCharacters=skia_path_data.path_characters,
-            moveCommands=skia_path_data.move_commands,
-            lineCommands=skia_path_data.line_commands,
-            curveCommands=skia_path_data.curve_commands,
+        else:
+            with profiler.span(f"{event_prefix}.union", **profile_data):
+                skia_path_data = union_skia_artwork(skia_artwork)
+            profiler.metric(
+                f"{event_prefix}.output",
+                **profile_data,
+                pathCharacters=skia_path_data.path_characters,
+                moveCommands=skia_path_data.move_commands,
+                lineCommands=skia_path_data.line_commands,
+                curveCommands=skia_path_data.curve_commands,
+            )
+    except Exception as exc:
+        if profiler is not None:
+            profiler.metric(
+                f"{event_prefix}.fallback",
+                **profile_data,
+                convertedItems=len(skia_artwork),
+                unsupportedItems=0,
+                errorType=type(exc).__name__,
+            )
+        warning = (
+            f"Skia copper path fallback for {_skia_warning_label(event_prefix)} layer {layer} "
+            f"({function}/{side or 'all'}): Skia union failed with {type(exc).__name__}; "
+            f"using Shapely geometry for whole layer."
         )
+        warn(warning)
+        return ""
     return skia_path_data.d
 
 
@@ -1069,6 +1102,15 @@ def _skia_artwork_for_layer_sources(
         if skia_artwork is not None:
             artwork.append(skia_artwork)
     return tuple(artwork)
+
+
+def _skia_warning_label(event_prefix: str) -> str:
+    labels = {
+        "cad.skia": "CAD copper",
+        "highlight.skia": "highlight copper",
+        "realistic.covered_copper.skia": "realistic covered copper",
+    }
+    return labels.get(event_prefix, "copper")
 
 
 def _profile_layer_name(sources: Iterable[_LayerSkiaSource]) -> str:

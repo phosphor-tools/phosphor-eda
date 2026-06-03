@@ -33,10 +33,16 @@ from phosphor_eda.pcb_render_settings import (
     RenderSettings,
     SourceSelection,
 )
+from phosphor_eda.pcb_render_skia import geometry_to_skia_artwork
 from phosphor_eda.pcb_render_tokens import ResolvedStyle
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
+
     import pytest
+    from shapely.geometry.base import BaseGeometry
+
+    from phosphor_eda.pcb_render_skia import SkiaArtwork
 
 
 def test_cad_front_copper_artwork_collapses_to_one_union_layer() -> None:
@@ -283,6 +289,226 @@ def test_cad_copper_layer_uses_skia_path_data_for_pad_and_via() -> None:
     assert layer.source_ids == ("pad-1", "via-1")
     assert layer.path_data.startswith("M ")
     assert not isinstance(layer.geometry, GeometryCollection)
+
+
+def test_cad_copper_skia_fallback_warns_and_reports_unsupported_items(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "pad-1",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=1.0, y=1.0),
+            ),
+            _renderable(
+                "via-1",
+                GeometryKind.VIA,
+                "vias",
+                "via",
+                "",
+                geometry=PcbVia(2.0, 1.0, 0.8, 0.3, ["F.Cu"], 1),
+            ),
+        )
+    )
+    _force_skia_failure_for_ids(monkeypatch, ("via-1",))
+    profiler = RenderProfiler()
+    warnings: list[str] = []
+
+    layers = build_cad_layers(
+        store,
+        _settings(
+            rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
+            tokens={"cad.copper.front.fill": "#d17a22"},
+        ),
+        warn=warnings.append,
+        profiler=profiler,
+    )
+
+    assert len(layers) == 1
+    layer = layers[0]
+    assert layer.id == "cad:copper:front"
+    assert layer.source_ids == ("pad-1", "via-1")
+    assert not layer.geometry.is_empty
+    assert layer.path_data == ""
+    assert len(warnings) == 1
+    assert "CAD copper" in warnings[0]
+    assert "F.Cu" in warnings[0]
+    assert "1 unsupported" in warnings[0]
+    _assert_skia_fallback_profile(
+        profiler,
+        "cad.skia.fallback",
+        converted_items=1,
+        unsupported_items=1,
+    )
+
+
+def test_cad_copper_skia_union_failure_warns_and_uses_geometry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "pad-1",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=1.0, y=1.0),
+            ),
+        )
+    )
+
+    def fail_union(_artwork: object) -> object:
+        raise RuntimeError("pathops failed")
+
+    monkeypatch.setattr(render_modes, "union_skia_artwork", fail_union)
+    profiler = RenderProfiler()
+    warnings: list[str] = []
+
+    layers = build_cad_layers(
+        store,
+        _settings(
+            rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
+            tokens={"cad.copper.front.fill": "#d17a22"},
+        ),
+        warn=warnings.append,
+        profiler=profiler,
+    )
+
+    assert len(layers) == 1
+    layer = layers[0]
+    assert layer.id == "cad:copper:front"
+    assert layer.source_ids == ("pad-1",)
+    assert not layer.geometry.is_empty
+    assert layer.path_data == ""
+    assert len(warnings) == 1
+    assert "CAD copper" in warnings[0]
+    assert "Skia union failed with RuntimeError" in warnings[0]
+    _assert_skia_fallback_profile(
+        profiler,
+        "cad.skia.fallback",
+        converted_items=1,
+        unsupported_items=0,
+    )
+
+
+def test_realistic_covered_copper_skia_fallback_warns_and_uses_geometry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "pad-1",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=1.0, y=1.0),
+            ),
+            _renderable(
+                "via-1",
+                GeometryKind.VIA,
+                "vias",
+                "via",
+                "",
+                geometry=PcbVia(2.0, 1.0, 0.8, 0.3, ["F.Cu"], 1),
+            ),
+        )
+    )
+    _force_skia_failure_for_ids(monkeypatch, ("via-1",))
+    profiler = RenderProfiler()
+    warnings: list[str] = []
+
+    layers = build_realistic_layers(
+        store,
+        _settings(
+            side="front",
+            rules=(LayerSelectionRule(match=LayerMatch(function="copper")),),
+            tokens=_realistic_tokens(),
+        ),
+        warn=warnings.append,
+        profiler=profiler,
+    )
+
+    covered_copper = next(layer for layer in layers if layer.id == "realistic:coveredCopper")
+    assert covered_copper.source_ids == ("pad-1", "via-1")
+    assert not covered_copper.geometry.is_empty
+    assert covered_copper.path_data == ""
+    assert len(warnings) == 1
+    assert "realistic covered copper" in warnings[0]
+    assert "F.Cu" in warnings[0]
+    assert "1 unsupported" in warnings[0]
+    _assert_skia_fallback_profile(
+        profiler,
+        "realistic.covered_copper.skia.fallback",
+        converted_items=1,
+        unsupported_items=1,
+    )
+
+
+def test_highlight_copper_skia_fallback_warns_and_uses_geometry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "pad-1",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=1.0, y=1.0, net_name="SIG"),
+                tags=GeometryTags(source_collection="pads", net_name="SIG"),
+            ),
+            _renderable(
+                "via-1",
+                GeometryKind.VIA,
+                "vias",
+                "via",
+                "",
+                geometry=PcbVia(2.0, 1.0, 0.8, 0.3, ["F.Cu"], 1),
+                tags=GeometryTags(source_collection="vias", net_name="SIG"),
+            ),
+        )
+    )
+    _force_skia_failure_for_ids(monkeypatch, ("via-1",))
+    profiler = RenderProfiler()
+    warnings: list[str] = []
+
+    groups = build_highlight_layers(
+        store,
+        _settings(
+            rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
+            tokens={"highlight.copper.front.fill": "#ff8a00"},
+            highlights=(HighlightSpec(net="SIG"),),
+        ),
+        warn=warnings.append,
+        profiler=profiler,
+    )
+
+    layer = groups[0].layers[0]
+    assert layer.id == "highlight:copper:front"
+    assert layer.source_ids == ("pad-1", "via-1")
+    assert not layer.geometry.is_empty
+    assert layer.path_data == ""
+    assert len(warnings) == 1
+    assert "highlight copper" in warnings[0]
+    assert "F.Cu" in warnings[0]
+    assert "1 unsupported" in warnings[0]
+    _assert_skia_fallback_profile(
+        profiler,
+        "highlight.skia.fallback",
+        converted_items=1,
+        unsupported_items=1,
+    )
 
 
 def test_cad_geometry_keeps_unclipped_artwork_and_tracks_layer_clip() -> None:
@@ -804,16 +1030,21 @@ def test_render_mode_union_can_prefer_disjoint_subset_union(
     calls: list[bool] = []
 
     def fake_robust_union(
-        geometries: tuple[object, ...],
+        geometries: Iterable[BaseGeometry],
         *,
         prefer_disjoint_subsets: bool = False,
-    ) -> GeometryCollection:
+    ) -> BaseGeometry:
         calls.append(prefer_disjoint_subsets)
-        return GeometryCollection(geometries)
+        return GeometryCollection(tuple(geometries))
 
     monkeypatch.setattr(render_modes, "robust_union", fake_robust_union)
 
-    _ = render_modes._union_or_empty(
+    union_or_empty = cast(
+        "Callable[..., BaseGeometry]",
+        render_modes.__dict__["_union_or_empty"],
+    )
+
+    _ = union_or_empty(
         (Point(1, 1), Point(2, 2)),
         prefer_disjoint_subsets=True,
     )
@@ -954,22 +1185,22 @@ def test_layer_processing_profiles_input_and_output_geometry_complexity() -> Non
         profiler=profiler,
     )
 
-    events = profiler.to_dict()["events"]
+    events = cast("list[dict[str, object]]", profiler.to_dict()["events"])
     input_event = next(
-        event
-        for event in events
-        if isinstance(event, dict) and event["name"] == "cad.resolve_group.input_geometry"
+        event for event in events if event["name"] == "cad.resolve_group.input_geometry"
     )
     output_event = next(
-        event
-        for event in events
-        if isinstance(event, dict) and event["name"] == "cad.resolve_group.output_geometry"
+        event for event in events if event["name"] == "cad.resolve_group.output_geometry"
     )
+    input_data = cast("dict[str, object]", input_event["data"])
+    output_data = cast("dict[str, object]", output_event["data"])
 
-    assert input_event["data"]["geometries"] == 2
-    assert input_event["data"]["coordinates"] == 10
-    assert output_event["data"]["geometries"] > 0
-    assert output_event["data"]["coordinates"] > 0
+    assert input_data["geometries"] == 2
+    assert input_data["coordinates"] == 10
+    assert isinstance(output_data["geometries"], int)
+    assert isinstance(output_data["coordinates"], int)
+    assert output_data["geometries"] > 0
+    assert output_data["coordinates"] > 0
 
 
 def test_profiler_reports_converted_artwork_complexity_by_source_kind() -> None:
@@ -1090,6 +1321,8 @@ def test_profiler_reports_skia_path_metrics_for_cad_copper() -> None:
 
     assert "cad.skia.union" in by_name
     assert input_data["sourceItems"] == 2
+    assert isinstance(output_data["pathCharacters"], int)
+    assert isinstance(output_data["moveCommands"], int)
     assert output_data["pathCharacters"] > 0
     assert output_data["moveCommands"] > 0
 
@@ -1220,6 +1453,45 @@ def _require_style(layer: DerivedLayer) -> ResolvedStyle:
         msg = "missing test layer style"
         raise AssertionError(msg)
     return layer.style
+
+
+def _force_skia_failure_for_ids(
+    monkeypatch: pytest.MonkeyPatch,
+    failing_ids: Iterable[str],
+) -> None:
+    failing_id_set = frozenset(failing_ids)
+
+    def fake_geometry_to_skia_artwork(
+        item: RenderableGeometry,
+        *,
+        target_layer_name: str,
+    ) -> SkiaArtwork | None:
+        if item.id in failing_id_set:
+            return None
+        return geometry_to_skia_artwork(
+            item,
+            target_layer_name=target_layer_name,
+        )
+
+    monkeypatch.setattr(
+        render_modes,
+        "geometry_to_skia_artwork",
+        fake_geometry_to_skia_artwork,
+    )
+
+
+def _assert_skia_fallback_profile(
+    profiler: RenderProfiler,
+    event_name: str,
+    *,
+    converted_items: int,
+    unsupported_items: int,
+) -> None:
+    profile_events = cast("list[dict[str, object]]", profiler.to_dict()["events"])
+    fallback_event = next(event for event in profile_events if event["name"] == event_name)
+    fallback_data = cast("dict[str, object]", fallback_event["data"])
+    assert fallback_data["unsupportedItems"] == unsupported_items
+    assert fallback_data["convertedItems"] == converted_items
 
 
 def _board_outline() -> RenderableGeometry:

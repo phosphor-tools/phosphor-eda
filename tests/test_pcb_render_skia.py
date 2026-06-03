@@ -190,6 +190,22 @@ def test_skia_converts_zone_polygon_to_valid_path_data() -> None:
     assert path_data.line_commands > 0
 
 
+def test_skia_converts_zone_polygon_payload_to_valid_path_data() -> None:
+    path_data = _convert_one(
+        _renderable_zone_polygon(
+            PcbPolygon(
+                points=[(0.0, 0.0), (2.0, 0.0), (2.0, 1.0), (0.0, 1.0)],
+                layer="F.Cu",
+                net_number=1,
+                net_name="GND",
+            )
+        )
+    )
+
+    _assert_valid_path_data(path_data.d)
+    assert path_data.line_commands > 0
+
+
 def test_skia_converts_polygon_with_holes_to_valid_path_data() -> None:
     path_data = _convert_one(
         _renderable_polygon(
@@ -312,6 +328,22 @@ def _renderable_zone(zone: PcbZone) -> RenderableGeometry:
             source_collection="zones",
             net_number=zone.net_number,
             net_name=zone.net_name,
+        ),
+    )
+
+
+def _renderable_zone_polygon(polygon: PcbPolygon) -> RenderableGeometry:
+    return _renderable(
+        "zone-polygon-1",
+        GeometryKind.ZONE,
+        polygon.layer,
+        "copper",
+        "front",
+        geometry=polygon,
+        tags=GeometryTags(
+            source_collection="zones",
+            net_number=polygon.net_number,
+            net_name=polygon.net_name,
         ),
     )
 
