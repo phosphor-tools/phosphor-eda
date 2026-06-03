@@ -53,7 +53,7 @@ from phosphor_eda.pcb_render_geometry import (
 )
 from phosphor_eda.pcb_render_modes import build_cad_layers
 from phosphor_eda.pcb_render_plan import DerivedRenderPlan, ViewBox
-from phosphor_eda.pcb_render_primitives import SvgPrimitive
+from phosphor_eda.pcb_render_primitives import LayerMask, SvgPrimitive
 from phosphor_eda.pcb_render_settings import is_json_dict, is_json_list
 from phosphor_eda.pcb_render_tokens import ResolvedStyle, VisualRole
 
@@ -1708,6 +1708,88 @@ def test_derived_serializer_renders_primitive_child_paths_and_group_opacity() ->
     assert 'data-net-name="VCC"' in svg
     assert 'data-shape="rect"' in svg
     assert 'data-role="cad.empty.front"' not in svg
+
+
+def test_derived_serializer_preserves_mask_metadata_and_opening_polarity() -> None:
+    board_primitive = SvgPrimitive(
+        d="M 0.0000 0.0000 L 6.0000 0.0000 L 6.0000 6.0000 Z",
+        source_id="board-1",
+        source_layer="Edge.Cuts",
+        kind=GeometryKind.BOARD_MATERIAL,
+        tags=GeometryTags(),
+    )
+    opening_primitive = SvgPrimitive(
+        d="M 1.0000 1.0000 L 2.0000 1.0000 L 2.0000 2.0000 Z",
+        source_id="mask-opening-1",
+        source_layer="F.Mask",
+        kind=GeometryKind.MASK,
+        tags=GeometryTags(component_ref="U1", pad_number="1"),
+        data={"source-copper-layer": "F.Cu"},
+    )
+    drill_primitive = SvgPrimitive(
+        d="M 3.0000 3.0000 L 4.0000 3.0000 L 4.0000 4.0000 Z",
+        source_id="drill-1",
+        source_layer="drills",
+        kind=GeometryKind.DRILL,
+        tags=GeometryTags(),
+    )
+    copper_primitive = SvgPrimitive(
+        d="M 0.5000 0.5000 L 2.5000 0.5000 L 2.5000 2.5000 Z",
+        source_id="pad-1",
+        source_layer="F.Cu",
+        kind=GeometryKind.PAD,
+        tags=GeometryTags(),
+    )
+    plan = DerivedRenderPlan(
+        view_box=ViewBox(0.0, 0.0, 10.0, 10.0),
+        width_px=100,
+        height_px=100,
+        base_layers=(
+            DerivedLayer(
+                id="realistic:solderMask",
+                role=VisualRole(namespace="realistic", function="solderMask"),
+                primitives=(board_primitive,),
+                source_layers=("F.Mask",),
+                source_ids=("mask-opening-1",),
+                style=ResolvedStyle(fill="#1f7a3a"),
+                mask=LayerMask(
+                    board=(board_primitive,),
+                    drills=(drill_primitive,),
+                    openings=(opening_primitive,),
+                ),
+            ),
+            DerivedLayer(
+                id="realistic:exposedCopper",
+                role=VisualRole(namespace="realistic", function="exposedCopper"),
+                primitives=(copper_primitive,),
+                source_layers=("F.Cu",),
+                source_ids=("pad-1",),
+                style=ResolvedStyle(fill="#b87333"),
+                mask=LayerMask(board=(opening_primitive,)),
+            ),
+        ),
+        highlight_groups=(),
+        annotations=None,
+        warnings=(),
+    )
+
+    svg = pcb_render_module.render_pcb_svg_from_derived_plan(plan)
+    black_opening_pattern = (
+        r'<path d="M 1\.0000 1\.0000 L 2\.0000 1\.0000 L 2\.0000 2\.0000 Z" '
+        + r'fill="black" fill-rule="evenodd" data-source-id="mask-opening-1" '
+        + r'data-source-layer="F\.Mask" data-kind="mask" data-component-ref="U1" '
+        + r'data-pad-number="1" data-source-copper-layer="F\.Cu"/>'
+    )
+    white_opening_pattern = (
+        r'<path d="M 1\.0000 1\.0000 L 2\.0000 1\.0000 L 2\.0000 2\.0000 Z" '
+        + r'fill="white" fill-rule="evenodd" data-source-id="mask-opening-1" '
+        + r'data-source-layer="F\.Mask" data-kind="mask" data-component-ref="U1" '
+        + r'data-pad-number="1" data-source-copper-layer="F\.Cu"/>'
+    )
+
+    assert re.search(black_opening_pattern, svg)
+    assert re.search(white_opening_pattern, svg)
+    assert 'data-source-id="drill-1" data-source-layer="drills" data-kind="drill"' in svg
 
 
 def test_derived_serializer_keeps_fill_stroke_and_stroke_width_on_child_path() -> None:

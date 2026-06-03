@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, cast
 
 from shapely import GeometryCollection, LineString, MultiLineString, MultiPolygon, Polygon
 from shapely.geometry.base import BaseGeometry
 
-from phosphor_eda.pcb import Pcb, PcbArc, PcbCircle, PcbGraphicText, PcbLine, PcbText
+from phosphor_eda.pcb import Pcb, PcbArc, PcbCircle, PcbGraphicText, PcbLine, PcbPad, PcbText
 from phosphor_eda.pcb_render_geometry import GeometryKind, RenderPoint
 from phosphor_eda.pcb_render_skia import geometry_to_skia_artwork, skia_path_to_svg_d
 from phosphor_eda.sql.geometry import arc_to_polyline
@@ -61,6 +61,68 @@ def geometry_to_svg_primitive(
         kind=item.kind,
         tags=item.tags,
     )
+
+
+def pad_solder_mask_opening_primitive(
+    item: RenderableGeometry,
+    *,
+    side: str,
+    target_layer_name: str,
+) -> SvgPrimitive | None:
+    """Convert a side-visible copper pad into a solder-mask opening primitive."""
+    payload = item.payload if item.payload is not None else item.source
+    if item.kind is not GeometryKind.PAD or not isinstance(payload, PcbPad):
+        return None
+    copper_layer_name = _pad_copper_target_layer_name(payload, item.layer.name, side)
+    if copper_layer_name is None:
+        return None
+
+    expansion = payload.mask_expansion if payload.mask_expansion is not None else 0.0
+    expanded = replace(
+        payload,
+        width=payload.width + 2 * expansion,
+        height=payload.height + 2 * expansion,
+        mid_width=None if payload.mid_width is None else payload.mid_width + 2 * expansion,
+        mid_height=None if payload.mid_height is None else payload.mid_height + 2 * expansion,
+        bot_width=None if payload.bot_width is None else payload.bot_width + 2 * expansion,
+        bot_height=None if payload.bot_height is None else payload.bot_height + 2 * expansion,
+    )
+    if expanded.width <= 0.0 or expanded.height <= 0.0:
+        return None
+
+    temp_item = replace(item, payload=expanded, source=expanded)
+    primitive = geometry_to_svg_primitive(temp_item, target_layer_name=copper_layer_name)
+    if primitive is None:
+        return None
+    return SvgPrimitive(
+        d=primitive.d,
+        source_id=item.id,
+        source_layer=target_layer_name,
+        kind=GeometryKind.MASK,
+        tags=item.tags,
+        data={"source-copper-layer": copper_layer_name},
+    )
+
+
+def _pad_copper_target_layer_name(pad: PcbPad, fallback_layer_name: str, side: str) -> str | None:
+    layer_names = {str(layer_name) for layer_name in pad.layers}
+    if side == "front":
+        for layer_name in ("F.Cu", "Top Layer", "Top"):
+            if layer_name in layer_names:
+                return layer_name
+        if "*.Cu" in layer_names:
+            return "F.Cu"
+        if fallback_layer_name in {"F.Cu", "Top Layer", "Top"}:
+            return fallback_layer_name
+    if side == "back":
+        for layer_name in ("B.Cu", "Bottom Layer", "Bottom"):
+            if layer_name in layer_names:
+                return layer_name
+        if "*.Cu" in layer_names:
+            return "B.Cu"
+        if fallback_layer_name in {"B.Cu", "Bottom Layer", "Bottom"}:
+            return fallback_layer_name
+    return None
 
 
 def _non_skia_svg_path_d(item: RenderableGeometry) -> str:

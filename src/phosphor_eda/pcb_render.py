@@ -615,9 +615,9 @@ def _render_layer_mask(
     )
     svg.raw(f"<defs><mask {mask_attrs}>")
     for primitive in layer.mask.board:
-        svg.path(primitive.d, attrs={"fill": "white", "fill-rule": "evenodd"})
+        svg.path(primitive.d, attrs=_layer_mask_path_attrs(primitive, fill="white"))
     for primitive in (*layer.mask.drills, *layer.mask.openings):
-        svg.path(primitive.d, attrs={"fill": "black", "fill-rule": "evenodd"})
+        svg.path(primitive.d, attrs=_layer_mask_path_attrs(primitive, fill="black"))
     svg.raw("</mask></defs>")
 
 
@@ -666,6 +666,18 @@ def _derived_layer_path_attrs(
 ) -> dict[str, str]:
     attrs = _resolved_path_style_svg_attrs(style)
     attrs["fill-rule"] = "evenodd"
+    attrs.update(_primitive_metadata_attrs(primitive))
+    return attrs
+
+
+def _layer_mask_path_attrs(primitive: SvgPrimitive, *, fill: str) -> dict[str, str]:
+    attrs = {"fill": fill, "fill-rule": "evenodd"}
+    attrs.update(_primitive_metadata_attrs(primitive))
+    return attrs
+
+
+def _primitive_metadata_attrs(primitive: SvgPrimitive) -> dict[str, str]:
+    attrs: dict[str, str] = {}
     if primitive.source_id:
         attrs["data-source-id"] = primitive.source_id
     if primitive.source_layer:

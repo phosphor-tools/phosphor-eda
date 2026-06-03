@@ -36,10 +36,9 @@ from phosphor_eda.pcb_render_settings import (
 from phosphor_eda.pcb_render_tokens import ResolvedStyle
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Iterable
 
     import pytest
-    from shapely.geometry.base import BaseGeometry
 
     from phosphor_eda.pcb_render_artwork import DerivedLayer
 
@@ -420,7 +419,7 @@ def test_cad_copper_projection_does_not_use_skia_union() -> None:
     assert not hasattr(render_modes, "union_skia_artwork")
 
 
-def test_realistic_covered_copper_primitive_conversion_falls_back_to_artwork_geometry(
+def test_realistic_covered_copper_skips_unconvertible_source_without_artwork_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = PcbGeometryStore(
@@ -460,11 +459,8 @@ def test_realistic_covered_copper_primitive_conversion_falls_back_to_artwork_geo
     )
 
     covered_copper = next(layer for layer in layers if layer.id == "realistic:coveredCopper")
-    assert covered_copper.source_ids == ("pad-1", "via-1")
-    assert tuple(primitive.source_id for primitive in covered_copper.primitives) == (
-        "pad-1",
-        "via-1",
-    )
+    assert covered_copper.source_ids == ("pad-1",)
+    assert tuple(primitive.source_id for primitive in covered_copper.primitives) == ("pad-1",)
     assert warnings == []
 
 
@@ -708,13 +704,122 @@ def test_realistic_front_layers_project_physical_stack_in_order() -> None:
     assert by_id["realistic:substrate"].mask.drills
 
     assert by_id["realistic:solderMask"].source_layers == ("F.Mask",)
-    assert by_id["realistic:coveredCopper"].source_ids == ("copper-pad",)
-    assert by_id["realistic:coveredCopper"].primitives[0].source_id == "copper-pad"
-    assert by_id["realistic:exposedCopper"].source_ids == (
+    assert by_id["realistic:solderMask"].mask is not None
+    assert tuple(
+        primitive.source_id for primitive in by_id["realistic:solderMask"].mask.openings
+    ) == (
         "mask-copper-opening",
         "mask-substrate-opening",
         "copper-pad",
     )
+    assert by_id["realistic:coveredCopper"].source_ids == ("copper-pad",)
+    assert by_id["realistic:coveredCopper"].primitives[0].source_id == "copper-pad"
+    assert by_id["realistic:exposedCopper"].source_ids == ("copper-pad",)
+    exposed_source_ids = tuple(
+        primitive.source_id for primitive in by_id["realistic:exposedCopper"].primitives
+    )
+    assert exposed_source_ids == ("copper-pad",)
+    assert by_id["realistic:exposedCopper"].mask is not None
+    assert tuple(
+        primitive.source_id for primitive in by_id["realistic:exposedCopper"].mask.board
+    ) == (
+        "mask-copper-opening",
+        "mask-substrate-opening",
+        "copper-pad",
+    )
+
+
+def test_realistic_solder_mask_openings_include_visible_side_pads() -> None:
+    front_masked_pad = _pad(
+        x=1.0,
+        y=1.0,
+        width=1.0,
+        height=1.0,
+        layers=["F.Cu", "F.Mask"],
+    )
+    back_masked_pad = _pad(
+        x=3.0,
+        y=1.0,
+        width=1.0,
+        height=1.0,
+        layers=["B.Cu", "B.Mask"],
+    )
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "front-pad",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=front_masked_pad,
+            ),
+            _renderable(
+                "back-pad",
+                GeometryKind.PAD,
+                "B.Cu",
+                "copper",
+                "back",
+                geometry=back_masked_pad,
+            ),
+        )
+    )
+
+    layers = build_realistic_layers(
+        store,
+        _settings(
+            side="front",
+            rules=(LayerSelectionRule(match=LayerMatch(function="copper")),),
+            tokens=_realistic_tokens(),
+        ),
+        warn=lambda _message: None,
+    )
+
+    by_id = {layer.id: layer for layer in layers}
+    solder_mask = by_id["realistic:solderMask"]
+    exposed_copper = by_id["realistic:exposedCopper"]
+
+    assert solder_mask.mask is not None
+    assert tuple(primitive.source_id for primitive in solder_mask.mask.openings) == ("front-pad",)
+    assert tuple(primitive.source_layer for primitive in solder_mask.mask.openings) == ("F.Mask",)
+    assert tuple(primitive.kind for primitive in solder_mask.mask.openings) == (GeometryKind.MASK,)
+    assert tuple(primitive.source_id for primitive in exposed_copper.primitives) == ("front-pad",)
+    assert exposed_copper.mask is not None
+    assert tuple(primitive.source_id for primitive in exposed_copper.mask.board) == ("front-pad",)
+
+
+def test_realistic_solder_mask_openings_do_not_include_vias_without_tenting_metadata() -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "via-1",
+                GeometryKind.VIA,
+                "vias",
+                "via",
+                "",
+                geometry=PcbVia(2.0, 1.0, 0.8, 0.3, ["F.Cu", "B.Cu"], 1),
+            ),
+        )
+    )
+
+    layers = build_realistic_layers(
+        store,
+        _settings(
+            side="front",
+            rules=(LayerSelectionRule(match=LayerMatch(function="copper")),),
+            tokens=_realistic_tokens(),
+        ),
+        warn=lambda _message: None,
+    )
+
+    solder_mask = next(layer for layer in layers if layer.id == "realistic:solderMask")
+
+    assert solder_mask.mask is not None
+    # PcbVia has no tenting/exposure field today, so realistic mode preserves
+    # the previous behavior: vias do not create solder-mask openings by default.
+    assert solder_mask.mask.openings == ()
 
 
 def test_realistic_projection_uses_visible_side_only() -> None:
@@ -964,9 +1069,7 @@ def test_highlight_copper_layer_uses_child_primitives_for_pad_and_via() -> None:
     assert all(primitive.d.startswith("M ") for primitive in layer.primitives)
 
 
-def test_highlight_layer_contents_do_not_use_artwork_resolution_or_union(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_highlight_layer_contents_do_not_use_artwork_resolution_or_union() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -982,13 +1085,9 @@ def test_highlight_layer_contents_do_not_use_artwork_resolution_or_union(
         )
     )
 
-    def fail_if_called(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("highlight layer contents must not use artwork resolution")
-
-    monkeypatch.setattr(render_modes, "_groupable_artwork", fail_if_called)
-    monkeypatch.setattr(render_modes, "_resolved_group_geometry", fail_if_called, raising=False)
-    monkeypatch.setattr(render_modes, "_process_artwork_layer", fail_if_called)
-    monkeypatch.setattr(render_modes, "robust_union", fail_if_called)
+    assert not hasattr(render_modes, "_groupable_artwork")
+    assert not hasattr(render_modes, "_process_artwork_layer")
+    assert not hasattr(render_modes, "robust_union")
 
     groups = build_highlight_layers(
         store,
@@ -1048,37 +1147,7 @@ def test_base_layers_dim_only_when_dimming_enabled_and_highlights_exist() -> Non
     assert with_highlights[0].style == ResolvedStyle(fill="#6f5b48")
 
 
-def test_render_mode_union_can_prefer_disjoint_subset_union(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[bool] = []
-
-    def fake_robust_union(
-        geometries: Iterable[BaseGeometry],
-        *,
-        prefer_disjoint_subsets: bool = False,
-    ) -> BaseGeometry:
-        calls.append(prefer_disjoint_subsets)
-        return GeometryCollection(tuple(geometries))
-
-    monkeypatch.setattr(render_modes, "robust_union", fake_robust_union)
-
-    union_or_empty = cast(
-        "Callable[..., BaseGeometry]",
-        render_modes.__dict__["_union_or_empty"],
-    )
-
-    _ = union_or_empty(
-        (Point(1, 1), Point(2, 2)),
-        prefer_disjoint_subsets=True,
-    )
-
-    assert calls == [True]
-
-
-def test_cad_layer_contents_do_not_use_artwork_resolution_or_union(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_cad_layer_contents_do_not_use_artwork_resolution_or_union() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -1101,13 +1170,9 @@ def test_cad_layer_contents_do_not_use_artwork_resolution_or_union(
         )
     )
 
-    def fail_if_called(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("CAD layer contents must not use artwork resolution")
-
-    monkeypatch.setattr(render_modes, "_groupable_artwork", fail_if_called)
-    monkeypatch.setattr(render_modes, "_resolved_group_geometry", fail_if_called, raising=False)
-    monkeypatch.setattr(render_modes, "_process_artwork_layer", fail_if_called)
-    monkeypatch.setattr(render_modes, "robust_union", fail_if_called)
+    assert not hasattr(render_modes, "_groupable_artwork")
+    assert not hasattr(render_modes, "_process_artwork_layer")
+    assert not hasattr(render_modes, "robust_union")
 
     layers = build_cad_layers(
         store,
@@ -1125,9 +1190,7 @@ def test_cad_layer_contents_do_not_use_artwork_resolution_or_union(
     )
 
 
-def test_realistic_layer_processing_prefers_disjoint_subset_union(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_realistic_layer_contents_do_not_use_artwork_resolution_or_boolean_geometry() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -1149,20 +1212,13 @@ def test_realistic_layer_processing_prefers_disjoint_subset_union(
             ),
         )
     )
-    calls: list[bool] = []
+    assert not hasattr(render_modes, "_groupable_artwork")
+    assert not hasattr(render_modes, "_process_artwork_layer")
+    assert not hasattr(render_modes, "_difference")
+    assert not hasattr(render_modes, "_intersection")
+    assert not hasattr(render_modes, "robust_union")
 
-    def fake_robust_union(
-        geometries: tuple[object, ...],
-        *,
-        prefer_disjoint_subsets: bool = False,
-    ) -> Polygon:
-        calls.append(prefer_disjoint_subsets)
-        assert len(geometries) == 2
-        return Polygon([(0.5, 0.5), (3.5, 0.5), (3.5, 1.5), (0.5, 1.5)])
-
-    monkeypatch.setattr(render_modes, "robust_union", fake_robust_union)
-
-    _ = build_realistic_layers(
+    layers = build_realistic_layers(
         store,
         _settings(
             side="front",
@@ -1172,7 +1228,13 @@ def test_realistic_layer_processing_prefers_disjoint_subset_union(
         warn=lambda _message: None,
     )
 
-    assert calls[0] is True
+    by_id = {layer.id: layer for layer in layers}
+    assert tuple(
+        primitive.source_id for primitive in by_id["realistic:coveredCopper"].primitives
+    ) == ("pad-1", "pad-2")
+    assert tuple(
+        primitive.source_id for primitive in by_id["realistic:exposedCopper"].primitives
+    ) == ("pad-1", "pad-2")
 
 
 def test_cad_profiler_reports_selected_items_and_primitive_conversion_counts() -> None:
@@ -1538,6 +1600,7 @@ def _pad(
     drill: float = 0.0,
     footprint_ref: str = "J1",
     net_name: str = "GND",
+    layers: list[str] | None = None,
 ) -> PcbPad:
     return PcbPad(
         number="1",
@@ -1546,7 +1609,7 @@ def _pad(
         width=width,
         height=height,
         shape="rect",
-        layers=["F.Cu", "B.Cu"],
+        layers=["F.Cu", "B.Cu"] if layers is None else layers,
         net_number=1,
         net_name=net_name,
         footprint_ref=footprint_ref,
