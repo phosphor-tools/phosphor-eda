@@ -1,5 +1,7 @@
 """Tests for Altium source-to-public schematic resolution."""
 
+import pytest
+
 from phosphor_eda.altium.project import AltiumHierarchyMode, AltiumProject
 from phosphor_eda.altium.resolver import resolve_altium_source
 from phosphor_eda.altium.source import (
@@ -13,6 +15,7 @@ from phosphor_eda.altium.source import (
     AltiumSheetSymbol,
     AltiumSourceDesign,
 )
+from phosphor_eda.resolved_graph import ResolutionInputError
 from phosphor_eda.schematic import Net, ScopeId
 
 
@@ -433,6 +436,14 @@ def test_hierarchical_repeated_sheet_symbols_use_specific_child_instance_scope()
         ports=[_port("ChildB", "SIG")],
         references=["B1"],
     )
+    child_a_scope = ScopeId(path=("Top", symbol_a.id, "ChildA"))
+    child_b_scope = ScopeId(path=("Top", symbol_b.id, "ChildB"))
+    child_a_net.scope_id = child_a_scope
+    child_a_net.ports[0].scope_id = child_a_scope
+    child_a_pins[0].scope_id = child_a_scope
+    child_b_net.scope_id = child_b_scope
+    child_b_net.ports[0].scope_id = child_b_scope
+    child_b_pins[0].scope_id = child_b_scope
 
     design = resolve_altium_source(
         _source(
@@ -449,14 +460,14 @@ def test_hierarchical_repeated_sheet_symbols_use_specific_child_instance_scope()
                     [child_a_net],
                     child_a_pins,
                     source_file="Child.SchDoc",
-                    scope_id=ScopeId(path=("Top", symbol_a.id, "ChildA")),
+                    scope_id=child_a_scope,
                 ),
                 _sheet(
                     "ChildB",
                     [child_b_net],
                     child_b_pins,
                     source_file="Child.SchDoc",
-                    scope_id=ScopeId(path=("Top", symbol_b.id, "ChildB")),
+                    scope_id=child_b_scope,
                 ),
             ],
             mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
@@ -711,3 +722,97 @@ def test_repeated_independent_sheet_instances_with_same_reference_stay_distinct(
     assert len(design.components) == 2
     assert {component.reference for component in design.components} == {"U1"}
     assert len({component.id for component in design.components}) == 2
+
+
+def test_pin_occurrence_with_unknown_scope_fails_resolution():
+    net, _pins = _local_net("A", "sig")
+    pin = _pin("Missing", net.id, "U1")
+
+    with pytest.raises(ResolutionInputError, match="pin .* unknown scope"):
+        resolve_altium_source(_source([_sheet("A", [net], [pin])]))
+
+
+def test_pin_occurrence_with_unknown_local_net_fails_resolution():
+    net, _pins = _local_net("A", "sig")
+    pin = _pin("A", "A:local:missing", "U1")
+
+    with pytest.raises(ResolutionInputError, match="pin .* unknown local net"):
+        resolve_altium_source(_source([_sheet("A", [net], [pin])]))
+
+
+def test_net_label_scope_must_match_containing_local_net_scope():
+    attached_net, attached_pins = _local_net(
+        "A",
+        "attached",
+        labels=[_label("B", "SIG")],
+        references=["U1"],
+    )
+    other_net, other_pins = _local_net("A", "other", references=["U2"])
+
+    with pytest.raises(
+        ResolutionInputError,
+        match="net label .* scope .* local net",
+    ):
+        resolve_altium_source(
+            _source(
+                [
+                    _sheet(
+                        "A",
+                        [attached_net, other_net],
+                        [*attached_pins, *other_pins],
+                    ),
+                    _sheet("B", [], []),
+                ]
+            )
+        )
+
+
+def test_unattached_top_level_sheet_entry_is_allowed_and_ignored():
+    symbol = _symbol("Top", "Child.SchDoc")
+    entry = _entry("Top", "SIG", symbol.id)
+    local_net, pins = _local_net("Top", "attached", references=["U1"])
+
+    design = resolve_altium_source(
+        _source(
+            [
+                _sheet(
+                    "Top",
+                    [local_net],
+                    pins,
+                    sheet_symbols=[symbol],
+                    sheet_entries=[entry],
+                ),
+                _sheet("Child", [], [], source_file="Child.SchDoc"),
+            ],
+            mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
+            root_sheet_name="Top",
+        )
+    )
+
+    [net] = design.nets
+    assert _refs(net) == {"U1"}
+
+
+def test_repeated_logical_pin_preserves_first_no_connect_state_and_dedupes_source():
+    first_net, first_pins = _local_net("A", "first", references=["U1"])
+    second_net, second_pins = _local_net("A", "second", references=["U1"])
+    first_pins[0].id = "A:pin:U1:1:shared"
+    second_pins[0].id = "A:pin:U1:1:shared"
+    second_pins[0].no_connect = True
+
+    design = resolve_altium_source(
+        _source(
+            [
+                _sheet(
+                    "A",
+                    [first_net, second_net],
+                    [*first_pins, *second_pins],
+                )
+            ]
+        )
+    )
+
+    [component] = design.components
+    [pin] = component.pins
+    assert pin.no_connect is False
+    assert [occurrence.source_id for occurrence in pin.occurrences] == ["A:pin:U1:1:shared"]
