@@ -756,6 +756,19 @@ def test_format_page_detail_filters_unified_component_pins_by_pin_occurrence():
     assert "U1.2" not in detail
 
 
+def test_format_page_detail_rejects_ambiguous_duplicate_page_names():
+    first = Page(name="Channel", id="page:channel-a", scope_id=ScopeId(path=("root", "a")))
+    second = Page(name="Channel", id="page:channel-b", scope_id=ScopeId(path=("root", "b")))
+    design = Schematic(name="REPEATED", pages=[first, second])
+
+    with pytest.raises(ValueError, match="ambiguous.*page:channel-a.*page:channel-b"):
+        _ = format_page_detail(design, "Channel")
+
+    detail = format_page_detail(design, "page:channel-b")
+
+    assert "PAGE: Channel" in detail
+
+
 def test_format_page_detail_not_found():
     design = _simple_design()
     with pytest.raises(ValueError, match="not found"):

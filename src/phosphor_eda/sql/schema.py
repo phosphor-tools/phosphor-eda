@@ -230,6 +230,27 @@ TABLE_DDL: dict[str, str] = {
             no_connect BOOLEAN NOT NULL
         )
     """,
+    "pin_occurrences": """
+        CREATE TABLE pin_occurrences (
+            occurrence_id VARCHAR PRIMARY KEY,
+            pin_id VARCHAR NOT NULL,
+            component_id VARCHAR NOT NULL,
+            reference VARCHAR NOT NULL,
+            designator VARCHAR NOT NULL,
+            page_id VARCHAR NOT NULL,
+            page_name VARCHAR NOT NULL,
+            scope_path VARCHAR NOT NULL,
+            source_id VARCHAR NOT NULL
+        )
+    """,
+    "pin_occurrence_metadata": """
+        CREATE TABLE pin_occurrence_metadata (
+            occurrence_id VARCHAR NOT NULL,
+            pin_id VARCHAR NOT NULL,
+            key VARCHAR NOT NULL,
+            value VARCHAR NOT NULL
+        )
+    """,
     "nets": """
         CREATE TABLE nets (
             net_id VARCHAR PRIMARY KEY,
@@ -296,6 +317,12 @@ INDEX_DDL: dict[str, str] = {
     """,
     "idx_pins_net_id": """
         CREATE INDEX idx_pins_net_id ON pins(net_id)
+    """,
+    "idx_pin_occurrences_pin_id": """
+        CREATE INDEX idx_pin_occurrences_pin_id ON pin_occurrences(pin_id)
+    """,
+    "idx_pin_occurrences_page_id": """
+        CREATE INDEX idx_pin_occurrences_page_id ON pin_occurrences(page_id)
     """,
     "idx_nets_name": """
         CREATE INDEX idx_nets_name ON nets(name)

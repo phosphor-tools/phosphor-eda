@@ -69,6 +69,7 @@ def load_database(project: Project) -> duckdb.DuckDBPyConnection:
         _load_net_occurrences(con, project.schematic)
         _load_net_metadata(con, project.schematic)
         _load_pins(con, project.schematic)
+        _load_pin_occurrences(con, project.schematic)
 
     _load_project_metadata(con, project)
 
@@ -526,6 +527,31 @@ def _load_pins(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
                     pin.no_connect,
                 ],
             )
+
+
+def _load_pin_occurrences(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    for comp in schematic.components:
+        for pin in comp.pins:
+            for occurrence in pin.occurrences:
+                _ = con.execute(
+                    "INSERT INTO pin_occurrences VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        occurrence.id,
+                        pin.id,
+                        comp.id,
+                        comp.reference,
+                        pin.designator,
+                        occurrence.page.id,
+                        occurrence.page.name,
+                        str(occurrence.scope_id),
+                        occurrence.source_id,
+                    ],
+                )
+                for key, value in occurrence.metadata.items():
+                    _ = con.execute(
+                        "INSERT INTO pin_occurrence_metadata VALUES (?, ?, ?, ?)",
+                        [occurrence.id, pin.id, key, value],
+                    )
 
 
 def _load_nets(con: duckdb.DuckDBPyConnection, schematic: Schematic, project: Project) -> None:

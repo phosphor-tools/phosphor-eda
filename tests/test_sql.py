@@ -15,6 +15,7 @@ from phosphor_eda.schematic import (
     NetOccurrence,
     Page,
     Pin,
+    PinOccurrence,
     Schematic,
     ScopeId,
 )
@@ -146,6 +147,39 @@ def _constructed_schematic() -> Schematic:
         name="B",
         no_connect=True,
     )
+    controller_sync.occurrences = [
+        PinOccurrence(
+            id="pin-occurrence:u1:sync:power",
+            pin=controller_sync,
+            page=power_page,
+            scope_id=power_page.scope_id,
+            source_id="power/U1A/pin10",
+            metadata={
+                "source_component": "power/U1A",
+                "source_local_net_id": "power/local-12",
+            },
+        ),
+        PinOccurrence(
+            id="pin-occurrence:u1:sync:control",
+            pin=controller_sync,
+            page=control_page,
+            scope_id=control_page.scope_id,
+            source_id="control/U1B/pin10",
+            metadata={
+                "source_component": "control/U1B",
+                "source_local_net_id": "control/local-8",
+            },
+        ),
+    ]
+    duplicate_a_pin.occurrences = [
+        PinOccurrence(
+            id="pin-occurrence:power:u7:1",
+            pin=duplicate_a_pin,
+            page=power_page,
+            scope_id=power_page.scope_id,
+            source_id="power/U7/pin1",
+        )
+    ]
 
     controller.pins = [controller_sync, controller_reset]
     duplicate_a.pins = [duplicate_a_pin]
@@ -441,6 +475,76 @@ class TestConstructedSchematicSql:
                 "input",
                 False,
             ),
+        ]
+
+    def test_pin_occurrences_preserve_source_provenance(
+        self, constructed_db: duckdb.DuckDBPyConnection
+    ) -> None:
+        rows = constructed_db.execute(
+            """
+            SELECT
+                occurrence_id, pin_id, component_id, reference, designator,
+                page_id, page_name, scope_path, source_id
+            FROM pin_occurrences
+            ORDER BY occurrence_id
+            """
+        ).fetchall()
+        assert rows == [
+            (
+                "pin-occurrence:power:u7:1",
+                "pin:power:u7:1",
+                "component:power:u7",
+                "U7",
+                "1",
+                "page:power",
+                "Power",
+                "/root/power",
+                "power/U7/pin1",
+            ),
+            (
+                "pin-occurrence:u1:sync:control",
+                "pin:u1:10",
+                "component:u1",
+                "U1",
+                "10",
+                "page:control",
+                "Control",
+                "/root/control",
+                "control/U1B/pin10",
+            ),
+            (
+                "pin-occurrence:u1:sync:power",
+                "pin:u1:10",
+                "component:u1",
+                "U1",
+                "10",
+                "page:power",
+                "Power",
+                "/root/power",
+                "power/U1A/pin10",
+            ),
+        ]
+
+        metadata_rows = constructed_db.execute(
+            """
+            SELECT occurrence_id, key, value
+            FROM pin_occurrence_metadata
+            ORDER BY occurrence_id, key
+            """
+        ).fetchall()
+        assert metadata_rows == [
+            (
+                "pin-occurrence:u1:sync:control",
+                "source_component",
+                "control/U1B",
+            ),
+            (
+                "pin-occurrence:u1:sync:control",
+                "source_local_net_id",
+                "control/local-8",
+            ),
+            ("pin-occurrence:u1:sync:power", "source_component", "power/U1A"),
+            ("pin-occurrence:u1:sync:power", "source_local_net_id", "power/local-12"),
         ]
 
     def test_nets_occurrences_and_metadata_preserve_identity_and_provenance(

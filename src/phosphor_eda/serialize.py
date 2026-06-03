@@ -637,15 +637,26 @@ def format_net_detail(design: Schematic, name: str) -> str:
     return "\n".join(lines)
 
 
+def _find_page_for_detail(design: Schematic, page_name: str) -> Page:
+    id_matches = [page for page in design.pages if page.id == page_name]
+    if len(id_matches) == 1:
+        return id_matches[0]
+
+    name_matches = [page for page in design.pages if page.name == page_name]
+    if len(name_matches) == 1:
+        return name_matches[0]
+    if len(name_matches) > 1:
+        choices = ", ".join(
+            f"{page.id} ({page.name}, scope {page.scope_id})" for page in name_matches
+        )
+        raise ValueError(f"Page '{page_name}' is ambiguous; use a page id: {choices}")
+
+    raise ValueError(f"Page '{page_name}' not found in design.")
+
+
 def format_page_detail(design: Schematic, page_name: str) -> str:
     """Format full detail for a single page. Raises ValueError if not found."""
-    page = None
-    for p in design.pages:
-        if p.name == page_name:
-            page = p
-            break
-    if page is None:
-        raise ValueError(f"Page '{page_name}' not found in design.")
+    page = _find_page_for_detail(design, page_name)
 
     lines = [f"PAGE: {page.name}"]
     for key, value in sorted(page.metadata.items()):
