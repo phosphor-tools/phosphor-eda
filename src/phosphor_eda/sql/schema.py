@@ -190,6 +190,7 @@ TABLE_DDL: dict[str, str] = {
             reference VARCHAR NOT NULL,
             part VARCHAR NOT NULL,
             description VARCHAR NOT NULL,
+            page_ids VARCHAR,
             page_names VARCHAR
         )
     """,
@@ -213,6 +214,14 @@ TABLE_DDL: dict[str, str] = {
         CREATE TABLE component_metadata (
             component_id VARCHAR NOT NULL,
             reference VARCHAR NOT NULL,
+            key VARCHAR NOT NULL,
+            value VARCHAR NOT NULL
+        )
+    """,
+    "component_occurrence_metadata": """
+        CREATE TABLE component_occurrence_metadata (
+            occurrence_id VARCHAR NOT NULL,
+            component_id VARCHAR NOT NULL,
             key VARCHAR NOT NULL,
             value VARCHAR NOT NULL
         )
@@ -256,6 +265,7 @@ TABLE_DDL: dict[str, str] = {
             net_id VARCHAR PRIMARY KEY,
             name VARCHAR NOT NULL,
             pin_count INTEGER NOT NULL,
+            page_ids VARCHAR,
             page_names VARCHAR,
             is_power BOOLEAN NOT NULL,
             net_class VARCHAR,
@@ -280,6 +290,14 @@ TABLE_DDL: dict[str, str] = {
         CREATE TABLE net_metadata (
             net_id VARCHAR NOT NULL,
             name VARCHAR NOT NULL,
+            key VARCHAR NOT NULL,
+            value VARCHAR NOT NULL
+        )
+    """,
+    "net_occurrence_metadata": """
+        CREATE TABLE net_occurrence_metadata (
+            occurrence_id VARCHAR NOT NULL,
+            net_id VARCHAR NOT NULL,
             key VARCHAR NOT NULL,
             value VARCHAR NOT NULL
         )
@@ -312,6 +330,17 @@ INDEX_DDL: dict[str, str] = {
     "idx_component_occurrences_page_id": """
         CREATE INDEX idx_component_occurrences_page_id ON component_occurrences(page_id)
     """,
+    "idx_component_metadata_component_id": """
+        CREATE INDEX idx_component_metadata_component_id ON component_metadata(component_id)
+    """,
+    "idx_component_occurrence_metadata_occurrence_id": """
+        CREATE INDEX idx_component_occurrence_metadata_occurrence_id
+        ON component_occurrence_metadata(occurrence_id)
+    """,
+    "idx_component_occurrence_metadata_component_id": """
+        CREATE INDEX idx_component_occurrence_metadata_component_id
+        ON component_occurrence_metadata(component_id)
+    """,
     "idx_pins_component_id": """
         CREATE INDEX idx_pins_component_id ON pins(component_id)
     """,
@@ -324,6 +353,13 @@ INDEX_DDL: dict[str, str] = {
     "idx_pin_occurrences_page_id": """
         CREATE INDEX idx_pin_occurrences_page_id ON pin_occurrences(page_id)
     """,
+    "idx_pin_occurrence_metadata_occurrence_id": """
+        CREATE INDEX idx_pin_occurrence_metadata_occurrence_id
+        ON pin_occurrence_metadata(occurrence_id)
+    """,
+    "idx_pin_occurrence_metadata_pin_id": """
+        CREATE INDEX idx_pin_occurrence_metadata_pin_id ON pin_occurrence_metadata(pin_id)
+    """,
     "idx_nets_name": """
         CREATE INDEX idx_nets_name ON nets(name)
     """,
@@ -332,6 +368,16 @@ INDEX_DDL: dict[str, str] = {
     """,
     "idx_net_occurrences_page_id": """
         CREATE INDEX idx_net_occurrences_page_id ON net_occurrences(page_id)
+    """,
+    "idx_net_metadata_net_id": """
+        CREATE INDEX idx_net_metadata_net_id ON net_metadata(net_id)
+    """,
+    "idx_net_occurrence_metadata_occurrence_id": """
+        CREATE INDEX idx_net_occurrence_metadata_occurrence_id
+        ON net_occurrence_metadata(occurrence_id)
+    """,
+    "idx_net_occurrence_metadata_net_id": """
+        CREATE INDEX idx_net_occurrence_metadata_net_id ON net_occurrence_metadata(net_id)
     """,
 }
 

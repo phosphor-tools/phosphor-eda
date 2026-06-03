@@ -200,6 +200,7 @@ def _constructed_schematic() -> Schematic:
             y=20.0,
             rotation=90.0,
             mirror=False,
+            metadata={"source_block": "U1A", "sheet_symbol": "power-mcu"},
         ),
         ComponentOccurrence(
             id="occurrence:u1:control",
@@ -212,6 +213,7 @@ def _constructed_schematic() -> Schematic:
             y=40.0,
             rotation=0.0,
             mirror=True,
+            metadata={"source_block": "U1B", "sheet_symbol": "control-mcu"},
         ),
     ]
     duplicate_a.occurrences = [
@@ -241,6 +243,7 @@ def _constructed_schematic() -> Schematic:
             scope_id=power_page.scope_id,
             source_local_net_id="power/local-12",
             source_names={"SYNC", "GLOBAL_SYNC"},
+            metadata={"source_label_kind": "global", "source_sheet": "Power"},
         ),
         NetOccurrence(
             id="net-occurrence:sync:control",
@@ -249,6 +252,7 @@ def _constructed_schematic() -> Schematic:
             scope_id=control_page.scope_id,
             source_local_net_id="control/local-8",
             source_names={"SYNC_IN"},
+            metadata={"source_label_kind": "port", "source_sheet": "Control"},
         ),
     ]
     reset_power.occurrences = [
@@ -349,15 +353,15 @@ class TestConstructedSchematicSql:
     ) -> None:
         component_rows = constructed_db.execute(
             """
-            SELECT component_id, reference, page_names
+            SELECT component_id, reference, page_ids, page_names
             FROM components
             ORDER BY component_id
             """
         ).fetchall()
         assert component_rows == [
-            ("component:control:u7", "U7", "Control"),
-            ("component:power:u7", "U7", "Power"),
-            ("component:u1", "U1", "Control,Power"),
+            ("component:control:u7", "U7", "page:control", "Control"),
+            ("component:power:u7", "U7", "page:power", "Power"),
+            ("component:u1", "U1", "page:control,page:power", "Control,Power"),
         ]
         assert _count(constructed_db, "SELECT count(*) FROM components WHERE reference = 'U1'") == 1
 
@@ -390,6 +394,20 @@ class TestConstructedSchematicSql:
             ),
         ]
         assert _count(constructed_db, "SELECT count(*) FROM component_occurrences") == 4
+
+        occurrence_metadata_rows = constructed_db.execute(
+            """
+            SELECT occurrence_id, component_id, key, value
+            FROM component_occurrence_metadata
+            ORDER BY occurrence_id, key
+            """
+        ).fetchall()
+        assert occurrence_metadata_rows == [
+            ("occurrence:u1:control", "component:u1", "sheet_symbol", "control-mcu"),
+            ("occurrence:u1:control", "component:u1", "source_block", "U1B"),
+            ("occurrence:u1:power", "component:u1", "sheet_symbol", "power-mcu"),
+            ("occurrence:u1:power", "component:u1", "source_block", "U1A"),
+        ]
 
     def test_duplicate_references_have_distinct_component_ids(
         self, constructed_db: duckdb.DuckDBPyConnection
@@ -551,11 +569,16 @@ class TestConstructedSchematicSql:
         self, constructed_db: duckdb.DuckDBPyConnection
     ) -> None:
         duplicate_name_rows = constructed_db.execute(
-            "SELECT net_id, name, page_names FROM nets WHERE name = 'RESET' ORDER BY net_id"
+            """
+            SELECT net_id, name, page_ids, page_names
+            FROM nets
+            WHERE name = 'RESET'
+            ORDER BY net_id
+            """
         ).fetchall()
         assert duplicate_name_rows == [
-            ("net:reset:control", "RESET", "Control"),
-            ("net:reset:power", "RESET", "Power"),
+            ("net:reset:control", "RESET", "page:control", "Control"),
+            ("net:reset:power", "RESET", "page:power", "Power"),
         ]
 
         occurrence_rows = constructed_db.execute(
@@ -608,6 +631,20 @@ class TestConstructedSchematicSql:
                 "power/local-12",
                 "GLOBAL_SYNC,SYNC",
             ),
+        ]
+
+        occurrence_metadata_rows = constructed_db.execute(
+            """
+            SELECT occurrence_id, net_id, key, value
+            FROM net_occurrence_metadata
+            ORDER BY occurrence_id, key
+            """
+        ).fetchall()
+        assert occurrence_metadata_rows == [
+            ("net-occurrence:sync:control", "net:sync", "source_label_kind", "port"),
+            ("net-occurrence:sync:control", "net:sync", "source_sheet", "Control"),
+            ("net-occurrence:sync:power", "net:sync", "source_label_kind", "global"),
+            ("net-occurrence:sync:power", "net:sync", "source_sheet", "Power"),
         ]
 
         alias_rows = constructed_db.execute(
@@ -681,15 +718,24 @@ class TestConstructedSchematicSql:
         ]
 
     def test_loader_referential_integrity(self, constructed_db: duckdb.DuckDBPyConnection) -> None:
+        page_ids = {
+            page_id for (page_id,) in constructed_db.execute("SELECT page_id FROM pages").fetchall()
+        }
         page_names = {
             name for (name,) in constructed_db.execute("SELECT name FROM pages").fetchall()
         }
         component_page_names = constructed_db.execute(
-            "SELECT component_id, page_names FROM components WHERE page_names IS NOT NULL"
+            """
+            SELECT component_id, page_ids, page_names
+            FROM components
+            WHERE page_names IS NOT NULL
+            """
         ).fetchall()
-        for component_id, page_names_csv in component_page_names:
+        for component_id, page_ids_csv, page_names_csv in component_page_names:
             for page_name in str(page_names_csv).split(","):
                 assert page_name in page_names, component_id
+            for page_id in str(page_ids_csv).split(","):
+                assert page_id in page_ids, component_id
 
         assert (
             _count(
@@ -699,6 +745,18 @@ class TestConstructedSchematicSql:
                 FROM component_occurrences co
                 LEFT JOIN components c ON c.component_id = co.component_id
                 WHERE c.component_id IS NULL
+                """,
+            )
+            == 0
+        )
+        assert (
+            _count(
+                constructed_db,
+                """
+                SELECT count(*)
+                FROM component_occurrence_metadata com
+                LEFT JOIN component_occurrences co ON co.occurrence_id = com.occurrence_id
+                WHERE co.occurrence_id IS NULL
                 """,
             )
             == 0
@@ -720,6 +778,18 @@ class TestConstructedSchematicSql:
                 constructed_db,
                 """
                 SELECT count(*)
+                FROM net_occurrence_metadata nom
+                LEFT JOIN net_occurrences no ON no.occurrence_id = nom.occurrence_id
+                WHERE no.occurrence_id IS NULL
+                """,
+            )
+            == 0
+        )
+        assert (
+            _count(
+                constructed_db,
+                """
+                SELECT count(*)
                 FROM pins pin
                 LEFT JOIN components c ON c.component_id = pin.component_id
                 WHERE c.component_id IS NULL
@@ -727,6 +797,34 @@ class TestConstructedSchematicSql:
             )
             == 0
         )
+
+    def test_schematic_metadata_indexes_exist(
+        self, constructed_db: duckdb.DuckDBPyConnection
+    ) -> None:
+        rows = constructed_db.execute(
+            """
+            SELECT index_name
+            FROM duckdb_indexes()
+            WHERE table_name IN (
+                'component_metadata',
+                'component_occurrence_metadata',
+                'net_metadata',
+                'net_occurrence_metadata',
+                'pin_occurrence_metadata'
+            )
+            ORDER BY index_name
+            """
+        ).fetchall()
+        assert rows == [
+            ("idx_component_metadata_component_id",),
+            ("idx_component_occurrence_metadata_component_id",),
+            ("idx_component_occurrence_metadata_occurrence_id",),
+            ("idx_net_metadata_net_id",),
+            ("idx_net_occurrence_metadata_net_id",),
+            ("idx_net_occurrence_metadata_occurrence_id",),
+            ("idx_pin_occurrence_metadata_occurrence_id",),
+            ("idx_pin_occurrence_metadata_pin_id",),
+        ]
         assert (
             _count(
                 constructed_db,
