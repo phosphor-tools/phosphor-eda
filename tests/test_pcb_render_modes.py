@@ -184,6 +184,58 @@ def test_cad_exact_native_layer_selection_builds_layer_with_native_token_style()
     assert layers[0].style == ResolvedStyle(fill="#55ccff")
 
 
+def test_cad_layer_order_ignores_group_size_when_stack_index_matches() -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "a-mech-1",
+                GeometryKind.MECHANICAL,
+                "A.Mechanical",
+                "mechanical",
+                "",
+                stack_index=50,
+                geometry=Polygon([(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)]),
+            ),
+            _renderable(
+                "a-mech-2",
+                GeometryKind.MECHANICAL,
+                "A.Mechanical",
+                "mechanical",
+                "",
+                stack_index=50,
+                geometry=Polygon([(3.0, 1.0), (4.0, 1.0), (4.0, 2.0), (3.0, 2.0)]),
+            ),
+            _renderable(
+                "b-mech-1",
+                GeometryKind.MECHANICAL,
+                "B.Mechanical",
+                "mechanical",
+                "",
+                stack_index=50,
+                geometry=Polygon([(5.0, 1.0), (6.0, 1.0), (6.0, 2.0), (5.0, 2.0)]),
+            ),
+        )
+    )
+
+    layers = build_cad_layers(
+        store,
+        _settings(
+            rules=(LayerSelectionRule(match=LayerMatch(function="mechanical")),),
+            tokens={
+                "cad.layer[A.Mechanical].fill": "#55ccff",
+                "cad.layer[B.Mechanical].fill": "#ff55cc",
+            },
+        ),
+        warn=lambda _message: None,
+    )
+
+    assert [layer.source_layers for layer in layers] == [
+        ("A.Mechanical",),
+        ("B.Mechanical",),
+    ]
+
+
 def test_cad_native_layer_token_override_wins_over_semantic_copper_token() -> None:
     store = PcbGeometryStore(
         items=(
@@ -284,7 +336,7 @@ def test_cad_copper_layer_uses_child_primitives_for_pad_and_via() -> None:
     assert all(primitive.d.startswith("M ") for primitive in layer.primitives)
 
 
-def test_cad_copper_primitive_conversion_falls_back_to_artwork_geometry(
+def test_cad_copper_primitive_conversion_skips_unconvertible_source_without_artwork_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = PcbGeometryStore(
@@ -325,10 +377,10 @@ def test_cad_copper_primitive_conversion_falls_back_to_artwork_geometry(
     assert len(layers) == 1
     layer = layers[0]
     assert layer.id == "cad:copper:front"
-    assert layer.source_ids == ("pad-1", "via-1")
-    assert tuple(primitive.source_id for primitive in layer.primitives) == ("pad-1", "via-1")
+    assert layer.source_ids == ("pad-1",)
+    assert tuple(primitive.source_id for primitive in layer.primitives) == ("pad-1",)
     assert warnings == []
-    _assert_primitive_profile(profiler, primitives=2)
+    _assert_primitive_profile(profiler, primitives=1)
 
 
 def test_cad_copper_projection_does_not_use_skia_union() -> None:
@@ -416,7 +468,7 @@ def test_realistic_covered_copper_primitive_conversion_falls_back_to_artwork_geo
     assert warnings == []
 
 
-def test_highlight_copper_primitive_conversion_falls_back_to_artwork_geometry(
+def test_highlight_copper_primitive_conversion_skips_unconvertible_source_without_artwork_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = PcbGeometryStore(
@@ -459,8 +511,8 @@ def test_highlight_copper_primitive_conversion_falls_back_to_artwork_geometry(
 
     layer = groups[0].layers[0]
     assert layer.id == "highlight:copper:front"
-    assert layer.source_ids == ("pad-1", "via-1")
-    assert tuple(primitive.source_id for primitive in layer.primitives) == ("pad-1", "via-1")
+    assert layer.source_ids == ("pad-1",)
+    assert tuple(primitive.source_id for primitive in layer.primitives) == ("pad-1",)
     assert warnings == []
 
 
@@ -912,6 +964,46 @@ def test_highlight_copper_layer_uses_child_primitives_for_pad_and_via() -> None:
     assert all(primitive.d.startswith("M ") for primitive in layer.primitives)
 
 
+def test_highlight_layer_contents_do_not_use_artwork_resolution_or_union(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "pad-1",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=1.0, y=1.0, net_name="SIG"),
+                tags=GeometryTags(source_collection="pads", net_name="SIG"),
+            ),
+        )
+    )
+
+    def fail_if_called(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("highlight layer contents must not use artwork resolution")
+
+    monkeypatch.setattr(render_modes, "_groupable_artwork", fail_if_called)
+    monkeypatch.setattr(render_modes, "_resolved_group_geometry", fail_if_called, raising=False)
+    monkeypatch.setattr(render_modes, "_process_artwork_layer", fail_if_called)
+    monkeypatch.setattr(render_modes, "robust_union", fail_if_called)
+
+    groups = build_highlight_layers(
+        store,
+        _settings(
+            rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
+            tokens={"highlight.copper.front.fill": "#ff8a00"},
+            highlights=(HighlightSpec(net="SIG"),),
+        ),
+        warn=lambda _message: None,
+    )
+
+    assert len(groups) == 1
+    assert tuple(primitive.source_id for primitive in groups[0].layers[0].primitives) == ("pad-1",)
+
+
 def test_base_layers_dim_only_when_dimming_enabled_and_highlights_exist() -> None:
     store = PcbGeometryStore(
         items=(
@@ -984,7 +1076,7 @@ def test_render_mode_union_can_prefer_disjoint_subset_union(
     assert calls == [True]
 
 
-def test_cad_layer_processing_keeps_union_strategy_explicit(
+def test_cad_layer_contents_do_not_use_artwork_resolution_or_union(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = PcbGeometryStore(
@@ -1008,20 +1100,16 @@ def test_cad_layer_processing_keeps_union_strategy_explicit(
             ),
         )
     )
-    calls: list[bool] = []
 
-    def fake_robust_union(
-        geometries: tuple[object, ...],
-        *,
-        prefer_disjoint_subsets: bool = False,
-    ) -> Polygon:
-        calls.append(prefer_disjoint_subsets)
-        assert len(geometries) == 2
-        return Polygon([(0.5, 0.5), (3.5, 0.5), (3.5, 1.5), (0.5, 1.5)])
+    def fail_if_called(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("CAD layer contents must not use artwork resolution")
 
-    monkeypatch.setattr(render_modes, "robust_union", fake_robust_union)
+    monkeypatch.setattr(render_modes, "_groupable_artwork", fail_if_called)
+    monkeypatch.setattr(render_modes, "_resolved_group_geometry", fail_if_called, raising=False)
+    monkeypatch.setattr(render_modes, "_process_artwork_layer", fail_if_called)
+    monkeypatch.setattr(render_modes, "robust_union", fail_if_called)
 
-    _ = build_cad_layers(
+    layers = build_cad_layers(
         store,
         _settings(
             rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
@@ -1030,7 +1118,11 @@ def test_cad_layer_processing_keeps_union_strategy_explicit(
         warn=lambda _message: None,
     )
 
-    assert calls[0] is False
+    assert len(layers) == 1
+    assert tuple(primitive.source_id for primitive in layers[0].primitives) == (
+        "pad-1",
+        "pad-2",
+    )
 
 
 def test_realistic_layer_processing_prefers_disjoint_subset_union(
@@ -1083,7 +1175,7 @@ def test_realistic_layer_processing_prefers_disjoint_subset_union(
     assert calls[0] is True
 
 
-def test_layer_processing_profiles_input_and_output_geometry_complexity() -> None:
+def test_cad_profiler_reports_selected_items_and_primitive_conversion_counts() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -1118,24 +1210,24 @@ def test_layer_processing_profiles_input_and_output_geometry_complexity() -> Non
     )
 
     events = cast("list[dict[str, object]]", profiler.to_dict()["events"])
-    input_event = next(
-        event for event in events if event["name"] == "cad.resolve_group.input_geometry"
+    by_name = {event["name"]: event for event in events}
+    selected_data = cast("dict[str, object]", by_name["cad.selected_items"]["data"])
+    layer_item_data = cast("dict[str, object]", by_name["cad.layer_items"]["data"])
+    primitive_data = cast(
+        "dict[str, object]",
+        by_name["artwork.converted_primitives"]["data"],
     )
-    output_event = next(
-        event for event in events if event["name"] == "cad.resolve_group.output_geometry"
-    )
-    input_data = cast("dict[str, object]", input_event["data"])
-    output_data = cast("dict[str, object]", output_event["data"])
 
-    assert input_data["geometries"] == 2
-    assert input_data["coordinates"] == 10
-    assert isinstance(output_data["geometries"], int)
-    assert isinstance(output_data["coordinates"], int)
-    assert output_data["geometries"] > 0
-    assert output_data["coordinates"] > 0
+    assert selected_data["count"] == 2
+    assert layer_item_data["count"] == 2
+    assert primitive_data["sourceItems"] == 2
+    assert primitive_data["primitives"] == 2
+    path_characters = primitive_data["pathCharacters"]
+    assert isinstance(path_characters, int)
+    assert path_characters > 0
 
 
-def test_profiler_reports_converted_artwork_complexity_by_source_kind() -> None:
+def test_cad_profiler_reports_selected_via_expansion_counts() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -1192,24 +1284,21 @@ def test_profiler_reports_converted_artwork_complexity_by_source_kind() -> None:
     )
 
     profile_events = cast("list[dict[str, object]]", profiler.to_dict()["events"])
-    events: list[dict[str, object]] = []
-    by_kind: dict[str, dict[str, object]] = {}
-    for event in profile_events:
-        if event["name"] != "artwork.converted_by_kind":
-            continue
-        data = cast("dict[str, object]", event["data"])
-        kind = data["kind"]
-        assert isinstance(kind, str)
-        events.append(event)
-        by_kind[kind] = data
+    by_name = {event["name"]: event for event in profile_events}
+    selected_data = cast(
+        "dict[str, object]",
+        by_name["primitive.selected_source_items"]["data"],
+    )
+    primitive_data = cast(
+        "dict[str, object]",
+        by_name["artwork.converted_primitives"]["data"],
+    )
 
-    assert {"pad", "trace", "zone", "via"}.issubset(by_kind)
-    assert len(events) == 4
-    assert by_kind["pad"]["sourceItems"] == 1
-    assert by_kind["trace"]["sourceItems"] == 1
-    assert isinstance(by_kind["zone"]["coordinates"], int)
-    assert by_kind["zone"]["coordinates"] > 0
-    assert by_kind["via"]["layer"] == "F.Cu"
+    assert selected_data["nonVias"] == 3
+    assert selected_data["vias"] == 1
+    assert selected_data["copperLayers"] == 1
+    assert primitive_data["sourceItems"] == 4
+    assert primitive_data["primitives"] == 4
 
 
 def test_profiler_reports_primitive_metrics_for_cad_copper() -> None:

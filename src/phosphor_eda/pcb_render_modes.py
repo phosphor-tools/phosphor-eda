@@ -114,6 +114,12 @@ class HighlightGroup:
     layers: tuple[DerivedLayer, ...]
 
 
+@dataclass(frozen=True)
+class _PrimitiveLayerItem:
+    source: RenderableGeometry
+    layer: GeometryLayer
+
+
 _SOURCE_FUNCTION_TO_LAYER_ROLE = {
     "copper": "copper",
     "silkscreen": "silkscreen",
@@ -150,7 +156,7 @@ def build_cad_layers(
     )
     if profiler is not None:
         profiler.metric("cad.selected_items", count=len(selected_items))
-    grouped_artwork = _groupable_artwork(
+    layer_items = _primitive_layer_items(
         store,
         selected_items,
         settings.source.layers,
@@ -158,41 +164,24 @@ def build_cad_layers(
         profiler=profiler,
     )
     if profiler is not None:
-        profiler.metric("cad.grouped_artwork", count=len(grouped_artwork))
+        profiler.metric("cad.layer_items", count=len(layer_items))
     board = board_outline_geometry(store)
     layer_mask = _layer_mask(store, board)
     dimmed = _should_dim_base_layers(store, settings)
     warned_missing_dimmed_tokens: set[str] = set()
-    drill_cache: dict[str, BaseGeometry] = {}
 
-    groups: dict[_LayerGroupKey, list[_GroupedArtwork]] = defaultdict(list)
-    for item in grouped_artwork:
+    groups: dict[_LayerGroupKey, list[_PrimitiveLayerItem]] = defaultdict(list)
+    for item in layer_items:
         groups[_group_key(item.layer)].append(item)
 
     layers: list[DerivedLayer] = []
     for key, group in sorted(groups.items(), key=_group_sort_key):
-        if profiler is None:
-            geometry = _resolved_group_geometry(
-                store,
-                group,
-                drill_cache=drill_cache,
-            )
-        else:
-            with profiler.span(
-                "cad.resolve_group",
-                layer=key.source_layer_name,
-                function=key.function,
-                side=key.side,
-                items=len(group),
-            ):
-                geometry = _resolved_group_geometry(
-                    store,
-                    group,
-                    drill_cache=drill_cache,
-                    profiler=profiler,
-                    profile_prefix="cad",
-                )
-        if geometry.is_empty:
+        primitives = _primitive_layer_primitives(
+            key,
+            group,
+            profiler=profiler,
+        )
+        if not primitives:
             continue
         role = VisualRole(
             namespace="cad",
@@ -208,15 +197,8 @@ def build_cad_layers(
             warn=warn,
             warned_missing_dimmed_tokens=warned_missing_dimmed_tokens,
         )
-        source_layers = _unique_ordered(
-            layer for item in group for layer in item.artwork.source_layers
-        )
-        source_ids = _source_ids_by_store_order(store, group)
-        primitives = _group_primitives(
-            key,
-            group,
-            profiler=profiler,
-        )
+        source_layers = _unique_ordered(primitive.source_layer for primitive in primitives)
+        source_ids = _source_ids_by_store_order_for_primitives(store, primitives)
         layers.append(
             DerivedLayer(
                 id=_derived_layer_id(role),
@@ -465,12 +447,11 @@ def build_highlight_layers(
     board = board_outline_geometry(store)
     layer_mask = _layer_mask(store, board)
     groups: list[HighlightGroup] = []
-    drill_cache: dict[str, BaseGeometry] = {}
 
     for highlight in settings.highlights:
         selected_items = _selected_highlight_items(store, settings, highlight)
         selected_vias = _selected_highlight_vias(store, settings, highlight)
-        grouped_artwork = _groupable_artwork(
+        layer_items = _primitive_layer_items(
             store,
             selected_items,
             settings.source.layers,
@@ -484,41 +465,24 @@ def build_highlight_layers(
                 target=_highlight_target(highlight),
                 items=len(selected_items),
                 vias=len(selected_vias),
-                grouped=len(grouped_artwork),
+                grouped=len(layer_items),
             )
-        if not grouped_artwork:
+        if not layer_items:
             continue
 
-        by_layer: dict[_LayerGroupKey, list[_GroupedArtwork]] = defaultdict(list)
-        for item in grouped_artwork:
+        by_layer: dict[_LayerGroupKey, list[_PrimitiveLayerItem]] = defaultdict(list)
+        for item in layer_items:
             by_layer[_group_key(item.layer)].append(item)
 
         target = _highlight_target(highlight)
         layers: list[DerivedLayer] = []
         for key, layer_group in sorted(by_layer.items(), key=_group_sort_key):
-            if profiler is None:
-                geometry = _resolved_group_geometry(
-                    store,
-                    layer_group,
-                    drill_cache=drill_cache,
-                )
-            else:
-                with profiler.span(
-                    "highlight.resolve_group",
-                    target=target,
-                    layer=key.source_layer_name,
-                    function=key.function,
-                    side=key.side,
-                    items=len(layer_group),
-                ):
-                    geometry = _resolved_group_geometry(
-                        store,
-                        layer_group,
-                        drill_cache=drill_cache,
-                        profiler=profiler,
-                        profile_prefix="highlight",
-                    )
-            if geometry.is_empty:
+            primitives = _primitive_layer_primitives(
+                key,
+                layer_group,
+                profiler=profiler,
+            )
+            if not primitives:
                 continue
             role = VisualRole(
                 namespace="highlight",
@@ -534,20 +498,18 @@ def build_highlight_layers(
                 warn=warn,
                 highlight_color=highlight.color,
             )
-            primitives = _group_primitives(
-                key,
-                layer_group,
-                profiler=profiler,
-            )
             layers.append(
                 DerivedLayer(
                     id=_derived_layer_id(role),
                     role=role,
                     primitives=primitives,
                     source_layers=_unique_ordered(
-                        layer for item in layer_group for layer in item.artwork.source_layers
+                        primitive.source_layer for primitive in primitives
                     ),
-                    source_ids=_source_ids_by_store_order(store, layer_group),
+                    source_ids=_source_ids_by_store_order_for_primitives(
+                        store,
+                        primitives,
+                    ),
                     style=style,
                     data={
                         "data-highlight-target": target,
@@ -569,6 +531,38 @@ class _RealisticLayerInput:
     primitives: tuple[SvgPrimitive, ...]
     source_layers: tuple[str, ...]
     source_ids: tuple[str, ...]
+
+
+def _primitive_layer_items(
+    store: PcbGeometryStore,
+    selected_items: Iterable[RenderableGeometry],
+    rules: Iterable[LayerSelectionRule],
+    *,
+    active_side: str,
+    via_items: Iterable[RenderableGeometry] | None = None,
+    profiler: RenderProfiler | None = None,
+) -> tuple[_PrimitiveLayerItem, ...]:
+    selected_non_vias = tuple(item for item in selected_items if item.kind is not GeometryKind.VIA)
+    selected_copper_layers = _selected_copper_layers(store, rules, active_side=active_side)
+    selected_via_items = store.by_kind(GeometryKind.VIA) if via_items is None else tuple(via_items)
+    items: list[_PrimitiveLayerItem] = [
+        _PrimitiveLayerItem(source=item, layer=item.layer) for item in selected_non_vias
+    ]
+
+    if profiler is not None:
+        profiler.metric(
+            "primitive.selected_source_items",
+            nonVias=len(selected_non_vias),
+            vias=len(selected_via_items),
+            copperLayers=len(selected_copper_layers),
+        )
+
+    for item in selected_via_items:
+        via_layers = _via_layers(item)
+        for layer in selected_copper_layers:
+            if layer.name in via_layers or "*.Cu" in via_layers:
+                items.append(_PrimitiveLayerItem(source=item, layer=layer))
+    return tuple(items)
 
 
 def _groupable_artwork(
@@ -973,20 +967,22 @@ def _group_key(layer: GeometryLayer) -> _LayerGroupKey:
     )
 
 
-def _group_sort_key(item: tuple[_LayerGroupKey, list[_GroupedArtwork]]) -> tuple[int, int, str]:
+def _group_sort_key(
+    item: tuple[_LayerGroupKey, list[_GroupedArtwork] | list[_PrimitiveLayerItem]],
+) -> tuple[int, str]:
     key, group = item
     stack_index = group[0].layer.stack_index if group else 0
-    return (stack_index, len(group), key.source_layer_name)
+    return (stack_index, key.source_layer_name)
 
 
-def _group_primitives(
+def _primitive_layer_primitives(
     key: _LayerGroupKey,
-    group: list[_GroupedArtwork],
+    group: list[_PrimitiveLayerItem],
     *,
     profiler: RenderProfiler | None = None,
 ) -> tuple[SvgPrimitive, ...]:
     if profiler is None:
-        return _group_primitives_without_profiling(key, group)
+        return _primitive_layer_primitives_without_profiling(key, group)
     with profiler.span(
         "artwork.convert_primitives",
         layer=key.source_layer_name,
@@ -994,16 +990,32 @@ def _group_primitives(
         side=key.side,
         items=len(group),
     ):
-        primitives = _group_primitives_without_profiling(key, group)
+        primitives = _primitive_layer_primitives_without_profiling(key, group)
     profiler.metric(
         "artwork.converted_primitives",
         layer=key.source_layer_name,
         function=key.function,
         side=key.side,
+        sourceItems=len(group),
         primitives=len(primitives),
         pathCharacters=sum(len(primitive.d) for primitive in primitives),
     )
     return primitives
+
+
+def _primitive_layer_primitives_without_profiling(
+    key: _LayerGroupKey,
+    group: list[_PrimitiveLayerItem],
+) -> tuple[SvgPrimitive, ...]:
+    primitives: list[SvgPrimitive] = []
+    for item in sorted(group, key=_primitive_layer_item_sort_key):
+        primitive = geometry_to_svg_primitive(
+            item.source,
+            target_layer_name=key.source_layer_name,
+        )
+        if primitive is not None:
+            primitives.append(primitive)
+    return tuple(primitives)
 
 
 def _group_primitives_without_profiling(
@@ -1051,9 +1063,19 @@ _PRIMITIVE_KIND_ORDER = {
     GeometryKind.TRACE: 0,
     GeometryKind.TRACE_ARC: 0,
     GeometryKind.ZONE: 1,
+    GeometryKind.SILK_POLYGON: 1,
+    GeometryKind.FAB_POLYGON: 1,
+    GeometryKind.BODY_POLYGON: 1,
+    GeometryKind.MASK: 1,
+    GeometryKind.PASTE: 1,
+    GeometryKind.MECHANICAL: 1,
     GeometryKind.PAD: 2,
     GeometryKind.VIA: 2,
 }
+
+
+def _primitive_layer_item_sort_key(item: _PrimitiveLayerItem) -> tuple[int, str]:
+    return (_PRIMITIVE_KIND_ORDER.get(item.source.kind, 3), item.source.id)
 
 
 def _grouped_artwork_primitive_sort_key(item: _GroupedArtwork) -> tuple[int, str]:
@@ -1094,41 +1116,6 @@ def _mask_primitives_from_geometry(
         source_layers=source_layers,
         kind=kind,
         tags=GeometryTags(),
-    )
-
-
-def _resolved_group_geometry(
-    store: PcbGeometryStore,
-    group: list[_GroupedArtwork],
-    *,
-    drill_cache: dict[str, BaseGeometry] | None = None,
-    profiler: RenderProfiler | None = None,
-    profile_prefix: str = "",
-) -> BaseGeometry:
-    layer = group[0].layer
-    if layer.role == "edge":
-        board = board_outline_geometry(store)
-        return _outline_geometry(board)
-
-    return _process_artwork_layer(
-        store,
-        (item.artwork.geometry for item in group),
-        layer_name=layer.name,
-        subtract_drills=False,
-        drill_cache=drill_cache,
-        prefer_disjoint_subsets=False,
-        profiler=profiler,
-        profile=(
-            _LayerProcessingProfile(
-                event_prefix=f"{profile_prefix}.resolve_group",
-                layer=layer.name,
-                function=layer.role,
-                side=layer.side,
-                items=len(group),
-            )
-            if profiler is not None
-            else None
-        ),
     )
 
 
@@ -1348,11 +1335,11 @@ def _unique_ordered(values: Iterable[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
-def _source_ids_by_store_order(
+def _source_ids_by_store_order_for_primitives(
     store: PcbGeometryStore,
-    group: Iterable[_GroupedArtwork],
+    primitives: Iterable[SvgPrimitive],
 ) -> tuple[str, ...]:
-    selected_ids = {source_id for item in group for source_id in item.artwork.source_ids}
+    selected_ids = {primitive.source_id for primitive in primitives}
     return tuple(item.id for item in store.items if item.id in selected_ids)
 
 
