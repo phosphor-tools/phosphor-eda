@@ -13,6 +13,7 @@ from phosphor_eda.schematic import (
     NetOccurrence,
     Page,
     Pin,
+    PinOccurrence,
     Schematic,
     ScopeId,
 )
@@ -39,20 +40,23 @@ class _NameEvidence:
 
 def resolve_kicad_source(source: KiCadSourceDesign) -> Schematic:
     """Resolve a KiCad source design into the public schematic graph."""
+    pin_occurrences = list(source.pin_occurrences)
+    component_ids_by_source_id = _component_ids_by_source_id(pin_occurrences)
     net_union = NetUnion(local_net.id for local_net in source.local_nets)
 
-    _merge_repeated_logical_pins(net_union, source.pin_occurrences)
+    _merge_repeated_logical_pins(net_union, pin_occurrences, component_ids_by_source_id)
     _merge_same_scope_names(net_union, source.local_nets)
     _merge_global_labels(net_union, source.local_nets)
     _merge_power_symbols(net_union, source.local_nets)
     _merge_hierarchical_sheet_pins(source, net_union)
 
     pages = _build_pages(source)
-    nets_by_local_id = _build_nets(source.local_nets, net_union, pages, source.pin_occurrences)
+    nets_by_local_id = _build_nets(source.local_nets, net_union, pages, pin_occurrences)
     components = _build_components(
         pages,
         nets_by_local_id,
-        source.pin_occurrences,
+        pin_occurrences,
+        component_ids_by_source_id,
     )
 
     return Schematic(
@@ -69,10 +73,14 @@ def resolve_kicad_source(source: KiCadSourceDesign) -> Schematic:
 def _merge_repeated_logical_pins(
     net_union: NetUnion,
     pin_occurrences: Iterable[KiCadPinOccurrence],
+    component_ids_by_source_id: dict[str, str],
 ) -> None:
     net_ids_by_pin: dict[tuple[str, str], list[str]] = {}
     for pin_occurrence in pin_occurrences:
-        key = (_component_identity(pin_occurrence), pin_occurrence.pin_designator)
+        key = (
+            _component_identity(pin_occurrence, component_ids_by_source_id),
+            pin_occurrence.pin_designator,
+        )
         net_ids_by_pin.setdefault(key, []).append(pin_occurrence.local_net_id)
 
     for net_ids in net_ids_by_pin.values():
@@ -139,7 +147,7 @@ def _merge_hierarchical_sheet_pins(source: KiCadSourceDesign, net_union: NetUnio
             continue
         child_key = (sheet_pin.child_scope_id, name)
         for child_net_id in child_hierarchical_net_ids.get(child_key, []):
-            net_union.union(sheet_pin.local_net_id, child_net_id)
+            _ = net_union.union(sheet_pin.local_net_id, child_net_id)
 
 
 def _merge_ids(net_union: NetUnion, net_ids: list[str]) -> None:
@@ -147,7 +155,7 @@ def _merge_ids(net_union: NetUnion, net_ids: list[str]) -> None:
         return
     first_id = net_ids[0]
     for net_id in net_ids[1:]:
-        net_union.union(first_id, net_id)
+        _ = net_union.union(first_id, net_id)
 
 
 def _build_pages(source: KiCadSourceDesign) -> dict[ScopeId, Page]:
@@ -327,14 +335,16 @@ def _build_components(
     pages: dict[ScopeId, Page],
     nets_by_local_id: dict[str, Net],
     pin_occurrences: Iterable[KiCadPinOccurrence],
+    component_ids_by_source_id: dict[str, str],
 ) -> list[Component]:
     components_by_id: dict[str, Component] = {}
     occurrences_by_component_page_source: set[tuple[str, str, str]] = set()
+    pin_occurrences_by_pin_source: set[tuple[str, str]] = set()
     pins_by_component_designator: dict[tuple[str, str], Pin] = {}
 
     for pin_occurrence in pin_occurrences:
         page = _page_for_scope(pages, pin_occurrence.scope_id)
-        component_id = _component_identity(pin_occurrence)
+        component_id = _component_identity(pin_occurrence, component_ids_by_source_id)
         component = components_by_id.get(component_id)
         if component is None:
             component = Component(
@@ -387,6 +397,22 @@ def _build_components(
             pins_by_component_designator[pin_key] = pin
             component.pins.append(pin)
 
+        pin_occurrence_key = (pin.id, pin_occurrence.id)
+        if pin_occurrence_key not in pin_occurrences_by_pin_source:
+            pin_occurrences_by_pin_source.add(pin_occurrence_key)
+            pin.occurrences.append(
+                PinOccurrence(
+                    id=f"{pin.id}:occ:{len(pin.occurrences) + 1:04d}",
+                    pin=pin,
+                    page=page,
+                    scope_id=pin_occurrence.scope_id,
+                    source_id=pin_occurrence.id,
+                    metadata={
+                        "kicad_component_source_id": pin_occurrence.component_source_id,
+                    },
+                )
+            )
+
         net = nets_by_local_id.get(pin_occurrence.local_net_id)
         if net is not None:
             if pin.net is not None and pin.net.id != net.id:
@@ -395,6 +421,56 @@ def _build_components(
             _append_unique_pin(net.pins, pin)
 
     return list(components_by_id.values())
+
+
+def _component_ids_by_source_id(
+    pin_occurrences: Iterable[KiCadPinOccurrence],
+) -> dict[str, str]:
+    pins = list(pin_occurrences)
+    multi_unit_source_ids = _multi_unit_component_source_ids(pins)
+    result: dict[str, str] = {}
+    for pin_occurrence in pins:
+        if pin_occurrence.component_source_id in result:
+            continue
+        if pin_occurrence.component_source_id in multi_unit_source_ids:
+            result[pin_occurrence.component_source_id] = (
+                "kicad:component:"
+                f"{pin_occurrence.component_identity_source_id}:"
+                f"{pin_occurrence.component_reference}"
+            )
+        elif pin_occurrence.component_source_id:
+            result[pin_occurrence.component_source_id] = (
+                f"kicad:component:{pin_occurrence.component_source_id}"
+            )
+    return result
+
+
+def _multi_unit_component_source_ids(
+    pin_occurrences: Iterable[KiCadPinOccurrence],
+) -> set[str]:
+    groups: dict[tuple[ScopeId, str, str], set[tuple[str, int]]] = {}
+    for pin_occurrence in pin_occurrences:
+        if (
+            not pin_occurrence.component_identity_source_id
+            or pin_occurrence.component_identity_source_id == pin_occurrence.component_source_id
+        ):
+            continue
+        key = (
+            pin_occurrence.scope_id,
+            pin_occurrence.component_identity_source_id,
+            pin_occurrence.component_reference,
+        )
+        groups.setdefault(key, set()).add(
+            (pin_occurrence.component_source_id, pin_occurrence.component_unit)
+        )
+
+    source_ids: set[str] = set()
+    for source_units in groups.values():
+        sources = {source_id for source_id, _unit in source_units}
+        units = {unit for _source_id, unit in source_units}
+        if len(sources) > 1 and len(units) > 1:
+            source_ids.update(sources)
+    return source_ids
 
 
 def _component_metadata(pin_occurrence: KiCadPinOccurrence) -> dict[str, str]:
@@ -408,7 +484,13 @@ def _component_metadata(pin_occurrence: KiCadPinOccurrence) -> dict[str, str]:
     return metadata
 
 
-def _component_identity(pin_occurrence: KiCadPinOccurrence) -> str:
+def _component_identity(
+    pin_occurrence: KiCadPinOccurrence,
+    component_ids_by_source_id: dict[str, str],
+) -> str:
+    component_id = component_ids_by_source_id.get(pin_occurrence.component_source_id)
+    if component_id:
+        return component_id
     scope_key = _scope_key(pin_occurrence.scope_id)
     return f"kicad:component:{scope_key}:{pin_occurrence.component_reference}"
 

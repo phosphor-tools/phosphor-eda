@@ -15,6 +15,7 @@ from phosphor_eda.schematic import (
     NetOccurrence,
     Page,
     Pin,
+    PinOccurrence,
     Schematic,
 )
 
@@ -129,7 +130,7 @@ def _merge_repeated_logical_pins(
     for net_ids in net_ids_by_pin.values():
         first_net_id = net_ids[0]
         for net_id in net_ids[1:]:
-            net_union.union(first_net_id, net_id)
+            _ = net_union.union(first_net_id, net_id)
 
 
 def _merge_source_names(
@@ -193,7 +194,7 @@ def _merge_hierarchy(
             for child_sheet in child_sheets:
                 for child_net_id in child_port_nets.get((child_sheet.id, entry_name), []):
                     if child_net_id in local_net_by_id:
-                        net_union.union(ref.local_net.id, child_net_id)
+                        _ = net_union.union(ref.local_net.id, child_net_id)
 
 
 def _child_sheets_by_source_file(
@@ -258,7 +259,7 @@ def _merge_by_source_name(net_union: NetUnion, ids_by_name: dict[str, list[str]]
             continue
         first_id = ids[0]
         for other_id in ids[1:]:
-            net_union.union(first_id, other_id)
+            _ = net_union.union(first_id, other_id)
 
 
 def _label_name_ids(local_refs: Iterable[_LocalNetRef]) -> dict[str, list[str]]:
@@ -370,6 +371,7 @@ def _build_components(
 ) -> list[Component]:
     components_by_id: dict[str, Component] = {}
     occurrences_by_component_page_source: set[tuple[str, str, str]] = set()
+    pin_occurrences_by_pin_source: set[tuple[str, str]] = set()
     pins_by_component_designator: dict[tuple[str, str], Pin] = {}
 
     for pin_occurrence in pin_occurrences:
@@ -394,7 +396,8 @@ def _build_components(
 
         _append_unique_page(component.pages, page)
         _append_unique_component(page.components, component)
-        occurrence_key = (component.id, page.id, pin_occurrence.component_source_id)
+        component_occurrence_source_id = _component_occurrence_source_id(pin_occurrence)
+        occurrence_key = (component.id, page.id, component_occurrence_source_id)
         if occurrence_key not in occurrences_by_component_page_source:
             occurrences_by_component_page_source.add(occurrence_key)
             component.occurrences.append(
@@ -403,7 +406,9 @@ def _build_components(
                     component=component,
                     page=page,
                     scope_id=pin_occurrence.scope_id,
-                    source_id=pin_occurrence.component_source_id,
+                    source_id=component_occurrence_source_id,
+                    part_id=pin_occurrence.component_part_id,
+                    metadata=_component_occurrence_metadata(pin_occurrence),
                 ),
             )
 
@@ -422,6 +427,20 @@ def _build_components(
             )
             pins_by_component_designator[pin_key] = pin
             component.pins.append(pin)
+
+        pin_occurrence_key = (pin.id, pin_occurrence.id)
+        if pin_occurrence_key not in pin_occurrences_by_pin_source:
+            pin_occurrences_by_pin_source.add(pin_occurrence_key)
+            pin.occurrences.append(
+                PinOccurrence(
+                    id=f"{pin.id}:occ:{len(pin.occurrences) + 1:04d}",
+                    pin=pin,
+                    page=page,
+                    scope_id=pin_occurrence.scope_id,
+                    source_id=pin_occurrence.id,
+                    metadata=_pin_occurrence_metadata(pin_occurrence),
+                ),
+            )
 
         net = nets_by_local_id.get(pin_occurrence.local_net_id)
         if net is not None:
@@ -583,16 +602,45 @@ def _dedupe(names: Iterable[str]) -> list[str]:
 
 def _component_identity(pin_occurrence: AltiumPinOccurrence) -> str:
     source_id = pin_occurrence.component_source_id
-    if source_id and not source_id.startswith("sheet:"):
+    if source_id:
         return source_id
-    return f"{pin_occurrence.scope_id}:{pin_occurrence.component_reference}"
+    occurrence_source_id = _component_occurrence_source_id(pin_occurrence)
+    if occurrence_source_id:
+        return f"{pin_occurrence.scope_id}:{occurrence_source_id}"
+    return f"{pin_occurrence.scope_id}:pin-owner:{pin_occurrence.id}"
 
 
 def _source_component_identity(pin_occurrence: AltiumPinOccurrence) -> str:
     source_id = pin_occurrence.component_source_id
     if source_id:
         return source_id
-    return f"{pin_occurrence.scope_id}:{pin_occurrence.component_reference}"
+    occurrence_source_id = _component_occurrence_source_id(pin_occurrence)
+    if occurrence_source_id:
+        return f"{pin_occurrence.scope_id}:{occurrence_source_id}"
+    return f"{pin_occurrence.scope_id}:pin-owner:{pin_occurrence.id}"
+
+
+def _component_occurrence_source_id(pin_occurrence: AltiumPinOccurrence) -> str:
+    if pin_occurrence.component_occurrence_source_id:
+        return pin_occurrence.component_occurrence_source_id
+    return pin_occurrence.component_source_id
+
+
+def _component_occurrence_metadata(pin_occurrence: AltiumPinOccurrence) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    if pin_occurrence.component_source_id:
+        metadata["altium_component_source_id"] = pin_occurrence.component_source_id
+    return metadata
+
+
+def _pin_occurrence_metadata(pin_occurrence: AltiumPinOccurrence) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    component_occurrence_source_id = _component_occurrence_source_id(pin_occurrence)
+    if component_occurrence_source_id:
+        metadata["altium_component_occurrence_source_id"] = component_occurrence_source_id
+    if pin_occurrence.component_source_id:
+        metadata["altium_component_source_id"] = pin_occurrence.component_source_id
+    return metadata
 
 
 def _merge_component_fields(component: Component, pin_occurrence: AltiumPinOccurrence) -> None:

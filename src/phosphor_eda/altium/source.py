@@ -31,6 +31,7 @@ from phosphor_eda.altium.sheet_builder import (
 from phosphor_eda.schematic import ScopeId
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from pathlib import Path
 
 
@@ -138,7 +139,9 @@ class AltiumPinOccurrence:
     pin_name: str
     location: tuple[int, int]
     tip: tuple[int, int]
+    component_occurrence_source_id: str = ""
     no_connect: bool = False
+    component_part_id: str = ""
     component_part: str = ""
     component_description: str = ""
     component_metadata: dict[str, str] = field(default_factory=dict)
@@ -334,9 +337,98 @@ def _component_parameters_by_owner(sheet: SheetRecords) -> dict[int, dict[str, s
     return result
 
 
+def _component_source_id(
+    sheet_id: str,
+    scope_id: ScopeId,
+    owner_index: int,
+    component: ComponentRec | None,
+) -> str:
+    occurrence_source_id = _component_occurrence_source_id(sheet_id, owner_index)
+    if component is not None and component.unique_id:
+        return f"altium:component:{scope_id}:uid:{component.unique_id}"
+    return occurrence_source_id
+
+
+def _multipart_component_scope_key(scope_id: ScopeId) -> str:
+    parent_path = scope_id.path[:-1]
+    return "root" if not parent_path else "/".join(parent_path)
+
+
+def _component_occurrence_source_id(sheet_id: str, owner_index: int) -> str:
+    return _source_id(sheet_id, "component", owner_index + 1)
+
+
+def _component_part_id(component: ComponentRec | None) -> str:
+    if component is None:
+        return ""
+    return str(component.current_part_id)
+
+
+def _component_part_count(pin: AltiumPinOccurrence) -> int:
+    value = pin.component_metadata.get("altium_part_count", "1")
+    try:
+        return int(value)
+    except ValueError:
+        return 1
+
+
+def _apply_multipart_component_identities(sheets: Iterable[AltiumSheetSource]) -> None:
+    groups: dict[tuple[str, str, str, int], list[AltiumPinOccurrence]] = {}
+    for sheet in sheets:
+        for pin in sheet.pin_occurrences:
+            part_count = _component_part_count(pin)
+            if part_count <= 1 or not pin.component_reference:
+                continue
+            key = (
+                _multipart_component_scope_key(pin.scope_id),
+                pin.component_reference,
+                pin.component_part,
+                part_count,
+            )
+            groups.setdefault(key, []).append(pin)
+
+    for (scope_key, reference, part, part_count), pins in groups.items():
+        occurrence_ids = {pin.component_occurrence_source_id for pin in pins}
+        part_ids = {pin.component_part_id for pin in pins if pin.component_part_id}
+        if len(occurrence_ids) <= 1 or len(part_ids) <= 1:
+            continue
+        component_source_id = (
+            f"altium:component:{scope_key}:multipart:{reference}:{part}:{part_count}"
+        )
+        for pin in pins:
+            pin.component_source_id = component_source_id
+
+
+def _component_metadata(
+    component: ComponentRec | None,
+    parameters: dict[str, str],
+) -> dict[str, str]:
+    metadata = dict(parameters)
+    if component is None:
+        return metadata
+    if component.unique_id:
+        metadata["altium_component_unique_id"] = metadata.get(
+            "altium_component_unique_id",
+            component.unique_id,
+        )
+    metadata["altium_current_part_id"] = metadata.get(
+        "altium_current_part_id",
+        str(component.current_part_id),
+    )
+    metadata["altium_part_count"] = metadata.get("altium_part_count", str(component.part_count))
+    metadata["altium_display_mode"] = metadata.get(
+        "altium_display_mode",
+        str(component.display_mode),
+    )
+    return metadata
+
+
 def _pin_is_visible(pin: PinRec, components_by_owner: dict[int, ComponentRec]) -> bool:
     component = components_by_owner.get(pin.owner_index)
-    return component is None or pin.owner_part_display_mode == component.display_mode
+    if component is None:
+        return True
+    part_matches = pin.owner_part_id == 0 or pin.owner_part_id == component.current_part_id
+    return part_matches and pin.owner_part_display_mode == component.display_mode
 
 
 def _root_for_point(
@@ -459,17 +551,31 @@ def _source_sheet(
             continue
         local_net_id = root_to_net_id.get(root, "")
         component = components_by_owner.get(pin.owner_index)
+        component_reference = designator_by_owner.get(pin.owner_index, "")
         pin_id = _source_id(sheet_id, "pin", pin.index)
         occurrence = AltiumPinOccurrence(
             id=pin_id,
             scope_id=scope_id,
             source_index=pin.index,
             local_net_id=local_net_id,
-            component_source_id=_source_id(sheet_id, "component", pin.owner_index + 1),
-            component_reference=designator_by_owner.get(pin.owner_index, ""),
+            component_source_id=_component_source_id(
+                sheet_id,
+                scope_id,
+                pin.owner_index,
+                component,
+            ),
+            component_occurrence_source_id=_component_occurrence_source_id(
+                sheet_id,
+                pin.owner_index,
+            ),
+            component_reference=component_reference,
+            component_part_id=_component_part_id(component),
             component_part=component.lib_reference if component is not None else "",
             component_description=component.description if component is not None else "",
-            component_metadata=component_parameters_by_owner.get(pin.owner_index, {}),
+            component_metadata=_component_metadata(
+                component,
+                component_parameters_by_owner.get(pin.owner_index, {}),
+            ),
             pin_designator=pin.designator,
             pin_name=pin.name,
             location=pin.location,
@@ -561,12 +667,14 @@ def load_project_source_sheets(
                     sheet_id=child_sheet_id,
                     scope_id=child_scope_id,
                 )
+        _apply_multipart_component_identities(sheets.values())
         return project, sheets
 
     sheet_records = load_sheet(str(path), ctx=ctx)
     project = AltiumProject(schematic_paths=[path.name])
     source = _source_sheet(sheet_records, path.name)
     sheets[source.id] = source
+    _apply_multipart_component_identities(sheets.values())
     return project, sheets
 
 

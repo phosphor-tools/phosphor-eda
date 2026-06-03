@@ -12,6 +12,7 @@ from phosphor_eda.schematic import (
 from phosphor_eda.schematic import (
     ComponentOccurrence,
     NetOccurrence,
+    PinOccurrence,
     Schematic,
     ScopeId,
 )
@@ -128,6 +129,7 @@ class Pin(DomainPin):
         id: str = "",
         net: DomainNet | None = None,
         no_connect: bool = False,
+        occurrences: list[PinOccurrence] | None = None,
         metadata: dict[str, str] | None = None,
     ) -> None:
         super().__init__(
@@ -137,6 +139,7 @@ class Pin(DomainPin):
             component=component,
             net=net,
             no_connect=no_connect,
+            occurrences=occurrences or [],
             metadata=metadata or {},
         )
 
@@ -711,6 +714,46 @@ def test_format_page_detail_filters_unified_net_pins_to_selected_page():
     assert "U1.3" in detail
     assert "C1.1" not in detail
     assert "U3.2" not in detail
+
+
+def test_format_page_detail_filters_unified_component_pins_by_pin_occurrence():
+    page_a = Page(name="Core")
+    page_b = Page(name="IO")
+    comp = Component(reference="U1", part="MCU", description="Processor", pages=[page_a, page_b])
+    net = Net(name="P3V3", pages=[page_a, page_b])
+    pin_a = Pin(designator="1", name="VDD", component=comp, net=net)
+    pin_b = Pin(designator="2", name="VDDIO", component=comp, net=net)
+
+    pin_a.occurrences = [
+        PinOccurrence(
+            id="pin-occ:u1-core-1",
+            pin=pin_a,
+            page=page_a,
+            scope_id=page_a.scope_id,
+            source_id="source:u1-core:pin-1",
+        )
+    ]
+    pin_b.occurrences = [
+        PinOccurrence(
+            id="pin-occ:u1-io-2",
+            pin=pin_b,
+            page=page_b,
+            scope_id=page_b.scope_id,
+            source_id="source:u1-io:pin-2",
+        )
+    ]
+    comp.pins = [pin_a, pin_b]
+    net.pins = [pin_a, pin_b]
+    page_a.components = [comp]
+    page_a.nets = [net]
+    page_b.components = [comp]
+    page_b.nets = [net]
+    design = Schematic(name="MULTIPART", pages=[page_a, page_b], nets=[net], components=[comp])
+
+    detail = format_page_detail(design, "Core")
+
+    assert "U1.1" in detail
+    assert "U1.2" not in detail
 
 
 def test_format_page_detail_not_found():

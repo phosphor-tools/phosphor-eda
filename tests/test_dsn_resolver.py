@@ -352,6 +352,35 @@ def test_repeated_independent_hierarchy_instances_with_same_reference_stay_disti
     assert len({component.id for component in u7_components}) == 2
 
 
+def test_same_reference_without_source_identity_stays_scope_local_with_pin_occurrences() -> None:
+    scope_a = _scope("Root", "InstanceA")
+    scope_b = _scope("Root", "InstanceB")
+    pin_a = _pin("InstanceA", scope_a, 1, "U7", component_source_id="")
+    pin_b = _pin("InstanceB", scope_b, 2, "U7", component_source_id="")
+
+    design = resolve_dsn_source(
+        _source(
+            [
+                _page("InstanceA", scope_a, [_net("InstanceA", scope_a, 1, "SIG_A")], pins=[pin_a]),
+                _page("InstanceB", scope_b, [_net("InstanceB", scope_b, 2, "SIG_B")], pins=[pin_b]),
+            ]
+        )
+    )
+
+    u7_components = [component for component in design.components if component.reference == "U7"]
+    assert len(u7_components) == 2
+    assert len({component.id for component in u7_components}) == 2
+
+    pin_occurrences = [
+        occurrence
+        for component in u7_components
+        for pin in component.pins
+        for occurrence in pin.occurrences
+    ]
+    assert {occurrence.source_id for occurrence in pin_occurrences} == {pin_a.id, pin_b.id}
+    assert {occurrence.scope_id for occurrence in pin_occurrences} == {scope_a, scope_b}
+
+
 def test_dsn_to_design_routes_through_source_resolver() -> None:
     raw = ParsedDesign(
         pages=[

@@ -87,3 +87,18 @@ def test_source_local_net_ids_are_not_final_net_names():
         assert local_net.id not in source_names
         assert "GND" not in local_net.id.upper()
         assert "VCC3V3" not in local_net.id.upper()
+
+
+def test_multipart_component_source_identity_uses_component_not_part_record():
+    sheet = _sheet_by_name("MCU")
+    u1_pins = [
+        pin
+        for pin in sheet.pin_occurrences
+        if pin.component_reference == "U1" and pin.component_source_id
+    ]
+
+    assert u1_pins
+    assert {pin.component_source_id for pin in u1_pins} == {
+        "altium:component:root:multipart:U1:STM32F103CBT6:3"
+    }
+    assert len({pin.component_occurrence_source_id for pin in u1_pins}) > 1

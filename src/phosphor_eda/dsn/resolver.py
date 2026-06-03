@@ -13,6 +13,7 @@ from phosphor_eda.schematic import (
     NetOccurrence,
     Page,
     Pin,
+    PinOccurrence,
     Schematic,
     ScopeId,
 )
@@ -150,7 +151,7 @@ def _merge_ids(net_union: NetUnion, net_ids: list[str]) -> None:
         return
     first_id = net_ids[0]
     for net_id in net_ids[1:]:
-        net_union.union(first_id, net_id)
+        _ = net_union.union(first_id, net_id)
 
 
 def _build_pages(source_pages: Iterable[DsnPageSource]) -> dict[ScopeId, Page]:
@@ -374,6 +375,20 @@ def _build_components(
             component.pins.append(pin)
         elif not pin.name and pin_occurrence.pin_name:
             pin.name = pin_occurrence.pin_name
+
+        pin.occurrences.append(
+            PinOccurrence(
+                id=f"{pin.id}:occ:{len(pin.occurrences) + 1:04d}",
+                pin=pin,
+                page=page,
+                scope_id=pin_occurrence.scope_id,
+                source_id=pin_occurrence.id,
+                metadata={
+                    "dsn_source_net_id": str(pin_occurrence.source_net_id),
+                    "dsn_local_net_id": pin_occurrence.local_net_id,
+                },
+            )
+        )
 
         net = nets_by_local_id.get(pin_occurrence.local_net_id)
         if net is not None:

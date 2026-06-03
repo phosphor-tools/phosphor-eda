@@ -189,6 +189,8 @@ class _PinCandidate:
     scope_id: ScopeId
     source_index: int
     component_source_id: str
+    component_identity_source_id: str
+    component_unit: int
     component_reference: str
     component_value: str
     component_footprint: str
@@ -525,6 +527,8 @@ def _extract_sheet_sources(
             source_index=candidate.source_index,
             local_net_id=root_to_net_id[uf.find(candidate.location)],
             component_source_id=candidate.component_source_id,
+            component_identity_source_id=candidate.component_identity_source_id,
+            component_unit=candidate.component_unit,
             component_reference=candidate.component_reference,
             component_value=candidate.component_value,
             component_footprint=candidate.component_footprint,
@@ -756,6 +760,11 @@ def _pin_candidates(
         inst_unit = int(sexp.num(unit_node, 1)) if unit_node is not None else 1
         symbol_uuid = _node_value(sym_node[1:], "uuid") or ref or str(source_index)
         component_source_id = _source_id(scope_id, "component", symbol_uuid)
+        component_identity_source_id = _resolved_component_identity_source_id(
+            scope_id,
+            sym_node,
+            component_source_id,
+        )
         pin_uuids = _pin_uuids_by_designator(sym_node)
 
         unit_pins = _resolve_lib_pins(lib_id, lib_pins)
@@ -770,6 +779,8 @@ def _pin_candidates(
                     scope_id=scope_id,
                     source_index=source_index,
                     component_source_id=component_source_id,
+                    component_identity_source_id=component_identity_source_id,
+                    component_unit=inst_unit,
                     component_reference=ref,
                     component_value=value,
                     component_footprint=footprint,
@@ -788,6 +799,28 @@ def _pin_candidates(
             )
             source_index += 1
     return candidates
+
+
+def _resolved_component_identity_source_id(
+    scope_id: ScopeId,
+    sym_node: SExpNode,
+    component_source_id: str,
+) -> str:
+    instance_path = _symbol_instance_path(sym_node)
+    if not instance_path:
+        return component_source_id
+    return _source_id(scope_id, "component_instance", instance_path)
+
+
+def _symbol_instance_path(sym_node: SExpNode) -> str:
+    instances_node = sexp.find(sym_node[1:], "instances")
+    if instances_node is None:
+        return ""
+    for project_node in sexp.find_all(instances_node[1:], "project"):
+        path_node = sexp.find(project_node[1:], "path")
+        if path_node is not None:
+            return sexp.val(path_node)
+    return ""
 
 
 def _lib_description(lib_id: str, lib_descs: dict[str, str]) -> str:

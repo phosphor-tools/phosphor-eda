@@ -100,6 +100,7 @@ def _pin(
     reference: str,
     designator: str = "1",
     component_source_id: str = "",
+    component_occurrence_source_id: str = "",
     index: int = 1,
 ) -> AltiumPinOccurrence:
     return AltiumPinOccurrence(
@@ -108,6 +109,7 @@ def _pin(
         source_index=index,
         local_net_id=local_net_id,
         component_source_id=component_source_id or f"{sheet}:component:{reference}",
+        component_occurrence_source_id=component_occurrence_source_id,
         component_reference=reference,
         pin_designator=designator,
         pin_name=f"{reference}-{designator}",
@@ -640,6 +642,45 @@ def test_multipart_components_across_pages_use_source_component_identity():
     assert design.components[0].reference == "U1"
     assert {pin.designator for pin in design.components[0].pins} == {"1", "2"}
     assert {page.name for page in design.components[0].pages} == {"A", "B"}
+
+
+def test_multipart_component_occurrences_use_source_block_identity_and_pin_provenance():
+    part_a_net, part_a_pins = _local_net(
+        "A",
+        "a",
+        labels=[_label("A", "A")],
+        references=["U1"],
+        component_source_ids=["altium:component:/A:uid:ABC123"],
+        pin_designators=["1"],
+    )
+    part_a_pins[0].component_occurrence_source_id = "sheet:A:component:10"
+    part_b_net, part_b_pins = _local_net(
+        "A",
+        "b",
+        labels=[_label("A", "B")],
+        references=["U1"],
+        component_source_ids=["altium:component:/A:uid:ABC123"],
+        pin_designators=["2"],
+    )
+    part_b_pins[0].component_occurrence_source_id = "sheet:A:component:22"
+
+    design = resolve_altium_source(
+        _source([_sheet("A", [part_a_net, part_b_net], [*part_a_pins, *part_b_pins])]),
+    )
+
+    assert len(design.components) == 1
+    component = design.components[0]
+    assert component.reference == "U1"
+    assert {occurrence.source_id for occurrence in component.occurrences} == {
+        "sheet:A:component:10",
+        "sheet:A:component:22",
+    }
+    assert {pin.designator for pin in component.pins} == {"1", "2"}
+    assert all(len(pin.occurrences) == 1 for pin in component.pins)
+    assert {pin.occurrences[0].source_id for pin in component.pins} == {
+        "A:pin:U1:1:1",
+        "A:pin:U1:2:1",
+    }
 
 
 def test_repeated_independent_sheet_instances_with_same_reference_stay_distinct():

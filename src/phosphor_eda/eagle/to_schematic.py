@@ -19,6 +19,7 @@ from phosphor_eda.schematic import (
     NetOccurrence,
     Page,
     Pin,
+    PinOccurrence,
     Schematic,
     ScopeId,
 )
@@ -288,6 +289,7 @@ def _build_pages(
     nets_by_name: dict[str, Net] = {}
     pins_by_component_designator: dict[tuple[str, str], Pin] = {}
     component_occurrences_seen: set[tuple[str, str, str]] = set()
+    pin_occurrences_seen: set[tuple[str, str, str]] = set()
 
     sheets_elem = schematic.find("sheets")
     if sheets_elem is None:
@@ -456,6 +458,30 @@ def _build_pages(
                     else:
                         pin.metadata.update(pin_meta)
                         pin.no_connect = pin.no_connect or is_nc
+
+                    pin_source_id = (
+                        f"{page.id}:instance:{instance.part_name}:"
+                        f"{instance.gate_name}:pin:{pin_def.name}"
+                    )
+                    pin_occurrence_key = (pin.id, page.id, pin_source_id)
+                    if pin_occurrence_key not in pin_occurrences_seen:
+                        pin_occurrences_seen.add(pin_occurrence_key)
+                        occurrence_metadata = {
+                            "eagle_gate": instance.gate_name,
+                            "eagle_pin": pin_def.name,
+                        }
+                        if pad:
+                            occurrence_metadata["eagle_pad"] = pad
+                        pin.occurrences.append(
+                            PinOccurrence(
+                                id=f"{pin.id}:occ:{len(pin.occurrences) + 1:04d}",
+                                pin=pin,
+                                page=page,
+                                scope_id=scope_id,
+                                source_id=pin_source_id,
+                                metadata=occurrence_metadata,
+                            )
+                        )
 
                     if net is not None:
                         if pin.net is not None and pin.net.id != net.id:

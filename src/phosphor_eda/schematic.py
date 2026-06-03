@@ -27,6 +27,7 @@ class Pin:
     component: Component
     net: Net | None = None
     no_connect: bool = False
+    occurrences: list[PinOccurrence] = field(default_factory=list)
     metadata: dict[str, str] = field(default_factory=dict)
 
     @override

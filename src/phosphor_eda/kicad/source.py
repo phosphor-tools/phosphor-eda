@@ -100,6 +100,8 @@ class KiCadPinOccurrence:
     source_index: int
     local_net_id: str
     component_source_id: str
+    component_identity_source_id: str
+    component_unit: int
     component_reference: str
     pin_designator: str
     pin_name: str

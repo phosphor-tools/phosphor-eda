@@ -76,6 +76,9 @@ def _pin_source_ids(pin: Pin) -> list[str]:
 
 
 def _pin_belongs_to_page(pin: Pin, page: Page) -> bool:
+    if pin.occurrences:
+        return any(occurrence.page.id == page.id for occurrence in pin.occurrences)
+
     source_ids = _pin_source_ids(pin)
     if source_ids:
         page_keys = {page.id, page.source_file}

@@ -114,15 +114,20 @@ def _pin(
     *,
     designator: str = "1",
     component_source_id: str = "",
+    component_identity_source_id: str = "",
+    component_unit: int = 1,
     index: int = 1,
 ) -> KiCadPinOccurrence:
     source_id = component_source_id or f"{_scope_key(scope_id)}:component:{reference}"
+    identity_source_id = component_identity_source_id or source_id
     return KiCadPinOccurrence(
         id=f"{net_id}:pin:{reference}:{designator}:{index}",
         scope_id=scope_id,
         source_index=index,
         local_net_id=net_id,
         component_source_id=source_id,
+        component_identity_source_id=identity_source_id,
+        component_unit=component_unit,
         component_reference=reference,
         pin_designator=designator,
         pin_name=f"{reference}-{designator}",
@@ -569,10 +574,22 @@ def test_multi_unit_symbols_become_one_logical_component_when_source_identifiers
     net_a_id = "root:local:a"
     net_b_id = "root:local:b"
     pin_a = _pin(
-        root, net_a_id, "U1", designator="1", component_source_id="root:component:logical-u1"
+        root,
+        net_a_id,
+        "U1",
+        designator="1",
+        component_source_id="root:component:u1-unit-a",
+        component_identity_source_id="root:component_instance:u1",
+        component_unit=1,
     )
     pin_b = _pin(
-        root, net_b_id, "U1", designator="2", component_source_id="root:component:logical-u1"
+        root,
+        net_b_id,
+        "U1",
+        designator="2",
+        component_source_id="root:component:u1-unit-b",
+        component_identity_source_id="root:component_instance:u1",
+        component_unit=2,
     )
 
     design = resolve_kicad_source(
@@ -585,6 +602,48 @@ def test_multi_unit_symbols_become_one_logical_component_when_source_identifiers
     assert len(design.components) == 1
     assert design.components[0].reference == "U1"
     assert {pin.designator for pin in design.components[0].pins} == {"1", "2"}
+    assert {occurrence.source_id for occurrence in design.components[0].occurrences} == {
+        "root:component:u1-unit-a",
+        "root:component:u1-unit-b",
+    }
+
+
+def test_same_scope_reference_uses_kicad_source_identity_for_separate_components() -> None:
+    root = _scope()
+    net_a_id = "root:local:a"
+    net_b_id = "root:local:b"
+    pin_a = _pin(
+        root,
+        net_a_id,
+        "U1",
+        designator="1",
+        component_source_id="root:component:first-symbol",
+    )
+    pin_b = _pin(
+        root,
+        net_b_id,
+        "U1",
+        designator="1",
+        component_source_id="root:component:second-symbol",
+    )
+
+    design = resolve_kicad_source(
+        _source(
+            [_local_net(root, "a", pins=[pin_a]), _local_net(root, "b", pins=[pin_b])],
+            [pin_a, pin_b],
+        )
+    )
+
+    assert len(design.components) == 2
+    assert {component.reference for component in design.components} == {"U1"}
+    assert {
+        component.metadata["kicad_component_source_ids"] for component in design.components
+    } == {"root:component:first-symbol", "root:component:second-symbol"}
+    assert all(len(component.occurrences) == 1 for component in design.components)
+    assert all(len(component.pins) == 1 for component in design.components)
+    assert {
+        pin.occurrences[0].source_id for component in design.components for pin in component.pins
+    } == {pin_a.id, pin_b.id}
 
 
 def test_repeated_sheet_instances_with_same_references_produce_separate_logical_component_ids() -> (

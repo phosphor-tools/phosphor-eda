@@ -175,6 +175,81 @@ def _write_multipart_eagle_component(tmp_path: Path) -> Path:
     return schematic
 
 
+def _write_multipart_eagle_component_across_pages(tmp_path: Path) -> Path:
+    schematic = tmp_path / "multipart-across-pages.sch"
+    schematic.write_text(
+        """<?xml version="1.0" encoding="utf-8"?>
+<eagle version="9.6.2">
+  <drawing>
+    <schematic>
+      <libraries>
+        <library name="test">
+          <symbols>
+            <symbol name="AMP">
+              <pin name="IN" direction="in"/>
+              <pin name="OUT" direction="out"/>
+            </symbol>
+          </symbols>
+          <devicesets>
+            <deviceset name="DUAL">
+              <gates>
+                <gate name="A" symbol="AMP"/>
+                <gate name="B" symbol="AMP"/>
+              </gates>
+              <devices>
+                <device name="" package="SOIC8">
+                  <connects>
+                    <connect gate="A" pin="IN" pad="1"/>
+                    <connect gate="A" pin="OUT" pad="2"/>
+                    <connect gate="B" pin="IN" pad="3"/>
+                    <connect gate="B" pin="OUT" pad="4"/>
+                  </connects>
+                </device>
+              </devices>
+            </deviceset>
+          </devicesets>
+        </library>
+      </libraries>
+      <parts>
+        <part name="U1" library="test" deviceset="DUAL" device="" value="LM358"/>
+      </parts>
+      <sheets>
+        <sheet>
+          <instances>
+            <instance part="U1" gate="A" x="1" y="2"/>
+          </instances>
+          <nets>
+            <net name="AIN" class="0">
+              <segment><pinref part="U1" gate="A" pin="IN"/></segment>
+            </net>
+            <net name="AOUT" class="0">
+              <segment><pinref part="U1" gate="A" pin="OUT"/></segment>
+            </net>
+          </nets>
+        </sheet>
+        <sheet>
+          <instances>
+            <instance part="U1" gate="B" x="3" y="4" rot="MR90"/>
+          </instances>
+          <nets>
+            <net name="BIN" class="0">
+              <segment><pinref part="U1" gate="B" pin="IN"/></segment>
+            </net>
+            <net name="BOUT" class="0">
+              <segment><pinref part="U1" gate="B" pin="OUT"/></segment>
+            </net>
+          </nets>
+        </sheet>
+      </sheets>
+    </schematic>
+  </drawing>
+</eagle>
+""",
+        encoding="utf-8",
+    )
+    return schematic
+
+
 def _write_eagle_net_without_pinrefs(tmp_path: Path) -> Path:
     schematic = tmp_path / "empty-net.sch"
     schematic.write_text(
@@ -379,6 +454,32 @@ def test_multipart_eagle_component_collects_gate_occurrences(tmp_path):
         "BIN",
         "BOUT",
     }
+
+
+def test_multipart_eagle_component_across_pages_has_pin_occurrences(tmp_path):
+    design = eagle_to_design(_write_multipart_eagle_component_across_pages(tmp_path))
+
+    component = _find_component(design, "U1")
+    assert component is not None
+    assert len([candidate for candidate in design.components if candidate.reference == "U1"]) == 1
+    assert {occurrence.metadata["eagle_gate"] for occurrence in component.occurrences} == {"A", "B"}
+    assert {occurrence.page.name for occurrence in component.occurrences} == {
+        "Sheet 1",
+        "Sheet 2",
+    }
+
+    pins_by_designator = {pin.designator: pin for pin in component.pins}
+    assert set(pins_by_designator) == {"1", "2", "3", "4"}
+    assert all(len(pin.occurrences) == 1 for pin in pins_by_designator.values())
+    assert pins_by_designator["1"].occurrences[0].page.name == "Sheet 1"
+    assert pins_by_designator["1"].occurrences[0].source_id.endswith(":instance:U1:A:pin:IN")
+    assert pins_by_designator["1"].occurrences[0].metadata == {
+        "eagle_gate": "A",
+        "eagle_pin": "IN",
+        "eagle_pad": "1",
+    }
+    assert pins_by_designator["3"].occurrences[0].page.name == "Sheet 2"
+    assert pins_by_designator["3"].occurrences[0].source_id.endswith(":instance:U1:B:pin:IN")
 
 
 def test_eagle_named_net_without_pinrefs_does_not_create_empty_occurrence(tmp_path):
