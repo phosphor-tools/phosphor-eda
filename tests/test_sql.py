@@ -572,8 +572,8 @@ class TestConstructedSchematicSql:
             """
         ).fetchall()
         assert rows == [
-            ("net:reset:control", "RESET", 1, 0, 0, 0.0),
-            ("net:reset:power", "RESET", 2, 0, 0, 0.0),
+            ("net:reset:control", "RESET", 1, None, None, None),
+            ("net:reset:power", "RESET", 2, None, None, None),
         ]
 
     def test_loader_referential_integrity(self, constructed_db: duckdb.DuckDBPyConnection) -> None:

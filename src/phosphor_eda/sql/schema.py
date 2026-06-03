@@ -328,9 +328,9 @@ VIEW_DDL: dict[str, str] = {
             n.is_power,
             n.net_class,
             n.diff_pair,
-            0 AS pcb_pad_count,
-            0 AS pcb_via_count,
-            0.0 AS trace_length_mm
+            CAST(NULL AS INTEGER) AS pcb_pad_count,
+            CAST(NULL AS INTEGER) AS pcb_via_count,
+            CAST(NULL AS DOUBLE) AS trace_length_mm
         FROM nets n
         GROUP BY n.net_id, n.name, n.pin_count, n.is_power, n.net_class, n.diff_pair
     """,
