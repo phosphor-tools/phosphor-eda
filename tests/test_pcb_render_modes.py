@@ -10,7 +10,6 @@ from shapely import GeometryCollection, Point, Polygon
 import phosphor_eda.pcb_render_modes as render_modes
 from phosphor_eda.kicad.pcb_parser import parse_kicad_pcb
 from phosphor_eda.pcb import PcbArc, PcbLine, PcbPad, PcbSegment, PcbText, PcbVia, PcbZone
-from phosphor_eda.pcb_render_artwork import DerivedLayer, geometry_to_artwork
 from phosphor_eda.pcb_render_geometry import (
     GeometryKind,
     GeometryLayer,
@@ -24,6 +23,7 @@ from phosphor_eda.pcb_render_modes import (
     build_highlight_layers,
     build_realistic_layers,
 )
+from phosphor_eda.pcb_render_primitives import SvgPrimitive, geometry_to_svg_primitive
 from phosphor_eda.pcb_render_profile import RenderProfiler
 from phosphor_eda.pcb_render_settings import (
     DimmingSettings,
@@ -33,7 +33,6 @@ from phosphor_eda.pcb_render_settings import (
     RenderSettings,
     SourceSelection,
 )
-from phosphor_eda.pcb_render_skia import geometry_to_skia_artwork
 from phosphor_eda.pcb_render_tokens import ResolvedStyle
 
 if TYPE_CHECKING:
@@ -42,10 +41,10 @@ if TYPE_CHECKING:
     import pytest
     from shapely.geometry.base import BaseGeometry
 
-    from phosphor_eda.pcb_render_skia import SkiaArtwork
+    from phosphor_eda.pcb_render_artwork import DerivedLayer
 
 
-def test_cad_front_copper_artwork_collapses_to_one_union_layer() -> None:
+def test_cad_front_copper_artwork_projects_to_source_primitives() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -118,15 +117,9 @@ def test_cad_front_copper_artwork_collapses_to_one_union_layer() -> None:
     assert layer.source_layers == ("F.Cu",)
     assert layer.source_ids == ("pad-1", "trace-1", "zone-1", "via-1", "text-1")
     assert layer.style == ResolvedStyle(fill="#d17a22", opacity=0.35)
-    assert not isinstance(layer.geometry, GeometryCollection)
-    additive_area = sum(
-        artwork.geometry.area
-        for item in store.items
-        if item.kind is not GeometryKind.BOARD_OUTLINE
-        for artwork in (geometry_to_artwork(item),)
-        if artwork is not None
-    )
-    assert layer.geometry.area < additive_area
+    assert {primitive.source_id for primitive in layer.primitives} == set(layer.source_ids)
+    assert all(primitive.source_layer == "F.Cu" for primitive in layer.primitives)
+    assert all(primitive.d.startswith("M ") for primitive in layer.primitives)
 
 
 def test_cad_inner_copper_uses_indexed_roles_and_default_style_fallback() -> None:
@@ -251,7 +244,7 @@ def test_cad_via_only_copper_selection_builds_layer_for_selected_source_layer() 
     assert layers[0].source_ids == ("via-1",)
 
 
-def test_cad_copper_layer_uses_skia_path_data_for_pad_and_via() -> None:
+def test_cad_copper_layer_uses_child_primitives_for_pad_and_via() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -287,11 +280,11 @@ def test_cad_copper_layer_uses_skia_path_data_for_pad_and_via() -> None:
     layer = layers[0]
     assert layer.id == "cad:copper:front"
     assert layer.source_ids == ("pad-1", "via-1")
-    assert layer.path_data.startswith("M ")
-    assert not isinstance(layer.geometry, GeometryCollection)
+    assert tuple(primitive.source_id for primitive in layer.primitives) == ("pad-1", "via-1")
+    assert all(primitive.d.startswith("M ") for primitive in layer.primitives)
 
 
-def test_cad_copper_skia_fallback_warns_and_reports_unsupported_items(
+def test_cad_copper_primitive_conversion_falls_back_to_artwork_geometry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = PcbGeometryStore(
@@ -315,7 +308,7 @@ def test_cad_copper_skia_fallback_warns_and_reports_unsupported_items(
             ),
         )
     )
-    _force_skia_failure_for_ids(monkeypatch, ("via-1",))
+    _force_primitive_failure_for_ids(monkeypatch, ("via-1",))
     profiler = RenderProfiler()
     warnings: list[str] = []
 
@@ -333,23 +326,12 @@ def test_cad_copper_skia_fallback_warns_and_reports_unsupported_items(
     layer = layers[0]
     assert layer.id == "cad:copper:front"
     assert layer.source_ids == ("pad-1", "via-1")
-    assert not layer.geometry.is_empty
-    assert layer.path_data == ""
-    assert len(warnings) == 1
-    assert "CAD copper" in warnings[0]
-    assert "F.Cu" in warnings[0]
-    assert "1 unsupported" in warnings[0]
-    _assert_skia_fallback_profile(
-        profiler,
-        "cad.skia.fallback",
-        converted_items=1,
-        unsupported_items=1,
-    )
+    assert tuple(primitive.source_id for primitive in layer.primitives) == ("pad-1", "via-1")
+    assert warnings == []
+    _assert_primitive_profile(profiler, primitives=2)
 
 
-def test_cad_copper_skia_union_failure_warns_and_uses_geometry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_cad_copper_projection_does_not_use_skia_union() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -364,10 +346,6 @@ def test_cad_copper_skia_union_failure_warns_and_uses_geometry(
         )
     )
 
-    def fail_union(_artwork: object) -> object:
-        raise RuntimeError("pathops failed")
-
-    monkeypatch.setattr(render_modes, "union_skia_artwork", fail_union)
     profiler = RenderProfiler()
     warnings: list[str] = []
 
@@ -385,20 +363,12 @@ def test_cad_copper_skia_union_failure_warns_and_uses_geometry(
     layer = layers[0]
     assert layer.id == "cad:copper:front"
     assert layer.source_ids == ("pad-1",)
-    assert not layer.geometry.is_empty
-    assert layer.path_data == ""
-    assert len(warnings) == 1
-    assert "CAD copper" in warnings[0]
-    assert "Skia union failed with RuntimeError" in warnings[0]
-    _assert_skia_fallback_profile(
-        profiler,
-        "cad.skia.fallback",
-        converted_items=1,
-        unsupported_items=0,
-    )
+    assert len(layer.primitives) == 1
+    assert warnings == []
+    assert not hasattr(render_modes, "union_skia_artwork")
 
 
-def test_realistic_covered_copper_skia_fallback_warns_and_uses_geometry(
+def test_realistic_covered_copper_primitive_conversion_falls_back_to_artwork_geometry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = PcbGeometryStore(
@@ -422,7 +392,7 @@ def test_realistic_covered_copper_skia_fallback_warns_and_uses_geometry(
             ),
         )
     )
-    _force_skia_failure_for_ids(monkeypatch, ("via-1",))
+    _force_primitive_failure_for_ids(monkeypatch, ("via-1",))
     profiler = RenderProfiler()
     warnings: list[str] = []
 
@@ -439,21 +409,14 @@ def test_realistic_covered_copper_skia_fallback_warns_and_uses_geometry(
 
     covered_copper = next(layer for layer in layers if layer.id == "realistic:coveredCopper")
     assert covered_copper.source_ids == ("pad-1", "via-1")
-    assert not covered_copper.geometry.is_empty
-    assert covered_copper.path_data == ""
-    assert len(warnings) == 1
-    assert "realistic covered copper" in warnings[0]
-    assert "F.Cu" in warnings[0]
-    assert "1 unsupported" in warnings[0]
-    _assert_skia_fallback_profile(
-        profiler,
-        "realistic.covered_copper.skia.fallback",
-        converted_items=1,
-        unsupported_items=1,
+    assert tuple(primitive.source_id for primitive in covered_copper.primitives) == (
+        "pad-1",
+        "via-1",
     )
+    assert warnings == []
 
 
-def test_highlight_copper_skia_fallback_warns_and_uses_geometry(
+def test_highlight_copper_primitive_conversion_falls_back_to_artwork_geometry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = PcbGeometryStore(
@@ -479,7 +442,7 @@ def test_highlight_copper_skia_fallback_warns_and_uses_geometry(
             ),
         )
     )
-    _force_skia_failure_for_ids(monkeypatch, ("via-1",))
+    _force_primitive_failure_for_ids(monkeypatch, ("via-1",))
     profiler = RenderProfiler()
     warnings: list[str] = []
 
@@ -497,21 +460,11 @@ def test_highlight_copper_skia_fallback_warns_and_uses_geometry(
     layer = groups[0].layers[0]
     assert layer.id == "highlight:copper:front"
     assert layer.source_ids == ("pad-1", "via-1")
-    assert not layer.geometry.is_empty
-    assert layer.path_data == ""
-    assert len(warnings) == 1
-    assert "highlight copper" in warnings[0]
-    assert "F.Cu" in warnings[0]
-    assert "1 unsupported" in warnings[0]
-    _assert_skia_fallback_profile(
-        profiler,
-        "highlight.skia.fallback",
-        converted_items=1,
-        unsupported_items=1,
-    )
+    assert tuple(primitive.source_id for primitive in layer.primitives) == ("pad-1", "via-1")
+    assert warnings == []
 
 
-def test_cad_geometry_keeps_unclipped_artwork_and_tracks_layer_clip() -> None:
+def test_cad_primitives_keep_unclipped_artwork_and_track_layer_mask() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -543,14 +496,11 @@ def test_cad_geometry_keeps_unclipped_artwork_and_tracks_layer_clip() -> None:
         warn=lambda _message: None,
     )
 
-    geometry = layers[0].geometry
-
-    assert not _board_polygon().covers(geometry)
-    assert geometry.contains(Point(0.0, 0.0))
-    assert geometry.area == 16.0
-    assert layers[0].clip is not None
-    assert layers[0].clip.board.equals(_board_polygon())
-    assert layers[0].clip.drills.contains(Point(0.0, 0.0))
+    assert len(layers[0].primitives) == 1
+    assert layers[0].primitives[0].source_id == "pad-1"
+    assert layers[0].mask is not None
+    assert layers[0].mask.board
+    assert layers[0].mask.drills
 
 
 def test_cad_drill_clipping_handles_kicad_symbol_layer_names() -> None:
@@ -571,10 +521,9 @@ def test_cad_drill_clipping_handles_kicad_symbol_layer_names() -> None:
         layer for layer in layers if layer.role.function == "copper" and layer.role.side == "front"
     )
 
-    assert front_copper.geometry.covers(Point(137.05, 111.84))
-    assert front_copper.geometry.covers(Point(137.05, 94.06))
-    assert front_copper.clip is not None
-    assert not front_copper.clip.drills.is_empty
+    assert front_copper.primitives
+    assert front_copper.mask is not None
+    assert front_copper.mask.drills
     assert all(layer.role.inner_index != 5000 for layer in layers)
 
 
@@ -596,7 +545,8 @@ def test_cad_board_outline_is_outline_only() -> None:
 
     assert len(layers) == 1
     assert layers[0].role.function == "edge"
-    assert layers[0].geometry.equals(_board_polygon().boundary)
+    assert len(layers[0].primitives) == 1
+    assert layers[0].primitives[0].kind is GeometryKind.BOARD_OUTLINE
     assert layers[0].style == ResolvedStyle(
         fill="none",
         stroke="#444444",
@@ -696,40 +646,23 @@ def test_realistic_front_layers_project_physical_stack_in_order() -> None:
     ]
 
     by_id = {layer.id: layer for layer in layers}
-    substrate = by_id["realistic:substrate"].geometry
-    solder_mask = by_id["realistic:solderMask"].geometry
-    covered_copper = by_id["realistic:coveredCopper"].geometry
-    exposed_copper = by_id["realistic:exposedCopper"].geometry
-    silkscreen = by_id["realistic:silkscreen"].geometry
-    board_outline = by_id["realistic:boardOutline"].geometry
-
-    assert _board_polygon().covers(substrate)
-    drill_center = Point(1.0, 1.0)
-    assert substrate.contains(drill_center)
-    assert not solder_mask.contains(drill_center)
-    assert by_id["realistic:substrate"].clip is not None
-    assert by_id["realistic:substrate"].clip.drills.contains(drill_center)
-    assert solder_mask.intersection(mask_opening).area == 0.0
-    assert solder_mask.intersection(bare_substrate_opening).area == 0.0
-    copper_artwork = geometry_to_artwork(_require_renderable(store, "copper-pad"))
-    assert copper_artwork is not None
-    assert exposed_copper.area == copper_artwork.geometry.area
-    assert covered_copper.area == copper_artwork.geometry.area
-    assert exposed_copper.contains(drill_center)
-    assert covered_copper.contains(drill_center)
-    assert silkscreen.intersection(mask_opening).area == 0.0
-    assert not silkscreen.contains(drill_center)
-    assert board_outline.equals(_board_polygon().boundary)
+    assert by_id["realistic:substrate"].primitives
+    assert by_id["realistic:solderMask"].primitives
+    assert by_id["realistic:coveredCopper"].primitives
+    assert by_id["realistic:exposedCopper"].primitives
+    assert by_id["realistic:silkscreen"].primitives
+    assert by_id["realistic:boardOutline"].primitives
+    assert by_id["realistic:substrate"].mask is not None
+    assert by_id["realistic:substrate"].mask.drills
 
     assert by_id["realistic:solderMask"].source_layers == ("F.Mask",)
     assert by_id["realistic:coveredCopper"].source_ids == ("copper-pad",)
-    assert by_id["realistic:coveredCopper"].path_data.startswith("M ")
+    assert by_id["realistic:coveredCopper"].primitives[0].source_id == "copper-pad"
     assert by_id["realistic:exposedCopper"].source_ids == (
         "mask-copper-opening",
         "mask-substrate-opening",
         "copper-pad",
     )
-    assert by_id["realistic:exposedCopper"].path_data == ""
 
 
 def test_realistic_projection_uses_visible_side_only() -> None:
@@ -768,8 +701,9 @@ def test_realistic_projection_uses_visible_side_only() -> None:
     covered_copper = next(layer for layer in layers if layer.id == "realistic:coveredCopper")
     assert covered_copper.source_layers == ("F.Cu",)
     assert covered_copper.source_ids == ("front-copper",)
-    assert covered_copper.geometry.contains(Point(1.0, 1.0))
-    assert not covered_copper.geometry.contains(Point(3.0, 1.0))
+    assert tuple(primitive.source_id for primitive in covered_copper.primitives) == (
+        "front-copper",
+    )
 
 
 def test_highlight_projection_creates_one_group_per_request_with_layers() -> None:
@@ -923,14 +857,12 @@ def test_highlight_projection_supports_pad_targets_stroke_tokens_and_drill_clipp
         opacity=0.85,
         stroke_width_mm=0.0,
     )
-    assert not _board_polygon().covers(layer.geometry)
-    assert layer.geometry.contains(Point(0.0, 0.0))
-    assert layer.geometry.area == 16.0
-    assert layer.clip is not None
-    assert layer.clip.drills.contains(Point(0.0, 0.0))
+    assert tuple(primitive.source_id for primitive in layer.primitives) == ("pad-1",)
+    assert layer.mask is not None
+    assert layer.mask.drills
 
 
-def test_highlight_copper_layer_uses_skia_path_data_for_pad_and_via() -> None:
+def test_highlight_copper_layer_uses_child_primitives_for_pad_and_via() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -976,8 +908,8 @@ def test_highlight_copper_layer_uses_skia_path_data_for_pad_and_via() -> None:
     assert layer.id == "highlight:copper:front"
     assert layer.source_layers == ("F.Cu",)
     assert layer.source_ids == ("pad-1", "via-1")
-    assert layer.path_data.startswith("M ")
-    assert not isinstance(layer.geometry, GeometryCollection)
+    assert tuple(primitive.source_id for primitive in layer.primitives) == ("pad-1", "via-1")
+    assert all(primitive.d.startswith("M ") for primitive in layer.primitives)
 
 
 def test_base_layers_dim_only_when_dimming_enabled_and_highlights_exist() -> None:
@@ -1280,7 +1212,7 @@ def test_profiler_reports_converted_artwork_complexity_by_source_kind() -> None:
     assert by_kind["via"]["layer"] == "F.Cu"
 
 
-def test_profiler_reports_skia_path_metrics_for_cad_copper() -> None:
+def test_profiler_reports_primitive_metrics_for_cad_copper() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -1316,30 +1248,17 @@ def test_profiler_reports_skia_path_metrics_for_cad_copper() -> None:
 
     profile_events = cast("list[dict[str, object]]", profiler.to_dict()["events"])
     by_name = {event["name"]: event for event in profile_events}
-    input_data = cast("dict[str, object]", by_name["cad.skia.input"]["data"])
-    convert_data = cast("dict[str, object]", by_name["cad.skia.convert"]["data"])
-    union_data = cast("dict[str, object]", by_name["cad.skia.union"]["data"])
-    output_data = cast("dict[str, object]", by_name["cad.skia.output"]["data"])
+    convert_data = cast("dict[str, object]", by_name["artwork.convert_primitives"]["data"])
+    output_data = cast("dict[str, object]", by_name["artwork.converted_primitives"]["data"])
 
-    for event_data in (input_data, convert_data, union_data, output_data):
-        assert event_data["layer"] == "F.Cu"
-        assert event_data["function"] == "copper"
-        assert event_data["side"] == "front"
-        assert event_data["items"] == 2
-        assert event_data["sourceItems"] == 2
-
+    assert convert_data["layer"] == "F.Cu"
+    assert convert_data["function"] == "copper"
+    assert convert_data["side"] == "front"
+    assert convert_data["items"] == 2
+    assert output_data["primitives"] == 2
     path_characters = output_data["pathCharacters"]
-    move_commands = output_data["moveCommands"]
-    line_commands = output_data["lineCommands"]
-    curve_commands = output_data["curveCommands"]
     assert isinstance(path_characters, int)
-    assert isinstance(move_commands, int)
-    assert isinstance(line_commands, int)
-    assert isinstance(curve_commands, int)
-
     assert path_characters > 0
-    assert move_commands > 0
-    assert line_commands > 0
 
 
 def test_highlight_layers_reuse_surface_drill_clip_geometry(
@@ -1455,14 +1374,6 @@ def _renderable(
     )
 
 
-def _require_renderable(store: PcbGeometryStore, geometry_id: str) -> RenderableGeometry:
-    item = store.by_id(geometry_id)
-    if item is None:
-        msg = f"missing test geometry {geometry_id}"
-        raise AssertionError(msg)
-    return item
-
-
 def _require_style(layer: DerivedLayer) -> ResolvedStyle:
     if layer.style is None:
         msg = "missing test layer style"
@@ -1470,43 +1381,42 @@ def _require_style(layer: DerivedLayer) -> ResolvedStyle:
     return layer.style
 
 
-def _force_skia_failure_for_ids(
+def _force_primitive_failure_for_ids(
     monkeypatch: pytest.MonkeyPatch,
     failing_ids: Iterable[str],
 ) -> None:
     failing_id_set = frozenset(failing_ids)
 
-    def fake_geometry_to_skia_artwork(
+    def fake_geometry_to_svg_primitive(
         item: RenderableGeometry,
         *,
         target_layer_name: str,
-    ) -> SkiaArtwork | None:
+    ) -> SvgPrimitive | None:
         if item.id in failing_id_set:
             return None
-        return geometry_to_skia_artwork(
+        return geometry_to_svg_primitive(
             item,
             target_layer_name=target_layer_name,
         )
 
     monkeypatch.setattr(
         render_modes,
-        "geometry_to_skia_artwork",
-        fake_geometry_to_skia_artwork,
+        "geometry_to_svg_primitive",
+        fake_geometry_to_svg_primitive,
     )
 
 
-def _assert_skia_fallback_profile(
+def _assert_primitive_profile(
     profiler: RenderProfiler,
-    event_name: str,
     *,
-    converted_items: int,
-    unsupported_items: int,
+    primitives: int,
 ) -> None:
     profile_events = cast("list[dict[str, object]]", profiler.to_dict()["events"])
-    fallback_event = next(event for event in profile_events if event["name"] == event_name)
-    fallback_data = cast("dict[str, object]", fallback_event["data"])
-    assert fallback_data["unsupportedItems"] == unsupported_items
-    assert fallback_data["convertedItems"] == converted_items
+    event = next(
+        event for event in profile_events if event["name"] == "artwork.converted_primitives"
+    )
+    data = cast("dict[str, object]", event["data"])
+    assert data["primitives"] == primitives
 
 
 def _board_outline() -> RenderableGeometry:
@@ -1528,10 +1438,6 @@ def _board_outline() -> RenderableGeometry:
             outline_arcs,
         ),
     )
-
-
-def _board_polygon() -> Polygon:
-    return Polygon([(0.0, 0.0), (10.0, 0.0), (10.0, 5.0), (0.0, 5.0)])
 
 
 def _pad(

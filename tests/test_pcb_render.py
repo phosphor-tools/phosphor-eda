@@ -6,7 +6,6 @@ import re
 from pathlib import Path
 
 import pytest
-from shapely import GeometryCollection, MultiPolygon, Point, Polygon
 
 import phosphor_eda.pcb_render as pcb_render_module
 from phosphor_eda.altium.pcb_parser import parse_altium_pcb
@@ -48,11 +47,13 @@ from phosphor_eda.pcb_render_artwork import DerivedLayer
 from phosphor_eda.pcb_render_geometry import (
     GeometryKind,
     GeometrySelector,
+    GeometryTags,
     build_geometry_store,
     geometry_matches_selector,
 )
 from phosphor_eda.pcb_render_modes import build_cad_layers
 from phosphor_eda.pcb_render_plan import DerivedRenderPlan, ViewBox
+from phosphor_eda.pcb_render_primitives import SvgPrimitive
 from phosphor_eda.pcb_render_settings import is_json_dict, is_json_list
 from phosphor_eda.pcb_render_tokens import ResolvedStyle, VisualRole
 
@@ -157,9 +158,12 @@ def test_via_drill_hole_is_serialized_as_layer_mask_without_mask_layers() -> Non
     svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
 
     assert '<mask id="layer-clip-' in svg
+    assert 'maskUnits="userSpaceOnUse"' in svg
+    assert re.search(r'<mask id="layer-clip-[^"]+"[^>]+ x="[^"]+"', svg)
+    assert re.search(r'<mask id="layer-clip-[^"]+"[^>]+ height="[^"]+"', svg)
     assert 'fill="white"' in svg
     assert 'fill="black"' in svg
-    assert "<circle " in svg
+    assert '<path d="' in svg
     assert 'data-role="realistic.substrate"' in svg
     assert 'data-role="realistic.solderMask"' in svg
 
@@ -296,7 +300,8 @@ def test_structured_preset_colors_use_inline_style_so_css_does_not_override(
     assert substrate_pos < mask_pos < copper_pos
     assert 'style="fill: #1a5c2a"' in svg
     assert 'style="fill: #1f7a3a"' in svg
-    assert 'style="fill: #145222; opacity: 0.6000"' in svg
+    assert 'style="opacity: 0.6000"' in svg
+    assert 'style="fill: #145222"' in svg
 
 
 def test_clean_preset_enables_board_material(board: Pcb) -> None:
@@ -434,7 +439,8 @@ def test_design_preset_matches_legacy_core_colors_and_order() -> None:
     assert "#4d7fc4" in svg
     assert "#7fc87f" in svg
     assert 'data-role="cad.copper.front"' in svg
-    assert 'style="fill: #c83434; opacity: 0.3500"' in svg
+    assert 'style="opacity: 0.3500"' in svg
+    assert 'style="fill: #c83434"' in svg
     assert "#ffffff" in svg
     assert 'data-type="body"' not in svg
     _assert_svg_contains_in_order(
@@ -482,8 +488,10 @@ def test_design_preset_cycles_inner_copper_colors() -> None:
     front_start = svg.index('data-source-layers="F.Cu"')
     in1_svg = svg[in1_start:in2_start]
     in2_svg = svg[in2_start:front_start]
-    assert 'style="fill: #7fc87f; opacity: 0.3500"' in in1_svg
-    assert 'style="fill: #7fc87f; opacity: 0.3500"' in in2_svg
+    assert 'style="opacity: 0.3500"' in in1_svg
+    assert 'style="fill: #7fc87f"' in in1_svg
+    assert 'style="opacity: 0.3500"' in in2_svg
+    assert 'style="fill: #7fc87f"' in in2_svg
 
 
 def test_copper_layer_paints_traces_zones_then_pads() -> None:
@@ -506,10 +514,16 @@ def test_copper_layer_paints_traces_zones_then_pads() -> None:
         front_layer_start : next_layer_start if next_layer_start != -1 else len(svg)
     ]
     assert front_layer_svg.startswith('data-source-layers="F.Cu"')
-    assert front_layer_svg.count("<path") == 1
+    assert front_layer_svg.count("<path") == 4
+    assert [match.group(1) for match in re.finditer(r'data-kind="([^"]+)"', front_layer_svg)] == [
+        "trace",
+        "zone",
+        "pad",
+        "via",
+    ]
 
 
-def test_cad_trace_bends_are_buffered_as_mitered_joined_linework() -> None:
+def test_cad_trace_bends_emit_trace_primitives() -> None:
     board = Pcb(
         name="trace-bend",
         nets={0: PcbNet(0, ""), 1: PcbNet(1, "SIG")},
@@ -548,10 +562,9 @@ def test_cad_trace_bends_are_buffered_as_mitered_joined_linework() -> None:
     )
 
     assert len(layers) == 1
-    copper = layers[0].geometry
-    assert copper.contains(Point(6.0, 5.11))
-    assert copper.contains(Point(6.08, 4.98))
-    assert not copper.contains(Point(6.12, 4.94))
+    assert len(layers[0].primitives) == 2
+    assert all(primitive.kind is GeometryKind.TRACE for primitive in layers[0].primitives)
+    assert all(primitive.d.startswith("M ") for primitive in layers[0].primitives)
 
 
 def test_review_preset_matches_legacy_mask_without_body_context() -> None:
@@ -594,7 +607,8 @@ def test_review_zone_opacity_matches_trace_opacity() -> None:
     svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
 
     assert 'data-role="realistic.coveredCopper"' in svg
-    assert 'style="fill: #145222; opacity: 0.6000"' in svg
+    assert 'style="opacity: 0.6000"' in svg
+    assert 'style="fill: #145222"' in svg
 
 
 def test_clean_copper_opacity_matches_when_copper_is_visible() -> None:
@@ -614,7 +628,8 @@ def test_clean_copper_opacity_matches_when_copper_is_visible() -> None:
     svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
 
     assert 'data-role="realistic.coveredCopper"' in svg
-    assert 'style="fill: #31443a; opacity: 0.5500"' in svg
+    assert 'style="opacity: 0.5500"' in svg
+    assert 'style="fill: #31443a"' in svg
 
 
 def test_high_contrast_copper_opacity_matches_trace_opacity() -> None:
@@ -1464,7 +1479,8 @@ def test_derived_cad_svg_groups_by_role_source_layers_and_style(board: Pcb) -> N
     svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
 
     assert '<g data-role="cad.copper.front" data-source-layers="F.Cu"' in svg
-    assert 'style="fill: #ff6600; opacity: 0.7500"' in svg
+    assert 'style="opacity: 0.7500"' in svg
+    assert 'style="fill: #ff6600"' in svg
     assert 'data-source-ids="' in svg
     assert '<mask id="layer-clip-' in svg
     assert 'mask="url(#layer-clip-' in svg
@@ -1627,7 +1643,7 @@ def test_derived_renderer_escapes_annotation_css_style_terminators() -> None:
     assert '<\\/style><script>alert("x")</script>' in style_block.group(1)
 
 
-def test_derived_serializer_converts_polygons_multipolygons_holes_and_empty_geometry() -> None:
+def test_derived_serializer_renders_primitive_child_paths_and_group_opacity() -> None:
     plan = DerivedRenderPlan(
         view_box=ViewBox(0.0, 0.0, 10.0, 10.0),
         width_px=100,
@@ -1636,31 +1652,31 @@ def test_derived_serializer_converts_polygons_multipolygons_holes_and_empty_geom
             DerivedLayer(
                 id="cad:copper:front",
                 role=VisualRole(namespace="cad", function="copper", side="front"),
-                geometry=Polygon(
-                    shell=[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)],
-                    holes=[[(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)]],
+                primitives=(
+                    SvgPrimitive(
+                        d="M 0.0000 0.0000 L 4.0000 0.0000 L 4.0000 4.0000 Z",
+                        source_id="pad-1",
+                        source_layer="F.Cu",
+                        kind=GeometryKind.PAD,
+                        tags=GeometryTags(component_ref="U1", pad_number="1"),
+                        data={"shape": "rect"},
+                    ),
+                    SvgPrimitive(
+                        d="M 1.0000 1.0000 L 2.0000 1.0000 L 2.0000 2.0000 Z",
+                        source_id="trace-1",
+                        source_layer="F.Cu",
+                        kind=GeometryKind.TRACE,
+                        tags=GeometryTags(net_name="VCC"),
+                    ),
                 ),
                 source_layers=("F.Cu",),
-                source_ids=("pad-1",),
-                style=ResolvedStyle(fill="#ff6600"),
-            ),
-            DerivedLayer(
-                id="cad:mask:front",
-                role=VisualRole(namespace="cad", function="mask", side="front"),
-                geometry=MultiPolygon(
-                    [
-                        Polygon([(5.0, 0.0), (6.0, 0.0), (6.0, 1.0), (5.0, 1.0)]),
-                        Polygon([(7.0, 0.0), (8.0, 0.0), (8.0, 1.0), (7.0, 1.0)]),
-                    ]
-                ),
-                source_layers=("F.Mask",),
-                source_ids=("mask-1", "mask-2"),
-                style=ResolvedStyle(fill="#008800"),
+                source_ids=("pad-1", "trace-1"),
+                style=ResolvedStyle(fill="#ff6600", opacity=0.35),
             ),
             DerivedLayer(
                 id="cad:empty:front",
                 role=VisualRole(namespace="cad", function="empty", side="front"),
-                geometry=GeometryCollection(),
+                primitives=(),
                 source_layers=("Empty",),
                 source_ids=(),
                 style=ResolvedStyle(fill="#000000"),
@@ -1674,16 +1690,27 @@ def test_derived_serializer_converts_polygons_multipolygons_holes_and_empty_geom
     svg = pcb_render_module.render_pcb_svg_from_derived_plan(plan)
 
     assert 'data-role="cad.copper.front"' in svg
+    assert 'data-source-layers="F.Cu"' in svg
+    assert 'data-source-ids="pad-1,trace-1"' in svg
+    assert (
+        '<g data-role="cad.copper.front" data-source-layers="F.Cu" '
+        'data-source-ids="pad-1,trace-1" style="opacity: 0.3500">'
+    ) in svg
     assert 'fill-rule="evenodd"' in svg
-    assert "M 0.0000 0.0000 L 4.0000 0.0000" in svg
-    assert "M 1.0000 1.0000 L 2.0000 1.0000" in svg
-    assert 'data-role="cad.mask.front"' in svg
-    assert "M 5.0000 0.0000 L 6.0000 0.0000" in svg
-    assert "M 7.0000 0.0000 L 8.0000 0.0000" in svg
+    assert svg.count("<path ") == 2
+    assert 'style="fill: #ff6600"' in svg
+    assert "opacity: 0.3500" not in re.findall(r"<path [^>]+>", svg)[0]
+    assert 'data-source-id="pad-1"' in svg
+    assert 'data-source-layer="F.Cu"' in svg
+    assert 'data-kind="pad"' in svg
+    assert 'data-component-ref="U1"' in svg
+    assert 'data-pad-number="1"' in svg
+    assert 'data-net-name="VCC"' in svg
+    assert 'data-shape="rect"' in svg
     assert 'data-role="cad.empty.front"' not in svg
 
 
-def test_derived_serializer_prefers_prebuilt_path_data() -> None:
+def test_derived_serializer_keeps_fill_stroke_and_stroke_width_on_child_path() -> None:
     path_data = "M 0 0 C 1 1 2 1 3 0 Z"
     plan = DerivedRenderPlan(
         view_box=ViewBox(0.0, 0.0, 10.0, 10.0),
@@ -1693,11 +1720,23 @@ def test_derived_serializer_prefers_prebuilt_path_data() -> None:
             DerivedLayer(
                 id="cad:copper:front",
                 role=VisualRole(namespace="cad", function="copper", side="front"),
-                geometry=GeometryCollection(),
-                path_data=path_data,
+                primitives=(
+                    SvgPrimitive(
+                        d=path_data,
+                        source_id="copper-1",
+                        source_layer="F.Cu",
+                        kind=GeometryKind.PAD,
+                        tags=GeometryTags(),
+                    ),
+                ),
                 source_layers=("F.Cu",),
                 source_ids=("copper-1",),
-                style=ResolvedStyle(fill="#ff6600"),
+                style=ResolvedStyle(
+                    fill="#ff6600",
+                    stroke="#111111",
+                    stroke_width_mm=0.08,
+                    opacity=0.6,
+                ),
             ),
         ),
         highlight_groups=(),
@@ -1709,6 +1748,11 @@ def test_derived_serializer_prefers_prebuilt_path_data() -> None:
 
     assert 'data-role="cad.copper.front"' in svg
     assert f'd="{path_data}"' in svg
+    assert 'style="opacity: 0.6000"' in svg
+    assert 'style="fill: #ff6600; stroke: #111111; stroke-width: 0.0800"' in svg
+    path_tag = re.search(r"<path [^>]+>", svg)
+    assert path_tag is not None
+    assert "opacity" not in path_tag.group(0)
 
 
 def test_annotation_css_present() -> None:

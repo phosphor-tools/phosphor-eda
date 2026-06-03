@@ -41,6 +41,8 @@ class _Path(Protocol):
 
     def convertConicsToQuads(self, tolerance: float = SKIA_CONIC_TO_QUAD_TOLERANCE) -> None: ...
 
+    def draw(self, pen: _SvgPointPen) -> None: ...
+
     def stroke(self, width: float, cap: object, join: object, miter_limit: float) -> None: ...
 
 
@@ -192,6 +194,14 @@ def union_skia_artwork(artwork: Iterable[SkiaArtwork]) -> SkiaPathData:
         line_commands=d.count("L "),
         curve_commands=d.count("Q ") + d.count("C "),
     )
+
+
+def skia_path_to_svg_d(path: _Path) -> str:
+    """Serialize one Skia path as SVG path data without unioning it."""
+    _convert_conics(path)
+    pen = _SvgPathPen()
+    path.draw(pen)
+    return pen.path_data()
 
 
 _POLYGON_KINDS = frozenset(

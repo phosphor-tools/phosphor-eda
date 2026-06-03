@@ -9,19 +9,22 @@ from typing import TYPE_CHECKING, cast
 from shapely import GeometryCollection, LineString, MultiLineString, MultiPolygon, Polygon
 from shapely.ops import linemerge
 
-from phosphor_eda.pcb import PcbPad, PcbSegment, PcbTraceArc, PcbVia
+from phosphor_eda.pcb import PcbSegment, PcbTraceArc, PcbVia
 from phosphor_eda.pcb_render_artwork import (
     ArtworkItem,
     DerivedLayer,
-    LayerClip,
-    LayerClipCircle,
     board_outline_geometry,
     drill_geometry_for_layer,
     geometry_to_artwork,
     select_source_artwork,
 )
-from phosphor_eda.pcb_render_geometry import GeometryKind, GeometryLayer
-from phosphor_eda.pcb_render_skia import SkiaArtwork, geometry_to_skia_artwork, union_skia_artwork
+from phosphor_eda.pcb_render_geometry import GeometryKind, GeometryLayer, GeometryTags
+from phosphor_eda.pcb_render_primitives import (
+    LayerMask,
+    SvgPrimitive,
+    geometry_to_svg_primitive,
+    svg_primitives_from_geometry,
+)
 from phosphor_eda.pcb_render_tokens import VisualRole, resolve_layer_style
 from phosphor_eda.shapely_geometry import (
     robust_difference,
@@ -67,12 +70,6 @@ class _TraceArtworkKey:
     net_number: int | None
     net_name: str
     width: float
-
-
-@dataclass(frozen=True)
-class _LayerSkiaSource:
-    item: RenderableGeometry
-    target_layer_name: str
 
 
 @dataclass(frozen=True)
@@ -163,7 +160,7 @@ def build_cad_layers(
     if profiler is not None:
         profiler.metric("cad.grouped_artwork", count=len(grouped_artwork))
     board = board_outline_geometry(store)
-    layer_clip = _layer_clip(store, board)
+    layer_mask = _layer_mask(store, board)
     dimmed = _should_dim_base_layers(store, settings)
     warned_missing_dimmed_tokens: set[str] = set()
     drill_cache: dict[str, BaseGeometry] = {}
@@ -215,23 +212,21 @@ def build_cad_layers(
             layer for item in group for layer in item.artwork.source_layers
         )
         source_ids = _source_ids_by_store_order(store, group)
-        path_data = _cad_copper_path_data(
+        primitives = _group_primitives(
             key,
             group,
-            warn=warn,
             profiler=profiler,
         )
         layers.append(
             DerivedLayer(
                 id=_derived_layer_id(role),
                 role=role,
-                geometry=geometry,
+                primitives=primitives,
                 source_layers=source_layers,
                 source_ids=source_ids,
                 style=style,
                 data={"source-layer": key.source_layer_name},
-                clip=None if key.function == "edge" else layer_clip,
-                path_data=path_data,
+                mask=None if key.function == "edge" else layer_mask,
             )
         )
 
@@ -264,10 +259,19 @@ def build_realistic_layers(
         profiler.metric("realistic.grouped_artwork", count=len(grouped_artwork))
     board = board_outline_geometry(store)
     surface_drills = _surface_drill_geometry(store)
-    layer_clip = LayerClip(
-        board=board,
-        drills=surface_drills,
-        drill_circles=_surface_drill_circles(store),
+    layer_mask = LayerMask(
+        board=_mask_primitives_from_geometry(
+            board,
+            kind=GeometryKind.BOARD_MATERIAL,
+            source_ids=_board_source_ids(store),
+            source_layers=_board_source_layers(store),
+        ),
+        drills=_mask_primitives_from_geometry(
+            surface_drills,
+            kind=GeometryKind.DRILL,
+            source_ids=_drill_source_ids(store),
+            source_layers=("drills",),
+        ),
     )
     dimmed = _should_dim_base_layers(store, settings)
     warned_missing_dimmed_tokens: set[str] = set()
@@ -277,12 +281,6 @@ def build_realistic_layers(
         item.artwork
         for item in grouped_artwork
         if item.layer.role == "copper" and item.layer.side == side
-    )
-    copper_skia_sources = tuple(
-        _LayerSkiaSource(source_item, item.layer.name)
-        for item in grouped_artwork
-        if item.layer.role == "copper" and item.layer.side == side
-        for source_item in item.source_items
     )
     silkscreen_artwork = _side_artwork(selected_items, role="silkscreen", side=side)
 
@@ -347,35 +345,51 @@ def build_realistic_layers(
             ),
         )
 
-    covered_copper_path_data = _copper_path_data(
-        event_prefix="realistic.covered_copper.skia",
-        layer=_profile_layer_name(copper_skia_sources),
-        function="coveredCopper",
-        side=side,
-        items=len(copper_artwork),
-        sources=copper_skia_sources,
-        warn=warn,
-        profiler=profiler,
-    )
     layer_inputs = {
         "substrate": _RealisticLayerInput(
             geometry=board,
+            primitives=_mask_primitives_from_geometry(
+                board,
+                kind=GeometryKind.BOARD_MATERIAL,
+                source_ids=_board_source_ids(store),
+                source_layers=_board_source_layers(store),
+            ),
             source_layers=_board_source_layers(store),
             source_ids=_board_source_ids(store),
         ),
         "solderMask": _RealisticLayerInput(
             geometry=_difference(board, mask_openings),
+            primitives=_mask_primitives_from_geometry(
+                _difference(board, mask_openings),
+                kind=GeometryKind.MASK,
+                source_ids=_source_ids_from_artwork(mask_artwork),
+                source_layers=_source_layers_from_artwork(mask_artwork),
+            ),
             source_layers=_source_layers_from_artwork(mask_artwork),
             source_ids=_source_ids_from_artwork(mask_artwork),
         ),
         "coveredCopper": _RealisticLayerInput(
             geometry=outer_copper,
+            primitives=_realistic_copper_primitives(grouped_artwork, side=side),
             source_layers=_source_layers_from_artwork(copper_artwork),
             source_ids=_source_ids_by_store_order_for_artwork(store, copper_artwork),
-            path_data=covered_copper_path_data,
         ),
         "exposedCopper": _RealisticLayerInput(
             geometry=_intersection(outer_copper, mask_openings),
+            primitives=_mask_primitives_from_geometry(
+                _intersection(outer_copper, mask_openings),
+                kind=GeometryKind.PAD,
+                source_ids=_source_ids_by_store_order_for_artwork(
+                    store,
+                    (*copper_artwork, *mask_artwork),
+                ),
+                source_layers=_unique_ordered(
+                    (
+                        *_source_layers_from_artwork(copper_artwork),
+                        *_source_layers_from_artwork(mask_artwork),
+                    )
+                ),
+            ),
             source_layers=_unique_ordered(
                 (
                     *_source_layers_from_artwork(copper_artwork),
@@ -389,11 +403,23 @@ def build_realistic_layers(
         ),
         "silkscreen": _RealisticLayerInput(
             geometry=_difference(silkscreen, mask_openings),
+            primitives=_mask_primitives_from_geometry(
+                _difference(silkscreen, mask_openings),
+                kind=GeometryKind.SILK_POLYGON,
+                source_ids=_source_ids_by_store_order_for_artwork(store, silkscreen_artwork),
+                source_layers=_source_layers_from_artwork(silkscreen_artwork),
+            ),
             source_layers=_source_layers_from_artwork(silkscreen_artwork),
             source_ids=_source_ids_by_store_order_for_artwork(store, silkscreen_artwork),
         ),
         "boardOutline": _RealisticLayerInput(
             geometry=_outline_geometry(board),
+            primitives=_mask_primitives_from_geometry(
+                _outline_geometry(board),
+                kind=GeometryKind.BOARD_OUTLINE,
+                source_ids=_board_source_ids(store),
+                source_layers=_board_source_layers(store),
+            ),
             source_layers=_board_source_layers(store),
             source_ids=_board_source_ids(store),
         ),
@@ -418,12 +444,11 @@ def build_realistic_layers(
             DerivedLayer(
                 id=_derived_layer_id(role),
                 role=role,
-                geometry=geometry,
+                primitives=layer_input.primitives,
                 source_layers=layer_input.source_layers,
                 source_ids=layer_input.source_ids,
                 style=style,
-                clip=None if function == "boardOutline" else layer_clip,
-                path_data=layer_input.path_data,
+                mask=None if function == "boardOutline" else layer_mask,
             )
         )
     return tuple(layers)
@@ -438,7 +463,7 @@ def build_highlight_layers(
 ) -> tuple[HighlightGroup, ...]:
     """Build derived highlight overlay groups from selected raw source geometry."""
     board = board_outline_geometry(store)
-    layer_clip = _layer_clip(store, board)
+    layer_mask = _layer_mask(store, board)
     groups: list[HighlightGroup] = []
     drill_cache: dict[str, BaseGeometry] = {}
 
@@ -509,17 +534,16 @@ def build_highlight_layers(
                 warn=warn,
                 highlight_color=highlight.color,
             )
-            path_data = _highlight_copper_path_data(
+            primitives = _group_primitives(
                 key,
                 layer_group,
-                warn=warn,
                 profiler=profiler,
             )
             layers.append(
                 DerivedLayer(
                     id=_derived_layer_id(role),
                     role=role,
-                    geometry=geometry,
+                    primitives=primitives,
                     source_layers=_unique_ordered(
                         layer for item in layer_group for layer in item.artwork.source_layers
                     ),
@@ -529,8 +553,7 @@ def build_highlight_layers(
                         "data-highlight-target": target,
                         "source-layer": key.source_layer_name,
                     },
-                    clip=None if key.function == "edge" else layer_clip,
-                    path_data=path_data,
+                    mask=None if key.function == "edge" else layer_mask,
                 )
             )
 
@@ -543,9 +566,9 @@ def build_highlight_layers(
 @dataclass(frozen=True)
 class _RealisticLayerInput:
     geometry: BaseGeometry
+    primitives: tuple[SvgPrimitive, ...]
     source_layers: tuple[str, ...]
     source_ids: tuple[str, ...]
-    path_data: str = ""
 
 
 def _groupable_artwork(
@@ -956,166 +979,122 @@ def _group_sort_key(item: tuple[_LayerGroupKey, list[_GroupedArtwork]]) -> tuple
     return (stack_index, len(group), key.source_layer_name)
 
 
-def _cad_copper_path_data(
+def _group_primitives(
     key: _LayerGroupKey,
     group: list[_GroupedArtwork],
     *,
-    warn: Callable[[str], None],
     profiler: RenderProfiler | None = None,
-) -> str:
-    if key.function != "copper":
-        return ""
-
-    return _copper_path_data(
-        event_prefix="cad.skia",
-        layer=key.source_layer_name,
-        function=key.function,
-        side=key.side,
-        items=len(group),
-        sources=(
-            _LayerSkiaSource(source_item, key.source_layer_name)
-            for item in group
-            for source_item in item.source_items
-        ),
-        warn=warn,
-        profiler=profiler,
-    )
-
-
-def _highlight_copper_path_data(
-    key: _LayerGroupKey,
-    group: list[_GroupedArtwork],
-    *,
-    warn: Callable[[str], None],
-    profiler: RenderProfiler | None = None,
-) -> str:
-    if key.function != "copper":
-        return ""
-
-    return _copper_path_data(
-        event_prefix="highlight.skia",
-        layer=key.source_layer_name,
-        function=key.function,
-        side=key.side,
-        items=len(group),
-        sources=(
-            _LayerSkiaSource(source_item, key.source_layer_name)
-            for item in group
-            for source_item in item.source_items
-        ),
-        warn=warn,
-        profiler=profiler,
-    )
-
-
-def _copper_path_data(
-    *,
-    event_prefix: str,
-    layer: str,
-    function: str,
-    side: str,
-    items: int,
-    sources: Iterable[_LayerSkiaSource],
-    warn: Callable[[str], None],
-    profiler: RenderProfiler | None = None,
-) -> str:
-    source_tuple = tuple(sources)
-    if not source_tuple:
-        return ""
-
-    profile_data = {
-        "layer": layer,
-        "function": function,
-        "side": side,
-        "items": items,
-        "sourceItems": len(source_tuple),
-    }
-    if profiler is not None:
-        profiler.metric(f"{event_prefix}.input", **profile_data)
-
+) -> tuple[SvgPrimitive, ...]:
     if profiler is None:
-        skia_artwork = _skia_artwork_for_layer_sources(source_tuple)
-    else:
-        with profiler.span(f"{event_prefix}.convert", **profile_data):
-            skia_artwork = _skia_artwork_for_layer_sources(source_tuple)
+        return _group_primitives_without_profiling(key, group)
+    with profiler.span(
+        "artwork.convert_primitives",
+        layer=key.source_layer_name,
+        function=key.function,
+        side=key.side,
+        items=len(group),
+    ):
+        primitives = _group_primitives_without_profiling(key, group)
+    profiler.metric(
+        "artwork.converted_primitives",
+        layer=key.source_layer_name,
+        function=key.function,
+        side=key.side,
+        primitives=len(primitives),
+        pathCharacters=sum(len(primitive.d) for primitive in primitives),
+    )
+    return primitives
 
-    if len(skia_artwork) != len(source_tuple):
-        unsupported_items = len(source_tuple) - len(skia_artwork)
-        if profiler is not None:
-            profiler.metric(
-                f"{event_prefix}.fallback",
-                **profile_data,
-                convertedItems=len(skia_artwork),
-                unsupportedItems=unsupported_items,
+
+def _group_primitives_without_profiling(
+    key: _LayerGroupKey,
+    group: list[_GroupedArtwork],
+) -> tuple[SvgPrimitive, ...]:
+    primitives: list[SvgPrimitive] = []
+    for item in sorted(group, key=_grouped_artwork_primitive_sort_key):
+        source_primitives = _source_item_primitives(item, target_layer_name=key.source_layer_name)
+        if source_primitives is not None:
+            primitives.extend(source_primitives)
+            continue
+        primitives.extend(
+            svg_primitives_from_geometry(
+                item.artwork.geometry,
+                source_ids=item.artwork.source_ids,
+                source_layers=item.artwork.source_layers,
+                kind=_grouped_artwork_kind(item),
+                tags=item.artwork.tags,
             )
-        friendly_label = _skia_warning_label(event_prefix)
-        warning = (
-            f"Skia copper path fallback for {friendly_label} layer {layer} "
-            f"({function}/{side or 'all'}): {unsupported_items} unsupported "
-            f"of {len(source_tuple)} source items; using Shapely geometry for whole layer."
         )
-        warn(warning)
-        return ""
+    return tuple(primitives)
 
-    try:
-        if profiler is None:
-            skia_path_data = union_skia_artwork(skia_artwork)
-        else:
-            with profiler.span(f"{event_prefix}.union", **profile_data):
-                skia_path_data = union_skia_artwork(skia_artwork)
-            profiler.metric(
-                f"{event_prefix}.output",
-                **profile_data,
-                pathCharacters=skia_path_data.path_characters,
-                moveCommands=skia_path_data.move_commands,
-                lineCommands=skia_path_data.line_commands,
-                curveCommands=skia_path_data.curve_commands,
-            )
-    except Exception as exc:
-        if profiler is not None:
-            profiler.metric(
-                f"{event_prefix}.fallback",
-                **profile_data,
-                convertedItems=len(skia_artwork),
-                unsupportedItems=0,
-                errorType=type(exc).__name__,
-            )
-        warning = (
-            f"Skia copper path fallback for {_skia_warning_label(event_prefix)} layer {layer} "
-            f"({function}/{side or 'all'}): Skia union failed with {type(exc).__name__}; "
-            f"using Shapely geometry for whole layer."
+
+def _source_item_primitives(
+    item: _GroupedArtwork,
+    *,
+    target_layer_name: str,
+) -> tuple[SvgPrimitive, ...] | None:
+    if not item.source_items:
+        return None
+    primitives: list[SvgPrimitive] = []
+    for source_item in item.source_items:
+        primitive = geometry_to_svg_primitive(
+            source_item,
+            target_layer_name=target_layer_name,
         )
-        warn(warning)
-        return ""
-    return skia_path_data.d
+        if primitive is None:
+            return None
+        primitives.append(primitive)
+    return tuple(primitives)
 
 
-def _skia_artwork_for_layer_sources(
-    sources: Iterable[_LayerSkiaSource],
-) -> tuple[SkiaArtwork, ...]:
-    artwork: list[SkiaArtwork] = []
-    for source in sources:
-        skia_artwork = geometry_to_skia_artwork(
-            source.item,
-            target_layer_name=source.target_layer_name,
-        )
-        if skia_artwork is not None:
-            artwork.append(skia_artwork)
-    return tuple(artwork)
+_PRIMITIVE_KIND_ORDER = {
+    GeometryKind.TRACE: 0,
+    GeometryKind.TRACE_ARC: 0,
+    GeometryKind.ZONE: 1,
+    GeometryKind.PAD: 2,
+    GeometryKind.VIA: 2,
+}
 
 
-def _skia_warning_label(event_prefix: str) -> str:
-    labels = {
-        "cad.skia": "CAD copper",
-        "highlight.skia": "highlight copper",
-        "realistic.covered_copper.skia": "realistic covered copper",
-    }
-    return labels.get(event_prefix, "copper")
+def _grouped_artwork_primitive_sort_key(item: _GroupedArtwork) -> tuple[int, str]:
+    kind = _grouped_artwork_kind(item)
+    source_id = item.artwork.source_ids[0] if item.artwork.source_ids else ""
+    return (_PRIMITIVE_KIND_ORDER.get(kind, 3), source_id)
 
 
-def _profile_layer_name(sources: Iterable[_LayerSkiaSource]) -> str:
-    names = tuple(dict.fromkeys(source.target_layer_name for source in sources))
-    return ",".join(names)
+def _realistic_copper_primitives(
+    grouped_artwork: Iterable[_GroupedArtwork],
+    *,
+    side: str,
+) -> tuple[SvgPrimitive, ...]:
+    primitives: list[SvgPrimitive] = []
+    for item in grouped_artwork:
+        if item.layer.role != "copper" or item.layer.side != side:
+            continue
+        primitives.extend(_group_primitives_without_profiling(_group_key(item.layer), [item]))
+    return tuple(primitives)
+
+
+def _grouped_artwork_kind(item: _GroupedArtwork) -> GeometryKind:
+    if item.source_items:
+        return item.source_items[0].kind
+    return GeometryKind.MECHANICAL
+
+
+def _mask_primitives_from_geometry(
+    geometry: BaseGeometry,
+    *,
+    kind: GeometryKind,
+    source_ids: Iterable[str],
+    source_layers: Iterable[str],
+) -> tuple[SvgPrimitive, ...]:
+    return svg_primitives_from_geometry(
+        geometry,
+        source_ids=source_ids,
+        source_layers=source_layers,
+        kind=kind,
+        tags=GeometryTags(),
+    )
 
 
 def _resolved_group_geometry(
@@ -1293,30 +1272,23 @@ def _surface_drill_geometry(store: PcbGeometryStore) -> BaseGeometry:
     return drill_geometry_for_layer(store)
 
 
-def _layer_clip(store: PcbGeometryStore, board: BaseGeometry) -> LayerClip | None:
+def _layer_mask(store: PcbGeometryStore, board: BaseGeometry) -> LayerMask | None:
     if board.is_empty:
         return None
-    return LayerClip(
-        board=board,
-        drills=_surface_drill_geometry(store),
-        drill_circles=_surface_drill_circles(store),
+    return LayerMask(
+        board=_mask_primitives_from_geometry(
+            board,
+            kind=GeometryKind.BOARD_MATERIAL,
+            source_ids=_board_source_ids(store),
+            source_layers=_board_source_layers(store),
+        ),
+        drills=_mask_primitives_from_geometry(
+            _surface_drill_geometry(store),
+            kind=GeometryKind.DRILL,
+            source_ids=_drill_source_ids(store),
+            source_layers=("drills",),
+        ),
     )
-
-
-def _surface_drill_circles(store: PcbGeometryStore) -> tuple[LayerClipCircle, ...]:
-    circles: list[LayerClipCircle] = []
-    for item in store.items:
-        payload = item.payload if item.payload is not None else item.source
-        is_drilled_pad = item.kind is GeometryKind.DRILL and isinstance(payload, PcbPad)
-        is_drilled_via = item.kind is GeometryKind.VIA and isinstance(payload, PcbVia)
-        if not (is_drilled_pad or is_drilled_via):
-            continue
-        drill_payload = cast("PcbPad | PcbVia", payload)
-        if drill_payload.drill > 0:
-            circles.append(
-                LayerClipCircle(drill_payload.x, drill_payload.y, drill_payload.drill / 2)
-            )
-    return tuple(circles)
 
 
 def _drill_geometry_for_layer(
@@ -1406,3 +1378,11 @@ def _board_source_layers(store: PcbGeometryStore) -> tuple[str, ...]:
 
 def _board_source_ids(store: PcbGeometryStore) -> tuple[str, ...]:
     return tuple(item.id for item in store.by_kind(GeometryKind.BOARD_OUTLINE))
+
+
+def _drill_source_ids(store: PcbGeometryStore) -> tuple[str, ...]:
+    return tuple(
+        item.id
+        for item in store.items
+        if item.kind is GeometryKind.DRILL or item.kind is GeometryKind.VIA
+    )

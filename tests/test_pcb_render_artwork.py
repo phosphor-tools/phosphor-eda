@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from shapely import GeometryCollection, Point, Polygon
+from shapely import Point, Polygon
 
 from phosphor_eda.pcb import PcbArc, PcbLine, PcbPad, PcbPolygon, PcbSegment, PcbTraceArc, PcbVia
 from phosphor_eda.pcb_render_artwork import (
@@ -102,13 +102,13 @@ def test_selected_renderable_geometry_becomes_artwork_items_with_shapely_geometr
 
 def test_derived_layer_is_keyed_by_visual_role_and_carries_source_layer_provenance() -> None:
     first = ArtworkItem(
-        geometry=Point(1, 1),
+        geometry=Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
         source_ids=("pad-1",),
         source_layers=("F.Cu",),
         tags=GeometryTags(source_collection="pads"),
     )
     second = ArtworkItem(
-        geometry=Point(2, 2),
+        geometry=Polygon([(2, 0), (3, 0), (3, 1), (2, 1)]),
         source_ids=("trace-1",),
         source_layers=("F.Cu",),
         tags=GeometryTags(source_collection="segments"),
@@ -126,14 +126,19 @@ def test_derived_layer_is_keyed_by_visual_role_and_carries_source_layer_provenan
     assert layer == DerivedLayer(
         id="cad:copper:front",
         role=role,
-        geometry=layer.geometry,
+        primitives=layer.primitives,
         source_layers=("F.Cu",),
         source_ids=("pad-1", "trace-1"),
         style=style,
         data={"selected": "true"},
     )
-    assert isinstance(layer.geometry, GeometryCollection)
-    assert layer.geometry.equals(GeometryCollection([Point(1, 1), Point(2, 2)]))
+    assert tuple(primitive.source_id for primitive in layer.primitives) == ("pad-1", "trace-1")
+    assert tuple(primitive.source_layer for primitive in layer.primitives) == ("F.Cu", "F.Cu")
+    assert tuple(primitive.kind for primitive in layer.primitives) == (
+        GeometryKind.PAD,
+        GeometryKind.TRACE,
+    )
+    assert all(primitive.d.startswith("M ") for primitive in layer.primitives)
 
 
 def test_pad_shapes_convert_to_polygons() -> None:
@@ -301,6 +306,10 @@ def test_board_outline_converts_to_a_polygon() -> None:
 
 
 def test_board_outline_falls_back_to_board_material_when_outline_reconstruction_is_empty() -> None:
+    empty_outline_geometry: tuple[list[tuple[float, float]], list[list[tuple[float, float]]]] = (
+        [],
+        [],
+    )
     material = _renderable(
         "board-material",
         GeometryKind.BOARD_MATERIAL,
@@ -315,7 +324,7 @@ def test_board_outline_falls_back_to_board_material_when_outline_reconstruction_
         "Edge.Cuts",
         "edge",
         "",
-        geometry=([], []),
+        geometry=empty_outline_geometry,
     )
     store = PcbGeometryStore(items=(material, empty_outline))
 

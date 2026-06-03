@@ -15,10 +15,8 @@ from contextlib import contextmanager
 from dataclasses import replace
 from importlib.resources import files
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 from xml.sax.saxutils import escape as xml_escape
-
-from shapely import GeometryCollection, LineString, MultiLineString, MultiPolygon, Polygon
 
 from phosphor_eda.pcb_render_plan import (
     DerivedRenderPlan,
@@ -36,10 +34,7 @@ from phosphor_eda.pcb_render_settings import (
 from phosphor_eda.text_metrics import BASELINE_CENTER_OFFSET, INTER_REGULAR_BASE64
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator
-
-    from shapely.coords import CoordinateSequence
-    from shapely.geometry.base import BaseGeometry
+    from collections.abc import Iterator
 
     from phosphor_eda.pcb import (
         Pcb,
@@ -52,6 +47,8 @@ if TYPE_CHECKING:
         ResolvedPointer,
     )
     from phosphor_eda.pcb_render_artwork import DerivedLayer
+    from phosphor_eda.pcb_render_geometry import GeometryTags
+    from phosphor_eda.pcb_render_primitives import LayerMask, SvgPrimitive
     from phosphor_eda.pcb_render_profile import RenderProfiler
     from phosphor_eda.pcb_render_tokens import ResolvedStyle, VisualRole
 
@@ -59,6 +56,7 @@ _BUNDLED_SETTINGS_PACKAGE = "phosphor_eda.render_settings"
 _PHOSPHOR_SETTINGS_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _SETTINGS_EXTENDS_KEY = "extends"
 _STYLE_BLOCK_TERMINATOR_RE = re.compile(r"</\s*style\s*>", re.IGNORECASE)
+_SVG_PATH_NUMBER_RE = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
 
 
 def load_render_settings_file(path: Path) -> RenderSettings:
@@ -549,79 +547,99 @@ def _render_derived_layers(
     profiler: RenderProfiler | None = None,
     group: str,
 ) -> None:
-    clip_ids_by_object: dict[int, str] = {}
+    mask_ids_by_object: dict[int, str] = {}
     for layer in layers:
-        path_d = layer.path_data or _geometry_to_svg_path_d(layer.geometry)
-        if not path_d:
+        if not layer.primitives:
             continue
-        clip_key = id(layer.clip) if layer.clip is not None else 0
-        clip_already_rendered = clip_key in clip_ids_by_object
-        clip_id = ""
-        if layer.clip is not None:
-            clip_id = clip_ids_by_object.setdefault(
-                clip_key,
-                _layer_clip_id(group, len(clip_ids_by_object), layer),
+        mask = layer.mask if layer.mask is not None and layer.mask.board else None
+        mask_key = id(mask) if mask is not None else 0
+        mask_already_rendered = mask_key in mask_ids_by_object
+        mask_id = ""
+        if mask is not None:
+            mask_id = mask_ids_by_object.setdefault(
+                mask_key,
+                _layer_mask_id(group, len(mask_ids_by_object), layer),
             )
-        if layer.clip is not None:
-            _render_layer_clip_mask(
+        if mask is not None:
+            _render_layer_mask(
                 svg,
-                clip_id,
+                mask_id,
                 layer,
-                already_rendered=clip_already_rendered,
+                already_rendered=mask_already_rendered,
             )
         if profiler is not None:
             profiler.metric(
                 "svg.layer_path",
                 group=group,
                 layer=layer.id,
-                geometry_type=layer.geometry.geom_type,
                 source_ids=len(layer.source_ids),
-                path_characters=len(path_d),
-                move_commands=path_d.count("M "),
-                line_commands=path_d.count("L "),
+                primitives=len(layer.primitives),
+                path_characters=sum(len(primitive.d) for primitive in layer.primitives),
+                move_commands=sum(primitive.d.count("M ") for primitive in layer.primitives),
+                line_commands=sum(primitive.d.count("L ") for primitive in layer.primitives),
             )
         attrs = _derived_layer_group_attrs(layer)
-        if clip_id:
-            attrs["mask"] = f"url(#{clip_id})"
+        if mask_id:
+            attrs["mask"] = f"url(#{mask_id})"
         svg.group_start(attrs=attrs)
-        svg.path(path_d, attrs=_derived_layer_path_attrs(layer.style))
+        for primitive in layer.primitives:
+            svg.path(primitive.d, attrs=_derived_layer_path_attrs(layer.style, primitive))
         svg.group_end()
 
 
-def _render_layer_clip_mask(
+def _render_layer_mask(
     svg: _Svg,
-    clip_id: str,
+    mask_id: str,
     layer: DerivedLayer,
     *,
     already_rendered: bool,
 ) -> None:
     if already_rendered:
         return
-    if layer.clip is None:
+    if layer.mask is None or not layer.mask.board:
         return
-    board_path = _geometry_to_svg_path_d(layer.clip.board)
-    if not board_path:
+    bounds = _layer_mask_bounds(layer.mask)
+    if bounds is None:
         return
-    min_x, min_y, max_x, max_y = layer.clip.board.bounds
+    min_x, min_y, max_x, max_y = bounds
     pad = max(max_x - min_x, max_y - min_y, 1.0) * 0.05
-    svg.raw(
-        f'<defs><mask id="{xml_escape(clip_id)}" maskUnits="userSpaceOnUse" '
-        f'x="{min_x - pad:.4f}" y="{min_y - pad:.4f}" '
-        f'width="{(max_x - min_x) + 2 * pad:.4f}" '
-        f'height="{(max_y - min_y) + 2 * pad:.4f}">'
-    )
-    svg.path(board_path, attrs={"fill": "white", "fill-rule": "evenodd"})
-    for circle in layer.clip.drill_circles:
-        svg.raw(
-            f'<circle cx="{circle.cx:.4f}" cy="{circle.cy:.4f}" '
-            f'r="{circle.radius:.4f}" fill="black"/>'
+    mask_attrs = " ".join(
+        (
+            f'id="{xml_escape(mask_id)}"',
+            'maskUnits="userSpaceOnUse"',
+            f'x="{min_x - pad:.4f}"',
+            f'y="{min_y - pad:.4f}"',
+            f'width="{(max_x - min_x) + 2 * pad:.4f}"',
+            f'height="{(max_y - min_y) + 2 * pad:.4f}"',
         )
-    if not layer.clip.drill_circles and (drill_path := _geometry_to_svg_path_d(layer.clip.drills)):
-        svg.path(drill_path, attrs={"fill": "black", "fill-rule": "evenodd"})
+    )
+    svg.raw(f"<defs><mask {mask_attrs}>")
+    for primitive in layer.mask.board:
+        svg.path(primitive.d, attrs={"fill": "white", "fill-rule": "evenodd"})
+    for primitive in (*layer.mask.drills, *layer.mask.openings):
+        svg.path(primitive.d, attrs={"fill": "black", "fill-rule": "evenodd"})
     svg.raw("</mask></defs>")
 
 
-def _layer_clip_id(group: str, index: int, layer: DerivedLayer) -> str:
+def _layer_mask_bounds(mask: LayerMask) -> tuple[float, float, float, float] | None:
+    coordinates = [
+        point
+        for primitive in (*mask.board, *mask.drills, *mask.openings)
+        for point in _svg_path_points(primitive.d)
+    ]
+    if not coordinates:
+        return None
+    xs = [point[0] for point in coordinates]
+    ys = [point[1] for point in coordinates]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _svg_path_points(path_data: str) -> tuple[tuple[float, float], ...]:
+    numbers = [float(match.group(0)) for match in _SVG_PATH_NUMBER_RE.finditer(path_data)]
+    return tuple(zip(numbers[0::2], numbers[1::2], strict=False))
+
+
+def _layer_mask_id(group: str, index: int, layer: DerivedLayer) -> str:
     raw = f"layer-clip-{group}-{index}-{layer.id}"
     return re.sub(r"[^A-Za-z0-9_-]+", "-", raw)
 
@@ -636,12 +654,51 @@ def _derived_layer_group_attrs(layer: DerivedLayer) -> dict[str, str]:
     for key, value in layer.data.items():
         attr_name = key if key.startswith("data-") else f"data-{key}"
         attrs[attr_name] = value
+    group_style = _resolved_group_style_svg_attrs(layer.style)
+    if group_style:
+        attrs.update(group_style)
     return attrs
 
 
-def _derived_layer_path_attrs(style: ResolvedStyle | None) -> dict[str, str]:
-    attrs = _resolved_style_svg_attrs(style)
+def _derived_layer_path_attrs(
+    style: ResolvedStyle | None,
+    primitive: SvgPrimitive,
+) -> dict[str, str]:
+    attrs = _resolved_path_style_svg_attrs(style)
     attrs["fill-rule"] = "evenodd"
+    if primitive.source_id:
+        attrs["data-source-id"] = primitive.source_id
+    if primitive.source_layer:
+        attrs["data-source-layer"] = primitive.source_layer
+    attrs["data-kind"] = str(primitive.kind)
+    attrs.update(_primitive_tag_attrs(primitive.tags))
+    for key, value in primitive.data.items():
+        attr_name = key if key.startswith("data-") else f"data-{key}"
+        attrs[attr_name] = value
+    return attrs
+
+
+def _primitive_tag_attrs(tags: GeometryTags) -> dict[str, str]:
+    attrs: dict[str, str] = {}
+    if tags.source_collection:
+        attrs["data-source-collection"] = tags.source_collection
+        attrs["data-source-index"] = str(tags.source_index)
+    if tags.component_ref:
+        attrs["data-component-ref"] = tags.component_ref
+    if tags.component_prefix:
+        attrs["data-component-prefix"] = tags.component_prefix
+    if tags.pad_number:
+        attrs["data-pad-number"] = tags.pad_number
+    if tags.net_number is not None:
+        attrs["data-net-number"] = str(tags.net_number)
+    if tags.net_name:
+        attrs["data-net-name"] = tags.net_name
+    if tags.text_kind:
+        attrs["data-text-kind"] = tags.text_kind
+    if tags.footprint_lib:
+        attrs["data-footprint-lib"] = tags.footprint_lib
+    if tags.value:
+        attrs["data-value"] = tags.value
     return attrs
 
 
@@ -654,7 +711,13 @@ def _visual_role_name(role: VisualRole) -> str:
     return ".".join(parts)
 
 
-def _resolved_style_svg_attrs(style: ResolvedStyle | None) -> dict[str, str]:
+def _resolved_group_style_svg_attrs(style: ResolvedStyle | None) -> dict[str, str]:
+    if style is None or style.opacity is None:
+        return {}
+    return {"style": f"opacity: {style.opacity:.4f}"}
+
+
+def _resolved_path_style_svg_attrs(style: ResolvedStyle | None) -> dict[str, str]:
     if style is None:
         return {}
     declarations: list[str] = []
@@ -662,76 +725,9 @@ def _resolved_style_svg_attrs(style: ResolvedStyle | None) -> dict[str, str]:
         declarations.append(f"fill: {style.fill}")
     if style.stroke is not None:
         declarations.append(f"stroke: {style.stroke}")
-    if style.opacity is not None:
-        declarations.append(f"opacity: {style.opacity:.4f}")
     if style.stroke_width_mm is not None:
         declarations.append(f"stroke-width: {style.stroke_width_mm:.4f}")
     return {"style": "; ".join(declarations)} if declarations else {}
-
-
-def _geometry_to_svg_path_d(geometry: object) -> str:
-    if not isinstance(
-        geometry,
-        (GeometryCollection, LineString, MultiLineString, MultiPolygon, Polygon),
-    ):
-        return ""
-    if geometry.is_empty:
-        return ""
-    if isinstance(geometry, Polygon):
-        return _polygon_to_svg_path_d(geometry)
-    if isinstance(geometry, MultiPolygon):
-        return " ".join(
-            path_d
-            for polygon in geometry.geoms
-            for path_d in (_polygon_to_svg_path_d(polygon),)
-            if path_d
-        )
-    if isinstance(geometry, LineString):
-        return _line_string_to_svg_path_d(geometry)
-    if isinstance(geometry, MultiLineString):
-        return " ".join(
-            path_d
-            for line in geometry.geoms
-            for path_d in (_line_string_to_svg_path_d(line),)
-            if path_d
-        )
-    return _geometry_collection_to_svg_path_d(cast("GeometryCollection[BaseGeometry]", geometry))
-
-
-def _geometry_collection_to_svg_path_d(geometry: GeometryCollection[BaseGeometry]) -> str:
-    parts = cast("Iterable[BaseGeometry]", geometry.geoms)
-    return " ".join(
-        path_d for part in parts for path_d in (_geometry_to_svg_path_d(part),) if path_d
-    )
-
-
-def _polygon_to_svg_path_d(polygon: Polygon) -> str:
-    rings = [_ring_to_svg_path_d(polygon.exterior.coords)]
-    rings.extend(_ring_to_svg_path_d(interior.coords) for interior in polygon.interiors)
-    return " ".join(ring for ring in rings if ring)
-
-
-def _ring_to_svg_path_d(coords: CoordinateSequence) -> str:
-    points = [(float(x), float(y)) for x, y in coords]
-    if len(points) < 2:
-        return ""
-    if points[0] == points[-1]:
-        points = points[:-1]
-    if len(points) < 2:
-        return ""
-    commands = [f"M {points[0][0]:.4f} {points[0][1]:.4f}"]
-    commands.extend(f"L {x:.4f} {y:.4f}" for x, y in points[1:])
-    commands.append("Z")
-    return " ".join(commands)
-
-
-def _line_string_to_svg_path_d(line: LineString) -> str:
-    points = [(float(x), float(y)) for x, y in line.coords]
-    if len(points) < 2:
-        return ""
-    commands = [f"M {points[0][0]:.4f} {points[0][1]:.4f}"]
-    commands.extend(f"L {x:.4f} {y:.4f}" for x, y in points[1:])
-    return " ".join(commands)
 
 
 def _settings_for_plan(

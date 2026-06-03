@@ -25,6 +25,11 @@ from phosphor_eda.pcb import (
 from phosphor_eda.pcb_render_geometry import (
     GeometryKind,
 )
+from phosphor_eda.pcb_render_primitives import (
+    LayerMask,
+    SvgPrimitive,
+    svg_primitives_from_geometry,
+)
 from phosphor_eda.shapely_geometry import normalize_geometry, robust_union
 from phosphor_eda.sql.geometry import (
     VIA_DRILL_QUAD_SEGS,
@@ -58,20 +63,6 @@ class ArtworkItem:
     tags: GeometryTags
 
 
-@dataclass(frozen=True)
-class LayerClipCircle:
-    cx: float
-    cy: float
-    radius: float
-
-
-@dataclass(frozen=True)
-class LayerClip:
-    board: BaseGeometry
-    drills: BaseGeometry = field(default_factory=GeometryCollection)
-    drill_circles: tuple[LayerClipCircle, ...] = ()
-
-
 def _empty_data() -> dict[str, str]:
     return {}
 
@@ -80,13 +71,12 @@ def _empty_data() -> dict[str, str]:
 class DerivedLayer:
     id: str
     role: VisualRole
-    geometry: BaseGeometry
+    primitives: tuple[SvgPrimitive, ...]
     source_layers: tuple[str, ...]
     source_ids: tuple[str, ...]
     style: ResolvedStyle | None = None
     data: Mapping[str, str] = field(default_factory=_empty_data)
-    clip: LayerClip | None = None
-    path_data: str = ""
+    mask: LayerMask | None = None
 
 
 _FUNCTION_ROLE_ALIASES = {
@@ -244,15 +234,43 @@ def derived_layer_from_artwork(
     data: Mapping[str, str] | None = None,
 ) -> DerivedLayer:
     """Create a derived layer record from already-converted artwork."""
+    primitives = tuple(
+        primitive
+        for item in artwork
+        for primitive in svg_primitives_from_geometry(
+            item.geometry,
+            source_ids=item.source_ids,
+            source_layers=item.source_layers,
+            kind=_artwork_kind(item),
+            tags=item.tags,
+        )
+    )
     return DerivedLayer(
         id=_derived_layer_id(role),
         role=role,
-        geometry=GeometryCollection([item.geometry for item in artwork]),
+        primitives=primitives,
         source_layers=_unique_ordered(layer for item in artwork for layer in item.source_layers),
         source_ids=tuple(source_id for item in artwork for source_id in item.source_ids),
         style=style,
         data={} if data is None else data,
     )
+
+
+def _artwork_kind(item: ArtworkItem) -> GeometryKind:
+    collection = item.tags.source_collection
+    if collection in {"pads", "pad"}:
+        return GeometryKind.PAD
+    if collection in {"segments", "segment"}:
+        return GeometryKind.TRACE
+    if collection in {"vias", "via"}:
+        return GeometryKind.VIA
+    if collection in {"zones", "zone"}:
+        return GeometryKind.ZONE
+    if collection in {"board", "board_material"}:
+        return GeometryKind.BOARD_MATERIAL
+    if collection in {"outline", "board_outline"}:
+        return GeometryKind.BOARD_OUTLINE
+    return GeometryKind.MECHANICAL
 
 
 def _matches_rule(
