@@ -51,7 +51,7 @@ from phosphor_eda.pcb_render_geometry import (
     build_geometry_store,
     geometry_matches_selector,
 )
-from phosphor_eda.pcb_render_modes import build_cad_layers
+from phosphor_eda.pcb_render_modes import HighlightGroup, build_cad_layers
 from phosphor_eda.pcb_render_plan import DerivedRenderPlan, ViewBox
 from phosphor_eda.pcb_render_primitives import LayerMask, SvgPrimitive
 from phosphor_eda.pcb_render_settings import is_json_dict, is_json_list
@@ -1481,7 +1481,8 @@ def test_derived_cad_svg_groups_by_role_source_layers_and_style(board: Pcb) -> N
     assert '<g data-role="cad.copper.front" data-source-layers="F.Cu"' in svg
     assert 'style="opacity: 0.7500"' in svg
     assert 'style="fill: #ff6600"' in svg
-    assert 'data-source-ids="' in svg
+    assert 'data-source-id="' in svg
+    assert 'data-source-ids="' not in svg
     assert '<mask id="layer-clip-' in svg
     assert 'mask="url(#layer-clip-' in svg
 
@@ -1691,11 +1692,10 @@ def test_derived_serializer_renders_primitive_child_paths_and_group_opacity() ->
 
     assert 'data-role="cad.copper.front"' in svg
     assert 'data-source-layers="F.Cu"' in svg
-    assert 'data-source-ids="pad-1,trace-1"' in svg
     assert (
-        '<g data-role="cad.copper.front" data-source-layers="F.Cu" '
-        'data-source-ids="pad-1,trace-1" style="opacity: 0.3500">'
+        '<g data-role="cad.copper.front" data-source-layers="F.Cu" style="opacity: 0.3500">'
     ) in svg
+    assert 'data-source-ids="' not in svg
     assert 'fill-rule="evenodd"' in svg
     assert svg.count("<path ") == 2
     assert 'style="fill: #ff6600"' in svg
@@ -1708,6 +1708,66 @@ def test_derived_serializer_renders_primitive_child_paths_and_group_opacity() ->
     assert 'data-net-name="VCC"' in svg
     assert 'data-shape="rect"' in svg
     assert 'data-role="cad.empty.front"' not in svg
+
+
+def test_derived_serializer_deduplicates_identical_layer_masks_across_groups() -> None:
+    board_primitive = SvgPrimitive(
+        d="M 0.0000 0.0000 L 10.0000 0.0000 L 10.0000 10.0000 Z",
+        source_id="board",
+        source_layer="Edge.Cuts",
+        kind=GeometryKind.BOARD_MATERIAL,
+        tags=GeometryTags(),
+    )
+    drill_primitive = SvgPrimitive(
+        d="M 1.0000 1.0000 L 2.0000 1.0000 L 2.0000 2.0000 Z",
+        source_id="drill-1",
+        source_layer="drills",
+        kind=GeometryKind.DRILL,
+        tags=GeometryTags(),
+    )
+    copper_primitive = SvgPrimitive(
+        d="M 0.5000 0.5000 L 2.5000 0.5000 L 2.5000 2.5000 Z",
+        source_id="pad-1",
+        source_layer="F.Cu",
+        kind=GeometryKind.PAD,
+        tags=GeometryTags(),
+    )
+    mask = LayerMask(board=(board_primitive,), drills=(drill_primitive,))
+    base_layer = DerivedLayer(
+        id="cad:copper:front",
+        role=VisualRole(namespace="cad", function="copper", side="front"),
+        primitives=(copper_primitive,),
+        source_layers=("F.Cu",),
+        source_ids=("pad-1",),
+        style=ResolvedStyle(fill="#ff6600"),
+        mask=mask,
+    )
+    highlight_layer = DerivedLayer(
+        id="highlight:copper:front",
+        role=VisualRole(namespace="highlight", function="copper", side="front"),
+        primitives=(copper_primitive,),
+        source_layers=("F.Cu",),
+        source_ids=("pad-1",),
+        style=ResolvedStyle(fill="#00ffff"),
+        mask=LayerMask(board=(board_primitive,), drills=(drill_primitive,)),
+    )
+    plan = DerivedRenderPlan(
+        view_box=ViewBox(0.0, 0.0, 10.0, 10.0),
+        width_px=100,
+        height_px=100,
+        base_layers=(base_layer,),
+        highlight_groups=(
+            HighlightGroup(target="net:A", layers=(highlight_layer,)),
+            HighlightGroup(target="net:B", layers=(highlight_layer,)),
+        ),
+        annotations=None,
+        warnings=(),
+    )
+
+    svg = pcb_render_module.render_pcb_svg_from_derived_plan(plan)
+
+    assert svg.count("<mask ") == 1
+    assert svg.count('mask="url(#layer-clip-base-0-cad-copper-front)"') == 3
 
 
 def test_derived_serializer_preserves_mask_metadata_and_opening_polarity() -> None:

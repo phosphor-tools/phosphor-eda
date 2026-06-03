@@ -57,6 +57,7 @@ _PHOSPHOR_SETTINGS_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _SETTINGS_EXTENDS_KEY = "extends"
 _STYLE_BLOCK_TERMINATOR_RE = re.compile(r"</\s*style\s*>", re.IGNORECASE)
 _SVG_PATH_NUMBER_RE = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
+_LayerMaskSignature = tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]
 
 
 def load_render_settings_file(path: Path) -> RenderSettings:
@@ -491,10 +492,23 @@ def render_pcb_svg_from_derived_plan(
         )
         svg.raw("</style>")
 
-    _render_derived_layers(svg, plan.base_layers, profiler=profiler, group="base")
+    mask_ids_by_signature: dict[_LayerMaskSignature, str] = {}
+    _render_derived_layers(
+        svg,
+        plan.base_layers,
+        profiler=profiler,
+        group="base",
+        mask_ids_by_signature=mask_ids_by_signature,
+    )
     for group in plan.highlight_groups:
         svg.group_start(attrs={"class": "highlight-overlay", "data-highlight-target": group.target})
-        _render_derived_layers(svg, group.layers, profiler=profiler, group="highlight")
+        _render_derived_layers(
+            svg,
+            group.layers,
+            profiler=profiler,
+            group="highlight",
+            mask_ids_by_signature=mask_ids_by_signature,
+        )
         svg.group_end()
 
     if plan.annotations is not None:
@@ -554,25 +568,26 @@ def _render_derived_layers(
     *,
     profiler: RenderProfiler | None = None,
     group: str,
+    mask_ids_by_signature: dict[_LayerMaskSignature, str],
 ) -> None:
-    mask_ids_by_object: dict[int, str] = {}
     for layer in layers:
         if not layer.primitives:
             continue
         mask = layer.mask if layer.mask is not None and layer.mask.board else None
-        mask_key = id(mask) if mask is not None else 0
-        mask_already_rendered = mask_key in mask_ids_by_object
         mask_id = ""
+        mask_already_rendered = False
         if mask is not None:
-            mask_id = mask_ids_by_object.setdefault(
-                mask_key,
-                _layer_mask_id(group, len(mask_ids_by_object), layer),
+            mask_signature = _layer_mask_signature(mask)
+            mask_already_rendered = mask_signature in mask_ids_by_signature
+            mask_id = mask_ids_by_signature.setdefault(
+                mask_signature,
+                _layer_mask_id(group, len(mask_ids_by_signature), layer),
             )
         if mask is not None:
             _render_layer_mask(
                 svg,
                 mask_id,
-                layer,
+                mask,
                 already_rendered=mask_already_rendered,
             )
         if profiler is not None:
@@ -598,15 +613,15 @@ def _render_derived_layers(
 def _render_layer_mask(
     svg: _Svg,
     mask_id: str,
-    layer: DerivedLayer,
+    mask: LayerMask,
     *,
     already_rendered: bool,
 ) -> None:
     if already_rendered:
         return
-    if layer.mask is None or not layer.mask.board:
+    if not mask.board:
         return
-    bounds = _layer_mask_bounds(layer.mask)
+    bounds = _layer_mask_bounds(mask)
     if bounds is None:
         return
     min_x, min_y, max_x, max_y = bounds
@@ -622,11 +637,19 @@ def _render_layer_mask(
         )
     )
     svg.raw(f"<defs><mask {mask_attrs}>")
-    for primitive in layer.mask.board:
+    for primitive in mask.board:
         svg.path(primitive.d, attrs=_layer_mask_path_attrs(primitive, fill="white"))
-    for primitive in (*layer.mask.drills, *layer.mask.openings):
+    for primitive in (*mask.drills, *mask.openings):
         svg.path(primitive.d, attrs=_layer_mask_path_attrs(primitive, fill="black"))
     svg.raw("</mask></defs>")
+
+
+def _layer_mask_signature(mask: LayerMask) -> _LayerMaskSignature:
+    return (
+        tuple(primitive.d for primitive in mask.board),
+        tuple(primitive.d for primitive in mask.drills),
+        tuple(primitive.d for primitive in mask.openings),
+    )
 
 
 def _layer_mask_bounds(mask: LayerMask) -> tuple[float, float, float, float] | None:
@@ -657,8 +680,6 @@ def _derived_layer_group_attrs(layer: DerivedLayer) -> dict[str, str]:
         "data-role": _visual_role_name(layer.role),
         "data-source-layers": ",".join(layer.source_layers),
     }
-    if layer.source_ids:
-        attrs["data-source-ids"] = ",".join(layer.source_ids)
     for key, value in layer.data.items():
         attr_name = key if key.startswith("data-") else f"data-{key}"
         attrs[attr_name] = value
