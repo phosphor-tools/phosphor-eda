@@ -384,11 +384,12 @@ def _build_components(
             component = Component(
                 id=component_id,
                 reference=pin_occurrence.component_reference,
-                part="",
-                description="",
-                metadata={},
+                part=pin_occurrence.component_part,
+                description=pin_occurrence.component_description,
+                metadata=dict(pin_occurrence.component_metadata),
             )
             components_by_id[component_id] = component
+        _merge_component_fields(component, pin_occurrence)
         _add_component_source_id(component, pin_occurrence.component_source_id)
 
         _append_unique_page(component.pages, page)
@@ -592,6 +593,16 @@ def _source_component_identity(pin_occurrence: AltiumPinOccurrence) -> str:
     if source_id:
         return source_id
     return f"{pin_occurrence.scope_id}:{pin_occurrence.component_reference}"
+
+
+def _merge_component_fields(component: Component, pin_occurrence: AltiumPinOccurrence) -> None:
+    if not component.part and pin_occurrence.component_part:
+        component.part = pin_occurrence.component_part
+    if not component.description and pin_occurrence.component_description:
+        component.description = pin_occurrence.component_description
+    for key, value in pin_occurrence.component_metadata.items():
+        if key and value and key not in component.metadata:
+            component.metadata[key] = value
 
 
 def _add_component_source_id(component: Component, source_id: str) -> None:

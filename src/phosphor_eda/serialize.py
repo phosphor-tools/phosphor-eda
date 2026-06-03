@@ -36,7 +36,11 @@ _IC_METADATA_ALLOWLIST = frozenset(
 
 _DEFAULT_NET_METADATA_HIDDEN = frozenset(
     {
+        "altium_root_local_net_id",
+        "kicad_root_local_net_id",
         "selected_name_source_id",
+        "selected_name_source",
+        "source_format",
         "source_local_net_ids",
         "source_scope_ids",
     }
@@ -63,6 +67,29 @@ def _filter_default_net_metadata(net: Net) -> dict[str, str]:
     return {
         key: value for key, value in net.metadata.items() if key not in _DEFAULT_NET_METADATA_HIDDEN
     }
+
+
+def _pin_source_ids(pin: Pin) -> list[str]:
+    return [
+        value for key, value in pin.metadata.items() if key.endswith("_pin_source_id") and value
+    ]
+
+
+def _pin_belongs_to_page(pin: Pin, page: Page) -> bool:
+    source_ids = _pin_source_ids(pin)
+    if source_ids:
+        page_keys = {page.id, page.source_file}
+        return any(
+            page_key and page_key in source_id for page_key in page_keys for source_id in source_ids
+        )
+    return any(component_page.id == page.id for component_page in pin.component.pages)
+
+
+def _page_net_pins(design: Schematic, page: Page, net: Net) -> list[Pin]:
+    return sorted(
+        (pin for pin in net.pins if _pin_belongs_to_page(pin, page)),
+        key=lambda pin: (_pin_label(design, pin, net), pin.designator),
+    )
 
 
 def _pin_net_str(pin: Pin) -> str:
@@ -568,7 +595,7 @@ def format_component_detail(design: Schematic, ref: str) -> str:
         f"COMPONENT: {comp.reference} | {comp.part} | {comp.description} | Pages: {page_names}"
     ]
 
-    for key, value in sorted(comp.metadata.items()):
+    for key, value in sorted(_filter_metadata(comp).items()):
         lines.append(f"  {key}: {value}")
 
     for pin in sorted(comp.pins, key=lambda p: p.designator):
@@ -593,7 +620,7 @@ def format_net_detail(design: Schematic, name: str) -> str:
     if _net_name_is_ambiguous(design, net):
         lines.append("  [name_not_unique: true]")
 
-    for key, value in sorted(net.metadata.items()):
+    for key, value in sorted(_filter_default_net_metadata(net).items()):
         lines.append(f"  [{key}: {value}]")
 
     for pin in sorted(net.pins, key=lambda p: (_pin_label(design, p, net), p.designator)):
@@ -639,7 +666,7 @@ def format_page_detail(design: Schematic, page_name: str) -> str:
         lines.append("")
         lines.append("Nets:")
         for net in sorted(page.nets, key=lambda n: n.name):
-            pin_strs = [_pin_label(design, pin, net) for pin in net.pins]
+            pin_strs = [_pin_label(design, pin, net) for pin in _page_net_pins(design, page, net)]
             lines.append(f"  {net.name:20s} {', '.join(pin_strs)}")
 
     return "\n".join(lines)

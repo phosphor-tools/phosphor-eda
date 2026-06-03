@@ -139,6 +139,9 @@ class AltiumPinOccurrence:
     location: tuple[int, int]
     tip: tuple[int, int]
     no_connect: bool = False
+    component_part: str = ""
+    component_description: str = ""
+    component_metadata: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -322,6 +325,15 @@ def _designators_by_owner(sheet: SheetRecords) -> dict[int, str]:
     return result
 
 
+def _component_parameters_by_owner(sheet: SheetRecords) -> dict[int, dict[str, str]]:
+    result: dict[int, dict[str, str]] = {}
+    for parameter in sheet.parameters:
+        if parameter.owner_index < 0 or not parameter.name or not parameter.text:
+            continue
+        result.setdefault(parameter.owner_index, {})[parameter.name] = parameter.text
+    return result
+
+
 def _pin_is_visible(pin: PinRec, components_by_owner: dict[int, ComponentRec]) -> bool:
     component = components_by_owner.get(pin.owner_index)
     return component is None or pin.owner_part_display_mode == component.display_mode
@@ -430,6 +442,7 @@ def _source_sheet(
 
     local_nets_by_id = {local_net.id: local_net for local_net in local_nets}
     components_by_owner = _component_records(sheet)
+    component_parameters_by_owner = _component_parameters_by_owner(sheet)
     designator_by_owner = _designators_by_owner(sheet)
     no_connect_roots = {
         root
@@ -445,6 +458,7 @@ def _source_sheet(
         if root is None:
             continue
         local_net_id = root_to_net_id.get(root, "")
+        component = components_by_owner.get(pin.owner_index)
         pin_id = _source_id(sheet_id, "pin", pin.index)
         occurrence = AltiumPinOccurrence(
             id=pin_id,
@@ -453,6 +467,9 @@ def _source_sheet(
             local_net_id=local_net_id,
             component_source_id=_source_id(sheet_id, "component", pin.owner_index + 1),
             component_reference=designator_by_owner.get(pin.owner_index, ""),
+            component_part=component.lib_reference if component is not None else "",
+            component_description=component.description if component is not None else "",
+            component_metadata=component_parameters_by_owner.get(pin.owner_index, {}),
             pin_designator=pin.designator,
             pin_name=pin.name,
             location=pin.location,

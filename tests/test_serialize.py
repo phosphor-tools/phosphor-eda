@@ -445,13 +445,13 @@ def test_duplicate_net_names_are_separate_blocks_with_minimal_marker():
     assert text.count("[name_not_unique: true]") == 2
 
 
-def test_net_detail_prints_resolver_provenance_metadata():
+def test_net_detail_hides_internal_resolver_provenance_metadata_by_default():
     detail = format_net_detail(_duplicate_reference_design(), "SYNC")
-    assert "[selected_name_source: global_label]" in detail
-    assert "[selected_name_source_id: net-occ:shared-bus]" in detail
-    assert "[source_format: constructed]" in detail
-    assert "[source_local_net_ids: N$2,N$3]" in detail
-    assert "[source_scope_ids: /root/mcu_a,/root/mcu_b]" in detail
+    assert "selected_name_source" not in detail
+    assert "selected_name_source_id" not in detail
+    assert "source_format" not in detail
+    assert "source_local_net_ids" not in detail
+    assert "source_scope_ids" not in detail
 
 
 def test_net_provenance_is_not_printed_as_default_ids_in_summary_or_tables():
@@ -703,6 +703,16 @@ def test_format_page_detail():
     assert "R1" in detail
 
 
+def test_format_page_detail_filters_unified_net_pins_to_selected_page():
+    design = _filterable_design()
+    detail = format_page_detail(design, "SPI")
+
+    assert "P3V3" in detail
+    assert "U1.3" in detail
+    assert "C1.1" not in detail
+    assert "U3.2" not in detail
+
+
 def test_format_page_detail_not_found():
     design = _simple_design()
     with pytest.raises(ValueError, match="not found"):
@@ -828,7 +838,7 @@ def _filterable_design():
     connect(pin_vreg_3, gnd)
 
     page_spi.components = [u1, u2, r1, r2, tp1]
-    page_spi.nets = [spi_clk, spi_clk_b, spi_mosi]
+    page_spi.nets = [spi_clk, spi_clk_b, spi_mosi, p3v3]
     page_power.components = [c1, vreg]
     page_power.nets = [p3v3, gnd]
 
