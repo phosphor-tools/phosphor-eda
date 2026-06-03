@@ -12,11 +12,10 @@ from phosphor_eda.pcb import (
     PcbText,
 )
 from phosphor_eda.pcb_render_artwork import (
-    artwork_items_from_geometry,
-    geometry_to_artwork,
     select_source_artwork,
 )
 from phosphor_eda.pcb_render_geometry import GeometryKind, build_geometry_store
+from phosphor_eda.pcb_render_primitives import geometry_to_svg_primitive
 from phosphor_eda.pcb_render_settings import LayerMatch, LayerSelectionRule
 from phosphor_eda.text_outlines import text_outline_geometry
 
@@ -57,38 +56,44 @@ def test_footprint_user_text_on_silkscreen_becomes_silkscreen_artwork() -> None:
         store,
         (LayerSelectionRule(match=LayerMatch(function="silkscreen")),),
     )
-    artwork = artwork_items_from_geometry(selected)
+    primitives = tuple(
+        primitive
+        for item in selected
+        for primitive in (geometry_to_svg_primitive(item, target_layer_name=item.layer.name),)
+        if primitive is not None
+    )
 
     text_items = [item for item in store.items if item.kind is GeometryKind.USER_TEXT]
     assert len(text_items) == 1
     assert text_items[0].layer.role == "silkscreen"
-    assert any(item.source_ids == (text_items[0].id,) for item in artwork)
+    assert any(primitive.source_id == text_items[0].id for primitive in primitives)
 
 
-def test_board_graphic_text_converts_to_artwork() -> None:
+def test_board_graphic_text_converts_to_svg_primitive() -> None:
     board = _empty_board()
     board.graphic_texts.append(PcbGraphicText("ON", 12.0, 8.0, 0.0, "F.SilkS", 0.8))
     store = build_geometry_store(board, side="front")
     [graphic_text] = [item for item in store.items if item.kind is GeometryKind.BOARD_GRAPHIC_TEXT]
 
-    artwork = geometry_to_artwork(graphic_text)
+    primitive = geometry_to_svg_primitive(graphic_text, target_layer_name=graphic_text.layer.name)
 
-    assert artwork is not None
-    assert artwork.source_layers == ("F.SilkS",)
-    assert artwork.geometry.is_valid
-    assert not artwork.geometry.is_empty
+    assert primitive is not None
+    assert primitive.source_layer == "F.SilkS"
+    assert primitive.d.startswith("M ")
+    assert primitive.d.endswith("Z")
 
 
-def test_back_side_mirrored_text_still_produces_valid_artwork() -> None:
+def test_back_side_mirrored_text_still_produces_valid_svg_primitive() -> None:
     board = _board_with_text(PcbText("BOT", 4.0, 5.0, 15.0, "B.SilkS", 1.0, kind="user"))
     store = build_geometry_store(board, side="back")
     [text_item] = [item for item in store.items if item.kind is GeometryKind.USER_TEXT]
 
-    artwork = geometry_to_artwork(text_item)
+    primitive = geometry_to_svg_primitive(text_item, target_layer_name=text_item.layer.name)
 
-    assert artwork is not None
-    assert artwork.geometry.is_valid
-    assert not artwork.geometry.is_empty
+    assert primitive is not None
+    assert primitive.source_layer == "B.SilkS"
+    assert primitive.d.startswith("M ")
+    assert primitive.d.endswith("Z")
 
 
 def _board_with_text(text: PcbText) -> Pcb:

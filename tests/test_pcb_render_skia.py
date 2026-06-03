@@ -13,13 +13,12 @@ from phosphor_eda.pcb_render_geometry import (
     RenderableGeometry,
 )
 from phosphor_eda.pcb_render_skia import (
-    SkiaPathData,
     geometry_to_skia_artwork,
-    union_skia_artwork,
+    skia_path_to_svg_d,
 )
 
 
-def test_skia_unions_rect_pad_and_trace_to_svg_path_data() -> None:
+def test_skia_serializes_rect_pad_and_trace_as_separate_svg_paths() -> None:
     items = (
         _renderable_pad(_pad(shape="rect", x=1.0, y=1.0), geometry_id="pad-1"),
         _renderable_trace(PcbSegment(1.0, 1.0, 3.0, 1.0, 0.25, "F.Cu", 1)),
@@ -31,47 +30,46 @@ def test_skia_unions_rect_pad_and_trace_to_svg_path_data() -> None:
         for result in (geometry_to_skia_artwork(item, target_layer_name="F.Cu"),)
         if result is not None
     )
-    path_data = union_skia_artwork(artwork)
+    paths = tuple(skia_path_to_svg_d(item.path) for item in artwork)
 
-    assert path_data.d.startswith("M ")
-    assert path_data.path_characters > 0
-    assert path_data.line_commands > 0
-    assert path_data.source_ids == ("pad-1", "trace-1")
-
-
-def test_skia_converts_circular_pad_to_curved_path_data() -> None:
-    path_data = _convert_one(_renderable_pad(_pad(shape="circle", width=1.2, height=1.2)))
-
-    _assert_valid_path_data(path_data.d)
-    assert path_data.curve_commands > 0
+    assert len(paths) == 2
+    assert all(path.startswith("M ") for path in paths)
+    assert sum(len(path) for path in paths) > 0
+    assert sum(_line_commands(path) for path in paths) > 0
+    assert tuple(item.source_ids[0] for item in artwork) == ("pad-1", "trace-1")
 
 
-def test_skia_converts_oval_pad_to_curved_path_data() -> None:
-    path_data = _convert_one(_renderable_pad(_pad(shape="oval", width=2.0, height=0.8)))
+def test_skia_converts_circular_pad_to_curved_svg_path() -> None:
+    path_d = _convert_one(_renderable_pad(_pad(shape="circle", width=1.2, height=1.2)))
 
-    _assert_valid_path_data(path_data.d)
-    assert path_data.curve_commands > 0
+    _assert_valid_svg_path(path_d)
+    assert _curve_commands(path_d) > 0
 
 
-def test_skia_converts_roundrect_pad_to_curved_path_data() -> None:
-    path_data = _convert_one(
+def test_skia_converts_oval_pad_to_curved_svg_path() -> None:
+    path_d = _convert_one(_renderable_pad(_pad(shape="oval", width=2.0, height=0.8)))
+
+    _assert_valid_svg_path(path_d)
+    assert _curve_commands(path_d) > 0
+
+
+def test_skia_converts_roundrect_pad_to_curved_svg_path() -> None:
+    path_d = _convert_one(
         _renderable_pad(_pad(shape="roundrect", width=2.0, height=0.8, roundrect_rratio=0.5))
     )
 
-    _assert_valid_path_data(path_data.d)
-    assert path_data.curve_commands > 0
+    _assert_valid_svg_path(path_d)
+    assert _curve_commands(path_d) > 0
 
 
-def test_skia_converts_rotated_rect_pad_to_non_axis_aligned_path_data() -> None:
-    path_data = _convert_one(
-        _renderable_pad(_pad(shape="rect", width=2.0, height=1.0, rotation=45.0))
-    )
+def test_skia_converts_rotated_rect_pad_to_non_axis_aligned_svg_path() -> None:
+    path_d = _convert_one(_renderable_pad(_pad(shape="rect", width=2.0, height=1.0, rotation=45.0)))
 
-    _assert_valid_path_data(path_data.d)
+    _assert_valid_svg_path(path_d)
     assert any(
         not math.isclose(abs(x), 1.0, abs_tol=0.001)
         and not math.isclose(abs(y), 0.5, abs_tol=0.001)
-        for x, y in _path_coordinate_pairs(path_data.d)
+        for x, y in _path_coordinate_pairs(path_d)
     )
 
 
@@ -87,10 +85,10 @@ def test_skia_converts_drilled_through_hole_pad_body_on_selected_copper_layer() 
     )
 
     assert selected is not None
-    path_data = union_skia_artwork((selected,))
-    _assert_valid_path_data(path_data.d)
-    assert path_data.curve_commands > 0
-    assert path_data.move_commands == 1
+    path_d = skia_path_to_svg_d(selected.path)
+    _assert_valid_svg_path(path_d)
+    assert _curve_commands(path_d) > 0
+    assert _move_commands(path_d) == 1
     assert nonmatching is None
 
 
@@ -132,66 +130,42 @@ def test_skia_converts_via_body_on_spanned_layer_only() -> None:
     unrelated = geometry_to_skia_artwork(_renderable_via(via), target_layer_name="In1.Cu")
 
     assert selected is not None
-    path_data = union_skia_artwork((selected,))
-    _assert_valid_path_data(path_data.d)
-    assert path_data.curve_commands > 0
-    assert path_data.move_commands == 1
+    path_d = skia_path_to_svg_d(selected.path)
+    _assert_valid_svg_path(path_d)
+    assert _curve_commands(path_d) > 0
+    assert _move_commands(path_d) == 1
     assert unrelated is None
 
 
-def test_skia_converts_straight_trace_to_valid_path_data() -> None:
-    path_data = _convert_one(_renderable_trace(PcbSegment(0.0, 0.0, 2.0, 0.0, 0.2, "F.Cu", 1)))
+def test_skia_converts_straight_trace_to_valid_svg_path() -> None:
+    path_d = _convert_one(_renderable_trace(PcbSegment(0.0, 0.0, 2.0, 0.0, 0.2, "F.Cu", 1)))
 
-    _assert_valid_path_data(path_data.d)
-    assert path_data.line_commands > 0
-
-
-def test_skia_unions_connected_45_degree_traces_without_separate_contours() -> None:
-    artwork = tuple(
-        result
-        for item in (
-            _renderable_trace(
-                PcbSegment(0.0, 0.0, 1.0, 1.0, 0.2, "F.Cu", 1),
-                geometry_id="trace-a",
-            ),
-            _renderable_trace(
-                PcbSegment(1.0, 1.0, 2.0, 0.0, 0.2, "F.Cu", 1),
-                geometry_id="trace-b",
-            ),
-        )
-        for result in (geometry_to_skia_artwork(item, target_layer_name="F.Cu"),)
-        if result is not None
-    )
-
-    path_data = union_skia_artwork(artwork)
-
-    _assert_valid_path_data(path_data.d)
-    assert path_data.move_commands == 1
-    assert path_data.source_ids == ("trace-a", "trace-b")
+    _assert_valid_svg_path(path_d)
+    assert _line_commands(path_d) > 0
 
 
-def test_skia_converts_trace_arc_to_valid_path_data() -> None:
-    path_data = _convert_one(
+def test_skia_converts_trace_arc_to_valid_svg_path() -> None:
+    path_d = _convert_one(
         _renderable_trace_arc(PcbTraceArc(0.0, 0.0, 1.0, 1.0, 2.0, 0.0, 0.2, "F.Cu", 1))
     )
 
-    _assert_valid_path_data(path_data.d)
-    assert path_data.line_commands > 0
+    _assert_valid_svg_path(path_d)
+    assert _line_commands(path_d) > 0
 
 
-def test_skia_converts_zone_polygon_to_valid_path_data() -> None:
-    path_data = _convert_one(
+def test_skia_converts_zone_polygon_to_valid_svg_path() -> None:
+    path_d = _convert_one(
         _renderable_zone(
             PcbZone(1, "GND", "F.Cu", [(0.0, 0.0), (2.0, 0.0), (2.0, 1.0), (0.0, 1.0)])
         )
     )
 
-    _assert_valid_path_data(path_data.d)
-    assert path_data.line_commands > 0
+    _assert_valid_svg_path(path_d)
+    assert _line_commands(path_d) > 0
 
 
-def test_skia_converts_zone_polygon_payload_to_valid_path_data() -> None:
-    path_data = _convert_one(
+def test_skia_converts_zone_polygon_payload_to_valid_svg_path() -> None:
+    path_d = _convert_one(
         _renderable_zone_polygon(
             PcbPolygon(
                 points=[(0.0, 0.0), (2.0, 0.0), (2.0, 1.0), (0.0, 1.0)],
@@ -202,12 +176,12 @@ def test_skia_converts_zone_polygon_payload_to_valid_path_data() -> None:
         )
     )
 
-    _assert_valid_path_data(path_data.d)
-    assert path_data.line_commands > 0
+    _assert_valid_svg_path(path_d)
+    assert _line_commands(path_d) > 0
 
 
-def test_skia_converts_polygon_with_holes_to_valid_path_data() -> None:
-    path_data = _convert_one(
+def test_skia_converts_polygon_with_holes_to_valid_svg_path() -> None:
+    path_d = _convert_one(
         _renderable_polygon(
             PcbPolygon(
                 points=[(0.0, 0.0), (3.0, 0.0), (3.0, 3.0), (0.0, 3.0)],
@@ -217,40 +191,14 @@ def test_skia_converts_polygon_with_holes_to_valid_path_data() -> None:
         )
     )
 
-    _assert_valid_path_data(path_data.d)
-    assert path_data.move_commands == 2
+    _assert_valid_svg_path(path_d)
+    assert _move_commands(path_d) == 2
 
 
-def test_skia_union_preserves_source_ids_and_source_layers() -> None:
-    front = geometry_to_skia_artwork(
-        _renderable_trace(
-            PcbSegment(0.0, 0.0, 1.0, 0.0, 0.2, "F.Cu", 1),
-            geometry_id="front-trace",
-            layer_name="F.Cu",
-        ),
-        target_layer_name="F.Cu",
-    )
-    back = geometry_to_skia_artwork(
-        _renderable_trace(
-            PcbSegment(0.0, 1.0, 1.0, 1.0, 0.2, "B.Cu", 1),
-            geometry_id="back-trace",
-            layer_name="B.Cu",
-        ),
-        target_layer_name="B.Cu",
-    )
-
-    assert front is not None
-    assert back is not None
-    path_data = union_skia_artwork((front, back))
-
-    assert path_data.source_ids == ("front-trace", "back-trace")
-    assert path_data.source_layers == ("F.Cu", "B.Cu")
-
-
-def _convert_one(item: RenderableGeometry, *, target_layer_name: str = "F.Cu") -> SkiaPathData:
+def _convert_one(item: RenderableGeometry, *, target_layer_name: str = "F.Cu") -> str:
     artwork = geometry_to_skia_artwork(item, target_layer_name=target_layer_name)
     assert artwork is not None
-    return union_skia_artwork((artwork,))
+    return skia_path_to_svg_d(artwork.path)
 
 
 def _renderable_pad(
@@ -409,13 +357,25 @@ def _pad(
     )
 
 
-def _assert_valid_path_data(path_data: str) -> None:
-    assert path_data.startswith("M ")
-    assert path_data.endswith("Z")
-    assert len(path_data) > 0
+def _assert_valid_svg_path(path_d: str) -> None:
+    assert path_d.startswith("M ")
+    assert path_d.endswith("Z")
+    assert len(path_d) > 0
 
 
-def _path_coordinate_pairs(path_data: str) -> tuple[tuple[float, float], ...]:
-    coordinates = tuple(float(match.group()) for match in re.finditer(r"-?\d+\.\d+", path_data))
+def _path_coordinate_pairs(path_d: str) -> tuple[tuple[float, float], ...]:
+    coordinates = tuple(float(match.group()) for match in re.finditer(r"-?\d+\.\d+", path_d))
     assert len(coordinates) % 2 == 0
     return tuple(zip(coordinates[::2], coordinates[1::2], strict=True))
+
+
+def _move_commands(path_d: str) -> int:
+    return path_d.count("M ")
+
+
+def _line_commands(path_d: str) -> int:
+    return path_d.count("L ")
+
+
+def _curve_commands(path_d: str) -> int:
+    return path_d.count("Q ") + path_d.count("C ")

@@ -1,4 +1,4 @@
-"""Tests for artwork core data structures used by the derived PCB renderer."""
+"""Tests for artwork selection and derived PCB render layer records."""
 
 from __future__ import annotations
 
@@ -6,15 +6,11 @@ import math
 
 from shapely import Point, Polygon
 
-from phosphor_eda.pcb import PcbArc, PcbLine, PcbPad, PcbPolygon, PcbSegment, PcbTraceArc, PcbVia
+from phosphor_eda.pcb import PcbArc, PcbLine, PcbPad, PcbVia
 from phosphor_eda.pcb_render_artwork import (
-    ArtworkItem,
     DerivedLayer,
-    artwork_items_from_geometry,
     board_outline_geometry,
-    derived_layer_from_artwork,
     drill_geometry_for_layer,
-    geometry_to_artwork,
     select_source_artwork,
 )
 from phosphor_eda.pcb_render_geometry import (
@@ -24,6 +20,7 @@ from phosphor_eda.pcb_render_geometry import (
     PcbGeometryStore,
     RenderableGeometry,
 )
+from phosphor_eda.pcb_render_primitives import SvgPrimitive
 from phosphor_eda.pcb_render_settings import LayerMatch, LayerSelectionRule
 from phosphor_eda.pcb_render_tokens import ResolvedStyle, VisualRole
 
@@ -76,207 +73,33 @@ def test_select_source_artwork_rule_without_object_filter_selects_all_matched_la
     assert selected == (front_pad, front_trace)
 
 
-def test_selected_renderable_geometry_becomes_artwork_items_with_shapely_geometry() -> None:
-    geometry = Point(1, 1)
-    raw = _renderable(
-        "pad-1",
-        GeometryKind.PAD,
-        "F.Cu",
-        "copper",
-        "front",
-        geometry=geometry,
-    )
-
-    artwork = artwork_items_from_geometry((raw,))
-
-    assert artwork == (
-        ArtworkItem(
-            geometry=geometry,
-            source_ids=("pad-1",),
-            source_layers=("F.Cu",),
-            tags=raw.tags,
-        ),
-    )
-    assert artwork[0].geometry.equals(geometry)
-
-
-def test_derived_layer_is_keyed_by_visual_role_and_carries_source_layer_provenance() -> None:
-    first = ArtworkItem(
-        geometry=Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
-        source_ids=("pad-1",),
-        source_layers=("F.Cu",),
-        tags=GeometryTags(source_collection="pads"),
-    )
-    second = ArtworkItem(
-        geometry=Polygon([(2, 0), (3, 0), (3, 1), (2, 1)]),
-        source_ids=("trace-1",),
-        source_layers=("F.Cu",),
-        tags=GeometryTags(source_collection="segments"),
-    )
+def test_derived_layer_is_keyed_by_visual_role_and_carries_primitive_provenance() -> None:
     role = VisualRole(namespace="cad", function="copper", side="front")
     style = ResolvedStyle(fill="#d17a22", opacity=0.35)
-
-    layer = derived_layer_from_artwork(
-        role=role,
-        artwork=(first, second),
-        style=style,
-        data={"selected": "true"},
+    primitive = SvgPrimitive(
+        d="M 0.0000 0.0000 L 1.0000 0.0000 L 1.0000 1.0000 Z",
+        source_id="pad-1",
+        source_layer="F.Cu",
+        kind=GeometryKind.PAD,
+        tags=GeometryTags(source_collection="pads"),
     )
 
-    assert layer == DerivedLayer(
+    layer = DerivedLayer(
         id="cad:copper:front",
         role=role,
-        primitives=layer.primitives,
+        primitives=(primitive,),
         source_layers=("F.Cu",),
-        source_ids=("pad-1", "trace-1"),
+        source_ids=("pad-1",),
         style=style,
         data={"selected": "true"},
     )
-    assert tuple(primitive.source_id for primitive in layer.primitives) == ("pad-1", "trace-1")
-    assert tuple(primitive.source_layer for primitive in layer.primitives) == ("F.Cu", "F.Cu")
-    assert tuple(primitive.kind for primitive in layer.primitives) == (
-        GeometryKind.PAD,
-        GeometryKind.TRACE,
-    )
-    assert all(primitive.d.startswith("M ") for primitive in layer.primitives)
 
-
-def test_pad_shapes_convert_to_polygons() -> None:
-    rect = _renderable(
-        "pad-rect",
-        GeometryKind.PAD,
-        "F.Cu",
-        "copper",
-        "front",
-        geometry=_pad(shape="rect", width=2.0, height=1.0),
-    )
-    circle = _renderable(
-        "pad-circle",
-        GeometryKind.PAD,
-        "F.Cu",
-        "copper",
-        "front",
-        geometry=_pad(shape="circle", width=2.0, height=2.0),
-    )
-
-    rect_artwork = geometry_to_artwork(rect)
-    circle_artwork = geometry_to_artwork(circle)
-
-    assert rect_artwork is not None
-    assert circle_artwork is not None
-    assert isinstance(rect_artwork.geometry, Polygon)
-    _assert_close(float(rect_artwork.geometry.area), 2.0)
-    _assert_close(float(circle_artwork.geometry.area), math.pi, rel=0.01)
-
-
-def test_traces_convert_to_buffered_line_polygons() -> None:
-    trace = _renderable(
-        "trace-1",
-        GeometryKind.TRACE,
-        "F.Cu",
-        "copper",
-        "front",
-        geometry=PcbSegment(0.0, 0.0, 10.0, 0.0, 0.5, "F.Cu", 1),
-    )
-
-    artwork = geometry_to_artwork(trace)
-
-    assert artwork is not None
-    assert isinstance(artwork.geometry, Polygon)
-    _assert_close(float(artwork.geometry.area), 5.0)
-    _assert_bounds_close(artwork.geometry.bounds, (0.0, -0.25, 10.0, 0.25))
-
-
-def test_trace_arcs_convert_to_buffered_arc_polygons() -> None:
-    trace_arc = _renderable(
-        "trace-arc-1",
-        GeometryKind.TRACE_ARC,
-        "F.Cu",
-        "copper",
-        "front",
-        geometry=PcbTraceArc(0.0, 0.0, 1.0, 1.0, 2.0, 0.0, 0.2, "F.Cu", 1),
-    )
-
-    artwork = geometry_to_artwork(trace_arc)
-
-    assert artwork is not None
-    assert isinstance(artwork.geometry, Polygon)
-    _assert_close(float(artwork.geometry.area), math.pi * 0.2, rel=0.03)
-    assert artwork.geometry.bounds[3] > 0.9
-
-
-def test_zones_and_polygons_preserve_holes() -> None:
-    polygon = _renderable(
-        "zone-1",
-        GeometryKind.ZONE,
-        "F.Cu",
-        "copper",
-        "front",
-        geometry=PcbPolygon(
-            points=[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)],
-            layer="F.Cu",
-            holes=[[(2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0)]],
-        ),
-    )
-
-    artwork = geometry_to_artwork(polygon)
-
-    assert artwork is not None
-    assert isinstance(artwork.geometry, Polygon)
-    _assert_close(float(artwork.geometry.area), 96.0)
-    assert len(artwork.geometry.interiors) == 1
-
-
-def test_vias_convert_to_annular_copper_and_drill_geometry_separately() -> None:
-    via = _renderable(
-        "via-1",
-        GeometryKind.VIA,
-        "vias",
-        "via",
-        "",
-        geometry=PcbVia(5.0, 5.0, 1.0, 0.4, ["F.Cu", "B.Cu"], 1),
-    )
-    store = PcbGeometryStore(items=(via,))
-
-    artwork = geometry_to_artwork(via)
-    drills = drill_geometry_for_layer(store, layer_name="F.Cu")
-
-    assert artwork is not None
-    assert isinstance(artwork.geometry, Polygon)
-    assert len(artwork.geometry.interiors) == 1
-    assert len(artwork.geometry.exterior.coords) == 33
-    assert len(artwork.geometry.interiors[0].coords) == 33
-    _assert_close(float(artwork.geometry.area), math.pi * (0.5**2 - 0.2**2), rel=0.01)
-    _assert_close(float(drills.area), math.pi * 0.2**2, rel=0.01)
-
-
-def test_silkscreen_and_fab_lines_convert_to_buffered_line_polygons() -> None:
-    silk = _renderable(
-        "silk-1",
-        GeometryKind.SILK_LINE,
-        "F.SilkS",
-        "silkscreen",
-        "front",
-        geometry=PcbLine(0.0, 0.0, 4.0, 0.0, "F.SilkS", 0.2),
-    )
-    fab = _renderable(
-        "fab-1",
-        GeometryKind.FAB_LINE,
-        "F.Fab",
-        "fabrication",
-        "front",
-        geometry=PcbLine(0.0, 1.0, 4.0, 1.0, "F.Fab", 0.1),
-    )
-
-    silk_artwork = geometry_to_artwork(silk)
-    fab_artwork = geometry_to_artwork(fab)
-
-    assert silk_artwork is not None
-    assert fab_artwork is not None
-    assert isinstance(silk_artwork.geometry, Polygon)
-    assert isinstance(fab_artwork.geometry, Polygon)
-    _assert_close(float(silk_artwork.geometry.area), 0.8)
-    _assert_close(float(fab_artwork.geometry.area), 0.4)
+    assert layer.id == "cad:copper:front"
+    assert layer.primitives == (primitive,)
+    assert layer.source_layers == ("F.Cu",)
+    assert layer.source_ids == ("pad-1",)
+    assert layer.style == style
+    assert layer.data == {"selected": "true"}
 
 
 def test_board_outline_converts_to_a_polygon() -> None:
@@ -360,63 +183,6 @@ def test_drill_holes_convert_to_subtractive_geometry() -> None:
     assert geometry.contains(Point(2.0, 0.0))
 
 
-def test_curved_pad_geometry_uses_reduced_render_tessellation() -> None:
-    circle = geometry_to_artwork(
-        _renderable(
-            "pad-circle",
-            GeometryKind.PAD,
-            "F.Cu",
-            "copper",
-            "front",
-            geometry=_pad(shape="circle", width=2.0, height=2.0),
-        )
-    )
-    oval = geometry_to_artwork(
-        _renderable(
-            "pad-oval",
-            GeometryKind.PAD,
-            "F.Cu",
-            "copper",
-            "front",
-            geometry=_pad(shape="oval", width=3.0, height=1.0),
-        )
-    )
-    roundrect = geometry_to_artwork(
-        _renderable(
-            "pad-roundrect",
-            GeometryKind.PAD,
-            "F.Cu",
-            "copper",
-            "front",
-            geometry=_pad(shape="roundrect", width=2.0, height=1.0, roundrect_rratio=0.5),
-        )
-    )
-
-    assert circle is not None
-    assert oval is not None
-    assert roundrect is not None
-    assert isinstance(circle.geometry, Polygon)
-    assert isinstance(oval.geometry, Polygon)
-    assert isinstance(roundrect.geometry, Polygon)
-    assert len(circle.geometry.exterior.coords) == 49
-    assert len(oval.geometry.exterior.coords) == 51
-    assert len(roundrect.geometry.exterior.coords) == 37
-
-
-def test_drill_holes_are_not_additive_artwork_items() -> None:
-    pad_drill = _renderable(
-        "drill-1",
-        GeometryKind.DRILL,
-        "drills",
-        "drill",
-        "",
-        geometry=_pad(shape="circle", x=0.0, y=0.0, drill=0.6),
-    )
-
-    assert geometry_to_artwork(pad_drill) is None
-    assert artwork_items_from_geometry((pad_drill,)) == ()
-
-
 def _renderable(
     geometry_id: str,
     kind: GeometryKind,
@@ -444,7 +210,6 @@ def _pad(
     x: float = 0.0,
     y: float = 0.0,
     drill: float = 0.0,
-    roundrect_rratio: float = 0.0,
 ) -> PcbPad:
     return PcbPad(
         number="1",
@@ -458,18 +223,9 @@ def _pad(
         net_name="GND",
         footprint_ref="J1",
         drill=drill,
-        roundrect_rratio=roundrect_rratio,
     )
 
 
 def _assert_close(actual: float, expected: float, *, rel: float = 1e-9) -> None:
     tolerance = max(abs(expected) * rel, 1e-9)
     assert abs(actual - expected) <= tolerance
-
-
-def _assert_bounds_close(
-    actual: tuple[float, float, float, float],
-    expected: tuple[float, float, float, float],
-) -> None:
-    for actual_value, expected_value in zip(actual, expected, strict=True):
-        _assert_close(actual_value, expected_value)

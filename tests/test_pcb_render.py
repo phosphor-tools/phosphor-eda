@@ -1793,7 +1793,7 @@ def test_derived_serializer_preserves_mask_metadata_and_opening_polarity() -> No
 
 
 def test_derived_serializer_keeps_fill_stroke_and_stroke_width_on_child_path() -> None:
-    path_data = "M 0 0 C 1 1 2 1 3 0 Z"
+    path_d = "M 0 0 C 1 1 2 1 3 0 Z"
     plan = DerivedRenderPlan(
         view_box=ViewBox(0.0, 0.0, 10.0, 10.0),
         width_px=100,
@@ -1804,7 +1804,7 @@ def test_derived_serializer_keeps_fill_stroke_and_stroke_width_on_child_path() -
                 role=VisualRole(namespace="cad", function="copper", side="front"),
                 primitives=(
                     SvgPrimitive(
-                        d=path_data,
+                        d=path_d,
                         source_id="copper-1",
                         source_layer="F.Cu",
                         kind=GeometryKind.PAD,
@@ -1829,7 +1829,7 @@ def test_derived_serializer_keeps_fill_stroke_and_stroke_width_on_child_path() -
     svg = pcb_render_module.render_pcb_svg_from_derived_plan(plan)
 
     assert 'data-role="cad.copper.front"' in svg
-    assert f'd="{path_data}"' in svg
+    assert f'd="{path_d}"' in svg
     assert 'style="opacity: 0.6000"' in svg
     assert 'style="fill: #ff6600; stroke: #111111; stroke-width: 0.0800"' in svg
     path_tag = re.search(r"<path [^>]+>", svg)

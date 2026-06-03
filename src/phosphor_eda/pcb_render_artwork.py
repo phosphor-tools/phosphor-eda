@@ -1,66 +1,40 @@
-"""Artwork core data structures for derived PCB render layers."""
+"""Artwork selection and derived PCB render layer data structures."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
-from shapely import GeometryCollection, LineString, Point, Polygon
+from shapely import GeometryCollection, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from phosphor_eda.pcb import (
     Pcb,
     PcbArc,
-    PcbCircle,
-    PcbGraphicText,
     PcbLine,
     PcbPad,
-    PcbPolygon,
-    PcbSegment,
-    PcbText,
-    PcbTraceArc,
     PcbVia,
-    PcbZone,
 )
 from phosphor_eda.pcb_render_geometry import (
     GeometryKind,
 )
-from phosphor_eda.pcb_render_primitives import (
-    LayerMask,
-    SvgPrimitive,
-    svg_primitives_from_geometry,
-)
 from phosphor_eda.shapely_geometry import normalize_geometry, robust_union
 from phosphor_eda.sql.geometry import (
     VIA_DRILL_QUAD_SEGS,
-    arc_to_polyline,
     board_outline_polygon,
-    pad_polygon,
-    polygon_geometry,
-    segment_geometry,
-    trace_arc_geometry,
     via_geometry,
 )
-from phosphor_eda.text_outlines import text_outline_geometry
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
+    from collections.abc import Iterable, Mapping
 
     from phosphor_eda.pcb_render_geometry import (
-        GeometryTags,
         PcbGeometryStore,
         RenderableGeometry,
     )
+    from phosphor_eda.pcb_render_primitives import LayerMask, SvgPrimitive
     from phosphor_eda.pcb_render_settings import LayerSelectionRule
     from phosphor_eda.pcb_render_tokens import ResolvedStyle, VisualRole
-
-
-@dataclass(frozen=True)
-class ArtworkItem:
-    geometry: BaseGeometry
-    source_ids: tuple[str, ...]
-    source_layers: tuple[str, ...]
-    tags: GeometryTags
 
 
 def _empty_data() -> dict[str, str]:
@@ -161,31 +135,6 @@ def select_source_artwork(
     return tuple(selected)
 
 
-def artwork_items_from_geometry(
-    items: Iterable[RenderableGeometry],
-) -> tuple[ArtworkItem, ...]:
-    """Convert selected raw geometry into Shapely artwork items."""
-    artwork: list[ArtworkItem] = []
-    for item in items:
-        artwork_item = geometry_to_artwork(item)
-        if artwork_item is not None:
-            artwork.append(artwork_item)
-    return tuple(artwork)
-
-
-def geometry_to_artwork(item: RenderableGeometry) -> ArtworkItem | None:
-    """Convert one raw renderable PCB primitive into Shapely artwork."""
-    geometry = _item_shapely_geometry(item)
-    if geometry is None or geometry.is_empty:
-        return None
-    return ArtworkItem(
-        geometry=geometry,
-        source_ids=(item.id,),
-        source_layers=(item.layer.name,),
-        tags=item.tags,
-    )
-
-
 def board_outline_geometry(store: PcbGeometryStore) -> BaseGeometry:
     """Return the board outline polygon assembled from edge-cut primitives."""
     outlines: list[BaseGeometry] = []
@@ -226,53 +175,6 @@ def drill_geometry_for_layer(
     return _union_or_empty(drills)
 
 
-def derived_layer_from_artwork(
-    *,
-    role: VisualRole,
-    artwork: Sequence[ArtworkItem],
-    style: ResolvedStyle | None = None,
-    data: Mapping[str, str] | None = None,
-) -> DerivedLayer:
-    """Create a derived layer record from already-converted artwork."""
-    primitives = tuple(
-        primitive
-        for item in artwork
-        for primitive in svg_primitives_from_geometry(
-            item.geometry,
-            source_ids=item.source_ids,
-            source_layers=item.source_layers,
-            kind=_artwork_kind(item),
-            tags=item.tags,
-        )
-    )
-    return DerivedLayer(
-        id=_derived_layer_id(role),
-        role=role,
-        primitives=primitives,
-        source_layers=_unique_ordered(layer for item in artwork for layer in item.source_layers),
-        source_ids=tuple(source_id for item in artwork for source_id in item.source_ids),
-        style=style,
-        data={} if data is None else data,
-    )
-
-
-def _artwork_kind(item: ArtworkItem) -> GeometryKind:
-    collection = item.tags.source_collection
-    if collection in {"pads", "pad"}:
-        return GeometryKind.PAD
-    if collection in {"segments", "segment"}:
-        return GeometryKind.TRACE
-    if collection in {"vias", "via"}:
-        return GeometryKind.VIA
-    if collection in {"zones", "zone"}:
-        return GeometryKind.ZONE
-    if collection in {"board", "board_material"}:
-        return GeometryKind.BOARD_MATERIAL
-    if collection in {"outline", "board_outline"}:
-        return GeometryKind.BOARD_OUTLINE
-    return GeometryKind.MECHANICAL
-
-
 def _matches_rule(
     item: RenderableGeometry,
     rule: LayerSelectionRule,
@@ -307,119 +209,8 @@ def _object_class_kinds(object_class: str) -> frozenset[GeometryKind]:
     return frozenset(kind for kind in GeometryKind if kind.value == normalized)
 
 
-def _item_shapely_geometry(item: RenderableGeometry) -> BaseGeometry | None:
-    payload = _item_payload(item)
-    if isinstance(payload, BaseGeometry):
-        return payload
-    if item.kind is GeometryKind.PAD and isinstance(payload, PcbPad):
-        return pad_polygon(payload)
-    if item.kind is GeometryKind.TRACE and isinstance(payload, PcbSegment):
-        _centerline, corridor = segment_geometry(payload)
-        return corridor
-    if item.kind is GeometryKind.TRACE_ARC and isinstance(payload, PcbTraceArc):
-        _centerline, corridor = trace_arc_geometry(payload)
-        return corridor
-    if item.kind in _POLYGON_KINDS and isinstance(payload, PcbPolygon):
-        return polygon_geometry(payload)
-    if item.kind is GeometryKind.ZONE and isinstance(payload, PcbZone):
-        return _zone_geometry(payload)
-    if item.kind is GeometryKind.VIA and isinstance(payload, PcbVia):
-        copper, drill = via_geometry(payload)
-        return copper.difference(drill)
-    if item.kind in _LINE_KINDS and isinstance(payload, PcbLine):
-        return _line_geometry(payload)
-    if item.kind in _ARC_KINDS and isinstance(payload, PcbArc):
-        return _arc_geometry(payload)
-    if item.kind in _CIRCLE_KINDS and isinstance(payload, PcbCircle):
-        return _circle_geometry(payload)
-    if item.kind in _TEXT_KINDS and isinstance(payload, PcbText | PcbGraphicText):
-        return text_outline_geometry(payload)
-    if item.kind is GeometryKind.BOARD_OUTLINE:
-        return _board_outline_from_item(item)
-    if item.kind is GeometryKind.BOARD_MATERIAL:
-        return _board_material_geometry(payload)
-    return None
-
-
-_POLYGON_KINDS = frozenset(
-    {
-        GeometryKind.ZONE,
-        GeometryKind.SILK_POLYGON,
-        GeometryKind.FAB_POLYGON,
-        GeometryKind.BODY_POLYGON,
-        GeometryKind.MASK,
-        GeometryKind.PASTE,
-        GeometryKind.MECHANICAL,
-    }
-)
-
-_LINE_KINDS = frozenset(
-    {
-        GeometryKind.SILK_LINE,
-        GeometryKind.FAB_LINE,
-        GeometryKind.BODY_LINE,
-    }
-)
-
-_ARC_KINDS = frozenset(
-    {
-        GeometryKind.FAB_ARC,
-        GeometryKind.BODY_ARC,
-    }
-)
-
-_CIRCLE_KINDS = frozenset(
-    {
-        GeometryKind.FAB_CIRCLE,
-        GeometryKind.BODY_CIRCLE,
-    }
-)
-
-_TEXT_KINDS = frozenset(
-    {
-        GeometryKind.REF_TEXT,
-        GeometryKind.VALUE_TEXT,
-        GeometryKind.USER_TEXT,
-        GeometryKind.BOARD_GRAPHIC_TEXT,
-    }
-)
-
-
 def _item_payload(item: RenderableGeometry) -> object:
     return item.payload if item.payload is not None else item.source
-
-
-def _line_geometry(line: PcbLine) -> BaseGeometry:
-    return LineString([(line.start_x, line.start_y), (line.end_x, line.end_y)]).buffer(
-        line.width / 2,
-        cap_style="flat",
-    )
-
-
-def _arc_geometry(arc: PcbArc) -> BaseGeometry:
-    points = arc_to_polyline(
-        arc.start_x,
-        arc.start_y,
-        arc.mid_x,
-        arc.mid_y,
-        arc.end_x,
-        arc.end_y,
-        num_points=32,
-    )
-    return LineString(points).buffer(arc.width / 2, cap_style="flat")
-
-
-def _circle_geometry(circle: PcbCircle) -> BaseGeometry:
-    geometry = Point(circle.cx, circle.cy).buffer(circle.radius, quad_segs=32)
-    if circle.fill:
-        return geometry
-    return geometry.boundary.buffer(circle.width / 2, cap_style="flat")
-
-
-def _zone_geometry(zone: PcbZone) -> BaseGeometry | None:
-    if len(zone.boundary) < 3:
-        return None
-    return normalize_geometry(Polygon(zone.boundary))
 
 
 def _pad_drill_geometry(payload: object, *, layer_name: str | None) -> BaseGeometry | None:
@@ -511,16 +302,3 @@ def _union_or_empty(geometries: list[BaseGeometry]) -> BaseGeometry:
     if len(geometries) == 1:
         return normalize_geometry(geometries[0])
     return robust_union(geometries)
-
-
-def _derived_layer_id(role: VisualRole) -> str:
-    parts = [role.namespace, role.function]
-    if role.side:
-        parts.append(role.side)
-    if role.side == "inner" and role.inner_index is not None:
-        parts.append(str(role.inner_index))
-    return ":".join(parts)
-
-
-def _unique_ordered(values: Iterable[str]) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(values))

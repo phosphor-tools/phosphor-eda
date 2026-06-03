@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from importlib.resources import files
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, cast
 from xml.sax.saxutils import escape as xml_escape
 
 from phosphor_eda.pcb_render_plan import (
@@ -75,7 +75,7 @@ def load_render_settings_json(text: str) -> RenderSettings:
     return parse_render_settings(data)
 
 
-def _load_render_settings_file_data(path: Path, stack: list[str]) -> dict[str, Any]:
+def _load_render_settings_file_data(path: Path, stack: list[str]) -> dict[str, object]:
     try:
         text = path.read_text()
     except OSError as exc:
@@ -89,7 +89,7 @@ def _load_render_settings_text_data(
     *,
     source: Path | str | None,
     stack: list[str],
-) -> dict[str, Any]:
+) -> dict[str, object]:
     source_id = _settings_source_id(source)
     if source_id in stack:
         cycle = " -> ".join([*stack, source_id])
@@ -97,7 +97,7 @@ def _load_render_settings_text_data(
         raise ValueError(msg)
 
     try:
-        raw: object = json.loads(text)
+        raw = cast("object", json.loads(text))
     except json.JSONDecodeError as exc:
         msg = f"Invalid render settings JSON: {exc}"
         raise ValueError(msg) from exc
@@ -106,7 +106,7 @@ def _load_render_settings_text_data(
         raise ValueError(msg)
 
     data = dict(raw)
-    parse_render_settings(data)
+    _ = parse_render_settings(data)
     parent_ref = data.pop(_SETTINGS_EXTENDS_KEY, "")
     if not parent_ref:
         return data
@@ -128,7 +128,7 @@ def _load_parent_render_settings(
     *,
     source: Path | str | None,
     stack: list[str],
-) -> dict[str, Any]:
+) -> dict[str, object]:
     if not isinstance(parent_ref, str):
         msg = "extends must be a string"
         raise ValueError(msg)
@@ -155,9 +155,9 @@ def _load_parent_render_settings(
 
 
 def _merge_render_settings_data(
-    parent: dict[str, Any],
-    child: dict[str, Any],
-) -> dict[str, Any]:
+    parent: dict[str, object],
+    child: dict[str, object],
+) -> dict[str, object]:
     merged = dict(parent)
     child_css = child.get("custom_css")
     parent_css = parent.get("custom_css")
@@ -379,8 +379,12 @@ class _Svg:
         attrs: dict[str, str] | None = None,
     ) -> None:
         self._parts.append(
-            f'<line x1="{x1:.4f}" y1="{y1:.4f}" x2="{x2:.4f}" y2="{y2:.4f}" '
-            f'stroke-width="{stroke_width:.4f}"{_fmt_attrs(attrs)}/>'
+            "".join(
+                (
+                    f'<line x1="{x1:.4f}" y1="{y1:.4f}" x2="{x2:.4f}" y2="{y2:.4f}" ',
+                    f'stroke-width="{stroke_width:.4f}"{_fmt_attrs(attrs)}/>',
+                )
+            )
         )
 
     def circle(
@@ -428,11 +432,15 @@ class _Svg:
         weight = ' font-weight="bold"' if bold else ""
         rot = f' transform="rotate({rotation:.1f} {x:.4f} {y:.4f})"' if rotation else ""
         self._parts.append(
-            f'<text x="{x:.4f}" y="{y:.4f}" font-size="{font_size:.2f}" '
-            f'text-anchor="middle" '
-            f'dominant-baseline="central" font-family="sans-serif"'
-            f"{weight}{rot}{_fmt_attrs(attrs)}>"
-            f"{xml_escape(content)}</text>"
+            "".join(
+                (
+                    f'<text x="{x:.4f}" y="{y:.4f}" font-size="{font_size:.2f}" ',
+                    'text-anchor="middle" ',
+                    'dominant-baseline="central" font-family="sans-serif"',
+                    f"{weight}{rot}{_fmt_attrs(attrs)}>",
+                    f"{xml_escape(content)}</text>",
+                )
+            )
         )
 
     def group_start(
@@ -634,8 +642,8 @@ def _layer_mask_bounds(mask: LayerMask) -> tuple[float, float, float, float] | N
     return (min(xs), min(ys), max(xs), max(ys))
 
 
-def _svg_path_points(path_data: str) -> tuple[tuple[float, float], ...]:
-    numbers = [float(match.group(0)) for match in _SVG_PATH_NUMBER_RE.finditer(path_data)]
+def _svg_path_points(path_d: str) -> tuple[tuple[float, float], ...]:
+    numbers = [float(match.group(0)) for match in _SVG_PATH_NUMBER_RE.finditer(path_d)]
     return tuple(zip(numbers[0::2], numbers[1::2], strict=False))
 
 
@@ -1017,9 +1025,13 @@ def _render_pill_label(
         fill = label_style.get("fill") if label_style is not None else None
         fill_attr = fill if isinstance(fill, str) else text_color
         svg.raw(
-            f'<text x="{cx:.4f}" y="{ty:.4f}" text-anchor="{text_anchor}" '
-            f'class="annotation-label-text" fill="{fill_attr}">'
-            f"{xml_escape(line)}</text>"
+            "".join(
+                (
+                    f'<text x="{cx:.4f}" y="{ty:.4f}" text-anchor="{text_anchor}" ',
+                    f'class="annotation-label-text" fill="{fill_attr}">',
+                    f"{xml_escape(line)}</text>",
+                )
+            )
         )
 
 
@@ -1153,8 +1165,12 @@ def _render_legend(svg: _Svg, legend: ResolvedLegend, font_size: float) -> None:
         title_fs = font_size * 0.85
         cursor_y += title_fs / 2 + BASELINE_CENTER_OFFSET * title_fs
         svg.raw(
-            f'<text x="{legend.x + pad_h:.4f}" y="{cursor_y:.4f}" '
-            f'class="legend-title-text">{xml_escape(legend.title)}</text>'
+            "".join(
+                (
+                    f'<text x="{legend.x + pad_h:.4f}" y="{cursor_y:.4f}" ',
+                    f'class="legend-title-text">{xml_escape(legend.title)}</text>',
+                )
+            )
         )
         cursor_y += title_fs * 0.5  # gap after title
 
@@ -1184,8 +1200,12 @@ def _render_legend(svg: _Svg, legend: ResolvedLegend, font_size: float) -> None:
             text_x = legend.x + pad_h
         text_y = cursor_y + font_size / 2 + BASELINE_CENTER_OFFSET * font_size
         svg.raw(
-            f'<text x="{text_x:.4f}" y="{text_y:.4f}" '
-            f'class="legend-entry-text">{xml_escape(entry.label)}</text>'
+            "".join(
+                (
+                    f'<text x="{text_x:.4f}" y="{text_y:.4f}" ',
+                    f'class="legend-entry-text">{xml_escape(entry.label)}</text>',
+                )
+            )
         )
         cursor_y += max(font_size, swatch_size)
 

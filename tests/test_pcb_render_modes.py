@@ -416,7 +416,6 @@ def test_cad_copper_projection_does_not_use_skia_union() -> None:
     assert layer.source_ids == ("pad-1",)
     assert len(layer.primitives) == 1
     assert warnings == []
-    assert not hasattr(render_modes, "union_skia_artwork")
 
 
 def test_realistic_covered_copper_skips_unconvertible_source_without_artwork_fallback(
@@ -1085,10 +1084,6 @@ def test_highlight_layer_contents_do_not_use_artwork_resolution_or_union() -> No
         )
     )
 
-    assert not hasattr(render_modes, "_groupable_artwork")
-    assert not hasattr(render_modes, "_process_artwork_layer")
-    assert not hasattr(render_modes, "robust_union")
-
     groups = build_highlight_layers(
         store,
         _settings(
@@ -1170,10 +1165,6 @@ def test_cad_layer_contents_do_not_use_artwork_resolution_or_union() -> None:
         )
     )
 
-    assert not hasattr(render_modes, "_groupable_artwork")
-    assert not hasattr(render_modes, "_process_artwork_layer")
-    assert not hasattr(render_modes, "robust_union")
-
     layers = build_cad_layers(
         store,
         _settings(
@@ -1212,11 +1203,8 @@ def test_realistic_layer_contents_do_not_use_artwork_resolution_or_boolean_geome
             ),
         )
     )
-    assert not hasattr(render_modes, "_groupable_artwork")
-    assert not hasattr(render_modes, "_process_artwork_layer")
     assert not hasattr(render_modes, "_difference")
     assert not hasattr(render_modes, "_intersection")
-    assert not hasattr(render_modes, "robust_union")
 
     layers = build_realistic_layers(
         store,

@@ -12,7 +12,7 @@ from phosphor_eda.pcb_render_geometry import GeometryKind, GeometryTags
 from phosphor_eda.sql.geometry import arc_to_polyline
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Sequence
 
     from phosphor_eda.pcb_render_geometry import RenderableGeometry
 
@@ -64,15 +64,6 @@ class _PathopsModule(Protocol):
     LineCap: _LineCapValues
     LineJoin: _LineJoinValues
 
-    def union(
-        self,
-        contours: Sequence[_Path],
-        outpen: _SvgPointPen,
-        fix_winding: bool = True,
-        keep_starting_points: bool = True,
-        clockwise: bool = False,
-    ) -> None: ...
-
 
 class _SvgPointPen(Protocol):
     def moveTo(self, point: tuple[float, float]) -> None: ...
@@ -95,17 +86,6 @@ class SkiaArtwork:
     source_ids: tuple[str, ...]
     source_layers: tuple[str, ...]
     tags: GeometryTags
-
-
-@dataclass(frozen=True)
-class SkiaPathData:
-    d: str
-    source_ids: tuple[str, ...]
-    source_layers: tuple[str, ...]
-    path_characters: int
-    move_commands: int
-    line_commands: int
-    curve_commands: int
 
 
 class _SvgPathPen:
@@ -140,7 +120,7 @@ class _SvgPathPen:
     def closePath(self) -> None:
         self.parts.append("Z")
 
-    def path_data(self) -> str:
+    def svg_d(self) -> str:
         return " ".join(self.parts)
 
 
@@ -176,32 +156,12 @@ def geometry_to_skia_artwork(
     )
 
 
-def union_skia_artwork(artwork: Iterable[SkiaArtwork]) -> SkiaPathData:
-    """Union Skia artwork and serialize it as SVG path data."""
-    artwork_tuple = tuple(artwork)
-    pen = _SvgPathPen()
-    raw_paths = [item.path for item in artwork_tuple]
-    _PATHOPS.union(raw_paths, pen)
-    d = pen.path_data()
-    return SkiaPathData(
-        d=d,
-        source_ids=tuple(source_id for item in artwork_tuple for source_id in item.source_ids),
-        source_layers=tuple(
-            dict.fromkeys(layer for item in artwork_tuple for layer in item.source_layers)
-        ),
-        path_characters=len(d),
-        move_commands=d.count("M "),
-        line_commands=d.count("L "),
-        curve_commands=d.count("Q ") + d.count("C "),
-    )
-
-
 def skia_path_to_svg_d(path: _Path) -> str:
     """Serialize one Skia path as SVG path data without unioning it."""
     _convert_conics(path)
     pen = _SvgPathPen()
     path.draw(pen)
-    return pen.path_data()
+    return pen.svg_d()
 
 
 _POLYGON_KINDS = frozenset(
