@@ -1317,14 +1317,29 @@ def test_profiler_reports_skia_path_metrics_for_cad_copper() -> None:
     profile_events = cast("list[dict[str, object]]", profiler.to_dict()["events"])
     by_name = {event["name"]: event for event in profile_events}
     input_data = cast("dict[str, object]", by_name["cad.skia.input"]["data"])
+    convert_data = cast("dict[str, object]", by_name["cad.skia.convert"]["data"])
+    union_data = cast("dict[str, object]", by_name["cad.skia.union"]["data"])
     output_data = cast("dict[str, object]", by_name["cad.skia.output"]["data"])
 
-    assert "cad.skia.union" in by_name
-    assert input_data["sourceItems"] == 2
-    assert isinstance(output_data["pathCharacters"], int)
-    assert isinstance(output_data["moveCommands"], int)
-    assert output_data["pathCharacters"] > 0
-    assert output_data["moveCommands"] > 0
+    for event_data in (input_data, convert_data, union_data, output_data):
+        assert event_data["layer"] == "F.Cu"
+        assert event_data["function"] == "copper"
+        assert event_data["side"] == "front"
+        assert event_data["items"] == 2
+        assert event_data["sourceItems"] == 2
+
+    path_characters = output_data["pathCharacters"]
+    move_commands = output_data["moveCommands"]
+    line_commands = output_data["lineCommands"]
+    curve_commands = output_data["curveCommands"]
+    assert isinstance(path_characters, int)
+    assert isinstance(move_commands, int)
+    assert isinstance(line_commands, int)
+    assert isinstance(curve_commands, int)
+
+    assert path_characters > 0
+    assert move_commands > 0
+    assert line_commands > 0
 
 
 def test_highlight_layers_reuse_surface_drill_clip_geometry(
