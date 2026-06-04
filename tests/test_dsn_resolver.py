@@ -412,7 +412,7 @@ def test_pin_occurrence_with_unknown_scope_fails_resolution() -> None:
     pin_scope = _scope("Missing")
     pin = _pin("Main", pin_scope, 1, "U1")
 
-    with pytest.raises(ResolutionInputError, match="pin .* unknown scope"):
+    with pytest.raises(ResolutionInputError, match=r"pin .* unknown scope"):
         resolve_dsn_source(
             _source([_page("Main", page_scope, [_net("Main", page_scope, 1, "SIG")], pins=[pin])])
         )
@@ -422,7 +422,7 @@ def test_pin_occurrence_with_unknown_local_net_fails_resolution() -> None:
     scope = _scope("Main")
     pin = _pin("Main", scope, 2, "U1")
 
-    with pytest.raises(ResolutionInputError, match="pin .* unknown local net"):
+    with pytest.raises(ResolutionInputError, match=r"pin .* unknown local net"):
         resolve_dsn_source(
             _source([_page("Main", scope, [_net("Main", scope, 1, "SIG")], pins=[pin])])
         )
@@ -433,7 +433,7 @@ def test_pin_occurrence_scope_must_match_local_net_scope() -> None:
     pin_scope = _scope("B")
     pin = _pin("A", pin_scope, 1, "U1")
 
-    with pytest.raises(ResolutionInputError, match="pin .* scope .* local net"):
+    with pytest.raises(ResolutionInputError, match=r"pin .* scope .* local net"):
         resolve_dsn_source(
             _source(
                 [
@@ -448,7 +448,7 @@ def test_local_net_with_unknown_scope_fails_resolution() -> None:
     page_scope = _scope("Main")
     net_scope = _scope("Missing")
 
-    with pytest.raises(ResolutionInputError, match="local net .* unknown scope"):
+    with pytest.raises(ResolutionInputError, match=r"local net .* unknown scope"):
         resolve_dsn_source(
             _source([_page("Main", page_scope, [_net("Main", net_scope, 1, "SIG")])])
         )
@@ -458,7 +458,7 @@ def test_global_with_unknown_scope_fails_resolution() -> None:
     page_scope = _scope("Main")
     global_scope = _scope("Missing")
 
-    with pytest.raises(ResolutionInputError, match="global .* unknown scope"):
+    with pytest.raises(ResolutionInputError, match=r"global .* unknown scope"):
         resolve_dsn_source(
             _source(
                 [
@@ -476,7 +476,7 @@ def test_global_with_unknown_scope_fails_resolution() -> None:
 def test_global_with_unknown_local_net_fails_resolution() -> None:
     scope = _scope("Main")
 
-    with pytest.raises(ResolutionInputError, match="global .* unknown local net"):
+    with pytest.raises(ResolutionInputError, match=r"global .* unknown local net"):
         resolve_dsn_source(
             _source(
                 [

@@ -745,7 +745,7 @@ def test_format_net_detail():
 def test_format_net_detail_disambiguates_duplicate_net_names_by_id():
     design = _duplicate_reference_design()
 
-    with pytest.raises(ValueError, match="ambiguous.*net:mcu-a:reset.*net:mcu-b:reset"):
+    with pytest.raises(ValueError, match=r"ambiguous.*net:mcu-a:reset.*net:mcu-b:reset"):
         _ = format_net_detail(design, "RESET")
 
     detail = format_net_detail(design, "net:mcu-b:reset")
@@ -854,7 +854,7 @@ def test_format_page_detail_rejects_ambiguous_duplicate_page_names():
     second = Page(name="Channel", id="page:channel-b", scope_id=ScopeId(path=("root", "b")))
     design = Schematic(name="REPEATED", pages=[first, second])
 
-    with pytest.raises(ValueError, match="ambiguous.*page:channel-a.*page:channel-b"):
+    with pytest.raises(ValueError, match=r"ambiguous.*page:channel-a.*page:channel-b"):
         _ = format_page_detail(design, "Channel")
 
     detail = format_page_detail(design, "page:channel-b")

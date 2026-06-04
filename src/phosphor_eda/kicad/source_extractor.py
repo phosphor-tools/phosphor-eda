@@ -254,7 +254,8 @@ def _generated_local_net_name(
     ):
         if named_items:
             return named_items[0].name
-    return local_net_id.rsplit(":", 1)[-1]
+    _prefix, _sep, source_key = local_net_id.partition(":local_net:")
+    return source_key or local_net_id
 
 
 def _source_id(scope_id: ScopeId, kind: str, source_key: str) -> str:

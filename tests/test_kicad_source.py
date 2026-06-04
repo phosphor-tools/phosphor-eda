@@ -12,6 +12,7 @@ from phosphor_eda.kicad.source import (
     KiCadPowerSymbol,
     KiCadSheetPin,
 )
+from phosphor_eda.kicad.source_extractor import _generated_local_net_name
 from phosphor_eda.kicad.to_schematic import kicad_to_source
 from phosphor_eda.schematic import ScopeId
 
@@ -83,6 +84,20 @@ def test_pin_occurrences_keep_scope_and_local_net_id() -> None:
     for pin in child_pins:
         assert pin.local_net_id
         assert local_nets_by_id[pin.local_net_id].scope_id == pin.scope_id
+
+
+def test_generated_local_net_name_keeps_full_anonymous_source_key() -> None:
+    assert (
+        _generated_local_net_name(
+            "root:local_net:0001:12.0000:34.0000",
+            [],
+            [],
+            [],
+            [],
+            [],
+        )
+        == "0001:12.0000:34.0000"
+    )
 
 
 def test_multi_pin_power_symbol_attaches_evidence_to_each_local_net(tmp_path: Path) -> None:

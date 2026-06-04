@@ -1,6 +1,15 @@
 """Tests for the public schematic graph model."""
 
 import phosphor_eda.schematic as schematic
+from phosphor_eda.net_union import NetUnion
+from phosphor_eda.resolved_graph import (
+    ResolvedComponentOccurrenceInput,
+    ResolvedLocalNetInput,
+    ResolvedNetInput,
+    ResolvedPageInput,
+    ResolvedPinInput,
+    build_resolved_schematic,
+)
 from phosphor_eda.schematic import (
     Component,
     ComponentOccurrence,
@@ -200,3 +209,64 @@ def test_port_is_not_public_model() -> None:
     assert not hasattr(schematic, "merge_pages")
     assert not hasattr(schematic, "_unify_nets")
     assert not hasattr(schematic, "_resolve_net")
+
+
+def test_resolved_graph_preserves_distinct_pin_ids_with_same_designator() -> None:
+    scope = ScopeId(path=("root",))
+    local_nets = [
+        ResolvedLocalNetInput(id="local:first", scope_id=scope, source_names=frozenset({"FIRST"})),
+        ResolvedLocalNetInput(
+            id="local:second",
+            scope_id=scope,
+            source_names=frozenset({"SECOND"}),
+        ),
+    ]
+    pins = [
+        ResolvedPinInput(
+            id="source:u1:a:pin-1",
+            scope_id=scope,
+            local_net_id="local:first",
+            component_id="component:u1",
+            component_reference="U1",
+            component_part="MCU",
+            component_description="Processor",
+            pin_id="pin:u1:first:1",
+            pin_designator="1",
+            pin_name="GPIO_A",
+            no_connect=False,
+            component_occurrence=ResolvedComponentOccurrenceInput(source_id="source:u1:a"),
+        ),
+        ResolvedPinInput(
+            id="source:u1:b:pin-1",
+            scope_id=scope,
+            local_net_id="local:second",
+            component_id="component:u1",
+            component_reference="U1",
+            component_part="MCU",
+            component_description="Processor",
+            pin_id="pin:u1:second:1",
+            pin_designator="1",
+            pin_name="GPIO_B",
+            no_connect=False,
+            component_occurrence=ResolvedComponentOccurrenceInput(source_id="source:u1:b"),
+        ),
+    ]
+
+    design = build_resolved_schematic(
+        name="same-designator",
+        pages=[ResolvedPageInput(id="page:root", name="Root", scope_id=scope)],
+        local_nets=local_nets,
+        pins=pins,
+        net_union=NetUnion(local_net.id for local_net in local_nets),
+        net_factory=lambda _index, union_id, grouped_nets: ResolvedNetInput(
+            id=f"net:{union_id}",
+            name=next(iter(grouped_nets[0].source_names)),
+        ),
+        include_net=lambda _union_id, _grouped_nets, _pins: True,
+    )
+
+    [component] = design.components
+
+    assert [pin.id for pin in component.pins] == ["pin:u1:first:1", "pin:u1:second:1"]
+    assert [pin.designator for pin in component.pins] == ["1", "1"]
+    assert {pin.net.name for pin in component.pins if pin.net is not None} == {"FIRST", "SECOND"}

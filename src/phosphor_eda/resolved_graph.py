@@ -262,7 +262,7 @@ def _build_components(
 ) -> list[Component]:
     components_by_id: dict[str, Component] = {}
     occurrences_by_component_page_source: set[tuple[str, str, str]] = set()
-    pins_by_component_designator: dict[tuple[str, str], Pin] = {}
+    pins_by_id: dict[str, Pin] = {}
     component_page_ids: dict[str, set[str]] = {}
     page_component_ids: dict[str, set[str]] = {
         page.id: {component.id for component in page.components} for page in pages_by_scope.values()
@@ -329,8 +329,7 @@ def _build_components(
                 )
             )
 
-        pin_key = (component.id, pin_input.pin_designator)
-        pin = pins_by_component_designator.get(pin_key)
+        pin = pins_by_id.get(pin_input.pin_id)
         if pin is None:
             pin = Pin(
                 id=pin_input.pin_id,
@@ -340,7 +339,7 @@ def _build_components(
                 no_connect=pin_input.no_connect,
                 metadata=dict(pin_input.pin_metadata),
             )
-            pins_by_component_designator[pin_key] = pin
+            pins_by_id[pin_input.pin_id] = pin
             component.pins.append(pin)
         else:
             if not pin.name and pin_input.pin_name:
