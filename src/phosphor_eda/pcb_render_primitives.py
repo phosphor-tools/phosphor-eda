@@ -97,6 +97,23 @@ def drill_to_svg_primitive(item: RenderableGeometry) -> SvgPrimitive | None:
     )
 
 
+def visible_drill_to_svg_primitive(item: RenderableGeometry) -> SvgPrimitive | None:
+    """Convert one drill source item into an EDA-style visible drill symbol."""
+    payload = item.payload if item.payload is not None else item.source
+    if item.kind is not GeometryKind.DRILL or not isinstance(payload, PcbPad):
+        return None
+    d = _drill_symbol_path_d(payload.x, payload.y, payload.drill / 2.0)
+    if not d:
+        return None
+    return SvgPrimitive(
+        d=d,
+        source_id=item.id,
+        source_layer="drills",
+        kind=GeometryKind.DRILL,
+        tags=item.tags,
+    )
+
+
 def pad_solder_mask_opening_primitive(
     item: RenderableGeometry,
     *,
@@ -401,6 +418,14 @@ def _circle_path_d(cx: float, cy: float, radius: float) -> str:
         for x1, y1, x2, y2, x3, y3 in curves
     )
     return " ".join((f"M {cx + radius:.4f} {cy:.4f}", *curve_commands, "Z"))
+
+
+def _drill_symbol_path_d(cx: float, cy: float, radius: float) -> str:
+    if radius <= 0:
+        return ""
+    diagonal = radius / math.sqrt(2)
+    slash = f"M {cx - diagonal:.4f} {cy - diagonal:.4f} L {cx + diagonal:.4f} {cy + diagonal:.4f}"
+    return f"{_circle_path_d(cx, cy, radius)} {slash}"
 
 
 def _stroked_polyline_path_d(points: Iterable[tuple[float, float]], width: float) -> str:

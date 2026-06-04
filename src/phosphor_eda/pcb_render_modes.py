@@ -20,6 +20,7 @@ from phosphor_eda.pcb_render_primitives import (
     drill_to_svg_primitive,
     geometry_to_svg_primitive,
     pad_solder_mask_opening_primitive,
+    visible_drill_to_svg_primitive,
 )
 from phosphor_eda.pcb_render_tokens import VisualRole, resolve_layer_style
 
@@ -550,7 +551,7 @@ def _primitive_layer_primitives_without_profiling(
     primitives: list[SvgPrimitive] = []
     for item in sorted(group, key=_primitive_layer_item_sort_key):
         if key.function == "drill" and item.source.kind is GeometryKind.DRILL:
-            primitive = drill_to_svg_primitive(item.source)
+            primitive = visible_drill_to_svg_primitive(item.source)
         else:
             primitive = geometry_to_svg_primitive(
                 item.source,

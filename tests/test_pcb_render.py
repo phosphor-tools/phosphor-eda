@@ -529,7 +529,7 @@ def test_design_preset_renders_board_outline_without_fill() -> None:
 
     assert 'class="board-material"' not in svg
     assert re.search(
-        r'data-role="eda.edge".*style="fill: none; stroke: #d0d2cd; stroke-width: 0\.1500"',
+        r'data-role="eda.edge".*style="fill: none; stroke: #202020; stroke-width: 0\.0800"',
         svg,
         re.DOTALL,
     )
@@ -576,8 +576,12 @@ def test_design_preset_renders_visible_drills_as_outline_layer() -> None:
     assert drill_style is not None
     assert _style_value(drill_style, "fill") == "none"
     assert _style_value(drill_style, "stroke") == "#202020"
-    assert _style_value(drill_style, "stroke-width") == "0.1200"
+    assert _style_value(drill_style, "stroke-width") == "0.0600"
     assert 'data-source-id="drill:U1:1:0" data-source-layer="drills" data-kind="drill"' in svg
+    assert re.search(
+        r'<path d="[^"]+ L [^"]+"[^>]+data-source-id="drill:U1:1:0"',
+        svg,
+    )
 
 
 def test_design_drill_layer_is_not_masked_by_drill_clip() -> None:
@@ -602,6 +606,16 @@ def test_design_copper_still_uses_drill_clipping() -> None:
     copper_group_attrs = _layer_group_attrs(svg, "eda.copper.front", "F.Cu")
     assert copper_group_attrs is not None
     assert 'mask="url(' in copper_group_attrs
+    assert re.search(
+        r'<path d="[^"]+" fill="black" fill-rule="evenodd" '
+        r'data-source-id="drill:U1:1:0"',
+        svg,
+    )
+    assert not re.search(
+        r'<path d="[^"]+ L [^"]+" fill="black" fill-rule="evenodd" '
+        r'data-source-id="drill:U1:1:0"',
+        svg,
+    )
 
 
 def test_copper_layer_paints_traces_zones_then_pads() -> None:

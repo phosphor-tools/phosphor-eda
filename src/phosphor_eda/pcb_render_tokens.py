@@ -51,8 +51,8 @@ _EDA_SILKSCREEN_ANCHOR_COLORS = {
     "Bottom Overlay": "#ffff00",
 }
 _EDA_EDGE_ANCHOR_COLORS = {
-    "Edge.Cuts": "#d0d2cd",
-    "Board Shape": "#d0d2cd",
+    "Edge.Cuts": "#202020",
+    "Board Shape": "#202020",
 }
 _EDA_DRILL_ANCHOR_COLORS = {
     "drills": "#202020",
@@ -61,7 +61,7 @@ _EDA_COPPER_FRONT_COLOR = "#cc0000"
 _EDA_COPPER_BACK_COLOR = "#0000cc"
 _EDA_SILKSCREEN_FRONT_COLOR = "#ffffff"
 _EDA_SILKSCREEN_BACK_COLOR = "#ffff00"
-_EDA_EDGE_COLOR = "#d0d2cd"
+_EDA_EDGE_COLOR = "#202020"
 _EDA_DRILL_COLOR = "#202020"
 
 
@@ -228,7 +228,7 @@ def _resolve_eda_edge_default(role: VisualRole, prop: str) -> object | None:
     if prop == "stroke":
         return _EDA_EDGE_ANCHOR_COLORS.get(role.source_layer_name, _EDA_EDGE_COLOR)
     if prop == "strokeWidthMm":
-        return 0.15
+        return 0.08
     return None
 
 
@@ -238,7 +238,7 @@ def _resolve_eda_drill_default(role: VisualRole, prop: str) -> object | None:
     if prop == "stroke":
         return _EDA_DRILL_ANCHOR_COLORS.get(role.source_layer_name, _EDA_DRILL_COLOR)
     if prop == "strokeWidthMm":
-        return 0.12
+        return 0.06
     return None
 
 

@@ -151,8 +151,8 @@ def test_eda_edge_defaults_to_outline_style() -> None:
 
     assert style == ResolvedStyle(
         fill="none",
-        stroke="#d0d2cd",
-        stroke_width_mm=0.15,
+        stroke="#202020",
+        stroke_width_mm=0.08,
     )
 
 
@@ -167,7 +167,7 @@ def test_eda_drill_defaults_to_outline_style() -> None:
     assert style == ResolvedStyle(
         fill="none",
         stroke="#202020",
-        stroke_width_mm=0.12,
+        stroke_width_mm=0.06,
     )
 
 
