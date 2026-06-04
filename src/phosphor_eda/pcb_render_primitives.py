@@ -53,6 +53,11 @@ class LayerMask:
     openings: tuple[SvgPrimitive, ...] = ()
 
 
+@dataclass(frozen=True)
+class LayerClip:
+    board: tuple[SvgPrimitive, ...] = ()
+
+
 def geometry_to_svg_primitive(
     item: RenderableGeometry,
     *,

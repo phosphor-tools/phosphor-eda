@@ -86,10 +86,10 @@ def _layers(item: SExpNode) -> list[str]:
     """Extract layer names from (layers "F.Cu" "B.Cu" ...)."""
     result: list[str] = []
     for v in item[1:]:
-        if isinstance(v, str):
-            result.append(v)
-        elif isinstance(v, sexpdata.Symbol):
+        if isinstance(v, sexpdata.Symbol):
             result.append(v.value())
+        elif isinstance(v, str):
+            result.append(v)
     return result
 
 

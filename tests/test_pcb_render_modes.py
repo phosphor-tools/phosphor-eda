@@ -674,6 +674,7 @@ def test_realistic_front_layers_project_physical_stack_in_order() -> None:
                 LayerSelectionRule(match=LayerMatch(function="solder_mask", side="front")),
                 LayerSelectionRule(match=LayerMatch(function="copper", side="front")),
                 LayerSelectionRule(match=LayerMatch(function="silkscreen", side="front")),
+                LayerSelectionRule(match=LayerMatch(function="edge")),
             ),
             tokens=_realistic_tokens(),
         ),
@@ -739,6 +740,10 @@ def test_realistic_front_layers_project_physical_stack_in_order() -> None:
         "mask-substrate-opening",
         "copper-pad",
     )
+    assert by_id["realistic:exposedCopper"].clip is not None
+    assert tuple(
+        primitive.source_id for primitive in by_id["realistic:exposedCopper"].clip.board
+    ) == ("board-outline",)
 
 
 def test_realistic_solder_mask_openings_include_visible_side_pads() -> None:

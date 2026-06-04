@@ -4,8 +4,7 @@
     "layers": [
       { "match": { "function": "copper" } },
       { "match": { "function": "solder_mask", "side": "active" } },
-      { "match": { "function": "silkscreen", "side": "active" } },
-      { "match": { "function": "edge" } }
+      { "match": { "function": "silkscreen", "side": "active" } }
     ],
     "excludeComponents": ["R", "C", "L", "TP"]
   },
@@ -17,9 +16,6 @@
     "realistic.exposedCopper.fill": "#b87333",
     "realistic.exposedCopper.opacity": 0.85,
     "realistic.silkscreen.fill": "#ffffff",
-    "realistic.boardOutline.fill": "none",
-    "realistic.boardOutline.stroke": "#1a5c2a",
-    "realistic.boardOutline.strokeWidthMm": 0.12,
     "highlight.copper.front.fill": "#ff8a00",
     "highlight.copper.front.opacity": 0.85,
     "highlight.copper.front.stroke": "none",

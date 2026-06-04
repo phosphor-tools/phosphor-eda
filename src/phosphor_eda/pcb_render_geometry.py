@@ -867,7 +867,8 @@ def _outline_points(
 
 
 def _pad_copper_layer(pad: PcbPad, footprint_layer: str, layer_lookup: dict[str, PcbLayer]) -> str:
-    for layer_name in pad.layers:
+    for raw_layer_name in pad.layers:
+        layer_name = str(raw_layer_name)
         if layer_name == "*.Cu":
             return footprint_layer
         layer = layer_lookup.get(layer_name)

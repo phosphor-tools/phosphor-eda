@@ -316,7 +316,7 @@ def footprint_bbox_polygon(fp: PcbFootprint) -> Polygon | None:
 
 def pad_side(pad: PcbPad) -> str:
     """Determine which board side a pad is accessible from."""
-    layers = pad.layers
+    layers = [str(layer) for layer in pad.layers]
     has_wildcard = any("*" in ly for ly in layers)
     has_front = any(ly in _FRONT_LAYERS for ly in layers)
     has_back = any(ly in _BACK_LAYERS for ly in layers)

@@ -13,6 +13,7 @@ from phosphor_eda.pcb_render_artwork import (
 )
 from phosphor_eda.pcb_render_geometry import GeometryKind, GeometryLayer
 from phosphor_eda.pcb_render_primitives import (
+    LayerClip,
     LayerMask,
     SvgPrimitive,
     drill_to_svg_primitive,
@@ -168,6 +169,7 @@ def build_realistic_layers(
     if profiler is not None:
         profiler.metric("realistic.layer_items", count=len(layer_items))
     board_primitives = _board_mask_primitives(store)
+    board_clip = LayerClip(board=board_primitives) if board_primitives else None
     drill_primitives = _drill_mask_primitives(store)
     dimmed = _should_dim_base_layers(store, settings)
     warned_missing_dimmed_tokens: set[str] = set()
@@ -199,17 +201,20 @@ def build_realistic_layers(
         profiler.metric("realistic.copper_primitives", count=len(copper_primitives))
         profiler.metric("realistic.silkscreen_primitives", count=len(silkscreen_primitives))
 
+    board_outline_primitives = _selected_board_outline_primitives(selected_items)
     layer_inputs = {
         "substrate": _RealisticLayerInput(
             primitives=board_primitives,
             source_layers=_board_source_layers(store),
             source_ids=_board_source_ids(store),
+            clip=board_clip,
             mask=LayerMask(board=board_primitives, drills=drill_primitives),
         ),
         "solderMask": _RealisticLayerInput(
             primitives=board_primitives,
             source_layers=_source_layers_for_primitives(mask_openings, board_primitives),
             source_ids=_source_ids_for_primitives(mask_openings, board_primitives),
+            clip=board_clip,
             mask=LayerMask(
                 board=board_primitives,
                 drills=drill_primitives,
@@ -220,18 +225,21 @@ def build_realistic_layers(
             primitives=copper_primitives,
             source_layers=_source_layers_for_primitives(copper_primitives),
             source_ids=_source_ids_by_store_order_for_primitives(store, copper_primitives),
+            clip=board_clip,
             mask=LayerMask(board=board_primitives, drills=drill_primitives),
         ),
         "exposedCopper": _RealisticLayerInput(
             primitives=copper_primitives if mask_openings else (),
             source_layers=_source_layers_for_primitives(copper_primitives),
             source_ids=_source_ids_by_store_order_for_primitives(store, copper_primitives),
+            clip=board_clip,
             mask=LayerMask(board=mask_openings, drills=drill_primitives),
         ),
         "silkscreen": _RealisticLayerInput(
             primitives=silkscreen_primitives,
             source_layers=_source_layers_for_primitives(silkscreen_primitives),
             source_ids=_source_ids_by_store_order_for_primitives(store, silkscreen_primitives),
+            clip=board_clip,
             mask=LayerMask(
                 board=board_primitives,
                 drills=drill_primitives,
@@ -239,9 +247,10 @@ def build_realistic_layers(
             ),
         ),
         "boardOutline": _RealisticLayerInput(
-            primitives=_board_outline_primitives(store),
+            primitives=board_outline_primitives,
             source_layers=_board_source_layers(store),
             source_ids=_board_source_ids(store),
+            clip=None,
             mask=None,
         ),
     }
@@ -268,6 +277,7 @@ def build_realistic_layers(
                 source_layers=layer_input.source_layers,
                 source_ids=layer_input.source_ids,
                 style=style,
+                clip=layer_input.clip,
                 mask=layer_input.mask,
             )
         )
@@ -367,6 +377,7 @@ class _RealisticLayerInput:
     primitives: tuple[SvgPrimitive, ...]
     source_layers: tuple[str, ...]
     source_ids: tuple[str, ...]
+    clip: LayerClip | None
     mask: LayerMask | None
 
 
@@ -717,6 +728,23 @@ def _side_mask_layer_name(store: PcbGeometryStore, side: str) -> str:
         if item.layer.role == "mask" and item.layer.side == side:
             return item.layer.name
     return "B.Mask" if side == "back" else "F.Mask"
+
+
+def _selected_board_outline_primitives(
+    selected_items: Iterable[RenderableGeometry],
+) -> tuple[SvgPrimitive, ...]:
+    return tuple(
+        primitive
+        for item in selected_items
+        if item.kind is GeometryKind.BOARD_OUTLINE
+        if (
+            primitive := geometry_to_svg_primitive(
+                item,
+                target_layer_name=item.layer.name,
+            )
+        )
+        is not None
+    )
 
 
 def _source_layers_for_primitives(

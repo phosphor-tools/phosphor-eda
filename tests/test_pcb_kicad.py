@@ -277,6 +277,22 @@ def test_orangecrab_polygon_layers(orangecrab_board: Pcb) -> None:
     assert "B.Cu" in layers
 
 
+def test_orangecrab_pad_layers_are_plain_strings(orangecrab_board: Pcb) -> None:
+    """KiCad symbolic layer names should be normalized before entering the domain model."""
+    pad_layers = [
+        layer
+        for footprint in orangecrab_board.footprints
+        for pad in footprint.pads
+        for layer in pad.layers
+    ]
+    via_layers = [layer for via in orangecrab_board.vias for layer in via.layers]
+
+    assert pad_layers
+    assert all(type(layer) is str for layer in pad_layers)
+    assert all(type(layer) is str for layer in via_layers)
+    assert "*.Cu" in pad_layers
+
+
 # ---------------------------------------------------------------------------
 # 3D model parsing
 # ---------------------------------------------------------------------------

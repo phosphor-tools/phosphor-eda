@@ -93,7 +93,7 @@ def _load_footprints(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
     for fp in pcb.footprints:
         geom = footprint_bbox_polygon(fp)
         wkb_val = _wkb(geom) if geom else None
-        con.execute(
+        _ = con.execute(
             "INSERT INTO footprints VALUES (?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))",
             [
                 fp.reference,
@@ -115,7 +115,7 @@ def _load_pads(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
             side = pad_side(pad)
             # Use the first copper layer as the representative layer
             layer = _first_copper_layer(pad.layers)
-            con.execute(
+            _ = con.execute(
                 """INSERT INTO pads VALUES
                 (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))""",
                 [
@@ -140,10 +140,11 @@ def _load_pads(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
 
 def _first_copper_layer(layers: list[str]) -> str:
     """Pick the first copper layer name from a pad's layer list."""
-    for ly in layers:
+    normalized_layers = [str(layer) for layer in layers]
+    for ly in normalized_layers:
         if "Cu" in ly or "Layer" in ly or "Top" in ly or "Bottom" in ly:
             return ly
-    return layers[0] if layers else ""
+    return normalized_layers[0] if normalized_layers else ""
 
 
 def _load_segments(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
@@ -152,7 +153,7 @@ def _load_segments(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
         centerline, corridor = segment_geometry(seg)
         length = centerline.length
         net_name = _net_name(pcb, seg.net_number)
-        con.execute(
+        _ = con.execute(
             """INSERT INTO segments VALUES
             (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?), ST_GeomFromWKB(?))""",
             [
@@ -185,7 +186,7 @@ def _load_segments(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
         angle = arc_sweep_angle(
             arc.start_x, arc.start_y, arc.mid_x, arc.mid_y, arc.end_x, arc.end_y, cx, cy
         )
-        con.execute(
+        _ = con.execute(
             """INSERT INTO segments VALUES
             (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?), ST_GeomFromWKB(?))""",
             [
@@ -213,9 +214,9 @@ def _load_vias(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
         copper, drill = via_geometry(via)
         net_name = _net_name(pcb, via.net_number)
         # Determine start/end layers from via.layers list
-        start_layer = via.layers[0] if via.layers else ""
-        end_layer = via.layers[-1] if len(via.layers) > 1 else start_layer
-        con.execute(
+        start_layer = str(via.layers[0]) if via.layers else ""
+        end_layer = str(via.layers[-1]) if len(via.layers) > 1 else start_layer
+        _ = con.execute(
             """INSERT INTO vias VALUES
             (?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?), ST_GeomFromWKB(?))""",
             [
@@ -238,7 +239,7 @@ def _load_polygons(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
         geom = polygon_geometry(poly)
         if geom is None:
             continue
-        con.execute(
+        _ = con.execute(
             "INSERT INTO polygons VALUES (?, ?, ?, ST_GeomFromWKB(?))",
             [poly.net_name, poly.net_number, poly.layer, _wkb(geom)],
         )
@@ -249,7 +250,7 @@ def _load_zones(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
         # Build boundary polygon from zone.boundary points
         boundary_poly = polygon_geometry(PcbPolygon(points=zone.boundary, layer=zone.layer))
         wkb_val = _wkb(boundary_poly) if boundary_poly else None
-        con.execute(
+        _ = con.execute(
             "INSERT INTO zones VALUES (?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))",
             [
                 zone.net_name,
@@ -272,14 +273,14 @@ def _load_footprint_graphics(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
         _insert_graphic_lines(con, fp.reference, fp.fab_lines, "fab")
         for circle in fp.fab_circles:
             geom = Point(circle.cx, circle.cy).buffer(circle.radius, quad_segs=16)
-            con.execute(
+            _ = con.execute(
                 "INSERT INTO footprint_graphics VALUES (?, ?, ?, ST_GeomFromWKB(?))",
                 [fp.reference, circle.layer, "fab", _wkb(geom)],
             )
         for poly in fp.fab_polygons:
             geom = polygon_geometry(poly)
             if geom:
-                con.execute(
+                _ = con.execute(
                     "INSERT INTO footprint_graphics VALUES (?, ?, ?, ST_GeomFromWKB(?))",
                     [fp.reference, poly.layer, "fab", _wkb(geom)],
                 )
@@ -294,7 +295,7 @@ def _insert_graphic_lines(
     """Insert a set of graphic lines as LineString geometries."""
     for line in lines:
         geom = LineString([(line.start_x, line.start_y), (line.end_x, line.end_y)])
-        con.execute(
+        _ = con.execute(
             "INSERT INTO footprint_graphics VALUES (?, ?, ?, ST_GeomFromWKB(?))",
             [reference, line.layer, kind, _wkb(geom)],
         )
@@ -302,7 +303,7 @@ def _insert_graphic_lines(
 
 def _load_graphic_texts(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
     for gt in pcb.graphic_texts:
-        con.execute(
+        _ = con.execute(
             "INSERT INTO graphic_texts VALUES (?, ?, ?, ?, ?, ?, ?)",
             [gt.text, gt.x, gt.y, gt.rotation, gt.layer, gt.font_size, gt.justify],
         )
@@ -310,7 +311,7 @@ def _load_graphic_texts(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
 
 def _load_dimensions(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
     for dim in pcb.dimensions:
-        con.execute(
+        _ = con.execute(
             "INSERT INTO dimensions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 dim.kind,
@@ -340,7 +341,7 @@ def _load_layers(con: duckdb.DuckDBPyConnection, pcb: Pcb, stackup: Stackup | No
             func = pcb_layer.function.value if pcb_layer else sl.layer_type
             side = pcb_layer.side if pcb_layer else sl.side
             number = pcb_layer.number if pcb_layer else None
-            con.execute(
+            _ = con.execute(
                 "INSERT INTO layers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     i,
@@ -361,7 +362,7 @@ def _load_layers(con: duckdb.DuckDBPyConnection, pcb: Pcb, stackup: Stackup | No
     for pl in pcb.layers:
         if pl.name in stackup_map:
             continue  # Already inserted from stackup
-        con.execute(
+        _ = con.execute(
             "INSERT INTO layers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 None,
@@ -388,7 +389,7 @@ def _load_board(con: duckdb.DuckDBPyConnection, pcb: Pcb, stackup: Stackup | Non
     layer_count = 0
     if stackup:
         layer_count = sum(1 for ly in stackup.layers if ly.layer_type == "copper")
-    con.execute(
+    _ = con.execute(
         "INSERT INTO board VALUES (?, ?, ?, ?, ?, ST_GeomFromWKB(?))",
         [pcb.name, total_thickness, copper_finish, None, layer_count, wkb_val],
     )
@@ -401,7 +402,7 @@ def _load_board(con: duckdb.DuckDBPyConnection, pcb: Pcb, stackup: Stackup | Non
 
 def _load_net_classes(con: duckdb.DuckDBPyConnection, project: Project) -> None:
     for nc in project.net_classes:
-        con.execute(
+        _ = con.execute(
             "INSERT INTO net_classes VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 nc.name,
@@ -415,7 +416,7 @@ def _load_net_classes(con: duckdb.DuckDBPyConnection, project: Project) -> None:
             ],
         )
         for member in nc.members:
-            con.execute(
+            _ = con.execute(
                 "INSERT INTO net_class_members VALUES (?, ?)",
                 [member, nc.name],
             )
@@ -423,7 +424,7 @@ def _load_net_classes(con: duckdb.DuckDBPyConnection, project: Project) -> None:
 
 def _load_design_rules(con: duckdb.DuckDBPyConnection, project: Project) -> None:
     for rule in project.design_rules:
-        con.execute(
+        _ = con.execute(
             "INSERT INTO design_rules VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 rule.name,
@@ -448,7 +449,7 @@ def _load_design_rules(con: duckdb.DuckDBPyConnection, project: Project) -> None
 def _load_components(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
     for comp in schematic.components:
         page_name = comp.pages[0].name if comp.pages else ""
-        con.execute(
+        _ = con.execute(
             "INSERT INTO components VALUES (?, ?, ?, ?)",
             [comp.reference, comp.part, comp.description, page_name],
         )
@@ -457,7 +458,7 @@ def _load_components(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> No
 def _load_component_metadata(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
     for comp in schematic.components:
         for key, value in comp.metadata.items():
-            con.execute(
+            _ = con.execute(
                 "INSERT INTO component_metadata VALUES (?, ?, ?)",
                 [comp.reference, key, value],
             )
@@ -468,7 +469,7 @@ def _load_pins(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
         for pin in comp.pins:
             net_name = pin.net.name if pin.net else ""
             electrical = pin.metadata.get("electrical", "")
-            con.execute(
+            _ = con.execute(
                 "INSERT INTO pins VALUES (?, ?, ?, ?, ?, ?)",
                 [
                     comp.reference,
@@ -500,7 +501,7 @@ def _load_nets(con: duckdb.DuckDBPyConnection, schematic: Schematic, project: Pr
         diff_pair = dp_info[0] if dp_info else None
         diff_pair_polarity = dp_info[1] if dp_info else None
         aliases = ",".join(sorted(net.aliases)) if net.aliases else None
-        con.execute(
+        _ = con.execute(
             "INSERT INTO nets VALUES (?, ?, ?, ?, ?, ?, ?)",
             [
                 net.name,
@@ -524,7 +525,7 @@ def _is_power_net(name: str) -> bool:
 
 def _load_pages(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
     for page in schematic.pages:
-        con.execute(
+        _ = con.execute(
             "INSERT INTO pages VALUES (?, ?, ?)",
             [page.name, len(page.components), len(page.nets)],
         )
@@ -542,4 +543,4 @@ def _load_project_metadata(con: duckdb.DuckDBPyConnection, project: Project) -> 
     ]
     for key, value in entries:
         if value:
-            con.execute("INSERT INTO project VALUES (?, ?)", [key, value])
+            _ = con.execute("INSERT INTO project VALUES (?, ?)", [key, value])

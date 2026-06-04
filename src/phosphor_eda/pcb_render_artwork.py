@@ -32,7 +32,7 @@ if TYPE_CHECKING:
         PcbGeometryStore,
         RenderableGeometry,
     )
-    from phosphor_eda.pcb_render_primitives import LayerMask, SvgPrimitive
+    from phosphor_eda.pcb_render_primitives import LayerClip, LayerMask, SvgPrimitive
     from phosphor_eda.pcb_render_settings import LayerSelectionRule
     from phosphor_eda.pcb_render_tokens import ResolvedStyle, VisualRole
 
@@ -50,6 +50,7 @@ class DerivedLayer:
     source_ids: tuple[str, ...]
     style: ResolvedStyle | None = None
     data: Mapping[str, str] = field(default_factory=_empty_data)
+    clip: LayerClip | None = None
     mask: LayerMask | None = None
 
 

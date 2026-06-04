@@ -53,7 +53,7 @@ from phosphor_eda.pcb_render_geometry import (
 )
 from phosphor_eda.pcb_render_modes import HighlightGroup, build_cad_layers
 from phosphor_eda.pcb_render_plan import DerivedRenderPlan, ViewBox
-from phosphor_eda.pcb_render_primitives import LayerMask, SvgPrimitive
+from phosphor_eda.pcb_render_primitives import LayerClip, LayerMask, SvgPrimitive
 from phosphor_eda.pcb_render_settings import is_json_dict, is_json_list
 from phosphor_eda.pcb_render_tokens import ResolvedStyle, VisualRole
 
@@ -1063,9 +1063,24 @@ def test_unknown_component_no_error(board: Pcb) -> None:
 
 
 def test_orangecrab_renders(orangecrab_board: Pcb) -> None:
-    svg = render_pcb_svg(orangecrab_board)
+    svg: str = render_pcb_svg(orangecrab_board)
     assert svg.startswith("<svg")
     assert svg.strip().endswith("</svg>")
+
+
+def test_orangecrab_edge_connector_renders_through_hole_pad_copper(
+    orangecrab_board: Pcb,
+) -> None:
+    svg: str = render_pcb_svg(orangecrab_board)
+    j2_pad_paths = [
+        path
+        for path in re.findall(r"<path [^>]*>", svg)
+        if 'data-component-ref="J2"' in path and 'data-kind="pad"' in path
+    ]
+    curved_paths = [path for path in j2_pad_paths if re.search(r'\sd="[^"]*[CQ]', path)]
+
+    assert len(j2_pad_paths) >= 48
+    assert len(curved_paths) >= 32
 
 
 # ---------------------------------------------------------------------------
@@ -1825,6 +1840,7 @@ def test_derived_serializer_preserves_mask_metadata_and_opening_polarity() -> No
                 source_layers=("F.Cu",),
                 source_ids=("pad-1",),
                 style=ResolvedStyle(fill="#b87333"),
+                clip=LayerClip(board=(board_primitive,)),
                 mask=LayerMask(board=(opening_primitive,)),
             ),
         ),
@@ -1849,6 +1865,13 @@ def test_derived_serializer_preserves_mask_metadata_and_opening_polarity() -> No
 
     assert re.search(black_opening_pattern, svg)
     assert re.search(white_opening_pattern, svg)
+    assert "<clipPath " in svg
+    assert re.search(
+        r'<g data-role="realistic\.exposedCopper"[^>]+'
+        r'clip-path="url\(#layer-board-clip-[^"]+\)"[^>]+'
+        r'mask="url\(#layer-clip-[^"]+\)"',
+        svg,
+    )
     assert 'data-source-id="drill-1" data-source-layer="drills" data-kind="drill"' in svg
 
 
@@ -2350,6 +2373,15 @@ def test_bundled_render_settings_use_expected_render_modes(name: str, render_mod
     settings = load_render_settings_json(json.dumps({"extends": f"phosphor:{name}"}))
 
     assert settings.render_mode == render_mode
+
+
+@pytest.mark.parametrize("name", ["review", "clean"])
+def test_realistic_presets_hide_board_outline(board: Pcb, name: str) -> None:
+    settings = load_render_settings_json(json.dumps({"extends": f"phosphor:{name}"}))
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert 'data-role="realistic.boardOutline"' not in svg
 
 
 @pytest.mark.parametrize("name", ["high-contrast", "simplified-high-contrast"])

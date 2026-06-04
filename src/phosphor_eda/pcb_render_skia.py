@@ -427,8 +427,9 @@ def _convert_conics(path: _Path) -> None:
 
 
 def _layer_in_stack(layer_name: str, layers: list[str]) -> bool:
-    return layer_name in {str(layer) for layer in layers} or (
-        "*.Cu" in layers and _is_copper_layer(layer_name)
+    normalized_layers = {str(layer) for layer in layers}
+    return layer_name in normalized_layers or (
+        "*.Cu" in normalized_layers and _is_copper_layer(layer_name)
     )
 
 

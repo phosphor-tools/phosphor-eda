@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     )
     from phosphor_eda.pcb_render_artwork import DerivedLayer
     from phosphor_eda.pcb_render_geometry import GeometryTags
-    from phosphor_eda.pcb_render_primitives import LayerMask, SvgPrimitive
+    from phosphor_eda.pcb_render_primitives import LayerClip, LayerMask, SvgPrimitive
     from phosphor_eda.pcb_render_profile import RenderProfiler
     from phosphor_eda.pcb_render_tokens import ResolvedStyle, VisualRole
 
@@ -57,6 +57,7 @@ _PHOSPHOR_SETTINGS_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _SETTINGS_EXTENDS_KEY = "extends"
 _STYLE_BLOCK_TERMINATOR_RE = re.compile(r"</\s*style\s*>", re.IGNORECASE)
 _SVG_PATH_NUMBER_RE = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
+_LayerClipSignature = tuple[str, ...]
 _LayerMaskSignature = tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]
 
 
@@ -492,12 +493,14 @@ def render_pcb_svg_from_derived_plan(
         )
         svg.raw("</style>")
 
+    clip_ids_by_signature: dict[_LayerClipSignature, str] = {}
     mask_ids_by_signature: dict[_LayerMaskSignature, str] = {}
     _render_derived_layers(
         svg,
         plan.base_layers,
         profiler=profiler,
         group="base",
+        clip_ids_by_signature=clip_ids_by_signature,
         mask_ids_by_signature=mask_ids_by_signature,
     )
     for group in plan.highlight_groups:
@@ -507,6 +510,7 @@ def render_pcb_svg_from_derived_plan(
             group.layers,
             profiler=profiler,
             group="highlight",
+            clip_ids_by_signature=clip_ids_by_signature,
             mask_ids_by_signature=mask_ids_by_signature,
         )
         svg.group_end()
@@ -568,11 +572,22 @@ def _render_derived_layers(
     *,
     profiler: RenderProfiler | None = None,
     group: str,
+    clip_ids_by_signature: dict[_LayerClipSignature, str],
     mask_ids_by_signature: dict[_LayerMaskSignature, str],
 ) -> None:
     for layer in layers:
         if not layer.primitives:
             continue
+        clip = layer.clip if layer.clip is not None and layer.clip.board else None
+        clip_id = ""
+        clip_already_rendered = False
+        if clip is not None:
+            clip_signature = _layer_clip_signature(clip)
+            clip_already_rendered = clip_signature in clip_ids_by_signature
+            clip_id = clip_ids_by_signature.setdefault(
+                clip_signature,
+                _layer_clip_id(group, len(clip_ids_by_signature), layer),
+            )
         mask = layer.mask if layer.mask is not None and layer.mask.board else None
         mask_id = ""
         mask_already_rendered = False
@@ -582,6 +597,13 @@ def _render_derived_layers(
             mask_id = mask_ids_by_signature.setdefault(
                 mask_signature,
                 _layer_mask_id(group, len(mask_ids_by_signature), layer),
+            )
+        if clip is not None:
+            _render_layer_clip(
+                svg,
+                clip_id,
+                clip,
+                already_rendered=clip_already_rendered,
             )
         if mask is not None:
             _render_layer_mask(
@@ -602,12 +624,31 @@ def _render_derived_layers(
                 line_commands=sum(primitive.d.count("L ") for primitive in layer.primitives),
             )
         attrs = _derived_layer_group_attrs(layer)
+        if clip_id:
+            attrs["clip-path"] = f"url(#{clip_id})"
         if mask_id:
             attrs["mask"] = f"url(#{mask_id})"
         svg.group_start(attrs=attrs)
         for primitive in layer.primitives:
             svg.path(primitive.d, attrs=_derived_layer_path_attrs(layer.style, primitive))
         svg.group_end()
+
+
+def _render_layer_clip(
+    svg: _Svg,
+    clip_id: str,
+    clip: LayerClip,
+    *,
+    already_rendered: bool,
+) -> None:
+    if already_rendered:
+        return
+    if not clip.board:
+        return
+    svg.raw(f'<defs><clipPath id="{xml_escape(clip_id)}" clipPathUnits="userSpaceOnUse">')
+    for primitive in clip.board:
+        svg.path(primitive.d, attrs=_layer_clip_path_attrs(primitive))
+    svg.raw("</clipPath></defs>")
 
 
 def _render_layer_mask(
@@ -652,6 +693,10 @@ def _layer_mask_signature(mask: LayerMask) -> _LayerMaskSignature:
     )
 
 
+def _layer_clip_signature(clip: LayerClip) -> _LayerClipSignature:
+    return tuple(primitive.d for primitive in clip.board)
+
+
 def _layer_mask_bounds(mask: LayerMask) -> tuple[float, float, float, float] | None:
     coordinates = [
         point
@@ -672,6 +717,11 @@ def _svg_path_points(path_d: str) -> tuple[tuple[float, float], ...]:
 
 def _layer_mask_id(group: str, index: int, layer: DerivedLayer) -> str:
     raw = f"layer-clip-{group}-{index}-{layer.id}"
+    return re.sub(r"[^A-Za-z0-9_-]+", "-", raw)
+
+
+def _layer_clip_id(group: str, index: int, layer: DerivedLayer) -> str:
+    raw = f"layer-board-clip-{group}-{index}-{layer.id}"
     return re.sub(r"[^A-Za-z0-9_-]+", "-", raw)
 
 
@@ -701,6 +751,12 @@ def _derived_layer_path_attrs(
 
 def _layer_mask_path_attrs(primitive: SvgPrimitive, *, fill: str) -> dict[str, str]:
     attrs = {"fill": fill, "fill-rule": "evenodd"}
+    attrs.update(_primitive_metadata_attrs(primitive))
+    return attrs
+
+
+def _layer_clip_path_attrs(primitive: SvgPrimitive) -> dict[str, str]:
+    attrs = {"fill-rule": "evenodd"}
     attrs.update(_primitive_metadata_attrs(primitive))
     return attrs
 
