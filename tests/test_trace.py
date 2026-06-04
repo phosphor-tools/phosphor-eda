@@ -1,13 +1,78 @@
 """Tests for signal path tracing through 2-pin passives."""
 
+from __future__ import annotations
+
 import pytest
 
-from phosphor_eda.schematic import Component, Net, Page, Pin, Schematic
+from phosphor_eda.schematic import (
+    Component as DomainComponent,
+)
+from phosphor_eda.schematic import (
+    Net as DomainNet,
+)
+from phosphor_eda.schematic import (
+    Page as DomainPage,
+)
+from phosphor_eda.schematic import (
+    Pin as DomainPin,
+)
+from phosphor_eda.schematic import (
+    Schematic,
+    ScopeId,
+)
 from phosphor_eda.trace import (
     find_paths,
     is_two_pin_passive,
     trace_from_net,
 )
+
+
+class Page(DomainPage):
+    def __init__(self, *, name: str, id: str = "") -> None:
+        super().__init__(id=id or f"page:{name}", name=name, scope_id=ScopeId(path=()))
+
+
+class Component(DomainComponent):
+    def __init__(
+        self,
+        *,
+        reference: str,
+        part: str,
+        description: str,
+        pages: list[DomainPage],
+        id: str = "",
+    ) -> None:
+        super().__init__(
+            id=id or f"component:{reference}",
+            reference=reference,
+            part=part,
+            description=description,
+            pages=pages,
+        )
+
+
+class Net(DomainNet):
+    def __init__(self, *, name: str, id: str = "") -> None:
+        super().__init__(id=id or f"net:{name}", name=name)
+
+
+class Pin(DomainPin):
+    def __init__(
+        self,
+        *,
+        designator: str,
+        name: str,
+        component: DomainComponent,
+        metadata: dict[str, str],
+        id: str = "",
+    ) -> None:
+        super().__init__(
+            id=id or f"pin:{component.id}:{designator}",
+            designator=designator,
+            name=name,
+            component=component,
+            metadata=metadata,
+        )
 
 
 def _make_comp(ref: str, part: str, n_pins: int, page: Page) -> Component:
@@ -19,7 +84,7 @@ def _make_comp(ref: str, part: str, n_pins: int, page: Page) -> Component:
     return comp
 
 
-def _connect(pin: Pin, net: Net) -> None:
+def _connect(pin: DomainPin, net: DomainNet) -> None:
     pin.net = net
     net.pins.append(pin)
 
@@ -80,11 +145,16 @@ def _trace_design() -> Schematic:
     # U1.3 -> GND
     _connect(u1.pins[2], gnd)
 
-    all_nets = [sig_a, sig_b, sig_c, sig_d, sig_e, p3v3, gnd]
+    all_nets: list[DomainNet] = [sig_a, sig_b, sig_c, sig_d, sig_e, p3v3, gnd]
     page.nets = all_nets
-    all_comps = [u1, u2, u3, r1, r2, r3, fb1, c1]
+    all_comps: list[DomainComponent] = [u1, u2, u3, r1, r2, r3, fb1, c1]
 
-    return Schematic(name="TRACE_TEST", pages=[page], nets=all_nets, components=all_comps)
+    return Schematic(
+        name="TRACE_TEST",
+        pages=[page],
+        nets=all_nets,
+        components=all_comps,
+    )
 
 
 # ---- is_two_pin_passive ----
@@ -164,7 +234,9 @@ def test_trace_multi_hop():
     assert len(r.series_path) == 2
     assert r.series_path[0].component.reference == "R3"
     assert r.series_path[1].component.reference == "FB1"
-    assert r.terminal_pin.component.reference == "U3"
+    terminal_pin = r.terminal_pin
+    assert terminal_pin is not None
+    assert terminal_pin.component.reference == "U3"
 
 
 def test_trace_shunt_does_not_follow_into_power():
@@ -194,7 +266,8 @@ def test_trace_cycle_detection():
     _connect(r1.pins[1], net_b)
     _connect(r2.pins[1], net_b)
 
-    page.nets = [net_a, net_b]
+    loop_nets: list[DomainNet] = [net_a, net_b]
+    page.nets = loop_nets
 
     # Should terminate without error
     results = trace_from_net(net_a)
@@ -232,7 +305,7 @@ def test_find_paths_no_connection():
 def test_find_paths_not_found():
     design = _trace_design()
     with pytest.raises(ValueError, match="not found"):
-        find_paths(design, "U99", "U1")
+        _ = find_paths(design, "U99", "U1")
 
 
 def test_find_paths_shunts_collected():
@@ -241,3 +314,27 @@ def test_find_paths_shunts_collected():
     # R2 is a pull-up on SIG_A, should appear in shunts
     shunt_refs = [c.reference for c, _ in paths[0].shunts]
     assert "R2" in shunt_refs
+
+
+def test_find_paths_matches_component_ids_not_object_identity():
+    page = Page(name="P")
+    u1 = _make_comp("U1", "MCU", 1, page)
+    u2 = _make_comp("U2", "ADC", 1, page)
+    u2_same_id = Component(
+        id=u2.id,
+        reference=u2.reference,
+        part=u2.part,
+        description=u2.description,
+        pages=u2.pages,
+    )
+    sig = Net(name="SIG")
+    u2_pin = Pin(designator="1", name="P1", component=u2_same_id, metadata={})
+    _connect(u1.pins[0], sig)
+    _connect(u2_pin, sig)
+    page.nets = [sig]
+    design = Schematic(name="IDS", pages=[page], nets=[sig], components=[u1, u2])
+
+    paths = find_paths(design, "U1", "U2")
+
+    assert len(paths) == 1
+    assert paths[0].right_pin.component.id == u2.id

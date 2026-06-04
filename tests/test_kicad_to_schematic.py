@@ -56,13 +56,15 @@ def test_rp2040_has_pins(design):
 
 def test_rp2040_pins_have_names(design):
     u3 = _find_component(design, "U3")
+    assert u3 is not None
     named = [p for p in u3.pins if p.name]
     assert len(named) > 40  # most pins should have names
 
 
-def test_component_metadata(design):
+def test_component_source_metadata(design):
     u3 = _find_component(design, "U3")
-    assert "Value" in u3.metadata
+    assert u3 is not None
+    assert "kicad_component_source_ids" in u3.metadata
     assert u3.metadata["Value"] == "RP2040"
 
 
@@ -79,8 +81,28 @@ def test_component_description(design):
 
 def test_component_footprint(design):
     c1 = _find_component(design, "C1")
+    assert c1 is not None
     assert c1.metadata.get("Footprint")
     assert "0805" in c1.metadata["Footprint"]
+
+
+def test_component_occurrences(design):
+    c1 = _find_component(design, "C1")
+    assert c1 is not None
+    assert c1.occurrences
+    assert c1.occurrences[0].component is c1
+    assert c1.occurrences[0].source_id
+
+    j1 = _find_component(design, "J1")
+    assert j1 is not None
+    assert j1.occurrences
+
+
+def test_component_pages_link_back_to_page_components(design):
+    c1 = _find_component(design, "C1")
+    assert c1 is not None
+    assert c1.pages
+    assert any(component is c1 for component in c1.pages[0].components)
 
 
 # --- Nets ---
@@ -106,10 +128,11 @@ def test_3v3_net_exists(design):
 # --- Pin metadata ---
 
 
-def test_pin_electrical_metadata(design):
+def test_pin_source_metadata(design):
     u3 = _find_component(design, "U3")
-    pins_with_electrical = [p for p in u3.pins if "electrical" in p.metadata]
-    assert len(pins_with_electrical) > 0
+    assert u3 is not None
+    pins_with_source = [p for p in u3.pins if "kicad_pin_source_id" in p.metadata]
+    assert len(pins_with_source) == len(u3.pins)
 
 
 # --- No-connects ---
@@ -128,38 +151,39 @@ def test_single_page(design):
 
 
 def test_page_metadata(design):
+    assert design.pages
     page = design.pages[0]
-    assert page.metadata.get("SheetSize") == "A3"
+    assert "kicad_sheet_symbol_id" in page.metadata
+    assert page.source_file.endswith("RP2040_minimal_r2.kicad_sch")
 
 
 def test_design_metadata(design):
-    assert design.metadata.get("Revision") == "REV2"
-    assert "Raspberry Pi" in design.metadata.get("Organization", "")
+    assert design.metadata["kicad_root_source_file"].endswith("RP2040_minimal_r2.kicad_sch")
 
 
 # --- Component position ---
 
 
-def test_component_position(design):
-    """Components have non-None x/y coordinates from the (at ...) node."""
+def test_component_placement_belongs_to_occurrence_model(design):
     c1 = _find_component(design, "C1")
     assert c1 is not None
-    assert c1.x is not None
-    assert c1.y is not None
-    assert c1.x == pytest.approx(58.42)
-    assert c1.y == pytest.approx(49.53)
+    assert c1.occurrences
+    assert not hasattr(c1, "x")
+    assert c1.occurrences[0].x == pytest.approx(58.42)
+    assert c1.occurrences[0].y == pytest.approx(49.53)
 
 
-def test_component_rotation(design):
-    """Components report rotation from the (at x y angle) node."""
+def test_component_rotation_belongs_to_occurrence_model(design):
     c1 = _find_component(design, "C1")
     assert c1 is not None
-    assert c1.rotation == 0.0
+    assert c1.occurrences
+    assert not hasattr(c1, "rotation")
+    assert c1.occurrences[0].rotation == 0.0
 
-    # R1 is at 270° in this fixture — verifies angle is actually parsed
     r1 = _find_component(design, "R1")
     assert r1 is not None
-    assert r1.rotation == 270.0
+    assert r1.occurrences
+    assert r1.occurrences[0].rotation == 270.0
 
 
 # --- Validation ---

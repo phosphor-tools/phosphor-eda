@@ -2,15 +2,40 @@
 
 import configparser
 from dataclasses import dataclass, field
+from enum import IntEnum
+
+
+class AltiumHierarchyMode(IntEnum):
+    """Altium project net identifier scope mode."""
+
+    SMART = 0
+    FLAT = 1
+    HIERARCHICAL_POWER_GLOBAL = 2
+    GLOBAL = 3
+    HIERARCHICAL_POWER_LOCAL = 4
 
 
 @dataclass
 class AltiumProject:
     """Parsed Altium project file."""
 
-    hierarchy_mode: int = 1
+    hierarchy_mode: AltiumHierarchyMode = AltiumHierarchyMode.FLAT
+    allow_port_net_names: bool = False
+    allow_sheet_entry_net_names: bool = True
+    append_sheet_number_to_local_nets: bool = False
+    name_nets_hierarchically: bool = False
+    power_port_names_take_priority: bool = False
     schematic_paths: list[str] = field(default_factory=list)
     pcb_paths: list[str] = field(default_factory=list)
+
+
+def _get_hierarchy_mode(parser: configparser.ConfigParser) -> AltiumHierarchyMode:
+    raw_value = parser.get("Design", "HierarchyMode", fallback=str(AltiumHierarchyMode.FLAT.value))
+    try:
+        value = int(raw_value)
+        return AltiumHierarchyMode(value)
+    except ValueError as exc:
+        raise ValueError(f"HierarchyMode has unknown value {raw_value}") from exc
 
 
 def parse_prjpcb(content: str) -> AltiumProject:
@@ -22,7 +47,32 @@ def parse_prjpcb(content: str) -> AltiumProject:
     project = AltiumProject()
 
     if parser.has_section("Design"):
-        project.hierarchy_mode = parser.getint("Design", "HierarchyMode", fallback=1)
+        project.hierarchy_mode = _get_hierarchy_mode(parser)
+        project.allow_port_net_names = parser.getboolean(
+            "Design",
+            "AllowPortNetNames",
+            fallback=project.allow_port_net_names,
+        )
+        project.allow_sheet_entry_net_names = parser.getboolean(
+            "Design",
+            "AllowSheetEntryNetNames",
+            fallback=project.allow_sheet_entry_net_names,
+        )
+        project.append_sheet_number_to_local_nets = parser.getboolean(
+            "Design",
+            "AppendSheetNumberToLocalNets",
+            fallback=project.append_sheet_number_to_local_nets,
+        )
+        project.name_nets_hierarchically = parser.getboolean(
+            "Design",
+            "NameNetsHierarchically",
+            fallback=project.name_nets_hierarchically,
+        )
+        project.power_port_names_take_priority = parser.getboolean(
+            "Design",
+            "PowerPortNamesTakePriority",
+            fallback=project.power_port_names_take_priority,
+        )
 
     sections: list[str] = parser.sections()
     for section in sections:

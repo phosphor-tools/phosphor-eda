@@ -1,14 +1,27 @@
-"""Tests for Altium bus notation parsing and bus-typed port expansion.
+"""Tests for Altium bus notation parsing and bus-typed source names.
 
 Bus notation like ``D[0..7]`` expands into individual signal names
-(D0, D1, ..., D7). Bus-typed sheet entries and ports use this expansion
-to create per-member Port objects for cross-sheet connectivity.
+(D0, D1, ..., D7). Bus-typed sheet entries and ports remain source
+evidence and must not create aggregate-name public connectivity.
 """
 
 from phosphor_eda.altium._helpers import parse_bus_notation
+from phosphor_eda.altium.enums import SheetEntrySide
+from phosphor_eda.altium.project import AltiumHierarchyMode, AltiumProject
 from phosphor_eda.altium.records import AltiumRecord, WireRec
+from phosphor_eda.altium.resolver import resolve_altium_source
 from phosphor_eda.altium.sheet_builder import SheetRecords
+from phosphor_eda.altium.source import (
+    AltiumLocalNet,
+    AltiumPinOccurrence,
+    AltiumPort,
+    AltiumSheetEntry,
+    AltiumSheetSource,
+    AltiumSheetSymbol,
+    AltiumSourceDesign,
+)
 from phosphor_eda.altium.spatial import WireIndex
+from phosphor_eda.schematic import ScopeId
 
 
 def _make_sheet(name: str, records: list[AltiumRecord]) -> SheetRecords:
@@ -19,6 +32,130 @@ def _make_sheet(name: str, records: list[AltiumRecord]) -> SheetRecords:
         records=records,
         children={},
         wire_index=WireIndex(wire_recs),
+    )
+
+
+def _scope(name: str) -> ScopeId:
+    return ScopeId(path=(name,))
+
+
+def _bus_port(sheet: str, name: str, index: int = 1) -> AltiumPort:
+    return AltiumPort(
+        id=f"{sheet}:port:{index}",
+        scope_id=_scope(sheet),
+        source_index=index,
+        name=name,
+        location=(index, 10),
+        wire_coord=(index, 10),
+        harness_type="",
+        io_type=0,
+        style=0,
+    )
+
+
+def _bus_entry(
+    sheet: str,
+    name: str,
+    sheet_symbol_id: str,
+    index: int = 1,
+) -> AltiumSheetEntry:
+    return AltiumSheetEntry(
+        id=f"{sheet}:entry:{index}",
+        scope_id=_scope(sheet),
+        source_index=index,
+        sheet_symbol_id=sheet_symbol_id,
+        name=name,
+        coord=(index, 20),
+        side=SheetEntrySide.LEFT,
+        distance_from_top=0,
+        harness_type="",
+        io_type=0,
+    )
+
+
+def _bus_symbol(sheet: str, child_source_file: str) -> AltiumSheetSymbol:
+    return AltiumSheetSymbol(
+        id=f"{sheet}:symbol:1",
+        scope_id=_scope(sheet),
+        source_index=1,
+        name="child",
+        child_source_file=child_source_file,
+        location=(1, 30),
+        x_size=100,
+        y_size=100,
+    )
+
+
+def _bus_local_net(
+    sheet: str,
+    name: str,
+    reference: str,
+    *,
+    ports: list[AltiumPort] | None = None,
+    entries: list[AltiumSheetEntry] | None = None,
+) -> tuple[AltiumLocalNet, AltiumPinOccurrence]:
+    local_net_id = f"{sheet}:local:{name}"
+    pin = AltiumPinOccurrence(
+        id=f"{sheet}:pin:{reference}",
+        scope_id=_scope(sheet),
+        source_index=1,
+        local_net_id=local_net_id,
+        component_source_id=f"{sheet}:component:{reference}",
+        component_reference=reference,
+        pin_designator="1",
+        pin_name="",
+        location=(1, 40),
+        tip=(1, 41),
+    )
+    return (
+        AltiumLocalNet(
+            id=local_net_id,
+            scope_id=_scope(sheet),
+            wire_points=set(),
+            pin_ids=[pin.id],
+            net_labels=[],
+            power_ports=[],
+            ports=ports or [],
+            sheet_entries=entries or [],
+            harness_members=[],
+            generated_name=f"__auto_{sheet}_{name}",
+        ),
+        pin,
+    )
+
+
+def _bus_sheet(
+    name: str,
+    local_nets: list[AltiumLocalNet],
+    pins: list[AltiumPinOccurrence],
+    *,
+    symbols: list[AltiumSheetSymbol] | None = None,
+    entries: list[AltiumSheetEntry] | None = None,
+    source_file: str = "",
+) -> AltiumSheetSource:
+    return AltiumSheetSource(
+        id=f"sheet:{name}",
+        name=name,
+        source_file=source_file or f"{name}.SchDoc",
+        scope_id=_scope(name),
+        local_nets=local_nets,
+        sheet_symbols=symbols or [],
+        sheet_entries=entries or [],
+        harness_connectors=[],
+        harness_members=[],
+        pin_occurrences=pins,
+    )
+
+
+def _bus_source(
+    sheets: list[AltiumSheetSource],
+    mode: AltiumHierarchyMode,
+) -> AltiumSourceDesign:
+    return AltiumSourceDesign(
+        name="bus",
+        project=AltiumProject(hierarchy_mode=mode, allow_port_net_names=True),
+        sheets={sheet.name: sheet for sheet in sheets},
+        root_sheet_name=sheets[0].name,
     )
 
 
@@ -99,7 +236,7 @@ def test_plain_names_comma_separated_returns_none():
 
 
 # ---------------------------------------------------------------------------
-# Bus-typed sheet entry/port expansion in resolve_nets + build_page
+# Bus-typed sheet entry/port behavior in local extraction and public resolver
 # ---------------------------------------------------------------------------
 
 
@@ -174,151 +311,94 @@ def test_bus_port_skipped_in_resolve_nets():
     assert "D[0..7]" not in net_at_wire
 
 
-def test_bus_sheet_entry_expands_to_member_ports():
-    """A bus-typed sheet entry creates individual Port objects for each member."""
-    from phosphor_eda.altium.records import (
-        NetLabelRec,
-        RecordType,
-        SheetEntryRec,
-        SheetSymbolRec,
+def test_bus_sheet_entry_aggregate_name_does_not_merge_member_nets():
+    """A bus-typed sheet entry is not used as an aggregate connectivity name."""
+    symbol = _bus_symbol("Parent", "Child.SchDoc")
+    entry = _bus_entry("Parent", "D[0..1]", symbol.id)
+    parent_net, parent_pin = _bus_local_net("Parent", "bus", "PARENT", entries=[entry])
+    child_d0_net, child_d0_pin = _bus_local_net(
+        "Child",
+        "d0",
+        "D0_REF",
+        ports=[_bus_port("Child", "D0")],
     )
-    from phosphor_eda.altium.sheet_builder import build_page, resolve_nets
-
-    # Individual wires with labels D0, D1 on this sheet
-    wire0 = WireRec(
-        record_type=RecordType.WIRE,
-        index=0,
-        owner_index=-1,
-        points=[(0, 100), (100, 100)],
-    )
-    wire1 = WireRec(
-        record_type=RecordType.WIRE,
-        index=1,
-        owner_index=-1,
-        points=[(0, 200), (100, 200)],
-    )
-    label0 = NetLabelRec(
-        record_type=RecordType.NET_LABEL,
-        index=2,
-        owner_index=-1,
-        location=(50, 100),
-        text="D0",
-    )
-    label1 = NetLabelRec(
-        record_type=RecordType.NET_LABEL,
-        index=3,
-        owner_index=-1,
-        location=(50, 200),
-        text="D1",
-    )
-    # Sheet symbol with bus entry "D[0..1]"
-    sym = SheetSymbolRec(
-        record_type=RecordType.SHEET_SYMBOL,
-        index=4,
-        owner_index=-1,
-        location=(300, 300),
-        x_size=100,
-        y_size=40,
-    )
-    entry = SheetEntryRec(
-        record_type=RecordType.SHEET_ENTRY,
-        index=5,
-        owner_index=4,
-        name="D[0..1]",
-        coord=(300, 250),  # Not touching any wire — typical for bus entries
+    child_d1_net, child_d1_pin = _bus_local_net(
+        "Child",
+        "d1",
+        "D1_REF",
+        ports=[_bus_port("Child", "D1")],
     )
 
-    sheet = _make_sheet("Parent", [wire0, wire1, label0, label1, sym, entry])
-    coord_to_net, _nc = resolve_nets(sheet)
-    page = build_page(sheet, coord_to_net, {}, {})
-
-    # Should have ports for D0 and D1 (expanded from D[0..1])
-    port_names = [p.name for p in page.ports]
-    assert "D0" in port_names
-    assert "D1" in port_names
-
-
-def test_bus_port_expands_to_member_ports():
-    """A bus-typed port creates individual Port objects for each member."""
-    from phosphor_eda.altium.records import NetLabelRec, PortRec, RecordType
-    from phosphor_eda.altium.sheet_builder import build_page, resolve_nets
-
-    wire0 = WireRec(
-        record_type=RecordType.WIRE,
-        index=0,
-        owner_index=-1,
-        points=[(0, 100), (100, 100)],
-    )
-    wire1 = WireRec(
-        record_type=RecordType.WIRE,
-        index=1,
-        owner_index=-1,
-        points=[(0, 200), (100, 200)],
-    )
-    label0 = NetLabelRec(
-        record_type=RecordType.NET_LABEL,
-        index=2,
-        owner_index=-1,
-        location=(50, 100),
-        text="D0",
-    )
-    label1 = NetLabelRec(
-        record_type=RecordType.NET_LABEL,
-        index=3,
-        owner_index=-1,
-        location=(50, 200),
-        text="D1",
-    )
-    # Bus port "D[0..1]" — not touching any wire
-    port = PortRec(
-        record_type=RecordType.PORT,
-        index=4,
-        owner_index=-1,
-        name="D[0..1]",
-        location=(300, 300),
-        width=50,
+    design = resolve_altium_source(
+        _bus_source(
+            [
+                _bus_sheet(
+                    "Parent",
+                    [parent_net],
+                    [parent_pin],
+                    symbols=[symbol],
+                    entries=[entry],
+                ),
+                _bus_sheet(
+                    "Child",
+                    [child_d0_net, child_d1_net],
+                    [child_d0_pin, child_d1_pin],
+                    source_file="Child.SchDoc",
+                ),
+            ],
+            AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
+        ),
     )
 
-    sheet = _make_sheet("Child", [wire0, wire1, label0, label1, port])
-    coord_to_net, _nc = resolve_nets(sheet)
-    page = build_page(sheet, coord_to_net, {}, {})
-
-    port_names = [p.name for p in page.ports]
-    assert "D0" in port_names
-    assert "D1" in port_names
-
-
-def test_bus_member_nets_get_bus_field():
-    """Nets created via bus expansion should have their bus field set."""
-    from phosphor_eda.altium.records import NetLabelRec, PortRec, RecordType
-    from phosphor_eda.altium.sheet_builder import build_page, resolve_nets
-
-    wire0 = WireRec(
-        record_type=RecordType.WIRE,
-        index=0,
-        owner_index=-1,
-        points=[(0, 100), (100, 100)],
+    parent_public_net = next(
+        net for net in design.nets if any(pin.component.reference == "PARENT" for pin in net.pins)
     )
-    label0 = NetLabelRec(
-        record_type=RecordType.NET_LABEL,
-        index=1,
-        owner_index=-1,
-        location=(50, 100),
-        text="D0",
+    assert {pin.component.reference for pin in parent_public_net.pins} == {"PARENT"}
+
+
+def test_bus_port_aggregate_name_does_not_merge_member_port_nets():
+    """A bus-typed port is not merged with individual member ports by aggregate name."""
+    aggregate_net, aggregate_pin = _bus_local_net(
+        "A",
+        "bus",
+        "BUS",
+        ports=[_bus_port("A", "D[0..1]")],
     )
-    port = PortRec(
-        record_type=RecordType.PORT,
-        index=2,
-        owner_index=-1,
-        name="D[0..1]",
-        location=(300, 300),
-        width=50,
+    member_net, member_pin = _bus_local_net(
+        "B",
+        "d0",
+        "D0_REF",
+        ports=[_bus_port("B", "D0")],
     )
 
-    sheet = _make_sheet("Child", [wire0, label0, port])
-    coord_to_net, _nc = resolve_nets(sheet)
-    page = build_page(sheet, coord_to_net, {}, {})
+    design = resolve_altium_source(
+        _bus_source(
+            [
+                _bus_sheet("A", [aggregate_net], [aggregate_pin]),
+                _bus_sheet("B", [member_net], [member_pin]),
+            ],
+            AltiumHierarchyMode.FLAT,
+        ),
+    )
 
-    d0_ports = [p for p in page.ports if p.name == "D0"]
-    assert len(d0_ports) == 1
-    assert d0_ports[0].net.bus == "D[0..1]"
+    bus_net = next(
+        net for net in design.nets if any(pin.component.reference == "BUS" for pin in net.pins)
+    )
+    assert {pin.component.reference for pin in bus_net.pins} == {"BUS"}
+    assert bus_net.name != "D[0..1]"
+
+
+def test_bus_aggregate_name_is_not_used_as_final_net_name():
+    """Aggregate bus text is source evidence only, not a final member net name."""
+    aggregate_net, aggregate_pin = _bus_local_net(
+        "A",
+        "bus",
+        "BUS",
+        ports=[_bus_port("A", "D[0..1]")],
+    )
+
+    design = resolve_altium_source(
+        _bus_source([_bus_sheet("A", [aggregate_net], [aggregate_pin])], AltiumHierarchyMode.FLAT),
+    )
+
+    assert design.nets[0].name == "__auto_A_bus"

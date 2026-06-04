@@ -1,0 +1,491 @@
+"""Tests for OrCAD DSN source-to-public schematic resolution."""
+
+import pytest
+
+from phosphor_eda.dsn.resolver import resolve_dsn_source
+from phosphor_eda.dsn.source import (
+    DsnGlobal,
+    DsnOffPageConnector,
+    DsnPageNet,
+    DsnPageSource,
+    DsnPinOccurrence,
+    DsnSourceDesign,
+    DsnWire,
+    DsnWireAlias,
+    dsn_name_key,
+)
+from phosphor_eda.dsn.to_schematic import dsn_to_design
+from phosphor_eda.models import (
+    PageNetEntry,
+    ParsedDesign,
+    PinConnection,
+    PlacedInstance,
+    SchematicPage,
+)
+from phosphor_eda.resolved_graph import ResolutionInputError
+from phosphor_eda.schematic import Net, ScopeId
+
+
+def _scope(*parts: str) -> ScopeId:
+    return ScopeId(path=parts)
+
+
+def _page(
+    name: str,
+    scope_id: ScopeId,
+    nets: list[DsnPageNet],
+    *,
+    pins: list[DsnPinOccurrence] | None = None,
+    wires: list[DsnWire] | None = None,
+    globals_: list[DsnGlobal] | None = None,
+    off_page_connectors: list[DsnOffPageConnector] | None = None,
+) -> DsnPageSource:
+    return DsnPageSource(
+        id=f"page:{name}",
+        name=name,
+        scope_id=scope_id,
+        nets=nets,
+        wires=wires or [],
+        pin_occurrences=pins or [],
+        ports=[],
+        globals=globals_ or [],
+        off_page_connectors=off_page_connectors or [],
+    )
+
+
+def _net(page_name: str, scope_id: ScopeId, net_id: int, name: str) -> DsnPageNet:
+    return DsnPageNet(
+        id=f"page:{page_name}:net:{net_id}",
+        scope_id=scope_id,
+        net_id=net_id,
+        name=name,
+        name_key=dsn_name_key(name),
+    )
+
+
+def _pin(
+    page_name: str,
+    scope_id: ScopeId,
+    net_id: int,
+    reference: str,
+    *,
+    component_source_id: str | None = None,
+    designator: str = "1",
+    pin_name: str = "",
+    part: str = "Part",
+) -> DsnPinOccurrence:
+    local_net_id = f"page:{page_name}:net:{net_id}"
+    return DsnPinOccurrence(
+        id=f"{local_net_id}:pin:{reference}:{designator}",
+        scope_id=scope_id,
+        local_net_id=local_net_id,
+        source_net_id=net_id,
+        component_source_id=component_source_id or f"page:{page_name}:component:{reference}",
+        component_reference=reference,
+        component_part=part,
+        pin_designator=designator,
+        pin_name=pin_name,
+        location=(net_id, net_id),
+    )
+
+
+def _global(
+    page_name: str,
+    scope_id: ScopeId,
+    net_id: int,
+    name: str,
+) -> DsnGlobal:
+    return DsnGlobal(
+        id=f"page:{page_name}:global:{net_id}:{name}",
+        scope_id=scope_id,
+        local_net_id=f"page:{page_name}:net:{net_id}",
+        source_net_id=net_id,
+        name=name,
+        name_key=dsn_name_key(name),
+        location=(net_id, net_id),
+    )
+
+
+def _off_page(
+    page_name: str,
+    scope_id: ScopeId,
+    net_id: int,
+    name: str,
+) -> DsnOffPageConnector:
+    return DsnOffPageConnector(
+        id=f"page:{page_name}:off_page:{net_id}:{name}",
+        scope_id=scope_id,
+        local_net_id=f"page:{page_name}:net:{net_id}",
+        source_net_id=net_id,
+        name=name,
+        name_key=dsn_name_key(name),
+        location=(net_id, net_id),
+    )
+
+
+def _wire_alias(
+    page_name: str,
+    scope_id: ScopeId,
+    net_id: int,
+    name: str,
+) -> DsnWire:
+    local_net_id = f"page:{page_name}:net:{net_id}"
+    return DsnWire(
+        id=f"page:{page_name}:wire:{net_id}",
+        scope_id=scope_id,
+        local_net_id=local_net_id,
+        source_net_id=net_id,
+        start=(0, 0),
+        end=(1, 1),
+        points=[],
+        aliases=[
+            DsnWireAlias(
+                id=f"{local_net_id}:alias:1",
+                scope_id=scope_id,
+                name=name,
+                name_key=dsn_name_key(name),
+                location=(0, 0),
+            )
+        ],
+    )
+
+
+def _source(pages: list[DsnPageSource]) -> DsnSourceDesign:
+    return DsnSourceDesign(name="Board", pages=pages, hierarchy_mappings=[])
+
+
+def _net_for_reference(nets: list[Net], reference: str) -> Net:
+    for net in nets:
+        if any(pin.component.reference == reference for pin in net.pins):
+            return net
+    raise AssertionError(f"No net found for {reference}")
+
+
+def _refs(net: Net) -> set[str]:
+    return {pin.component.reference for pin in net.pins}
+
+
+def test_page_net_ids_determine_base_electrical_groups() -> None:
+    scope = _scope("Main")
+    net_a = _net("Main", scope, 1, "SIG")
+    net_b = _net("Main", scope, 2, "SIG")
+    pin_a = _pin("Main", scope, 1, "U1")
+    pin_b = _pin("Main", scope, 2, "U2")
+
+    design = resolve_dsn_source(
+        _source([_page("Main", scope, [net_a, net_b], pins=[pin_a, pin_b])])
+    )
+
+    assert _refs(_net_for_reference(design.nets, "U1")) == {"U1"}
+    assert _refs(_net_for_reference(design.nets, "U2")) == {"U2"}
+
+
+def test_same_named_globals_merge_case_insensitively_and_preserve_spelling_aliases() -> None:
+    scope_a = _scope("PowerA")
+    scope_b = _scope("PowerB")
+    net_a = _net("PowerA", scope_a, 1, "N00000001")
+    net_b = _net("PowerB", scope_b, 2, "N00000002")
+    pin_a = _pin("PowerA", scope_a, 1, "U1")
+    pin_b = _pin("PowerB", scope_b, 2, "U2")
+
+    design = resolve_dsn_source(
+        _source(
+            [
+                _page(
+                    "PowerA",
+                    scope_a,
+                    [net_a],
+                    pins=[pin_a],
+                    globals_=[_global("PowerA", scope_a, 1, "Vcc")],
+                ),
+                _page(
+                    "PowerB",
+                    scope_b,
+                    [net_b],
+                    pins=[pin_b],
+                    globals_=[_global("PowerB", scope_b, 2, "vCC")],
+                ),
+            ]
+        )
+    )
+
+    resolved = _net_for_reference(design.nets, "U1")
+    assert _refs(resolved) == {"U1", "U2"}
+    assert resolved.name == "Vcc"
+    assert "vCC" in resolved.aliases
+
+
+def test_off_page_connectors_merge_only_within_known_folder_scope() -> None:
+    scope_a = _scope("Harness", "A")
+    scope_b = _scope("Harness", "B")
+    scope_c = _scope("Other", "C")
+    net_a = _net("A", scope_a, 1, "BUS")
+    net_b = _net("B", scope_b, 2, "BUS")
+    net_c = _net("C", scope_c, 3, "BUS")
+    pin_a = _pin("A", scope_a, 1, "J1")
+    pin_b = _pin("B", scope_b, 2, "J2")
+    pin_c = _pin("C", scope_c, 3, "J3")
+
+    design = resolve_dsn_source(
+        _source(
+            [
+                _page(
+                    "A",
+                    scope_a,
+                    [net_a],
+                    pins=[pin_a],
+                    off_page_connectors=[_off_page("A", scope_a, 1, "HARNESS")],
+                ),
+                _page(
+                    "B",
+                    scope_b,
+                    [net_b],
+                    pins=[pin_b],
+                    off_page_connectors=[_off_page("B", scope_b, 2, "HARNESS")],
+                ),
+                _page(
+                    "C",
+                    scope_c,
+                    [net_c],
+                    pins=[pin_c],
+                    off_page_connectors=[_off_page("C", scope_c, 3, "HARNESS")],
+                ),
+            ]
+        )
+    )
+
+    assert _refs(_net_for_reference(design.nets, "J1")) == {"J1", "J2"}
+    assert _refs(_net_for_reference(design.nets, "J3")) == {"J3"}
+
+
+def test_aliases_are_provenance_not_global_merge_keys() -> None:
+    scope_a = _scope("A")
+    scope_b = _scope("B")
+    net_a = _net("A", scope_a, 1, "N00000001")
+    net_b = _net("B", scope_b, 2, "N00000002")
+    pin_a = _pin("A", scope_a, 1, "U1")
+    pin_b = _pin("B", scope_b, 2, "U2")
+
+    design = resolve_dsn_source(
+        _source(
+            [
+                _page(
+                    "A",
+                    scope_a,
+                    [net_a],
+                    pins=[pin_a],
+                    wires=[_wire_alias("A", scope_a, 1, "SDA")],
+                ),
+                _page(
+                    "B",
+                    scope_b,
+                    [net_b],
+                    pins=[pin_b],
+                    wires=[_wire_alias("B", scope_b, 2, "SDA")],
+                ),
+            ]
+        )
+    )
+
+    assert _refs(_net_for_reference(design.nets, "U1")) == {"U1"}
+    assert _refs(_net_for_reference(design.nets, "U2")) == {"U2"}
+
+
+def test_dsn_net_id_evidence_outranks_reconstructed_label_assumptions() -> None:
+    scope_a = _scope("A")
+    scope_b = _scope("B")
+    net_a = _net("A", scope_a, 1, "RESET")
+    net_b = _net("B", scope_b, 2, "RESET")
+    pin_a = _pin("A", scope_a, 1, "U1")
+    pin_b = _pin("B", scope_b, 2, "U2")
+
+    design = resolve_dsn_source(
+        _source(
+            [
+                _page("A", scope_a, [net_a], pins=[pin_a]),
+                _page("B", scope_b, [net_b], pins=[pin_b]),
+            ]
+        )
+    )
+
+    assert _refs(_net_for_reference(design.nets, "U1")) == {"U1"}
+    assert _refs(_net_for_reference(design.nets, "U2")) == {"U2"}
+
+
+def test_multi_part_source_component_becomes_one_logical_component() -> None:
+    scope_a = _scope("PartA")
+    scope_b = _scope("PartB")
+    shared_source_id = "capture:component:U1"
+    pin_a = _pin("PartA", scope_a, 1, "U1", component_source_id=shared_source_id, designator="1")
+    pin_b = _pin("PartB", scope_b, 2, "U1", component_source_id=shared_source_id, designator="8")
+
+    design = resolve_dsn_source(
+        _source(
+            [
+                _page("PartA", scope_a, [_net("PartA", scope_a, 1, "A")], pins=[pin_a]),
+                _page("PartB", scope_b, [_net("PartB", scope_b, 2, "B")], pins=[pin_b]),
+            ]
+        )
+    )
+
+    u1_components = [component for component in design.components if component.reference == "U1"]
+    assert len(u1_components) == 1
+    assert {page.name for page in u1_components[0].pages} == {"PartA", "PartB"}
+    assert {pin.designator for pin in u1_components[0].pins} == {"1", "8"}
+    assert len(u1_components[0].occurrences) == 2
+
+
+def test_repeated_independent_hierarchy_instances_with_same_reference_stay_distinct() -> None:
+    scope_a = _scope("Root", "InstanceA")
+    scope_b = _scope("Root", "InstanceB")
+    pin_a = _pin("InstanceA", scope_a, 1, "U7", component_source_id="instance-a:component:U7")
+    pin_b = _pin("InstanceB", scope_b, 2, "U7", component_source_id="instance-b:component:U7")
+
+    design = resolve_dsn_source(
+        _source(
+            [
+                _page("InstanceA", scope_a, [_net("InstanceA", scope_a, 1, "SIG")], pins=[pin_a]),
+                _page("InstanceB", scope_b, [_net("InstanceB", scope_b, 2, "SIG")], pins=[pin_b]),
+            ]
+        )
+    )
+
+    u7_components = [component for component in design.components if component.reference == "U7"]
+    assert len(u7_components) == 2
+    assert len({component.id for component in u7_components}) == 2
+
+
+def test_same_reference_without_source_identity_stays_scope_local_with_pin_occurrences() -> None:
+    scope_a = _scope("Root", "InstanceA")
+    scope_b = _scope("Root", "InstanceB")
+    pin_a = _pin("InstanceA", scope_a, 1, "U7", component_source_id="")
+    pin_b = _pin("InstanceB", scope_b, 2, "U7", component_source_id="")
+
+    design = resolve_dsn_source(
+        _source(
+            [
+                _page("InstanceA", scope_a, [_net("InstanceA", scope_a, 1, "SIG_A")], pins=[pin_a]),
+                _page("InstanceB", scope_b, [_net("InstanceB", scope_b, 2, "SIG_B")], pins=[pin_b]),
+            ]
+        )
+    )
+
+    u7_components = [component for component in design.components if component.reference == "U7"]
+    assert len(u7_components) == 2
+    assert len({component.id for component in u7_components}) == 2
+
+    pin_occurrences = [
+        occurrence
+        for component in u7_components
+        for pin in component.pins
+        for occurrence in pin.occurrences
+    ]
+    assert {occurrence.source_id for occurrence in pin_occurrences} == {pin_a.id, pin_b.id}
+    assert {occurrence.scope_id for occurrence in pin_occurrences} == {scope_a, scope_b}
+
+
+def test_dsn_to_design_routes_through_source_resolver() -> None:
+    raw = ParsedDesign(
+        pages=[
+            SchematicPage(
+                name="Main",
+                nets=[PageNetEntry(name="SIG", net_id=1)],
+                instances=[
+                    PlacedInstance(
+                        package_name="U.Normal",
+                        db_id=100,
+                        reference="U1",
+                        pin_connections=[PinConnection(pin_number="1", pin_x=1, pin_y=1, net_id=1)],
+                    )
+                ],
+            )
+        ]
+    )
+
+    design = dsn_to_design(raw, name="Board")
+
+    assert design.metadata["dsn_resolver"] == "source"
+
+
+def test_pin_occurrence_with_unknown_scope_fails_resolution() -> None:
+    page_scope = _scope("Main")
+    pin_scope = _scope("Missing")
+    pin = _pin("Main", pin_scope, 1, "U1")
+
+    with pytest.raises(ResolutionInputError, match=r"pin .* unknown scope"):
+        resolve_dsn_source(
+            _source([_page("Main", page_scope, [_net("Main", page_scope, 1, "SIG")], pins=[pin])])
+        )
+
+
+def test_pin_occurrence_with_unknown_local_net_fails_resolution() -> None:
+    scope = _scope("Main")
+    pin = _pin("Main", scope, 2, "U1")
+
+    with pytest.raises(ResolutionInputError, match=r"pin .* unknown local net"):
+        resolve_dsn_source(
+            _source([_page("Main", scope, [_net("Main", scope, 1, "SIG")], pins=[pin])])
+        )
+
+
+def test_pin_occurrence_scope_must_match_local_net_scope() -> None:
+    net_scope = _scope("A")
+    pin_scope = _scope("B")
+    pin = _pin("A", pin_scope, 1, "U1")
+
+    with pytest.raises(ResolutionInputError, match=r"pin .* scope .* local net"):
+        resolve_dsn_source(
+            _source(
+                [
+                    _page("A", net_scope, [_net("A", net_scope, 1, "SIG")]),
+                    _page("B", pin_scope, [], pins=[pin]),
+                ]
+            )
+        )
+
+
+def test_local_net_with_unknown_scope_fails_resolution() -> None:
+    page_scope = _scope("Main")
+    net_scope = _scope("Missing")
+
+    with pytest.raises(ResolutionInputError, match=r"local net .* unknown scope"):
+        resolve_dsn_source(
+            _source([_page("Main", page_scope, [_net("Main", net_scope, 1, "SIG")])])
+        )
+
+
+def test_global_with_unknown_scope_fails_resolution() -> None:
+    page_scope = _scope("Main")
+    global_scope = _scope("Missing")
+
+    with pytest.raises(ResolutionInputError, match=r"global .* unknown scope"):
+        resolve_dsn_source(
+            _source(
+                [
+                    _page(
+                        "Main",
+                        page_scope,
+                        [_net("Main", page_scope, 1, "SIG")],
+                        globals_=[_global("Main", global_scope, 1, "VCC")],
+                    )
+                ]
+            )
+        )
+
+
+def test_global_with_unknown_local_net_fails_resolution() -> None:
+    scope = _scope("Main")
+
+    with pytest.raises(ResolutionInputError, match=r"global .* unknown local net"):
+        resolve_dsn_source(
+            _source(
+                [
+                    _page(
+                        "Main",
+                        scope,
+                        [_net("Main", scope, 1, "SIG")],
+                        globals_=[_global("Main", scope, 2, "VCC")],
+                    )
+                ]
+            )
+        )

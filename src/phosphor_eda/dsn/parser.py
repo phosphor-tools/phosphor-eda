@@ -7,6 +7,7 @@ Based on the reverse-engineering work of the OpenOrCadParser C++ project:
 https://github.com/Werni2A/OpenOrCadParser
 """
 
+import logging
 import struct
 from pathlib import Path
 
@@ -15,6 +16,11 @@ import olefile
 from phosphor_eda.dsn.binary_reader import (
     PAGE_SETTINGS_SIZE,
     PREAMBLE,
+    STRUCT_GLOBAL,
+    STRUCT_OFF_PAGE_CONNECTOR,
+    STRUCT_PORT,
+    STRUCT_WIRE_BUS,
+    STRUCT_WIRE_SCALAR,
     BinaryReader,
 )
 from phosphor_eda.dsn.models import (
@@ -25,7 +31,10 @@ from phosphor_eda.dsn.models import (
     PinConnection,
     PlacedInstance,
     SchematicPage,
+    Wire,
 )
+
+logger = logging.getLogger(__name__)
 
 # --- Structure parsers ---
 
@@ -70,6 +79,54 @@ def skip_counted_self_describing(r: BinaryReader) -> int:
     for _ in range(count):
         skip_self_describing(r)
     return count
+
+
+def _props_from_pairs(
+    pairs: list[tuple[int, int]],
+    string_list: list[str],
+) -> dict[str, str]:
+    props: dict[str, str] = {}
+    for name_idx, value_idx in pairs:
+        name = string_list[name_idx] if 0 <= name_idx < len(string_list) else f"idx:{name_idx}"
+        value = string_list[value_idx] if 0 <= value_idx < len(string_list) else f"idx:{value_idx}"
+        props[name] = value
+    return props
+
+
+def _parse_graphic_inst(
+    r: BinaryReader,
+    string_list: list[str],
+    pairs: list[tuple[int, int]],
+    type_id: int,
+    *,
+    has_name_indices: bool,
+) -> GraphicInst:
+    """Parse the shared StructGraphicInst body used by known graphic objects."""
+    gi = GraphicInst(type_id=type_id)
+    props = _props_from_pairs(pairs, string_list)
+
+    if has_name_indices:
+        net_name_idx = r.read_uint32()
+        r.skip(4)  # source library path index
+        if 0 <= net_name_idx < len(string_list):
+            props["_net_name"] = string_list[net_name_idx]
+
+    gi.name = r.read_string_len_zero()
+    gi.db_id = r.read_uint32()
+
+    # Read coordinates and color per StructGraphicInst.
+    gi.loc_y = r.read_int16()
+    gi.loc_x = r.read_int16()
+    r.skip(8)  # y2, x2, x1, y1
+    r.skip(1)  # color
+    r.skip(3)  # 3 unknown bytes
+
+    num_display_props = r.read_uint16()
+    for _ in range(num_display_props):
+        skip_structure(r)
+
+    gi.props = props
+    return gi
 
 
 # --- Stream parsers ---
@@ -175,24 +232,32 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
     # Map: coordinate (x,y) -> set of net_ids
     wire_net_map: dict[tuple[int, int], set[int]] = {}
     for _ in range(num_wires):
-        _type_id, end_offset, pairs = r.read_prefix_chain()
+        type_id, end_offset, _pairs = r.read_prefix_chain()
         r.try_read_preamble()
+        wire = Wire(type_id=type_id)
+        parsed_wire = False
 
         try:
             r.skip(4)  # unknown_0
-            wire_id = r.read_uint32()  # this IS the net_id from page net list
-            r.skip(4)  # color
-            start_x = r.read_int32()
-            start_y = r.read_int32()
-            end_x = r.read_int32()
-            end_y = r.read_int32()
-            wire_net_map.setdefault((start_x, start_y), set()).add(wire_id)
-            wire_net_map.setdefault((end_x, end_y), set()).add(wire_id)
+            wire.wire_id = r.read_uint32()  # this IS the net_id from page net list
+            wire.color = r.read_uint32()
+            wire.start_x = r.read_int32()
+            wire.start_y = r.read_int32()
+            wire.end_x = r.read_int32()
+            wire.end_y = r.read_int32()
+            wire.is_bus = type_id == STRUCT_WIRE_BUS
+            wire.points = [(wire.start_x, wire.start_y), (wire.end_x, wire.end_y)]
+            if type_id in {STRUCT_WIRE_SCALAR, STRUCT_WIRE_BUS}:
+                parsed_wire = True
+                wire_net_map.setdefault((wire.start_x, wire.start_y), set()).add(wire.wire_id)
+                wire_net_map.setdefault((wire.end_x, wire.end_y), set()).add(wire.wire_id)
         except (struct.error, IndexError, ValueError):
             pass
 
         if end_offset > 0:
             r.pos = end_offset
+        if parsed_wire:
+            page.wires.append(wire)
     page.wire_net_map = wire_net_map
 
     # Placed instances — parse body to extract reference designator
@@ -203,15 +268,7 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
 
         inst = PlacedInstance()
 
-        # Resolve name-value pairs from the string list
-        props: dict[str, str] = {}
-        for name_idx, value_idx in pairs:
-            name = string_list[name_idx] if 0 <= name_idx < len(string_list) else f"idx:{name_idx}"
-            value = (
-                string_list[value_idx] if 0 <= value_idx < len(string_list) else f"idx:{value_idx}"
-            )
-            props[name] = value
-        inst.props = props
+        inst.props = _props_from_pairs(pairs, string_list)
 
         # Parse body to get package name, dbId, reference, and pin connections
         try:
@@ -258,74 +315,85 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
             # Checkpoint: source_package string
             r.try_read_preamble()
             inst.source_package = r.read_string_len_zero()
+            page.instances.append(inst)
         except (struct.error, IndexError, ValueError) as e:
-            print(f"    Warning: PlacedInstance parse error: {e}")
+            logger.warning("PlacedInstance parse error: %s", e)
 
         # Jump to end_offset for safety
         if end_offset > 0:
             r.pos = end_offset
-        page.instances.append(inst)
 
-    # Ports - skip
+    # Ports
     num_ports = r.read_uint16()
     for _ in range(num_ports):
-        skip_structure(r)
+        type_id, end_offset, pairs = r.read_prefix_chain()
+        r.try_read_preamble()
+        port: GraphicInst | None = None
+        if type_id == STRUCT_PORT:
+            try:
+                port = _parse_graphic_inst(
+                    r,
+                    string_list,
+                    pairs,
+                    type_id,
+                    has_name_indices=False,
+                )
+            except (struct.error, IndexError, ValueError) as e:
+                logger.warning("Port parse error: %s", e)
+        if end_offset > 0:
+            r.pos = end_offset
+        if port is not None:
+            page.ports.append(port)
 
     # Globals (power symbols) — extract name, properties, and display props
     num_globals = r.read_uint16()
     for _ in range(num_globals):
-        _type_id, end_offset, pairs = r.read_prefix_chain()
+        type_id, end_offset, pairs = r.read_prefix_chain()
         r.try_read_preamble()
 
-        gi = GraphicInst()
-
-        # Resolve name-value pairs from global's own prefix
-        global_props: dict[str, str] = {}
-        for name_idx, value_idx in pairs:
-            name = string_list[name_idx] if 0 <= name_idx < len(string_list) else f"idx:{name_idx}"
-            value = (
-                string_list[value_idx] if 0 <= value_idx < len(string_list) else f"idx:{value_idx}"
-            )
-            global_props[name] = value
+        gi: GraphicInst | None = None
 
         try:
-            # The 8 "unknown" bytes are two string list indices:
-            # idx1 = actual net name, idx2 = source library path
-            net_name_idx = r.read_uint32()
-            r.skip(4)  # source library path index (not needed)
-            if 0 <= net_name_idx < len(string_list):
-                global_props["_net_name"] = string_list[net_name_idx]
-
-            gi.name = r.read_string_len_zero()  # symbol name (GND, VCC_BAR)
-            gi.db_id = r.read_uint32()
-
-            # Read coordinates and color per StructGraphicInst
-            gi.loc_y = r.read_int16()
-            gi.loc_x = r.read_int16()
-            r.skip(8)  # y2, x2, x1, y1
-            r.skip(1)  # color
-            r.skip(3)  # 3 unknown bytes
-
-            # Skip SymbolDisplayProp structures
-            num_display_props = r.read_uint16()
-            for _ in range(num_display_props):
-                skip_structure(r)
-
+            if type_id == STRUCT_GLOBAL:
+                gi = _parse_graphic_inst(
+                    r,
+                    string_list,
+                    pairs,
+                    type_id,
+                    has_name_indices=True,
+                )
             r.skip(1)  # unknownFlag (0x21 for Global)
         except (struct.error, IndexError, ValueError) as e:
-            print(f"    Warning: Global parse error: {e}")
-
-        gi.props = global_props
+            logger.warning("Global parse error: %s", e)
 
         if end_offset > 0:
             r.pos = end_offset
-        page.globals.append(gi)
+        if gi is not None:
+            page.globals.append(gi)
         r.skip(5)  # trailing data per global at stream level
 
-    # Off-page connectors - skip
+    # Off-page connectors
     num_opc = r.read_uint16()
     for _ in range(num_opc):
-        skip_structure(r)
+        type_id, end_offset, pairs = r.read_prefix_chain()
+        r.try_read_preamble()
+        connector: GraphicInst | None = None
+        if type_id == STRUCT_OFF_PAGE_CONNECTOR:
+            try:
+                connector = _parse_graphic_inst(
+                    r,
+                    string_list,
+                    pairs,
+                    type_id,
+                    has_name_indices=True,
+                )
+                r.skip(1)  # unknownFlag, same trailing flag shape as globals
+            except (struct.error, IndexError, ValueError) as e:
+                logger.warning("Off-page connector parse error: %s", e)
+        if end_offset > 0:
+            r.pos = end_offset
+        if connector is not None:
+            page.off_page_connectors.append(connector)
         r.skip(5)  # trailing data
 
     return page
