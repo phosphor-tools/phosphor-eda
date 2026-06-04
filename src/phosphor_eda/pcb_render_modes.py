@@ -6,10 +6,11 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from phosphor_eda.pcb import PcbVia
 from phosphor_eda.pcb_render_artwork import (
     DerivedLayer,
     select_source_artwork,
+    selected_copper_layers,
+    via_layers,
 )
 from phosphor_eda.pcb_render_geometry import GeometryKind, GeometryLayer
 from phosphor_eda.pcb_render_primitives import (
@@ -50,18 +51,6 @@ class _PrimitiveLayerItem:
     layer: GeometryLayer
 
 
-_SOURCE_FUNCTION_TO_LAYER_ROLE = {
-    "copper": "copper",
-    "silkscreen": "silkscreen",
-    "solder_mask": "mask",
-    "solder_paste": "paste",
-    "fab": "fabrication",
-    "courtyard": "courtyard",
-    "edge": "edge",
-    "mechanical": "mechanical",
-    "other": "unknown",
-}
-
 _REALISTIC_LAYER_ORDER = (
     "substrate",
     "solderMask",
@@ -72,20 +61,20 @@ _REALISTIC_LAYER_ORDER = (
 )
 
 
-def build_cad_layers(
+def build_eda_layers(
     store: PcbGeometryStore,
     settings: RenderSettings,
     *,
     warn: Callable[[str], None],
     profiler: RenderProfiler | None = None,
 ) -> tuple[DerivedLayer, ...]:
-    """Build CAD derived layers from selected PCB source artwork."""
+    """Build EDA derived layers from selected PCB source artwork."""
     selected_items = _filter_excluded_components(
         select_source_artwork(store, settings.source.layers, active_side=settings.side),
         settings.source.exclude_components,
     )
     if profiler is not None:
-        profiler.metric("cad.selected_items", count=len(selected_items))
+        profiler.metric("eda.selected_items", count=len(selected_items))
     layer_items = _primitive_layer_items(
         store,
         selected_items,
@@ -94,10 +83,11 @@ def build_cad_layers(
         profiler=profiler,
     )
     if profiler is not None:
-        profiler.metric("cad.layer_items", count=len(layer_items))
+        profiler.metric("eda.layer_items", count=len(layer_items))
     layer_mask = _layer_mask(store)
     dimmed = _should_dim_base_layers(store, settings)
     warned_missing_dimmed_tokens: set[str] = set()
+    copper_order_by_layer = _copper_order_by_layer(store)
 
     groups: dict[_LayerGroupKey, list[_PrimitiveLayerItem]] = defaultdict(list)
     for item in layer_items:
@@ -113,7 +103,7 @@ def build_cad_layers(
         if not primitives:
             continue
         role = VisualRole(
-            namespace="cad",
+            namespace="eda",
             function=key.function,
             side=key.side,
             inner_index=key.inner_index,
@@ -125,6 +115,7 @@ def build_cad_layers(
             dimmed=dimmed,
             warn=warn,
             warned_missing_dimmed_tokens=warned_missing_dimmed_tokens,
+            eda_layer_order=copper_order_by_layer.get(key.source_layer_name),
         )
         source_layers = _unique_ordered(primitive.source_layer for primitive in primitives)
         source_ids = _source_ids_by_store_order_for_primitives(store, primitives)
@@ -137,7 +128,7 @@ def build_cad_layers(
                 source_ids=source_ids,
                 style=style,
                 data={"source-layer": key.source_layer_name},
-                mask=None if key.function == "edge" else layer_mask,
+                mask=None if key.function in {"edge", "drill"} else layer_mask,
             )
         )
 
@@ -391,7 +382,7 @@ def _primitive_layer_items(
     profiler: RenderProfiler | None = None,
 ) -> tuple[_PrimitiveLayerItem, ...]:
     selected_non_vias = tuple(item for item in selected_items if item.kind is not GeometryKind.VIA)
-    selected_copper_layers = _selected_copper_layers(store, rules, active_side=active_side)
+    selected_copper_layer_items = selected_copper_layers(store, rules, active_side=active_side)
     selected_via_items = store.by_kind(GeometryKind.VIA) if via_items is None else tuple(via_items)
     items: list[_PrimitiveLayerItem] = [
         _PrimitiveLayerItem(source=item, layer=item.layer) for item in selected_non_vias
@@ -402,13 +393,13 @@ def _primitive_layer_items(
             "primitive.selected_source_items",
             nonVias=len(selected_non_vias),
             vias=len(selected_via_items),
-            copperLayers=len(selected_copper_layers),
+            copperLayers=len(selected_copper_layer_items),
         )
 
     for item in selected_via_items:
-        via_layers = _via_layers(item)
-        for layer in selected_copper_layers:
-            if layer.name in via_layers or "*.Cu" in via_layers:
+        item_via_layers = via_layers(item)
+        for layer in selected_copper_layer_items:
+            if layer.name in item_via_layers or "*.Cu" in item_via_layers:
                 items.append(_PrimitiveLayerItem(source=item, layer=layer))
     return tuple(items)
 
@@ -444,18 +435,18 @@ def _selected_highlight_vias(
     settings: RenderSettings,
     highlight: HighlightSpec,
 ) -> tuple[RenderableGeometry, ...]:
-    selected_copper_layers = _selected_copper_layers(
+    selected_copper_layer_items = selected_copper_layers(
         store,
         settings.source.layers,
         active_side=settings.side,
     )
-    if not selected_copper_layers:
+    if not selected_copper_layer_items:
         return ()
     return tuple(
         item
         for item in store.by_kind(GeometryKind.VIA)
         if _matches_highlight(item, highlight)
-        and _via_intersects_selected_layers(item, selected_copper_layers)
+        and _via_intersects_selected_layers(item, selected_copper_layer_items)
     )
 
 
@@ -477,8 +468,10 @@ def _via_intersects_selected_layers(
     item: RenderableGeometry,
     selected_layers: Iterable[GeometryLayer],
 ) -> bool:
-    via_layers = _via_layers(item)
-    return any(layer.name in via_layers or "*.Cu" in via_layers for layer in selected_layers)
+    item_via_layers = via_layers(item)
+    return any(
+        layer.name in item_via_layers or "*.Cu" in item_via_layers for layer in selected_layers
+    )
 
 
 def _highlight_target(highlight: HighlightSpec) -> str:
@@ -501,104 +494,6 @@ def _filter_excluded_components(
         if not item.tags.component_prefix
         or item.tags.component_prefix.upper() not in excluded_prefixes
     )
-
-
-def _selected_copper_layers(
-    store: PcbGeometryStore,
-    rules: Iterable[LayerSelectionRule],
-    *,
-    active_side: str,
-) -> tuple[GeometryLayer, ...]:
-    rule_tuple = tuple(rules)
-    known_layers = {
-        item.layer.name: item.layer for item in store.items if item.layer.role == "copper"
-    }
-    layers: dict[str, GeometryLayer] = {}
-    for item in store.items:
-        if item.layer.role != "copper":
-            continue
-        if not any(
-            _rule_selects_layer(
-                rule,
-                item.layer,
-                object_name="via",
-                active_side=active_side,
-            )
-            for rule in rule_tuple
-        ):
-            continue
-        layers[item.layer.name] = item.layer
-
-    for item in store.by_kind(GeometryKind.VIA):
-        for layer_name in _via_layers(item):
-            if layer_name == "*.Cu":
-                continue
-            layer = known_layers.get(layer_name, _copper_layer_for_name(layer_name))
-            if any(
-                _rule_selects_layer(
-                    rule,
-                    layer,
-                    object_name="via",
-                    active_side=active_side,
-                )
-                for rule in rule_tuple
-            ):
-                layers[layer.name] = layer
-    return tuple(layers.values())
-
-
-def _rule_selects_layer(
-    rule: LayerSelectionRule,
-    layer: GeometryLayer,
-    *,
-    object_name: str,
-    active_side: str,
-) -> bool:
-    if not rule.visible:
-        return False
-    if rule.match.name and layer.name != rule.match.name:
-        return False
-    if rule.match.function and layer.role != _source_function_layer_role(rule.match.function):
-        return False
-    match_side = active_side if rule.match.side == "active" else rule.match.side
-    if match_side and layer.side != match_side:
-        return False
-    return not rule.objects or object_name in _normalized_objects(rule.objects)
-
-
-def _source_function_layer_role(function: str) -> str:
-    return _SOURCE_FUNCTION_TO_LAYER_ROLE.get(function, function)
-
-
-def _normalized_objects(objects: Iterable[str]) -> frozenset[str]:
-    return frozenset(obj.strip().lower().replace("-", "_") for obj in objects)
-
-
-def _via_layers(item: RenderableGeometry) -> frozenset[str]:
-    payload = item.payload if item.payload is not None else item.source
-    if not isinstance(payload, PcbVia):
-        return frozenset()
-    return frozenset(str(layer) for layer in payload.layers)
-
-
-def _copper_layer_for_name(name: str) -> GeometryLayer:
-    if name in {"F.Cu", "Top Layer"}:
-        return GeometryLayer(name=name, role="copper", side="front", stack_index=10_000)
-    if name in {"B.Cu", "Bottom Layer"}:
-        return GeometryLayer(name=name, role="copper", side="back", stack_index=0)
-    return GeometryLayer(
-        name=name,
-        role="copper",
-        side="inner",
-        stack_index=_inner_layer_index(name),
-    )
-
-
-def _inner_layer_index(name: str) -> int:
-    digits = "".join(character for character in name if character.isdigit())
-    if not digits:
-        return 5_000
-    return int(digits)
 
 
 def _group_key(layer: GeometryLayer) -> _LayerGroupKey:
@@ -654,10 +549,13 @@ def _primitive_layer_primitives_without_profiling(
 ) -> tuple[SvgPrimitive, ...]:
     primitives: list[SvgPrimitive] = []
     for item in sorted(group, key=_primitive_layer_item_sort_key):
-        primitive = geometry_to_svg_primitive(
-            item.source,
-            target_layer_name=key.source_layer_name,
-        )
+        if key.function == "drill" and item.source.kind is GeometryKind.DRILL:
+            primitive = drill_to_svg_primitive(item.source)
+        else:
+            primitive = geometry_to_svg_primitive(
+                item.source,
+                target_layer_name=key.source_layer_name,
+            )
         if primitive is not None:
             primitives.append(primitive)
     return tuple(primitives)
@@ -680,6 +578,16 @@ _PRIMITIVE_KIND_ORDER = {
 
 def _primitive_layer_item_sort_key(item: _PrimitiveLayerItem) -> tuple[int, str]:
     return (_PRIMITIVE_KIND_ORDER.get(item.source.kind, 3), item.source.id)
+
+
+def _copper_order_by_layer(store: PcbGeometryStore) -> dict[str, int]:
+    layers = {item.layer.name: item.layer for item in store.items if item.layer.role == "copper"}
+    return {
+        layer.name: index
+        for index, layer in enumerate(
+            sorted(layers.values(), key=lambda layer: (layer.stack_index, layer.name))
+        )
+    }
 
 
 def _realistic_side_primitives(

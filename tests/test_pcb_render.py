@@ -51,7 +51,7 @@ from phosphor_eda.pcb_render_geometry import (
     build_geometry_store,
     geometry_matches_selector,
 )
-from phosphor_eda.pcb_render_modes import HighlightGroup, build_cad_layers
+from phosphor_eda.pcb_render_modes import HighlightGroup, build_eda_layers
 from phosphor_eda.pcb_render_plan import DerivedRenderPlan, ViewBox
 from phosphor_eda.pcb_render_primitives import LayerClip, LayerMask, SvgPrimitive
 from phosphor_eda.pcb_render_settings import is_json_dict, is_json_list
@@ -65,9 +65,9 @@ PIMX8_FIXTURE = (
 CANONICAL_DERIVED_PRESET_MODES = {
     "review": "realistic",
     "clean": "realistic",
-    "design": "cad",
-    "high-contrast": "cad",
-    "simplified-high-contrast": "cad",
+    "design": "eda",
+    "high-contrast": "eda",
+    "simplified-high-contrast": "eda",
 }
 BUILT_IN_DERIVED_PRESETS = (
     *CANONICAL_DERIVED_PRESET_MODES,
@@ -144,6 +144,44 @@ def _assert_svg_contains_in_order(svg: str, needles: list[str]) -> None:
         cursor = next_index
 
 
+def _layer_group_match(svg: str, role_prefix: str, source_layer: str) -> re.Match[str] | None:
+    return re.search(
+        rf'<g data-role="{re.escape(role_prefix)}(?:\.[^"]*)?" '
+        rf'data-source-layers="{re.escape(source_layer)}"(?P<attrs>[^>]*)>',
+        svg,
+    )
+
+
+def _layer_group_attrs(svg: str, role_prefix: str, source_layer: str) -> str | None:
+    match = _layer_group_match(svg, role_prefix, source_layer)
+    return match.group("attrs") if match else None
+
+
+def _layer_fragment(svg: str, role_prefix: str, source_layer: str) -> str | None:
+    match = _layer_group_match(svg, role_prefix, source_layer)
+    if match is None:
+        return None
+    next_group = svg.find("<g data-role=", match.end())
+    return svg[match.start() : next_group if next_group != -1 else len(svg)]
+
+
+def _layer_style(svg: str, role_prefix: str, source_layer: str) -> str | None:
+    fragment = _layer_fragment(svg, role_prefix, source_layer)
+    if fragment is None:
+        return None
+    return "; ".join(re.findall(r'style="([^"]*)"', fragment))
+
+
+def _style_value(style: str | None, key: str) -> str | None:
+    if style is None:
+        return None
+    for declaration in style.split(";"):
+        name, separator, value = declaration.strip().partition(":")
+        if separator and name == key:
+            return value.strip()
+    return None
+
+
 def test_valid_svg(board: Pcb) -> None:
     svg = render_pcb_svg(board)
     assert svg.startswith("<svg")
@@ -174,9 +212,9 @@ def test_via_annular_rings_are_emitted_on_spanned_copper_layers() -> None:
 
     svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
 
-    assert 'data-role="cad.copper.front" data-source-layers="F.Cu"' in svg
-    assert 'data-role="cad.copper.inner.1" data-source-layers="In1.Cu"' in svg
-    assert 'data-role="cad.copper.back" data-source-layers="B.Cu"' in svg
+    assert 'data-role="eda.copper.front" data-source-layers="F.Cu"' in svg
+    assert 'data-role="eda.copper.inner.1" data-source-layers="In1.Cu"' in svg
+    assert 'data-role="eda.copper.back" data-source-layers="B.Cu"' in svg
     assert 'data-source-layers="vias"' not in svg
 
 
@@ -188,7 +226,7 @@ def test_via_annular_rings_respect_selected_copper_layers() -> None:
 
     assert 'data-role="realistic.coveredCopper"' in svg
     assert 'data-source-layers="F.Cu"' in svg
-    assert 'data-role="cad.copper.inner' not in svg
+    assert 'data-role="eda.copper.inner' not in svg
 
 
 def test_simplified_high_contrast_svg_omits_unhighlighted_traces(board: Pcb) -> None:
@@ -201,7 +239,7 @@ def test_simplified_high_contrast_svg_omits_unhighlighted_traces(board: Pcb) -> 
     )
     assert 'class="trace ' not in svg
     assert 'class="zone ' not in svg
-    assert 'data-role="cad.copper.front"' in svg
+    assert 'data-role="eda.copper.front"' in svg
 
 
 def test_back_side_plan_svg_does_not_use_top_level_mirror_transform(board: Pcb) -> None:
@@ -218,7 +256,21 @@ def test_back_side_plan_svg_does_not_use_top_level_mirror_transform(board: Pcb) 
     )
 
     assert "scale(-1" not in svg
-    assert 'data-role="cad.copper.back"' in svg
+    assert 'data-role="eda.copper.back"' in svg
+    assert 'data-role="highlight.copper.back"' in svg
+
+
+def test_render_settings_side_and_width_apply_without_cli_glue(board: Pcb) -> None:
+    settings = load_render_settings_json(
+        '{"extends": "phosphor:simplified-high-contrast", '
+        '"side": "back", "width": 1234, '
+        '"highlights": [{"pad": "TP3.1", "color": "#c00000"}]}'
+    )
+
+    svg = render_pcb_svg(board, render_settings=settings)
+
+    assert 'width="1234"' in svg
+    assert 'data-role="eda.copper.back"' in svg
     assert 'data-role="highlight.copper.back"' in svg
 
 
@@ -283,7 +335,7 @@ def test_structured_token_override_emits_direct_attributes(board: Pcb) -> None:
 
     svg = render_pcb_svg(board, side="back", width_px=1200, render_settings=settings)
 
-    assert 'data-role="cad.copper.front"' in svg
+    assert 'data-role="eda.copper.front"' in svg
     assert 'style="fill: #111111' in svg
 
 
@@ -418,7 +470,7 @@ def test_geometry_selector_matches_active_opposite_and_inner_layers() -> None:
     )
 
 
-def test_design_preset_matches_legacy_core_colors_and_order() -> None:
+def test_design_preset_renders_all_copper_layers_with_unique_colors() -> None:
     board = _make_board_with_inner_layers()
     board.polygons.append(
         PcbPolygon(
@@ -431,16 +483,32 @@ def test_design_preset_matches_legacy_core_colors_and_order() -> None:
     board.footprints[0].silkscreen_lines.append(
         PcbLine(4.0, 8.5, 6.0, 8.5, "F.SilkS", 0.12, footprint_ref="U1")
     )
+    for index in range(2, 9):
+        layer_name = f"In{index}.Cu"
+        board.layers.insert(index, PcbLayer(layer_name, LayerFunction.COPPER, number=index))
+        board.segments.append(
+            PcbSegment(
+                2.0,
+                2.0 + index,
+                8.0,
+                2.0 + index,
+                0.25,
+                layer_name,
+                1,
+            )
+        )
     settings = load_render_settings_json('{"extends": "phosphor:design"}')
 
     svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
 
-    assert "#c83434" in svg
-    assert "#4d7fc4" in svg
-    assert "#7fc87f" in svg
-    assert 'data-role="cad.copper.front"' in svg
-    assert 'style="opacity: 0.3500"' in svg
-    assert 'style="fill: #c83434"' in svg
+    copper_layers = ("B.Cu", *(f"In{index}.Cu" for index in range(1, 9)), "F.Cu")
+    copper_styles = [_layer_style(svg, "eda.copper", layer_name) for layer_name in copper_layers]
+    assert all(style is not None for style in copper_styles)
+    fills = [_style_value(style, "fill") for style in copper_styles if style is not None]
+    assert len(fills) == len(set(fills))
+    assert _style_value(_layer_style(svg, "eda.copper", "F.Cu"), "fill") == "#cc0000"
+    assert _style_value(_layer_style(svg, "eda.copper", "B.Cu"), "fill") == "#0000cc"
+    assert all(_style_value(style, "opacity") == "1.0000" for style in copper_styles)
     assert "#ffffff" in svg
     assert 'data-type="body"' not in svg
     _assert_svg_contains_in_order(
@@ -461,37 +529,79 @@ def test_design_preset_renders_board_outline_without_fill() -> None:
 
     assert 'class="board-material"' not in svg
     assert re.search(
-        r'data-role="cad.edge".*style="fill: none; stroke: #d0d2cd; stroke-width: 0\.1500"',
+        r'data-role="eda.edge".*style="fill: none; stroke: #d0d2cd; stroke-width: 0\.1500"',
         svg,
         re.DOTALL,
     )
 
 
-def test_design_preset_cycles_inner_copper_colors() -> None:
-    board = _make_board_with_inner_layers()
-    board.layers.insert(2, PcbLayer("In2.Cu", LayerFunction.COPPER, side="", number=2))
-    board.segments.append(PcbSegment(3.0, 12.0, 7.0, 12.0, 0.25, "In2.Cu", 1))
-    board.polygons.append(
-        PcbPolygon(
-            points=[(3.0, 13.0), (7.0, 13.0), (7.0, 15.0), (3.0, 15.0)],
-            layer="In2.Cu",
-            net_number=1,
-            net_name="SIG",
-        )
-    )
+def test_design_preset_supports_many_inner_layer_colors() -> None:
+    board = _make_many_layer_board(copper_layer_count=160)
     settings = load_render_settings_json('{"extends": "phosphor:design"}')
 
     svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
 
-    in1_start = svg.index('data-source-layers="In1.Cu"')
-    in2_start = svg.index('data-source-layers="In2.Cu"')
-    front_start = svg.index('data-source-layers="F.Cu"')
-    in1_svg = svg[in1_start:in2_start]
-    in2_svg = svg[in2_start:front_start]
-    assert 'style="opacity: 0.3500"' in in1_svg
-    assert 'style="fill: #7fc87f"' in in1_svg
-    assert 'style="opacity: 0.3500"' in in2_svg
-    assert 'style="fill: #7fc87f"' in in2_svg
+    copper_layers = ("B.Cu", *(f"In{index}.Cu" for index in range(1, 159)), "F.Cu")
+    copper_styles = [_layer_style(svg, "eda.copper", layer_name) for layer_name in copper_layers]
+    assert all(style is not None for style in copper_styles)
+    fills = [_style_value(style, "fill") for style in copper_styles if style is not None]
+    assert len(fills) == len(set(fills))
+
+
+def test_design_preset_renders_all_silkscreen_layers() -> None:
+    board = _make_board_with_inner_layers()
+    board.footprints[0].silkscreen_lines.extend(
+        [
+            PcbLine(4.0, 8.5, 6.0, 8.5, "F.SilkS", 0.12, footprint_ref="U1"),
+            PcbLine(4.0, 12.0, 6.0, 12.0, "B.SilkS", 0.12, footprint_ref="U1"),
+        ]
+    )
+    board.layers.append(PcbLayer("B.SilkS", LayerFunction.SILKSCREEN, side="back"))
+    settings = load_render_settings_json('{"extends": "phosphor:design"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert 'data-role="eda.silkscreen.front" data-source-layers="F.SilkS"' in svg
+    assert 'data-role="eda.silkscreen.back" data-source-layers="B.SilkS"' in svg
+
+
+def test_design_preset_renders_visible_drills_as_outline_layer() -> None:
+    board = _make_board_with_inner_layers()
+    board.footprints[0].pads[0].drill = 0.6
+    settings = load_render_settings_json('{"extends": "phosphor:design"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    drill_style = _layer_style(svg, "eda.drill", "drills")
+    assert drill_style is not None
+    assert _style_value(drill_style, "fill") == "none"
+    assert _style_value(drill_style, "stroke") == "#202020"
+    assert _style_value(drill_style, "stroke-width") == "0.1200"
+    assert 'data-source-id="drill:U1:1:0" data-source-layer="drills" data-kind="drill"' in svg
+
+
+def test_design_drill_layer_is_not_masked_by_drill_clip() -> None:
+    board = _make_board_with_inner_layers()
+    board.footprints[0].pads[0].drill = 0.6
+    settings = load_render_settings_json('{"extends": "phosphor:design"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    drill_group_attrs = _layer_group_attrs(svg, "eda.drill", "drills")
+    assert drill_group_attrs is not None
+    assert 'mask="url(' not in drill_group_attrs
+
+
+def test_design_copper_still_uses_drill_clipping() -> None:
+    board = _make_board_with_inner_layers()
+    board.footprints[0].pads[0].drill = 0.6
+    settings = load_render_settings_json('{"extends": "phosphor:design"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    copper_group_attrs = _layer_group_attrs(svg, "eda.copper.front", "F.Cu")
+    assert copper_group_attrs is not None
+    assert 'mask="url(' in copper_group_attrs
 
 
 def test_copper_layer_paints_traces_zones_then_pads() -> None:
@@ -523,7 +633,7 @@ def test_copper_layer_paints_traces_zones_then_pads() -> None:
     ]
 
 
-def test_cad_trace_bends_emit_trace_primitives() -> None:
+def test_eda_trace_bends_emit_trace_primitives() -> None:
     board = Pcb(
         name="trace-bend",
         nets={0: PcbNet(0, ""), 1: PcbNet(1, "SIG")},
@@ -548,14 +658,14 @@ def test_cad_trace_bends_emit_trace_primitives() -> None:
     settings = load_render_settings_json(
         json.dumps(
             {
-                "renderMode": "cad",
+                "renderMode": "eda",
                 "source": {"layers": [{"match": {"name": "F.Cu"}}]},
-                "tokens": {"cad.layer[F.Cu].fill": "#ff6600"},
+                "tokens": {"eda.layer[F.Cu].fill": "#ff6600"},
             }
         )
     )
 
-    layers = build_cad_layers(
+    layers = build_eda_layers(
         build_geometry_store(board, side="front"),
         settings,
         warn=lambda _msg: None,
@@ -646,9 +756,10 @@ def test_high_contrast_copper_opacity_matches_trace_opacity() -> None:
 
     svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
 
-    assert 'data-role="cad.copper.front"' in svg
-    assert 'style="fill: #111111"' in svg
-    assert "opacity:" not in svg
+    assert 'data-role="eda.copper.front"' in svg
+    copper_style = _layer_style(svg, "eda.copper.front", "F.Cu")
+    assert _style_value(copper_style, "fill") == "#111111"
+    assert _style_value(copper_style, "opacity") == "1.0000"
 
 
 def test_plan_path_renders_board_level_graphic_text() -> None:
@@ -734,7 +845,7 @@ def test_design_preset_renders_board_text_white() -> None:
 
     svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
 
-    assert 'data-role="cad.silkscreen.front"' in svg
+    assert 'data-role="eda.silkscreen.front"' in svg
     assert "#ffffff" in svg
 
 
@@ -876,6 +987,46 @@ def _make_board_with_inner_layers() -> Pcb:
             PcbLayer("F.SilkS", LayerFunction.SILKSCREEN, side="front"),
             PcbLayer("F.Fab", LayerFunction.FAB, side="front"),
         ],
+    )
+
+
+def _make_many_layer_board(*, copper_layer_count: int) -> Pcb:
+    assert copper_layer_count >= 2
+    inner_count = copper_layer_count - 2
+    copper_layers = [
+        PcbLayer("F.Cu", LayerFunction.COPPER, side="front"),
+        *(
+            PcbLayer(f"In{index}.Cu", LayerFunction.COPPER, number=index)
+            for index in range(1, inner_count + 1)
+        ),
+        PcbLayer("B.Cu", LayerFunction.COPPER, side="back"),
+    ]
+    layer_names = [layer.name for layer in copper_layers]
+    return Pcb(
+        name=f"{copper_layer_count}-layer-test",
+        nets={0: PcbNet(0, ""), 1: PcbNet(1, "SIG")},
+        footprints=[],
+        segments=[
+            PcbSegment(
+                2.0,
+                1.0 + index * 0.1,
+                18.0,
+                1.0 + index * 0.1,
+                0.05,
+                layer_name,
+                1,
+            )
+            for index, layer_name in enumerate(layer_names)
+        ],
+        vias=[],
+        outline_lines=[
+            PcbLine(0, 0, 20, 0, "Edge.Cuts", 0.1),
+            PcbLine(20, 0, 20, 20, "Edge.Cuts", 0.1),
+            PcbLine(20, 20, 0, 20, "Edge.Cuts", 0.1),
+            PcbLine(0, 20, 0, 0, "Edge.Cuts", 0.1),
+        ],
+        outline_arcs=[],
+        layers=[*copper_layers, PcbLayer("Edge.Cuts", LayerFunction.EDGE)],
     )
 
 
@@ -1477,15 +1628,15 @@ def test_no_annotations_no_group() -> None:
     assert '<style id="annotations">' not in svg
 
 
-def test_derived_cad_svg_groups_by_role_source_layers_and_style(board: Pcb) -> None:
+def test_derived_eda_svg_groups_by_role_source_layers_and_style(board: Pcb) -> None:
     settings = load_render_settings_json(
         json.dumps(
             {
-                "renderMode": "cad",
+                "renderMode": "eda",
                 "source": {"layers": [{"match": {"name": "F.Cu"}}]},
                 "tokens": {
-                    "cad.layer[F.Cu].fill": "#ff6600",
-                    "cad.copper.front.opacity": 0.75,
+                    "eda.layer[F.Cu].fill": "#ff6600",
+                    "eda.copper.front.opacity": 0.75,
                 },
             }
         )
@@ -1493,9 +1644,10 @@ def test_derived_cad_svg_groups_by_role_source_layers_and_style(board: Pcb) -> N
 
     svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
 
-    assert '<g data-role="cad.copper.front" data-source-layers="F.Cu"' in svg
-    assert 'style="opacity: 0.7500"' in svg
-    assert 'style="fill: #ff6600"' in svg
+    assert '<g data-role="eda.copper.front" data-source-layers="F.Cu"' in svg
+    layer_style = _layer_style(svg, "eda.copper.front", "F.Cu")
+    assert _style_value(layer_style, "opacity") == "0.7500"
+    assert _style_value(layer_style, "fill") == "#ff6600"
     assert 'data-source-id="' in svg
     assert 'data-source-ids="' not in svg
     assert '<mask id="layer-clip-' in svg
@@ -1542,9 +1694,9 @@ def test_derived_serializer_does_not_use_raw_source_kind_branches(
     settings = load_render_settings_json(
         json.dumps(
             {
-                "renderMode": "cad",
+                "renderMode": "eda",
                 "source": {"layers": [{"match": {"name": "F.Cu"}}]},
-                "tokens": {"cad.layer[F.Cu].fill": "#ff6600"},
+                "tokens": {"eda.layer[F.Cu].fill": "#ff6600"},
             }
         )
     )
@@ -1552,16 +1704,16 @@ def test_derived_serializer_does_not_use_raw_source_kind_branches(
     svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
 
     assert not hasattr(pcb_render_module, "_render_plan_item")
-    assert '<g data-role="cad.copper.front"' in svg
+    assert '<g data-role="eda.copper.front"' in svg
 
 
 def test_derived_serializer_renders_annotations(board: Pcb) -> None:
     settings = load_render_settings_json(
         json.dumps(
             {
-                "renderMode": "cad",
+                "renderMode": "eda",
                 "source": {"layers": [{"match": {"name": "F.Cu"}}]},
-                "tokens": {"cad.layer[F.Cu].fill": "#ff6600"},
+                "tokens": {"eda.layer[F.Cu].fill": "#ff6600"},
             }
         )
     )
@@ -1584,9 +1736,9 @@ def test_derived_renderer_preserves_component_metadata_block() -> None:
     settings = load_render_settings_json(
         json.dumps(
             {
-                "renderMode": "cad",
+                "renderMode": "eda",
                 "source": {"layers": [{"match": {"name": "F.Cu"}}]},
-                "tokens": {"cad.layer[F.Cu].fill": "#ff6600"},
+                "tokens": {"eda.layer[F.Cu].fill": "#ff6600"},
             }
         )
     )
@@ -1607,9 +1759,9 @@ def test_derived_renderer_escapes_metadata_script_terminators() -> None:
     settings = load_render_settings_json(
         json.dumps(
             {
-                "renderMode": "cad",
+                "renderMode": "eda",
                 "source": {"layers": [{"match": {"name": "F.Cu"}}]},
-                "tokens": {"cad.layer[F.Cu].fill": "#ff6600"},
+                "tokens": {"eda.layer[F.Cu].fill": "#ff6600"},
             }
         )
     )
@@ -1625,9 +1777,9 @@ def test_derived_renderer_escapes_custom_css_style_terminators() -> None:
     settings = load_render_settings_json(
         json.dumps(
             {
-                "renderMode": "cad",
+                "renderMode": "eda",
                 "source": {"layers": [{"match": {"name": "F.Cu"}}]},
-                "tokens": {"cad.layer[F.Cu].fill": "#ff6600"},
+                "tokens": {"eda.layer[F.Cu].fill": "#ff6600"},
                 "custom_css": '.x { color: red; } </STYLE ><script>alert("x")</script>',
             }
         )
@@ -1666,8 +1818,8 @@ def test_derived_serializer_renders_primitive_child_paths_and_group_opacity() ->
         height_px=100,
         base_layers=(
             DerivedLayer(
-                id="cad:copper:front",
-                role=VisualRole(namespace="cad", function="copper", side="front"),
+                id="eda:copper:front",
+                role=VisualRole(namespace="eda", function="copper", side="front"),
                 primitives=(
                     SvgPrimitive(
                         d="M 0.0000 0.0000 L 4.0000 0.0000 L 4.0000 4.0000 Z",
@@ -1690,8 +1842,8 @@ def test_derived_serializer_renders_primitive_child_paths_and_group_opacity() ->
                 style=ResolvedStyle(fill="#ff6600", opacity=0.35),
             ),
             DerivedLayer(
-                id="cad:empty:front",
-                role=VisualRole(namespace="cad", function="empty", side="front"),
+                id="eda:empty:front",
+                role=VisualRole(namespace="eda", function="empty", side="front"),
                 primitives=(),
                 source_layers=("Empty",),
                 source_ids=(),
@@ -1705,10 +1857,10 @@ def test_derived_serializer_renders_primitive_child_paths_and_group_opacity() ->
 
     svg = pcb_render_module.render_pcb_svg_from_derived_plan(plan)
 
-    assert 'data-role="cad.copper.front"' in svg
+    assert 'data-role="eda.copper.front"' in svg
     assert 'data-source-layers="F.Cu"' in svg
     assert (
-        '<g data-role="cad.copper.front" data-source-layers="F.Cu" style="opacity: 0.3500">'
+        '<g data-role="eda.copper.front" data-source-layers="F.Cu" style="opacity: 0.3500">'
     ) in svg
     assert 'data-source-ids="' not in svg
     assert 'fill-rule="evenodd"' in svg
@@ -1722,7 +1874,7 @@ def test_derived_serializer_renders_primitive_child_paths_and_group_opacity() ->
     assert 'data-pad-number="1"' in svg
     assert 'data-net-name="VCC"' in svg
     assert 'data-shape="rect"' in svg
-    assert 'data-role="cad.empty.front"' not in svg
+    assert 'data-role="eda.empty.front"' not in svg
 
 
 def test_derived_serializer_deduplicates_identical_layer_masks_across_groups() -> None:
@@ -1749,8 +1901,8 @@ def test_derived_serializer_deduplicates_identical_layer_masks_across_groups() -
     )
     mask = LayerMask(board=(board_primitive,), drills=(drill_primitive,))
     base_layer = DerivedLayer(
-        id="cad:copper:front",
-        role=VisualRole(namespace="cad", function="copper", side="front"),
+        id="eda:copper:front",
+        role=VisualRole(namespace="eda", function="copper", side="front"),
         primitives=(copper_primitive,),
         source_layers=("F.Cu",),
         source_ids=("pad-1",),
@@ -1782,7 +1934,7 @@ def test_derived_serializer_deduplicates_identical_layer_masks_across_groups() -
     svg = pcb_render_module.render_pcb_svg_from_derived_plan(plan)
 
     assert svg.count("<mask ") == 1
-    assert svg.count('mask="url(#layer-clip-base-0-cad-copper-front)"') == 3
+    assert svg.count('mask="url(#layer-clip-base-0-eda-copper-front)"') == 3
 
 
 def test_derived_serializer_preserves_mask_metadata_and_opening_polarity() -> None:
@@ -1883,8 +2035,8 @@ def test_derived_serializer_keeps_fill_stroke_and_stroke_width_on_child_path() -
         height_px=100,
         base_layers=(
             DerivedLayer(
-                id="cad:copper:front",
-                role=VisualRole(namespace="cad", function="copper", side="front"),
+                id="eda:copper:front",
+                role=VisualRole(namespace="eda", function="copper", side="front"),
                 primitives=(
                     SvgPrimitive(
                         d=path_d,
@@ -1911,7 +2063,7 @@ def test_derived_serializer_keeps_fill_stroke_and_stroke_width_on_child_path() -
 
     svg = pcb_render_module.render_pcb_svg_from_derived_plan(plan)
 
-    assert 'data-role="cad.copper.front"' in svg
+    assert 'data-role="eda.copper.front"' in svg
     assert f'd="{path_d}"' in svg
     assert 'style="opacity: 0.6000"' in svg
     assert 'style="fill: #ff6600; stroke: #111111; stroke-width: 0.0800"' in svg
@@ -2063,6 +2215,40 @@ class TestParseRenderSettings:
         assert "style_rules" not in example
         assert "custom_css" in example
 
+    def test_render_settings_schema_documents_eda_render_mode(self) -> None:
+        schema = render_settings_schema()
+        props = _as_object_dict(schema["properties"])
+        render_mode = _as_object_dict(props["renderMode"])
+
+        assert render_mode["enum"] == ["eda", "realistic"]
+
+    def test_render_settings_schema_documents_drill_source_layer_function(self) -> None:
+        schema = render_settings_schema()
+        props = _as_object_dict(schema["properties"])
+        source = _as_object_dict(props["source"])
+        source_props = _as_object_dict(source["properties"])
+        layers = _as_object_dict(source_props["layers"])
+        layer_items = _as_object_dict(layers["items"])
+        layer_props = _as_object_dict(layer_items["properties"])
+        match = _as_object_dict(layer_props["match"])
+        match_props = _as_object_dict(match["properties"])
+        function = _as_object_dict(match_props["function"])
+        functions = _as_object_list(function["enum"])
+
+        assert "drill" in functions
+
+    def test_render_settings_schema_token_patterns_accept_eda_not_cad(self) -> None:
+        schema = render_settings_schema()
+        props = _as_object_dict(schema["properties"])
+        tokens = _as_object_dict(props["tokens"])
+        pattern_properties = _as_object_dict(tokens["patternProperties"])
+        patterns = [re.compile(pattern) for pattern in pattern_properties]
+
+        assert any(pattern.fullmatch("eda.copper.front.fill") for pattern in patterns)
+        assert any(pattern.fullmatch("eda.layer[F.Cu].fill") for pattern in patterns)
+        assert not any(pattern.fullmatch("cad.copper.front.fill") for pattern in patterns)
+        assert not any(pattern.fullmatch("cad.layer[F.Cu].fill") for pattern in patterns)
+
     def test_empty_object(self) -> None:
         settings = parse_render_settings({})
         assert settings.side == ""
@@ -2079,10 +2265,19 @@ class TestParseRenderSettings:
         with pytest.raises(ValueError, match="theme"):
             parse_render_settings({"theme": "print"})
 
-    @pytest.mark.parametrize("render_mode", ["cad", "realistic"])
+    @pytest.mark.parametrize("render_mode", ["eda", "realistic"])
     def test_render_settings_accepts_render_mode(self, render_mode: str) -> None:
         settings = parse_render_settings({"renderMode": render_mode})
         assert settings.render_mode == render_mode
+
+    def test_render_settings_parse_accepts_eda_render_mode(self) -> None:
+        settings = parse_render_settings({"renderMode": "eda"})
+
+        assert settings.render_mode == "eda"
+
+    def test_unsupported_render_mode_rejects_cad(self) -> None:
+        with pytest.raises(ValueError, match="renderMode"):
+            parse_render_settings({"renderMode": "cad"})
 
     def test_render_settings_rejects_unknown_render_mode(self) -> None:
         with pytest.raises(ValueError, match="renderMode"):
@@ -2117,20 +2312,32 @@ class TestParseRenderSettings:
         assert settings.source.layers[1].objects == ()
         assert settings.source.exclude_components == ("R", "C")
 
+    def test_render_settings_parse_accepts_drill_source_layer_function(self) -> None:
+        settings = parse_render_settings({"source": {"layers": [{"match": {"function": "drill"}}]}})
+
+        assert settings.source.layers[0].match.function == "drill"
+
     def test_render_settings_accepts_dot_and_native_layer_tokens(self) -> None:
         settings = parse_render_settings(
             {
                 "tokens": {
-                    "cad.copper.front.fill": "#d17a22",
-                    "cad.layer[F.Cu].fill": "#ff0000",
+                    "eda.copper.front.fill": "#d17a22",
+                    "eda.layer[F.Cu].fill": "#ff0000",
                     "highlight.copper.front.opacity": 0.85,
                 }
             }
         )
 
-        assert settings.tokens["cad.copper.front.fill"] == "#d17a22"
-        assert settings.tokens["cad.layer[F.Cu].fill"] == "#ff0000"
+        assert settings.tokens["eda.copper.front.fill"] == "#d17a22"
+        assert settings.tokens["eda.layer[F.Cu].fill"] == "#ff0000"
         assert settings.tokens["highlight.copper.front.opacity"] == 0.85
+
+    def test_render_settings_parse_rejects_cad_tokens(self) -> None:
+        with pytest.raises(ValueError, match="tokens key"):
+            parse_render_settings({"tokens": {"cad.copper.front.fill": "#d17a22"}})
+
+        with pytest.raises(ValueError, match="tokens key"):
+            parse_render_settings({"tokens": {"cad.layer[F.Cu].fill": "#d17a22"}})
 
     def test_render_settings_accepts_font_size_px_camel_case(self) -> None:
         settings = parse_render_settings({"fontSizePx": 72})
@@ -2162,13 +2369,13 @@ class TestParseRenderSettings:
             "side": "back",
             "width": 1200,
             "fontSizePx": 24,
-            "renderMode": "cad",
+            "renderMode": "eda",
             "source": {
                 "layers": [{"match": {"function": "copper"}, "objects": ["pads"]}],
                 "excludeComponents": ["R", "C"],
             },
             "tokens": {
-                "cad.copper.front.fill": "#d17a22",
+                "eda.copper.front.fill": "#d17a22",
                 "highlight.copper.front.fill": "#ff8a00",
             },
             "dimming": {"enabled": True},
@@ -2184,11 +2391,11 @@ class TestParseRenderSettings:
         assert settings.side == "back"
         assert settings.width == 1200
         assert settings.font_size == 24.0
-        assert settings.render_mode == "cad"
+        assert settings.render_mode == "eda"
         assert settings.source.layers[0].match.function == "copper"
         assert settings.source.layers[0].objects == ("pads",)
         assert settings.source.exclude_components == ("R", "C")
-        assert settings.tokens["cad.copper.front.fill"] == "#d17a22"
+        assert settings.tokens["eda.copper.front.fill"] == "#d17a22"
         assert settings.dimming.enabled is True
         assert len(settings.highlights) == 3
         assert settings.highlights[0].net == "VBUS"
@@ -2473,8 +2680,8 @@ def test_simplified_high_contrast_extends_high_contrast_tokens() -> None:
     settings = load_render_settings_json('{"extends": "phosphor:simplified-high-contrast"}')
 
     assert settings.font_size == 40
-    assert settings.render_mode == "cad"
-    assert settings.tokens["cad.edge.fill"] == "none"
+    assert settings.render_mode == "eda"
+    assert settings.tokens["eda.edge.fill"] == "none"
     assert settings.tokens["annotation.label.pillVisible"] is False
     assert settings.tokens["annotation.connector.dotVisible"] is False
 
@@ -2492,7 +2699,7 @@ def test_render_settings_extends_merges_v2_policy(tmp_path: Path) -> None:
                     "excludeComponents": ["R"],
                 },
                 "tokens": {
-                    "cad.copper.front.fill": "#111111",
+                    "eda.copper.front.fill": "#111111",
                     "annotation.label.fill": "#000000",
                 },
                 "dimming": {"enabled": False},
@@ -2505,11 +2712,18 @@ def test_render_settings_extends_merges_v2_policy(tmp_path: Path) -> None:
             {
                 "extends": "./base.json",
                 "source": {
-                    "layers": [{"match": {"name": "Mechanical 13"}}],
+                    "layers": [
+                        {
+                            "match": {"function": "copper"},
+                            "visible": False,
+                            "objects": ["zones"],
+                        },
+                        {"match": {"name": "Mechanical 13"}, "visible": True},
+                    ],
                     "excludeComponents": ["C"],
                 },
                 "tokens": {
-                    "cad.copper.front.fill": "#222222",
+                    "eda.copper.front.fill": "#222222",
                     "highlight.copper.front.fill": "#ff8a00",
                 },
                 "dimming": {"enabled": True},
@@ -2519,10 +2733,19 @@ def test_render_settings_extends_merges_v2_policy(tmp_path: Path) -> None:
 
     settings = load_render_settings_file(child)
 
-    assert [rule.match.name for rule in settings.source.layers] == ["Mechanical 13"]
+    assert [rule.match.function for rule in settings.source.layers] == [
+        "copper",
+        "silkscreen",
+        "",
+    ]
+    assert [rule.match.name for rule in settings.source.layers] == ["", "", "Mechanical 13"]
+    assert settings.source.layers[0].visible is False
+    assert settings.source.layers[0].objects == ("zones",)
+    assert settings.source.layers[1].visible is True
+    assert settings.source.layers[2].visible is True
     assert settings.source.exclude_components == ("C",)
     assert settings.tokens == {
-        "cad.copper.front.fill": "#222222",
+        "eda.copper.front.fill": "#222222",
         "annotation.label.fill": "#000000",
         "highlight.copper.front.fill": "#ff8a00",
     }

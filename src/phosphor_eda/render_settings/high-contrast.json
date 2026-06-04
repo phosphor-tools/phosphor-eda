@@ -1,5 +1,5 @@
 {
-  "renderMode": "cad",
+  "renderMode": "eda",
   "source": {
     "layers": [
       { "match": { "function": "copper" } },
@@ -13,17 +13,17 @@
     ]
   },
   "tokens": {
-    "cad.copper.front.fill": "#111111",
-    "cad.copper.back.fill": "#111111",
-    "cad.copper.inner.default.fill": "#444444",
-    "cad.silkscreen.front.fill": "#000000",
-    "cad.silkscreen.back.fill": "#000000",
-    "cad.fabrication.front.fill": "#666666",
-    "cad.fabrication.back.fill": "#666666",
-    "cad.mechanical.fill": "#777777",
-    "cad.edge.fill": "none",
-    "cad.edge.stroke": "#444444",
-    "cad.edge.strokeWidthMm": 0.12,
+    "eda.copper.front.fill": "#111111",
+    "eda.copper.back.fill": "#111111",
+    "eda.copper.inner.default.fill": "#444444",
+    "eda.silkscreen.front.fill": "#000000",
+    "eda.silkscreen.back.fill": "#000000",
+    "eda.fabrication.front.fill": "#666666",
+    "eda.fabrication.back.fill": "#666666",
+    "eda.mechanical.fill": "#777777",
+    "eda.edge.fill": "none",
+    "eda.edge.stroke": "#444444",
+    "eda.edge.strokeWidthMm": 0.12,
     "highlight.copper.front.fill": "#000000",
     "highlight.copper.front.opacity": 1,
     "highlight.copper.front.stroke": "none",

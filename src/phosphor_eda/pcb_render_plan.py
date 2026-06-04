@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 from phosphor_eda.pcb_render_geometry import build_geometry_store
 from phosphor_eda.pcb_render_modes import (
     HighlightGroup,
-    build_cad_layers,
+    build_eda_layers,
     build_highlight_layers,
     build_realistic_layers,
 )
@@ -96,10 +96,10 @@ def build_derived_render_plan(
                 )
     else:
         if profiler is None:
-            base_layers = build_cad_layers(store, mode_settings, warn=warnings.append)
+            base_layers = build_eda_layers(store, mode_settings, warn=warnings.append)
         else:
-            with profiler.span("plan.build_cad_layers"):
-                base_layers = build_cad_layers(
+            with profiler.span("plan.build_eda_layers"):
+                base_layers = build_eda_layers(
                     store,
                     mode_settings,
                     warn=warnings.append,

@@ -32,7 +32,7 @@ from phosphor_eda.pcb_render_geometry import (
     build_geometry_store,
 )
 from phosphor_eda.pcb_render_modes import (
-    build_cad_layers,
+    build_eda_layers,
     build_highlight_layers,
     build_realistic_layers,
 )
@@ -56,7 +56,7 @@ if TYPE_CHECKING:
     from phosphor_eda.pcb_render_artwork import DerivedLayer
 
 
-def test_cad_front_copper_artwork_projects_to_source_primitives() -> None:
+def test_eda_front_copper_artwork_projects_to_source_primitives() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -108,13 +108,13 @@ def test_cad_front_copper_artwork_projects_to_source_primitives() -> None:
         )
     )
 
-    layers = build_cad_layers(
+    layers = build_eda_layers(
         store,
         _settings(
             rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
             tokens={
-                "cad.copper.front.fill": "#d17a22",
-                "cad.copper.front.opacity": 0.35,
+                "eda.copper.front.fill": "#d17a22",
+                "eda.copper.front.opacity": 0.35,
             },
         ),
         warn=lambda _message: None,
@@ -122,19 +122,19 @@ def test_cad_front_copper_artwork_projects_to_source_primitives() -> None:
 
     assert len(layers) == 1
     layer = layers[0]
-    assert layer.id == "cad:copper:front"
-    assert layer.role.namespace == "cad"
+    assert layer.id == "eda:copper:front"
+    assert layer.role.namespace == "eda"
     assert layer.role.function == "copper"
     assert layer.role.side == "front"
     assert layer.source_layers == ("F.Cu",)
     assert layer.source_ids == ("pad-1", "trace-1", "zone-1", "via-1", "text-1")
-    assert layer.style == ResolvedStyle(fill="#d17a22", opacity=0.35)
+    assert layer.style == ResolvedStyle(fill="#d17a22", opacity=0.35, stroke="none")
     assert {primitive.source_id for primitive in layer.primitives} == set(layer.source_ids)
     assert all(primitive.source_layer == "F.Cu" for primitive in layer.primitives)
     assert all(primitive.d.startswith("M ") for primitive in layer.primitives)
 
 
-def test_cad_inner_copper_uses_indexed_roles_and_default_style_fallback() -> None:
+def test_eda_inner_copper_uses_indexed_roles_and_default_style_fallback() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -150,22 +150,22 @@ def test_cad_inner_copper_uses_indexed_roles_and_default_style_fallback() -> Non
         )
     )
 
-    layers = build_cad_layers(
+    layers = build_eda_layers(
         store,
         _settings(
             rules=(LayerSelectionRule(match=LayerMatch(name="In2.Cu")),),
-            tokens={"cad.copper.inner.default.fill": "#7fc87f"},
+            tokens={"eda.copper.inner.default.fill": "#7fc87f"},
         ),
         warn=lambda _message: None,
     )
 
     assert len(layers) == 1
-    assert layers[0].id == "cad:copper:inner:2"
+    assert layers[0].id == "eda:copper:inner:2"
     assert layers[0].role.inner_index == 2
-    assert layers[0].style == ResolvedStyle(fill="#7fc87f")
+    assert layers[0].style == ResolvedStyle(fill="#7fc87f", opacity=1, stroke="none")
 
 
-def test_cad_exact_native_layer_selection_builds_layer_with_native_token_style() -> None:
+def test_eda_exact_native_layer_selection_builds_layer_with_native_token_style() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -180,23 +180,23 @@ def test_cad_exact_native_layer_selection_builds_layer_with_native_token_style()
         )
     )
 
-    layers = build_cad_layers(
+    layers = build_eda_layers(
         store,
         _settings(
             rules=(LayerSelectionRule(match=LayerMatch(name="Mechanical 13")),),
-            tokens={"cad.layer[Mechanical 13].fill": "#55ccff"},
+            tokens={"eda.layer[Mechanical 13].fill": "#55ccff"},
         ),
         warn=lambda _message: None,
     )
 
     assert len(layers) == 1
-    assert layers[0].id == "cad:mechanical"
+    assert layers[0].id == "eda:mechanical"
     assert layers[0].role.source_layer_name == "Mechanical 13"
     assert layers[0].source_layers == ("Mechanical 13",)
     assert layers[0].style == ResolvedStyle(fill="#55ccff")
 
 
-def test_cad_layer_order_ignores_group_size_when_stack_index_matches() -> None:
+def test_eda_layer_order_ignores_group_size_when_stack_index_matches() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -230,13 +230,13 @@ def test_cad_layer_order_ignores_group_size_when_stack_index_matches() -> None:
         )
     )
 
-    layers = build_cad_layers(
+    layers = build_eda_layers(
         store,
         _settings(
             rules=(LayerSelectionRule(match=LayerMatch(function="mechanical")),),
             tokens={
-                "cad.layer[A.Mechanical].fill": "#55ccff",
-                "cad.layer[B.Mechanical].fill": "#ff55cc",
+                "eda.layer[A.Mechanical].fill": "#55ccff",
+                "eda.layer[B.Mechanical].fill": "#ff55cc",
             },
         ),
         warn=lambda _message: None,
@@ -248,7 +248,7 @@ def test_cad_layer_order_ignores_group_size_when_stack_index_matches() -> None:
     ]
 
 
-def test_cad_native_layer_token_override_wins_over_semantic_copper_token() -> None:
+def test_eda_native_layer_token_override_wins_over_semantic_copper_token() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -263,22 +263,22 @@ def test_cad_native_layer_token_override_wins_over_semantic_copper_token() -> No
         )
     )
 
-    layers = build_cad_layers(
+    layers = build_eda_layers(
         store,
         _settings(
             rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
             tokens={
-                "cad.layer[F.Cu].fill": "#ff0000",
-                "cad.copper.front.fill": "#d17a22",
+                "eda.layer[F.Cu].fill": "#ff0000",
+                "eda.copper.front.fill": "#d17a22",
             },
         ),
         warn=lambda _message: None,
     )
 
-    assert layers[0].style == ResolvedStyle(fill="#ff0000")
+    assert layers[0].style == ResolvedStyle(fill="#ff0000", opacity=1, stroke="none")
 
 
-def test_cad_via_only_copper_selection_builds_layer_for_selected_source_layer() -> None:
+def test_eda_via_only_copper_selection_builds_layer_for_selected_source_layer() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -293,22 +293,22 @@ def test_cad_via_only_copper_selection_builds_layer_for_selected_source_layer() 
         )
     )
 
-    layers = build_cad_layers(
+    layers = build_eda_layers(
         store,
         _settings(
             rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
-            tokens={"cad.copper.front.fill": "#d17a22"},
+            tokens={"eda.copper.front.fill": "#d17a22"},
         ),
         warn=lambda _message: None,
     )
 
     assert len(layers) == 1
-    assert layers[0].id == "cad:copper:front"
+    assert layers[0].id == "eda:copper:front"
     assert layers[0].source_layers == ("F.Cu",)
     assert layers[0].source_ids == ("via-1",)
 
 
-def test_cad_copper_layer_uses_child_primitives_for_pad_and_via() -> None:
+def test_eda_copper_layer_uses_child_primitives_for_pad_and_via() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -331,24 +331,24 @@ def test_cad_copper_layer_uses_child_primitives_for_pad_and_via() -> None:
         )
     )
 
-    layers = build_cad_layers(
+    layers = build_eda_layers(
         store,
         _settings(
             rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
-            tokens={"cad.copper.front.fill": "#d17a22"},
+            tokens={"eda.copper.front.fill": "#d17a22"},
         ),
         warn=lambda _message: None,
     )
 
     assert len(layers) == 1
     layer = layers[0]
-    assert layer.id == "cad:copper:front"
+    assert layer.id == "eda:copper:front"
     assert layer.source_ids == ("pad-1", "via-1")
     assert tuple(primitive.source_id for primitive in layer.primitives) == ("pad-1", "via-1")
     assert all(primitive.d.startswith("M ") for primitive in layer.primitives)
 
 
-def test_cad_copper_primitive_conversion_skips_unconvertible_source_without_artwork_fallback(
+def test_eda_copper_primitive_conversion_skips_unconvertible_source_without_artwork_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = PcbGeometryStore(
@@ -376,11 +376,11 @@ def test_cad_copper_primitive_conversion_skips_unconvertible_source_without_artw
     profiler = RenderProfiler()
     warnings: list[str] = []
 
-    layers = build_cad_layers(
+    layers = build_eda_layers(
         store,
         _settings(
             rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
-            tokens={"cad.copper.front.fill": "#d17a22"},
+            tokens={"eda.copper.front.fill": "#d17a22"},
         ),
         warn=warnings.append,
         profiler=profiler,
@@ -388,14 +388,14 @@ def test_cad_copper_primitive_conversion_skips_unconvertible_source_without_artw
 
     assert len(layers) == 1
     layer = layers[0]
-    assert layer.id == "cad:copper:front"
+    assert layer.id == "eda:copper:front"
     assert layer.source_ids == ("pad-1",)
     assert tuple(primitive.source_id for primitive in layer.primitives) == ("pad-1",)
     assert warnings == []
     _assert_primitive_profile(profiler, primitives=1)
 
 
-def test_cad_copper_projection_does_not_use_skia_union() -> None:
+def test_eda_copper_projection_does_not_use_skia_union() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -413,11 +413,11 @@ def test_cad_copper_projection_does_not_use_skia_union() -> None:
     profiler = RenderProfiler()
     warnings: list[str] = []
 
-    layers = build_cad_layers(
+    layers = build_eda_layers(
         store,
         _settings(
             rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
-            tokens={"cad.copper.front.fill": "#d17a22"},
+            tokens={"eda.copper.front.fill": "#d17a22"},
         ),
         warn=warnings.append,
         profiler=profiler,
@@ -425,7 +425,7 @@ def test_cad_copper_projection_does_not_use_skia_union() -> None:
 
     assert len(layers) == 1
     layer = layers[0]
-    assert layer.id == "cad:copper:front"
+    assert layer.id == "eda:copper:front"
     assert layer.source_ids == ("pad-1",)
     assert len(layer.primitives) == 1
     assert warnings == []
@@ -524,7 +524,7 @@ def test_highlight_copper_primitive_conversion_skips_unconvertible_source_withou
     assert warnings == []
 
 
-def test_cad_primitives_keep_unclipped_artwork_and_track_layer_mask() -> None:
+def test_eda_primitives_keep_unclipped_artwork_and_track_layer_mask() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -547,11 +547,11 @@ def test_cad_primitives_keep_unclipped_artwork_and_track_layer_mask() -> None:
         )
     )
 
-    layers = build_cad_layers(
+    layers = build_eda_layers(
         store,
         _settings(
             rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
-            tokens={"cad.copper.front.fill": "#d17a22"},
+            tokens={"eda.copper.front.fill": "#d17a22"},
         ),
         warn=lambda _message: None,
     )
@@ -563,16 +563,16 @@ def test_cad_primitives_keep_unclipped_artwork_and_track_layer_mask() -> None:
     assert layers[0].mask.drills
 
 
-def test_cad_drill_clipping_handles_kicad_symbol_layer_names() -> None:
+def test_eda_drill_clipping_handles_kicad_symbol_layer_names() -> None:
     fixture = Path(__file__).parent / "fixtures" / "orangecrab.kicad_pcb"
     board = parse_kicad_pcb(fixture)
     store = build_geometry_store(board, side="front")
 
-    layers = build_cad_layers(
+    layers = build_eda_layers(
         store,
         _settings(
             rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
-            tokens={"cad.copper.front.fill": "#d17a22"},
+            tokens={"eda.copper.front.fill": "#d17a22"},
         ),
         warn=lambda _message: None,
     )
@@ -587,17 +587,17 @@ def test_cad_drill_clipping_handles_kicad_symbol_layer_names() -> None:
     assert all(layer.role.inner_index != 5000 for layer in layers)
 
 
-def test_cad_board_outline_is_outline_only() -> None:
+def test_eda_board_outline_is_outline_only() -> None:
     store = PcbGeometryStore(items=(_board_outline(),))
 
-    layers = build_cad_layers(
+    layers = build_eda_layers(
         store,
         _settings(
             rules=(LayerSelectionRule(match=LayerMatch(name="Edge.Cuts")),),
             tokens={
-                "cad.edge.fill": "none",
-                "cad.edge.stroke": "#444444",
-                "cad.edge.strokeWidthMm": 0.1,
+                "eda.edge.fill": "none",
+                "eda.edge.stroke": "#444444",
+                "eda.edge.strokeWidthMm": 0.1,
             },
         ),
         warn=lambda _message: None,
@@ -1135,11 +1135,11 @@ def test_base_layers_dim_only_when_dimming_enabled_and_highlights_exist() -> Non
         )
     )
     tokens: dict[str, str | int | float | bool] = {
-        "cad.copper.front.fill": "#d17a22",
-        "cad.dimmed.copper.front.fill": "#6f5b48",
+        "eda.copper.front.fill": "#d17a22",
+        "eda.dimmed.copper.front.fill": "#6f5b48",
     }
 
-    without_highlights = build_cad_layers(
+    without_highlights = build_eda_layers(
         store,
         _settings(
             rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
@@ -1148,7 +1148,7 @@ def test_base_layers_dim_only_when_dimming_enabled_and_highlights_exist() -> Non
         ),
         warn=lambda _message: None,
     )
-    with_highlights = build_cad_layers(
+    with_highlights = build_eda_layers(
         store,
         _settings(
             rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
@@ -1159,11 +1159,11 @@ def test_base_layers_dim_only_when_dimming_enabled_and_highlights_exist() -> Non
         warn=lambda _message: None,
     )
 
-    assert without_highlights[0].style == ResolvedStyle(fill="#d17a22")
-    assert with_highlights[0].style == ResolvedStyle(fill="#6f5b48")
+    assert without_highlights[0].style == ResolvedStyle(fill="#d17a22", opacity=1, stroke="none")
+    assert with_highlights[0].style == ResolvedStyle(fill="#6f5b48", opacity=1, stroke="none")
 
 
-def test_cad_layer_contents_do_not_use_artwork_resolution_or_union() -> None:
+def test_eda_layer_contents_do_not_use_artwork_resolution_or_union() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -1186,11 +1186,11 @@ def test_cad_layer_contents_do_not_use_artwork_resolution_or_union() -> None:
         )
     )
 
-    layers = build_cad_layers(
+    layers = build_eda_layers(
         store,
         _settings(
             rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
-            tokens={"cad.copper.front.fill": "#d17a22"},
+            tokens={"eda.copper.front.fill": "#d17a22"},
         ),
         warn=lambda _message: None,
     )
@@ -1252,7 +1252,7 @@ def test_realistic_layer_contents_do_not_use_artwork_resolution_or_boolean_geome
     ) == ("pad-1", "pad-2")
 
 
-def test_cad_profiler_reports_selected_items_and_primitive_conversion_counts() -> None:
+def test_eda_profiler_reports_selected_items_and_primitive_conversion_counts() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -1276,11 +1276,11 @@ def test_cad_profiler_reports_selected_items_and_primitive_conversion_counts() -
     )
     profiler = RenderProfiler()
 
-    _ = build_cad_layers(
+    _ = build_eda_layers(
         store,
         _settings(
             rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
-            tokens={"cad.copper.front.fill": "#d17a22"},
+            tokens={"eda.copper.front.fill": "#d17a22"},
         ),
         warn=lambda _message: None,
         profiler=profiler,
@@ -1288,8 +1288,8 @@ def test_cad_profiler_reports_selected_items_and_primitive_conversion_counts() -
 
     events = cast("list[dict[str, object]]", profiler.to_dict()["events"])
     by_name = {event["name"]: event for event in events}
-    selected_data = cast("dict[str, object]", by_name["cad.selected_items"]["data"])
-    layer_item_data = cast("dict[str, object]", by_name["cad.layer_items"]["data"])
+    selected_data = cast("dict[str, object]", by_name["eda.selected_items"]["data"])
+    layer_item_data = cast("dict[str, object]", by_name["eda.layer_items"]["data"])
     primitive_data = cast(
         "dict[str, object]",
         by_name["artwork.converted_primitives"]["data"],
@@ -1304,7 +1304,7 @@ def test_cad_profiler_reports_selected_items_and_primitive_conversion_counts() -
     assert path_characters > 0
 
 
-def test_cad_profiler_reports_selected_via_expansion_counts() -> None:
+def test_eda_profiler_reports_selected_via_expansion_counts() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -1350,11 +1350,11 @@ def test_cad_profiler_reports_selected_via_expansion_counts() -> None:
     )
     profiler = RenderProfiler()
 
-    _ = build_cad_layers(
+    _ = build_eda_layers(
         store,
         _settings(
             rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
-            tokens={"cad.copper.front.fill": "#d17a22"},
+            tokens={"eda.copper.front.fill": "#d17a22"},
         ),
         warn=lambda _message: None,
         profiler=profiler,
@@ -1378,7 +1378,7 @@ def test_cad_profiler_reports_selected_via_expansion_counts() -> None:
     assert primitive_data["primitives"] == 4
 
 
-def test_profiler_reports_primitive_metrics_for_cad_copper() -> None:
+def test_profiler_reports_primitive_metrics_for_eda_copper() -> None:
     store = PcbGeometryStore(
         items=(
             _board_outline(),
@@ -1402,11 +1402,11 @@ def test_profiler_reports_primitive_metrics_for_cad_copper() -> None:
     )
     profiler = RenderProfiler()
 
-    _ = build_cad_layers(
+    _ = build_eda_layers(
         store,
         _settings(
             rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
-            tokens={"cad.copper.front.fill": "#d17a22"},
+            tokens={"eda.copper.front.fill": "#d17a22"},
         ),
         warn=lambda _message: None,
         profiler=profiler,
@@ -1524,13 +1524,13 @@ def test_layer_masks_reconstruct_board_material_from_source_outline_not_points()
         )
     )
 
-    layers = build_cad_layers(
+    layers = build_eda_layers(
         store,
         _settings(
             rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
             tokens={
-                "cad.copper.front.fill": "#ff6600",
-                "cad.copper.front.opacity": 1.0,
+                "eda.copper.front.fill": "#ff6600",
+                "eda.copper.front.opacity": 1.0,
             },
         ),
         warn=lambda _message: None,

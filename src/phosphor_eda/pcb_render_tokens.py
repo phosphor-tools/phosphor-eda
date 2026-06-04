@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import colorsys
+import hashlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import NoReturn
 
 type WarningCallback = Callable[[str], None]
 
@@ -32,6 +35,51 @@ class _TokenResolution:
 
 
 _STYLE_PROPERTIES = ("fill", "stroke", "opacity", "strokeWidthMm")
+_EDA_NAMESPACE = "eda"
+_EDA_COPPER_ANCHOR_COLORS = {
+    "F.Cu": "#cc0000",
+    "Top Layer": "#cc0000",
+    "Top": "#cc0000",
+    "B.Cu": "#0000cc",
+    "Bottom Layer": "#0000cc",
+    "Bottom": "#0000cc",
+}
+_EDA_SILKSCREEN_ANCHOR_COLORS = {
+    "F.SilkS": "#ffffff",
+    "Top Overlay": "#ffffff",
+    "B.SilkS": "#ffff00",
+    "Bottom Overlay": "#ffff00",
+}
+_EDA_EDGE_ANCHOR_COLORS = {
+    "Edge.Cuts": "#d0d2cd",
+    "Board Shape": "#d0d2cd",
+}
+_EDA_DRILL_ANCHOR_COLORS = {
+    "drills": "#202020",
+}
+_EDA_COPPER_FRONT_COLOR = "#cc0000"
+_EDA_COPPER_BACK_COLOR = "#0000cc"
+_EDA_SILKSCREEN_FRONT_COLOR = "#ffffff"
+_EDA_SILKSCREEN_BACK_COLOR = "#ffff00"
+_EDA_EDGE_COLOR = "#d0d2cd"
+_EDA_DRILL_COLOR = "#202020"
+
+
+def eda_default_copper_color(source_layer_name: str, copper_order: int | None) -> str:
+    """Return a deterministic default color for an EDA copper layer."""
+    if source_layer_name in _EDA_COPPER_ANCHOR_COLORS:
+        return _EDA_COPPER_ANCHOR_COLORS[source_layer_name]
+
+    color_index = copper_order
+    if color_index is None:
+        digest = hashlib.blake2s(source_layer_name.encode(), digest_size=4).digest()
+        color_index = int.from_bytes(digest, byteorder="big", signed=False)
+
+    hue = ((color_index * 137) % 360) / 360
+    saturation = 0.56 + (color_index % 4) * 0.08
+    lightness = 0.46 + ((color_index // 4) % 3) * 0.08
+    red, green, blue = colorsys.hls_to_rgb(hue, lightness, saturation)
+    return f"#{round(red * 255):02x}{round(green * 255):02x}{round(blue * 255):02x}"
 
 
 def resolve_layer_style(
@@ -42,20 +90,27 @@ def resolve_layer_style(
     warn: WarningCallback,
     highlight_color: str = "",
     warned_missing_dimmed_tokens: set[str] | None = None,
+    eda_layer_order: int | None = None,
 ) -> ResolvedStyle:
     """Resolve paint style tokens for a visual layer role."""
     style_values: dict[str, object] = {}
     if highlight_color:
         style_values["fill"] = highlight_color
     else:
-        fill_resolution = _resolve_required_token(tokens, role, "fill")
-        style_values["fill"] = _resolve_dimmed_value(
-            tokens,
-            fill_resolution,
-            dimmed,
-            warn,
-            warned_missing_dimmed_tokens,
-        )
+        fill_resolution = _resolve_optional_token(tokens, role, "fill")
+        if fill_resolution is not None:
+            style_values["fill"] = _resolve_dimmed_value(
+                tokens,
+                fill_resolution,
+                dimmed,
+                warn,
+                warned_missing_dimmed_tokens,
+            )
+        else:
+            default_fill = _resolve_eda_default_value(role, "fill", eda_layer_order)
+            if default_fill is None:
+                _raise_missing_token(role, "fill")
+            style_values["fill"] = default_fill
 
     for prop in _STYLE_PROPERTIES:
         if prop == "fill":
@@ -69,6 +124,10 @@ def resolve_layer_style(
                 warn,
                 warned_missing_dimmed_tokens,
             )
+        else:
+            default_value = _resolve_eda_default_value(role, prop, eda_layer_order)
+            if default_value is not None:
+                style_values[prop] = default_value
 
     return ResolvedStyle(
         fill=_as_optional_string(style_values.get("fill"), "fill"),
@@ -78,15 +137,7 @@ def resolve_layer_style(
     )
 
 
-def _resolve_required_token(
-    tokens: Mapping[str, object],
-    role: VisualRole,
-    prop: str,
-) -> _TokenResolution:
-    resolution = _resolve_optional_token(tokens, role, prop)
-    if resolution is not None:
-        return resolution
-
+def _raise_missing_token(role: VisualRole, prop: str) -> NoReturn:
     role_label = _role_label(role)
     msg = f"Missing style token for {role_label}.{prop}"
     raise ValueError(msg)
@@ -118,6 +169,77 @@ def _candidate_tokens(role: VisualRole, prop: str) -> tuple[str, ...]:
 
     candidates.append(f"{role.namespace}.layer.default.{prop}")
     return tuple(dict.fromkeys(candidates))
+
+
+def _resolve_eda_default_value(
+    role: VisualRole,
+    prop: str,
+    eda_layer_order: int | None,
+) -> object | None:
+    if role.namespace != _EDA_NAMESPACE:
+        return None
+
+    if role.function == "copper":
+        return _resolve_eda_copper_default(role, prop, eda_layer_order)
+    if role.function == "silkscreen":
+        return _resolve_eda_silkscreen_default(role, prop)
+    if role.function == "edge":
+        return _resolve_eda_edge_default(role, prop)
+    if role.function in {"drill", "drills"}:
+        return _resolve_eda_drill_default(role, prop)
+    return None
+
+
+def _resolve_eda_copper_default(
+    role: VisualRole,
+    prop: str,
+    eda_layer_order: int | None,
+) -> object | None:
+    if prop == "fill":
+        if role.side == "front":
+            return _EDA_COPPER_FRONT_COLOR
+        if role.side in {"back", "bottom"}:
+            return _EDA_COPPER_BACK_COLOR
+        return eda_default_copper_color(role.source_layer_name, eda_layer_order)
+    if prop == "opacity":
+        return 1.0
+    if prop == "stroke":
+        return "none"
+    return None
+
+
+def _resolve_eda_silkscreen_default(role: VisualRole, prop: str) -> object | None:
+    if prop == "fill":
+        if role.source_layer_name in _EDA_SILKSCREEN_ANCHOR_COLORS:
+            return _EDA_SILKSCREEN_ANCHOR_COLORS[role.source_layer_name]
+        if role.side == "back":
+            return _EDA_SILKSCREEN_BACK_COLOR
+        return _EDA_SILKSCREEN_FRONT_COLOR
+    if prop == "opacity":
+        return 1.0
+    if prop == "stroke":
+        return "none"
+    return None
+
+
+def _resolve_eda_edge_default(role: VisualRole, prop: str) -> object | None:
+    if prop == "fill":
+        return "none"
+    if prop == "stroke":
+        return _EDA_EDGE_ANCHOR_COLORS.get(role.source_layer_name, _EDA_EDGE_COLOR)
+    if prop == "strokeWidthMm":
+        return 0.15
+    return None
+
+
+def _resolve_eda_drill_default(role: VisualRole, prop: str) -> object | None:
+    if prop == "fill":
+        return "none"
+    if prop == "stroke":
+        return _EDA_DRILL_ANCHOR_COLORS.get(role.source_layer_name, _EDA_DRILL_COLOR)
+    if prop == "strokeWidthMm":
+        return 0.12
+    return None
 
 
 def _resolve_dimmed_value(

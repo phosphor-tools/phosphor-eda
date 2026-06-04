@@ -17,6 +17,7 @@ from phosphor_eda.pcb import (
 )
 from phosphor_eda.pcb_render_geometry import (
     GeometryKind,
+    GeometryLayer,
 )
 from phosphor_eda.shapely_geometry import normalize_geometry, robust_union
 from phosphor_eda.sql.geometry import (
@@ -62,6 +63,7 @@ _FUNCTION_ROLE_ALIASES = {
     "fab": "fabrication",
     "courtyard": "courtyard",
     "edge": "edge",
+    "drill": "drill",
     "mechanical": "mechanical",
     "other": "unknown",
 }
@@ -136,6 +138,84 @@ def select_source_artwork(
     return tuple(selected)
 
 
+def selected_copper_layers(
+    store: PcbGeometryStore,
+    rules: Iterable[LayerSelectionRule],
+    *,
+    active_side: str,
+) -> tuple[GeometryLayer, ...]:
+    """Return copper target layers selected for via projection."""
+    rule_tuple = tuple(rules)
+    known_layers = {
+        item.layer.name: item.layer for item in store.items if item.layer.role == "copper"
+    }
+    layers: dict[str, GeometryLayer] = {}
+    for item in store.items:
+        if item.layer.role != "copper":
+            continue
+        if not any(
+            rule_selects_layer(
+                rule,
+                item.layer,
+                object_kind=GeometryKind.VIA,
+                active_side=active_side,
+            )
+            for rule in rule_tuple
+        ):
+            continue
+        layers[item.layer.name] = item.layer
+
+    for item in store.by_kind(GeometryKind.VIA):
+        for layer_name in via_layers(item):
+            if layer_name == "*.Cu":
+                continue
+            layer = known_layers.get(layer_name, _copper_layer_for_name(layer_name))
+            if any(
+                rule_selects_layer(
+                    rule,
+                    layer,
+                    object_kind=GeometryKind.VIA,
+                    active_side=active_side,
+                )
+                for rule in rule_tuple
+            ):
+                layers[layer.name] = layer
+    return tuple(layers.values())
+
+
+def rule_selects_layer(
+    rule: LayerSelectionRule,
+    layer: GeometryLayer,
+    *,
+    object_kind: GeometryKind,
+    active_side: str,
+) -> bool:
+    """Return whether a source-layer rule selects an object on a geometry layer."""
+    if not rule.visible:
+        return False
+    if rule.match.name and layer.name != rule.match.name:
+        return False
+    if rule.match.function and layer.role != source_function_layer_role(rule.match.function):
+        return False
+    match_side = active_side if rule.match.side == "active" else rule.match.side
+    if match_side and layer.side != match_side:
+        return False
+    return _matches_object_filter(object_kind, rule.objects)
+
+
+def source_function_layer_role(function: str) -> str:
+    """Map render-settings source function names to geometry layer roles."""
+    return _FUNCTION_ROLE_ALIASES.get(function, function)
+
+
+def via_layers(item: RenderableGeometry) -> frozenset[str]:
+    """Return the copper-layer span of a via renderable item."""
+    payload = item.payload if item.payload is not None else item.source
+    if not isinstance(payload, PcbVia):
+        return frozenset()
+    return frozenset(str(layer) for layer in payload.layers)
+
+
 def board_outline_geometry(store: PcbGeometryStore) -> BaseGeometry:
     """Return the board outline polygon assembled from edge-cut primitives."""
     outlines: list[BaseGeometry] = []
@@ -182,19 +262,7 @@ def _matches_rule(
     *,
     active_side: str,
 ) -> bool:
-    match = rule.match
-    if match.name and item.layer.name != match.name:
-        return False
-    if match.function and item.layer.role != _function_layer_role(match.function):
-        return False
-    match_side = active_side if match.side == "active" else match.side
-    if match_side and item.layer.side != match_side:
-        return False
-    return _matches_object_filter(item.kind, rule.objects)
-
-
-def _function_layer_role(function: str) -> str:
-    return _FUNCTION_ROLE_ALIASES.get(function, function)
+    return rule_selects_layer(rule, item.layer, object_kind=item.kind, active_side=active_side)
 
 
 def _matches_object_filter(kind: GeometryKind, objects: tuple[str, ...]) -> bool:
@@ -234,6 +302,26 @@ def _via_drill_geometry(payload: object, *, layer_name: str | None) -> BaseGeome
 def _layer_in_stack(layer_name: str, layers: list[str]) -> bool:
     normalized_layers = {str(layer) for layer in layers}
     return layer_name in normalized_layers or "*.Cu" in normalized_layers
+
+
+def _copper_layer_for_name(name: str) -> GeometryLayer:
+    if name in {"F.Cu", "Top Layer"}:
+        return GeometryLayer(name=name, role="copper", side="front", stack_index=10_000)
+    if name in {"B.Cu", "Bottom Layer"}:
+        return GeometryLayer(name=name, role="copper", side="back", stack_index=0)
+    return GeometryLayer(
+        name=name,
+        role="copper",
+        side="inner",
+        stack_index=_inner_layer_index(name),
+    )
+
+
+def _inner_layer_index(name: str) -> int:
+    digits = "".join(character for character in name if character.isdigit())
+    if not digits:
+        return 5_000
+    return int(digits)
 
 
 def _board_outline_from_item(item: RenderableGeometry) -> BaseGeometry | None:

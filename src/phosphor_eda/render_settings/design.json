@@ -1,24 +1,14 @@
 {
-  "renderMode": "cad",
+  "renderMode": "eda",
   "source": {
     "layers": [
       { "match": { "function": "copper" } },
-      { "match": { "function": "silkscreen", "side": "active" } },
-      { "match": { "function": "edge" } }
+      { "match": { "function": "silkscreen" } },
+      { "match": { "function": "edge" } },
+      { "match": { "function": "drill" } }
     ]
   },
   "tokens": {
-    "cad.copper.front.fill": "#c83434",
-    "cad.copper.front.opacity": 0.35,
-    "cad.copper.back.fill": "#4d7fc4",
-    "cad.copper.back.opacity": 0.35,
-    "cad.copper.inner.default.fill": "#7fc87f",
-    "cad.copper.inner.default.opacity": 0.35,
-    "cad.silkscreen.front.fill": "#ffffff",
-    "cad.silkscreen.back.fill": "#ffffff",
-    "cad.edge.fill": "none",
-    "cad.edge.stroke": "#d0d2cd",
-    "cad.edge.strokeWidthMm": 0.15,
     "highlight.copper.front.fill": "#ff8a00",
     "highlight.copper.front.opacity": 0.85,
     "highlight.copper.front.stroke": "none",

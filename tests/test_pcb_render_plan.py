@@ -23,13 +23,13 @@ from phosphor_eda.pcb_render_plan import (
 )
 
 
-def test_build_derived_render_plan_cad_uses_derived_layers() -> None:
+def test_build_derived_render_plan_eda_uses_derived_layers() -> None:
     settings = load_render_settings_json(
         json.dumps(
             {
-                "renderMode": "cad",
+                "renderMode": "eda",
                 "source": {"layers": [{"match": {"name": "F.Cu"}}]},
-                "tokens": {"cad.layer[F.Cu].fill": "#ff6600"},
+                "tokens": {"eda.layer[F.Cu].fill": "#ff6600"},
             }
         )
     )
@@ -45,7 +45,7 @@ def test_build_derived_render_plan_cad_uses_derived_layers() -> None:
     assert plan.width_px == 1000
     assert plan.height_px > 0
     assert plan.base_layers
-    assert plan.base_layers[0].role.namespace == "cad"
+    assert plan.base_layers[0].role.namespace == "eda"
     assert plan.base_layers[0].role.function == "copper"
     assert plan.base_layers[0].source_layers == ("F.Cu",)
     assert plan.highlight_groups == ()
@@ -135,9 +135,9 @@ def test_build_derived_render_plan_expands_view_box_for_annotations() -> None:
     settings = load_render_settings_json(
         json.dumps(
             {
-                "renderMode": "cad",
+                "renderMode": "eda",
                 "source": {"layers": [{"match": {"name": "F.Cu"}}]},
-                "tokens": {"cad.layer[F.Cu].fill": "#ff6600"},
+                "tokens": {"eda.layer[F.Cu].fill": "#ff6600"},
             }
         )
     )
