@@ -13,9 +13,7 @@ import json
 import re
 from contextlib import contextmanager
 from dataclasses import replace
-from importlib.resources import files
-from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 from xml.sax.saxutils import escape as xml_escape
 
 from phosphor_eda.pcb_render_plan import (
@@ -23,15 +21,27 @@ from phosphor_eda.pcb_render_plan import (
     build_derived_render_plan,
 )
 from phosphor_eda.pcb_render_settings import (
-    RENDER_MODES,
-    SOURCE_LAYER_FUNCTIONS,
-    SOURCE_LAYER_SIDES,
     HighlightSpec,
     RenderSettings,
     is_json_dict,
+    load_render_settings_file,
+    load_render_settings_json,
     parse_render_settings,
+    render_settings_schema,
 )
 from phosphor_eda.text_metrics import BASELINE_CENTER_OFFSET, INTER_REGULAR_BASE64
+
+__all__ = [
+    "HighlightSpec",
+    "RenderSettings",
+    "is_json_dict",
+    "load_render_settings_file",
+    "load_render_settings_json",
+    "parse_render_settings",
+    "render_pcb_svg",
+    "render_pcb_svg_from_derived_plan",
+    "render_settings_schema",
+]
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -52,302 +62,10 @@ if TYPE_CHECKING:
     from phosphor_eda.pcb_render_profile import RenderProfiler
     from phosphor_eda.pcb_render_tokens import ResolvedStyle, VisualRole
 
-_BUNDLED_SETTINGS_PACKAGE = "phosphor_eda.render_settings"
-_PHOSPHOR_SETTINGS_RE = re.compile(r"^[A-Za-z0-9_-]+$")
-_SETTINGS_EXTENDS_KEY = "extends"
 _STYLE_BLOCK_TERMINATOR_RE = re.compile(r"</\s*style\s*>", re.IGNORECASE)
 _SVG_PATH_NUMBER_RE = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
 _LayerClipSignature = tuple[str, ...]
 _LayerMaskSignature = tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]
-
-
-def load_render_settings_file(path: Path) -> RenderSettings:
-    """Load, resolve ``extends``, merge, and parse a render-settings JSON file."""
-    data = _load_render_settings_file_data(path.resolve(), stack=[])
-    return parse_render_settings(data)
-
-
-def load_render_settings_json(text: str) -> RenderSettings:
-    """Load render settings from JSON text.
-
-    Stdin settings can extend packaged ``phosphor:`` settings. Relative file
-    extends require a settings file path, so they are rejected for JSON text.
-    """
-    data = _load_render_settings_text_data(text, source=None, stack=[])
-    return parse_render_settings(data)
-
-
-def _load_render_settings_file_data(path: Path, stack: list[str]) -> dict[str, object]:
-    try:
-        text = path.read_text()
-    except OSError as exc:
-        msg = f"Render settings file not found: {path}"
-        raise ValueError(msg) from exc
-    return _load_render_settings_text_data(text, source=path, stack=stack)
-
-
-def _load_render_settings_text_data(
-    text: str,
-    *,
-    source: Path | str | None,
-    stack: list[str],
-) -> dict[str, object]:
-    source_id = _settings_source_id(source)
-    if source_id in stack:
-        cycle = " -> ".join([*stack, source_id])
-        msg = f"render settings extends cycle detected: {cycle}"
-        raise ValueError(msg)
-
-    try:
-        raw = cast("object", json.loads(text))
-    except json.JSONDecodeError as exc:
-        msg = f"Invalid render settings JSON: {exc}"
-        raise ValueError(msg) from exc
-    if not is_json_dict(raw):
-        msg = "top-level JSON value must be an object"
-        raise ValueError(msg)
-
-    data = dict(raw)
-    _ = parse_render_settings(data)
-    parent_ref = data.pop(_SETTINGS_EXTENDS_KEY, "")
-    if not parent_ref:
-        return data
-
-    parent_data = _load_parent_render_settings(parent_ref, source=source, stack=[*stack, source_id])
-    return _merge_render_settings_data(parent_data, data)
-
-
-def _settings_source_id(source: Path | str | None) -> str:
-    if source is None:
-        return "<stdin>"
-    if isinstance(source, Path):
-        return str(source.resolve())
-    return source
-
-
-def _load_parent_render_settings(
-    parent_ref: object,
-    *,
-    source: Path | str | None,
-    stack: list[str],
-) -> dict[str, object]:
-    if not isinstance(parent_ref, str):
-        msg = "extends must be a string"
-        raise ValueError(msg)
-
-    if parent_ref.startswith("phosphor:"):
-        name = parent_ref.removeprefix("phosphor:")
-        if not _PHOSPHOR_SETTINGS_RE.fullmatch(name):
-            msg = f"Invalid phosphor render settings name: {parent_ref!r}"
-            raise ValueError(msg)
-        resource = files(_BUNDLED_SETTINGS_PACKAGE).joinpath(f"{name}.json")
-        if not resource.is_file():
-            msg = f"Unknown phosphor render settings: {parent_ref}"
-            raise ValueError(msg)
-        text = resource.read_text()
-        return _load_render_settings_text_data(text, source=parent_ref, stack=stack)
-
-    parent_path = Path(parent_ref)
-    if not parent_path.is_absolute():
-        if not isinstance(source, Path):
-            msg = f"Relative render settings extends requires a file source: {parent_ref}"
-            raise ValueError(msg)
-        parent_path = source.parent / parent_path
-    return _load_render_settings_file_data(parent_path.resolve(), stack=stack)
-
-
-def _merge_render_settings_data(
-    parent: dict[str, object],
-    child: dict[str, object],
-) -> dict[str, object]:
-    merged = dict(parent)
-    child_css = child.get("custom_css")
-    parent_css = parent.get("custom_css")
-
-    for key, value in child.items():
-        existing = merged.get(key)
-        if key == "annotations" and is_json_dict(existing) and is_json_dict(value):
-            merged[key] = _deep_merge_json_dicts(existing, value)
-        elif key == "tokens" and is_json_dict(existing) and is_json_dict(value):
-            merged[key] = {**existing, **value}
-        elif key == "dimming" and is_json_dict(existing) and is_json_dict(value):
-            merged[key] = _deep_merge_json_dicts(existing, value)
-        elif key == "custom_css":
-            css_parts = [css for css in (parent_css, child_css) if isinstance(css, str) and css]
-            merged[key] = "\n".join(css_parts)
-        else:
-            merged[key] = value
-    return merged
-
-
-def _deep_merge_json_dicts(
-    parent: dict[str, object],
-    child: dict[str, object],
-) -> dict[str, object]:
-    merged: dict[str, object] = dict(parent)
-    for key, value in child.items():
-        existing = merged.get(key)
-        if is_json_dict(existing) and is_json_dict(value):
-            merged[key] = _deep_merge_json_dicts(existing, value)
-        else:
-            merged[key] = value
-    return merged
-
-
-def render_settings_schema() -> dict[str, object]:
-    """Return the JSON Schema for ``pcb render`` settings."""
-    return {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "phosphor-eda pcb render settings",
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {
-            "extends": {
-                "type": "string",
-                "description": (
-                    "Base render settings to merge first. Use phosphor:<name> "
-                    "for bundled settings or a relative/absolute JSON path."
-                ),
-            },
-            "renderMode": {
-                "type": "string",
-                "enum": list(RENDER_MODES),
-            },
-            "side": {
-                "type": "string",
-                "enum": ["front", "back"],
-            },
-            "width": {
-                "type": "integer",
-                "minimum": 1,
-            },
-            "fontSizePx": {
-                "type": "number",
-                "minimum": 1,
-                "maximum": 500,
-                "description": "Annotation label font size in display pixels.",
-            },
-            "source": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "layers": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "additionalProperties": False,
-                            "properties": {
-                                "match": {
-                                    "type": "object",
-                                    "additionalProperties": False,
-                                    "properties": {
-                                        "name": {"type": "string", "minLength": 1},
-                                        "function": {
-                                            "type": "string",
-                                            "enum": list(SOURCE_LAYER_FUNCTIONS),
-                                        },
-                                        "side": {
-                                            "type": "string",
-                                            "enum": list(SOURCE_LAYER_SIDES),
-                                        },
-                                    },
-                                },
-                                "visible": {"type": "boolean"},
-                                "objects": {
-                                    "type": "array",
-                                    "items": {"type": "string", "minLength": 1},
-                                },
-                            },
-                        },
-                    },
-                    "excludeComponents": {
-                        "type": "array",
-                        "items": {"type": "string", "minLength": 1},
-                    },
-                },
-            },
-            "tokens": {
-                "type": "object",
-                "patternProperties": {
-                    r"^(cad|realistic|highlight|annotation)(\.[A-Za-z][A-Za-z0-9_]*)+$": {
-                        "$ref": "#/$defs/token_value"
-                    },
-                    r"^(cad|realistic|highlight)\.layer\[[^\]\r\n]+\]\.[A-Za-z][A-Za-z0-9_]*$": {
-                        "$ref": "#/$defs/token_value"
-                    },
-                },
-                "additionalProperties": False,
-            },
-            "dimming": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "enabled": {"type": "boolean"},
-                },
-            },
-            "highlights": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "net": {"type": "string", "minLength": 1},
-                        "component": {"type": "string", "minLength": 1},
-                        "pad": {
-                            "type": "string",
-                            "minLength": 3,
-                            "pattern": r"^[^.]+\..+$",
-                        },
-                        "color": {"type": "string"},
-                    },
-                    "oneOf": [
-                        {"required": ["net"]},
-                        {"required": ["component"]},
-                        {"required": ["pad"]},
-                    ],
-                },
-            },
-            "annotations": {
-                "type": "object",
-            },
-            "custom_css": {
-                "type": "string",
-            },
-        },
-        "$defs": {
-            "token_value": {
-                "type": ["string", "number", "boolean"],
-            },
-        },
-        "examples": [
-            {
-                "extends": "phosphor:simplified-high-contrast",
-                "renderMode": "cad",
-                "width": 3000,
-                "fontSizePx": 40,
-                "source": {
-                    "layers": [
-                        {"match": {"function": "copper"}, "visible": True},
-                        {
-                            "match": {"function": "silkscreen", "side": "front"},
-                            "visible": True,
-                        },
-                    ],
-                    "excludeComponents": ["R", "C", "L"],
-                },
-                "tokens": {
-                    "cad.copper.front.fill": "#d17a22",
-                    "cad.layer[F.Cu].fill": "#d17a22",
-                },
-                "dimming": {"enabled": False},
-                "highlights": [{"pad": "CN11.30", "color": "#c00000"}],
-                "annotations": {
-                    "pointers": [{"target": "CN11.30", "label": "PA1 / REF_CLK"}],
-                },
-                "custom_css": "",
-            },
-        ],
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -1295,11 +1013,11 @@ def _render_legend(svg: _Svg, legend: ResolvedLegend, font_size: float) -> None:
 def render_pcb_svg(
     board: Pcb,
     *,
-    side: str = "front",
+    side: str | None = None,
     highlight_nets: list[str] | None = None,
     highlight_components: list[str] | None = None,
     highlight_specs: list[HighlightSpec] | None = None,
-    width_px: int = 800,
+    width_px: int | None = None,
     custom_css: str = "",
     annotations: ResolvedAnnotations | None = None,
     render_settings: RenderSettings | None = None,
@@ -1333,6 +1051,8 @@ def render_pcb_svg(
         effective_settings = render_settings or load_render_settings_json(
             '{"extends": "phosphor:review"}'
         )
+        effective_side = side if side is not None else effective_settings.side or "front"
+        effective_width_px = width_px if width_px is not None else effective_settings.width or 800
         plan_settings = _settings_for_plan(
             effective_settings,
             highlight_nets=highlight_nets,
@@ -1345,16 +1065,16 @@ def render_pcb_svg(
             plan = build_derived_render_plan(
                 board,
                 settings=plan_settings,
-                side=side,
-                width_px=width_px,
+                side=effective_side,
+                width_px=effective_width_px,
                 annotations=annotations,
             )
         else:
             plan = build_derived_render_plan(
                 board,
                 settings=plan_settings,
-                side=side,
-                width_px=width_px,
+                side=effective_side,
+                width_px=effective_width_px,
                 annotations=annotations,
                 profiler=profiler,
             )
