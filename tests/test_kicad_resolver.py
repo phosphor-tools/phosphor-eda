@@ -258,6 +258,38 @@ def test_local_labels_with_same_text_on_same_sheet_instance_merge() -> None:
     assert _refs(_net_for_reference(design.nets, "A1")) == {"A1", "B1"}
 
 
+def test_local_and_hierarchical_labels_with_same_text_on_same_sheet_instance_merge() -> None:
+    scope_id = _scope("sheet-a")
+    local_id = "sheet-a:local:local"
+    hierarchical_id = "sheet-a:local:hierarchical"
+    local_pin = _pin(scope_id, local_id, "LOCAL1")
+    hierarchical_pin = _pin(scope_id, hierarchical_id, "HIER1")
+    local_net = _local_net(
+        scope_id,
+        "local",
+        local_labels=[_local_label(scope_id, local_id, "SIG")],
+        pins=[local_pin],
+    )
+    hierarchical_net = _local_net(
+        scope_id,
+        "hierarchical",
+        hierarchical_labels=[_hier_label(scope_id, hierarchical_id, "SIG")],
+        pins=[hierarchical_pin],
+    )
+
+    design = resolve_kicad_source(
+        _source(
+            [local_net, hierarchical_net],
+            [local_pin, hierarchical_pin],
+            sheet_instances=[_sheet(scope_id, "A")],
+        )
+    )
+
+    resolved = _net_for_reference(design.nets, "LOCAL1")
+    assert _refs(resolved) == {"LOCAL1", "HIER1"}
+    assert resolved.name == "SIG"
+
+
 def test_global_labels_with_same_text_merge_across_design() -> None:
     scope_a = _scope("sheet-a")
     scope_b = _scope("sheet-b")

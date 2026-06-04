@@ -96,22 +96,19 @@ def _merge_repeated_logical_pins(
 
 
 def _merge_same_scope_names(net_union: NetUnion, local_nets: Iterable[KiCadLocalNet]) -> None:
-    local_label_ids: dict[tuple[ScopeId, str], list[str]] = {}
-    hierarchical_label_ids: dict[tuple[ScopeId, str], list[str]] = {}
+    label_ids: dict[tuple[ScopeId, str], list[str]] = {}
 
     for local_net in local_nets:
         for label in local_net.local_labels:
             name = _mergeable_name(label.name)
             if name is not None:
-                local_label_ids.setdefault((label.scope_id, name), []).append(local_net.id)
+                label_ids.setdefault((label.scope_id, name), []).append(local_net.id)
         for label in local_net.hierarchical_labels:
             name = _mergeable_name(label.name)
             if name is not None:
-                hierarchical_label_ids.setdefault((label.scope_id, name), []).append(local_net.id)
+                label_ids.setdefault((label.scope_id, name), []).append(local_net.id)
 
-    for net_ids in local_label_ids.values():
-        _merge_ids(net_union, net_ids)
-    for net_ids in hierarchical_label_ids.values():
+    for net_ids in label_ids.values():
         _merge_ids(net_union, net_ids)
 
 

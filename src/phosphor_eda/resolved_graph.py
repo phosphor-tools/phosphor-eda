@@ -66,7 +66,7 @@ class ResolvedComponentOccurrenceInput:
 class ResolvedPinInput:
     id: str
     scope_id: ScopeId
-    local_net_id: str
+    local_net_id: str | None
     component_id: str
     component_reference: str
     component_part: str
@@ -177,6 +177,8 @@ def _validate_pins(
         if pin.scope_id not in pages_by_scope:
             msg = f"pin {pin.id!r} references unknown scope {pin.scope_id}"
             raise ResolutionInputError(msg)
+        if pin.local_net_id is None:
+            continue
         if pin.local_net_id not in local_nets_by_id:
             msg = f"pin {pin.id!r} references unknown local net {pin.local_net_id!r}"
             raise ResolutionInputError(msg)
@@ -246,6 +248,8 @@ def _validate_pin_nets_are_included(
     nets_by_local_id: dict[str, Net],
 ) -> None:
     for pin in pins:
+        if pin.local_net_id is None:
+            continue
         if pin.local_net_id not in nets_by_local_id:
             msg = f"pin {pin.id!r} references filtered local net {pin.local_net_id!r}"
             raise ResolutionInputError(msg)
@@ -354,15 +358,16 @@ def _build_components(
             )
         )
 
-        net = nets_by_local_id[pin_input.local_net_id]
-        if pin.net is not None and pin.net.id != net.id:
-            _remove_pin(pin.net.pins, pin)
-        pin.net = net
-        _append_unique_pin(
-            net.pins,
-            pin,
-            seen_ids=net_pin_ids.setdefault(net.id, {existing.id for existing in net.pins}),
-        )
+        if pin_input.local_net_id is not None:
+            net = nets_by_local_id[pin_input.local_net_id]
+            if pin.net is not None and pin.net.id != net.id:
+                _remove_pin(pin.net.pins, pin)
+            pin.net = net
+            _append_unique_pin(
+                net.pins,
+                pin,
+                seen_ids=net_pin_ids.setdefault(net.id, {existing.id for existing in net.pins}),
+            )
 
     return list(components_by_id.values())
 

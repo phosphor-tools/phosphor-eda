@@ -3,6 +3,10 @@
 from pathlib import Path
 
 from phosphor_eda.altium.project import AltiumHierarchyMode
+from phosphor_eda.altium.records import FileNameRec, RecordType, SheetNameRec, SheetSymbolRec
+from phosphor_eda.altium.sheet_builder import SheetRecords
+from phosphor_eda.altium.source import load_project_source_sheets
+from phosphor_eda.altium.spatial import WireIndex
 from phosphor_eda.altium.to_schematic import altium_to_source
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -15,6 +19,34 @@ def _sheet_by_name(source_name: str):
         if sheet.name == source_name:
             return sheet
     raise AssertionError(f"No Altium source sheet named {source_name}")
+
+
+def _records_sheet(name: str, child_files: list[str]) -> SheetRecords:
+    records = []
+    for index, child_file in enumerate(child_files, start=1):
+        owner_index = index - 1
+        records.extend(
+            [
+                SheetSymbolRec(
+                    record_type=RecordType.SHEET_SYMBOL,
+                    index=index,
+                    owner_index=-1,
+                ),
+                SheetNameRec(
+                    record_type=RecordType.SHEET_NAME,
+                    index=100 + index,
+                    owner_index=owner_index,
+                    text=f"{name}-child-{index}",
+                ),
+                FileNameRec(
+                    record_type=RecordType.FILE_NAME,
+                    index=200 + index,
+                    owner_index=owner_index,
+                    text=child_file,
+                ),
+            ]
+        )
+    return SheetRecords(records=records, children={}, wire_index=WireIndex([]), name=name)
 
 
 def test_altium_to_source_preserves_project_options():
@@ -102,3 +134,46 @@ def test_multipart_component_source_identity_uses_component_not_part_record():
         "altium:component:root:multipart:U1:STM32F103CBT6:3"
     }
     assert len({pin.component_occurrence_source_id for pin in u1_pins}) > 1
+
+
+def test_project_source_expands_nested_repeated_sheet_instances(tmp_path, monkeypatch):
+    project_path = tmp_path / "Nested.PrjPcb"
+    project_path.write_text("", encoding="utf-8")
+    for sheet_name in ("Top.SchDoc", "Child.SchDoc", "Leaf.SchDoc"):
+        (tmp_path / sheet_name).write_text("", encoding="utf-8")
+
+    records_by_file = {
+        "Top.SchDoc": _records_sheet("Top", ["Child.SchDoc", "Child.SchDoc"]),
+        "Child.SchDoc": _records_sheet("Child", ["Leaf.SchDoc", "Leaf.SchDoc"]),
+        "Leaf.SchDoc": _records_sheet("Leaf", []),
+    }
+
+    monkeypatch.setattr(
+        "phosphor_eda.altium.source.parse_prjpcb_file",
+        lambda _path: type(
+            "Project",
+            (),
+            {
+                "schematic_paths": ["Top.SchDoc", "Child.SchDoc", "Leaf.SchDoc"],
+                "hierarchy_mode": AltiumHierarchyMode.SMART,
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        "phosphor_eda.altium.source.load_sheet",
+        lambda path, ctx: records_by_file[Path(path).name],
+    )
+
+    _project, sheets = load_project_source_sheets(project_path)
+
+    child_sheets = [sheet for sheet in sheets.values() if sheet.source_file == "Child.SchDoc"]
+    leaf_sheets = [sheet for sheet in sheets.values() if sheet.source_file == "Leaf.SchDoc"]
+    child_scope_paths = {child.scope_id.path for child in child_sheets}
+    assert len(child_sheets) == 2
+    assert len(leaf_sheets) == 4
+    assert {
+        leaf.scope_id.path[: len(child_scope)]
+        for leaf in leaf_sheets
+        for child_scope in child_scope_paths
+        if leaf.scope_id.path[: len(child_scope)] == child_scope
+    } == child_scope_paths

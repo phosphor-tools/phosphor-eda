@@ -12,17 +12,16 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET
 
-from phosphor_eda.schematic import (
-    Component,
-    ComponentOccurrence,
-    Net,
-    NetOccurrence,
-    Page,
-    Pin,
-    PinOccurrence,
-    Schematic,
-    ScopeId,
+from phosphor_eda.net_union import NetUnion
+from phosphor_eda.resolved_graph import (
+    ResolvedComponentOccurrenceInput,
+    ResolvedLocalNetInput,
+    ResolvedNetInput,
+    ResolvedPageInput,
+    ResolvedPinInput,
+    build_resolved_schematic,
 )
+from phosphor_eda.schematic import Schematic, ScopeId
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -139,34 +138,6 @@ def _parse_rotation(value: str) -> tuple[float, bool]:
     return (0.0, mirror)
 
 
-def _append_unique_page(pages: list[Page], page: Page) -> None:
-    if any(existing.id == page.id for existing in pages):
-        return
-    pages.append(page)
-
-
-def _append_unique_component(components: list[Component], component: Component) -> None:
-    if any(existing.id == component.id for existing in components):
-        return
-    components.append(component)
-
-
-def _append_unique_net(nets: list[Net], net: Net) -> None:
-    if any(existing.id == net.id for existing in nets):
-        return
-    nets.append(net)
-
-
-def _append_unique_pin(pins: list[Pin], pin: Pin) -> None:
-    if any(existing.id == pin.id for existing in pins):
-        return
-    pins.append(pin)
-
-
-def _remove_pin(pins: list[Pin], pin: Pin) -> None:
-    pins[:] = [existing for existing in pins if existing.id != pin.id]
-
-
 # ---------------------------------------------------------------------------
 # Library parsing
 # ---------------------------------------------------------------------------
@@ -273,36 +244,39 @@ def _parse_parts(schematic: ET.Element) -> dict[str, _PartInfo]:
 
 
 def _build_pages(
+    name: str,
     schematic: ET.Element,
     libraries: dict[str, _LibData],
     parts: dict[str, _PartInfo],
-) -> tuple[list[Page], list[Component], list[Net]]:
+) -> Schematic:
     """Build the public schematic graph from Eagle sheets.
 
     Eagle net names are global: net segments with the same name are one
     electrical net even across sheets. That is Eagle-specific source evidence,
     not a generic same-name page merge.
     """
-    pages: list[Page] = []
-    components: list[Component] = []
-    components_by_name: dict[str, Component] = {}
-    nets_by_name: dict[str, Net] = {}
-    pins_by_component_designator: dict[tuple[str, str], Pin] = {}
-    component_occurrences_seen: set[tuple[str, str, str]] = set()
+    page_inputs: list[ResolvedPageInput] = []
+    local_net_inputs: list[ResolvedLocalNetInput] = []
+    pin_inputs: list[ResolvedPinInput] = []
+    local_net_ids_by_name: dict[str, list[str]] = {}
+    net_name_by_local_id: dict[str, str] = {}
     pin_occurrences_seen: set[tuple[str, str, str]] = set()
 
     sheets_elem = schematic.find("sheets")
     if sheets_elem is None:
-        return (pages, components, [])
+        return Schematic(name=name)
 
     for sheet_idx, sheet_elem in enumerate(sheets_elem.findall("sheet"), 1):
         # Page name from <description> or default
         page_name = _get_description(sheet_elem) or f"Sheet {sheet_idx}"
         scope_id = ScopeId(path=(f"sheet-{sheet_idx}",))
-        page = Page(
-            id=f"eagle:page:{sheet_idx:04d}",
-            name=page_name,
-            scope_id=scope_id,
+        page_id = f"eagle:page:{sheet_idx:04d}"
+        page_inputs.append(
+            ResolvedPageInput(
+                id=page_id,
+                name=page_name,
+                scope_id=scope_id,
+            )
         )
 
         # Collect instances on this sheet: part_name -> list of gate_names
@@ -325,25 +299,32 @@ def _build_pages(
                 )
 
         # Parse nets: collect pinrefs across all segments
-        # (part_name, gate_name, pin_name) -> net_name
+        # (part_name, gate_name, pin_name) -> sheet-local net id
         pinref_map: dict[tuple[str, str, str], str] = {}
-        source_net_ids_by_name: dict[str, list[str]] = {}
         nets_elem = sheet_elem.find("nets")
         if nets_elem is not None:
             for net_idx, net_elem in enumerate(nets_elem.findall("net"), 1):
                 net_name = net_elem.get("name", "")
-                has_pinrefs = False
+                pinrefs: list[tuple[str, str, str]] = []
                 for segment_elem in net_elem.findall("segment"):
                     for pinref_elem in segment_elem.findall("pinref"):
                         pr_part = pinref_elem.get("part", "")
                         pr_gate = pinref_elem.get("gate", "")
                         pr_pin = pinref_elem.get("pin", "")
-                        has_pinrefs = True
-                        pinref_map[(pr_part, pr_gate, pr_pin)] = net_name
-                if net_name and has_pinrefs:
-                    source_net_ids_by_name.setdefault(net_name, []).append(
-                        f"{page.id}:net:{net_idx:04d}"
+                        pinrefs.append((pr_part, pr_gate, pr_pin))
+                if net_name and pinrefs:
+                    local_net_id = f"{page_id}:net:{net_idx:04d}"
+                    local_net_inputs.append(
+                        ResolvedLocalNetInput(
+                            id=local_net_id,
+                            scope_id=scope_id,
+                            source_names=frozenset({net_name}),
+                        )
                     )
+                    local_net_ids_by_name.setdefault(net_name, []).append(local_net_id)
+                    net_name_by_local_id[local_net_id] = net_name
+                    for pinref in pinrefs:
+                        pinref_map[pinref] = local_net_id
 
         # Build components — one Component per part, collecting all gates
         for part_name, instances in instances_per_part.items():
@@ -366,47 +347,12 @@ def _build_pages(
                 metadata["Value"] = part_info.value
 
             component_id = f"eagle:component:{part_name}"
-            comp = components_by_name.get(part_name)
-            if comp is None:
-                comp = Component(
-                    id=component_id,
-                    reference=part_name,
-                    part=f"{part_info.library}:{part_info.deviceset}",
-                    description=ds_info.description,
-                    metadata=metadata,
-                )
-                components_by_name[part_name] = comp
-                components.append(comp)
-            else:
-                comp.metadata.update(metadata)
 
             # Add pins from each gate placed on this sheet
             for instance in instances:
-                _append_unique_page(comp.pages, page)
-                _append_unique_component(page.components, comp)
                 occurrence_source_id = (
-                    f"{page.id}:instance:{instance.part_name}:{instance.gate_name}"
+                    f"{page_id}:instance:{instance.part_name}:{instance.gate_name}"
                 )
-                occurrence_key = (comp.id, page.id, occurrence_source_id)
-                if occurrence_key not in component_occurrences_seen:
-                    component_occurrences_seen.add(occurrence_key)
-                    comp.occurrences.append(
-                        ComponentOccurrence(
-                            id=f"{comp.id}:occ:{len(comp.occurrences) + 1:04d}",
-                            component=comp,
-                            page=page,
-                            scope_id=scope_id,
-                            source_id=occurrence_source_id,
-                            part_id=part_info.value,
-                            x=instance.x,
-                            y=instance.y,
-                            rotation=instance.rotation,
-                            mirror=instance.mirror,
-                            metadata={
-                                "eagle_gate": instance.gate_name,
-                            },
-                        )
-                    )
 
                 symbol_name = ds_info.gates.get(instance.gate_name)
                 if symbol_name is None:
@@ -421,18 +367,7 @@ def _build_pages(
                     designator = pad or pin_def.name
 
                     # Resolve net from pinref
-                    net_name = pinref_map.get((part_name, instance.gate_name, pin_def.name))
-                    net: Net | None = None
-                    if net_name:
-                        if net_name not in nets_by_name:
-                            nets_by_name[net_name] = Net(
-                                id=f"eagle:net:{len(nets_by_name) + 1:04d}",
-                                name=net_name,
-                                metadata={
-                                    "eagle_net_name": net_name,
-                                },
-                            )
-                        net = nets_by_name[net_name]
+                    local_net_id = pinref_map.get((part_name, instance.gate_name, pin_def.name))
 
                     # Map pin direction to canonical electrical type
                     electrical = _DIRECTION_MAP.get(pin_def.direction, "")
@@ -442,28 +377,12 @@ def _build_pages(
 
                     is_nc = pin_def.direction == "nc"
 
-                    pin_key = (comp.id, designator)
-                    pin = pins_by_component_designator.get(pin_key)
-                    if pin is None:
-                        pin = Pin(
-                            id=f"{comp.id}:pin:{designator}",
-                            designator=designator,
-                            name=pin_def.name,
-                            component=comp,
-                            no_connect=is_nc,
-                            metadata=pin_meta,
-                        )
-                        pins_by_component_designator[pin_key] = pin
-                        comp.pins.append(pin)
-                    else:
-                        pin.metadata.update(pin_meta)
-                        pin.no_connect = pin.no_connect or is_nc
-
                     pin_source_id = (
-                        f"{page.id}:instance:{instance.part_name}:"
+                        f"{page_id}:instance:{instance.part_name}:"
                         f"{instance.gate_name}:pin:{pin_def.name}"
                     )
-                    pin_occurrence_key = (pin.id, page.id, pin_source_id)
+                    pin_id = f"{component_id}:pin:{designator}"
+                    pin_occurrence_key = (pin_id, page_id, pin_source_id)
                     if pin_occurrence_key not in pin_occurrences_seen:
                         pin_occurrences_seen.add(pin_occurrence_key)
                         occurrence_metadata = {
@@ -472,44 +391,84 @@ def _build_pages(
                         }
                         if pad:
                             occurrence_metadata["eagle_pad"] = pad
-                        pin.occurrences.append(
-                            PinOccurrence(
-                                id=f"{pin.id}:occ:{len(pin.occurrences) + 1:04d}",
-                                pin=pin,
-                                page=page,
+                        pin_inputs.append(
+                            ResolvedPinInput(
+                                id=pin_source_id,
                                 scope_id=scope_id,
-                                source_id=pin_source_id,
-                                metadata=occurrence_metadata,
+                                local_net_id=local_net_id,
+                                component_id=component_id,
+                                component_reference=part_name,
+                                component_part=f"{part_info.library}:{part_info.deviceset}",
+                                component_description=ds_info.description,
+                                pin_id=pin_id,
+                                pin_designator=designator,
+                                pin_name=pin_def.name,
+                                no_connect=is_nc,
+                                component_occurrence=ResolvedComponentOccurrenceInput(
+                                    source_id=occurrence_source_id,
+                                    part_id=part_info.value,
+                                    x=instance.x,
+                                    y=instance.y,
+                                    rotation=instance.rotation,
+                                    mirror=instance.mirror,
+                                    metadata={
+                                        "eagle_gate": instance.gate_name,
+                                    },
+                                ),
+                                pin_metadata=pin_meta,
+                                pin_occurrence_metadata=occurrence_metadata,
+                                component_metadata=metadata,
                             )
                         )
 
-                    if net is not None:
-                        if pin.net is not None and pin.net.id != net.id:
-                            _remove_pin(pin.net.pins, pin)
-                        pin.net = net
-                        _append_unique_pin(net.pins, pin)
+    net_union = NetUnion(local_net.id for local_net in local_net_inputs)
+    for local_net_ids in local_net_ids_by_name.values():
+        if len(local_net_ids) < 2:
+            continue
+        first_id = local_net_ids[0]
+        for local_net_id in local_net_ids[1:]:
+            _ = net_union.union(first_id, local_net_id)
 
-        for net_name, source_net_ids in source_net_ids_by_name.items():
-            net = nets_by_name.get(net_name)
-            if net is None:
-                continue
-            _append_unique_page(net.pages, page)
-            _append_unique_net(page.nets, net)
-            for source_net_id in source_net_ids:
-                net.occurrences.append(
-                    NetOccurrence(
-                        id=f"{net.id}:occ:{len(net.occurrences) + 1:04d}",
-                        net=net,
-                        page=page,
-                        scope_id=scope_id,
-                        source_local_net_id=source_net_id,
-                        source_names={net_name},
-                    )
-                )
+    return build_resolved_schematic(
+        name=name,
+        pages=page_inputs,
+        local_nets=local_net_inputs,
+        pins=pin_inputs,
+        net_union=net_union,
+        net_factory=lambda net_index, _root_id, group_local_nets: _eagle_net_input_for_group(
+            net_index,
+            net_name_by_local_id,
+            group_local_nets,
+        ),
+        include_net=_include_eagle_net,
+    )
 
-        pages.append(page)
 
-    return (pages, components, list(nets_by_name.values()))
+def _eagle_net_input_for_group(
+    net_index: int,
+    net_name_by_local_id: dict[str, str],
+    group_local_nets: tuple[ResolvedLocalNetInput, ...],
+) -> ResolvedNetInput:
+    name = next(
+        (net_name_by_local_id[local_net.id] for local_net in group_local_nets),
+        "__auto_net",
+    )
+    return ResolvedNetInput(
+        id=f"eagle:net:{net_index:04d}",
+        name=name,
+        metadata={
+            "eagle_net_name": name,
+        },
+    )
+
+
+def _include_eagle_net(
+    _root_id: str,
+    group_local_nets: tuple[ResolvedLocalNetInput, ...],
+    pins: tuple[ResolvedPinInput, ...],
+) -> bool:
+    group_local_net_ids = {local_net.id for local_net in group_local_nets}
+    return any(pin.local_net_id in group_local_net_ids for pin in pins)
 
 
 # ---------------------------------------------------------------------------
@@ -536,14 +495,9 @@ def eagle_to_design(path: Path, name: str = "") -> Schematic:
 
     libraries = _parse_libraries(schematic)
     parts = _parse_parts(schematic)
-    pages, components, nets = _build_pages(schematic, libraries, parts)
+    design = _build_pages(name, schematic, libraries, parts)
 
-    if not pages:
+    if not design.pages:
         return Schematic(name=name)
 
-    return Schematic(
-        name=name,
-        pages=pages,
-        components=components,
-        nets=nets,
-    )
+    return design

@@ -649,24 +649,34 @@ def load_project_source_sheets(
             if source_file not in repeated_child_files:
                 sheets[source.id] = source
 
-        parents = list(sheets.values())
-        for parent in parents:
+        base_sheet_ids = {source.id for source in base_sources_by_file.values()}
+        parents: list[tuple[AltiumSheetSource, tuple[str, ...]]] = [
+            (source, (_source_file_key(source.source_file),)) for source in sheets.values()
+        ]
+        for parent, lineage in parents:
             for symbol in parent.sheet_symbols:
                 child_source_file = _source_file_key(symbol.child_source_file)
                 child_records = records_by_source_file.get(child_source_file)
-                if child_records is None or child_source_file not in repeated_child_files:
+                if child_records is None or child_source_file in lineage:
+                    continue
+                parent_is_instance = parent.id not in base_sheet_ids
+                if not parent_is_instance and child_source_file not in repeated_child_files:
                     continue
                 child_base_id = _default_sheet_id(child_records, child_source_file)
                 child_sheet_id = f"{parent.id}:{symbol.id}:{child_base_id}"
+                if child_sheet_id in sheets:
+                    continue
                 child_scope_id = ScopeId(
                     path=(*parent.scope_id.path, symbol.id, child_sheet_id),
                 )
-                sheets[child_sheet_id] = _source_sheet(
+                child_source = _source_sheet(
                     child_records,
                     child_source_file,
                     sheet_id=child_sheet_id,
                     scope_id=child_scope_id,
                 )
+                sheets[child_sheet_id] = child_source
+                parents.append((child_source, (*lineage, child_source_file)))
         _apply_multipart_component_identities(sheets.values())
         return project, sheets
 
