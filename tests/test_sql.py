@@ -12,6 +12,7 @@ from phosphor_eda.sql import load_database
 FIXTURES = Path(__file__).parent / "fixtures"
 SWD_SWITCH_PCB = FIXTURES / "swd_switch.kicad_pcb"
 JETSON_ORIN_PRO = FIXTURES / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pro"
+ORANGECRAB_PCB = FIXTURES / "orangecrab.kicad_pcb"
 
 
 def _count(db: duckdb.DuckDBPyConnection, sql: str) -> int:
@@ -103,6 +104,11 @@ class TestZones:
         assert _count(db, "SELECT count(*) FROM zones") == 2
 
 
+class TestKeepouts:
+    def test_swd_switch_has_keepouts_table(self, db: duckdb.DuckDBPyConnection) -> None:
+        assert _count(db, "SELECT count(*) FROM keepouts") == 0
+
+
 class TestGraphicTexts:
     def test_count(self, db: duckdb.DuckDBPyConnection) -> None:
         assert _count(db, "SELECT count(*) FROM graphic_texts") == 8
@@ -156,6 +162,35 @@ class TestViews:
         distance = float(row[0])
         # Board is small, distances should be in mm range (< 200mm)
         assert 0 <= distance < 200
+
+
+# ---------------------------------------------------------------------------
+# OrangeCrab fixture (PCB-only, includes KiCad keepout zones)
+# ---------------------------------------------------------------------------
+
+
+def test_kicad_keepouts_are_queryable_in_sql() -> None:
+    project = load_project(ORANGECRAB_PCB)
+    con = load_database(project)
+    try:
+        assert _count(con, "SELECT count(*) FROM keepouts") > 0
+        row = con.execute(
+            """
+            SELECT layers, layer, tracks, vias, copperpour, geom
+            FROM keepouts
+            WHERE copperpour = 'not_allowed'
+            LIMIT 1
+            """
+        ).fetchone()
+        assert row is not None
+        assert "F.Cu" in row[0]
+        assert row[1] in row[0]
+        assert row[2] == "allowed"
+        assert row[3] == "allowed"
+        assert row[4] == "not_allowed"
+        assert row[5] is not None
+    finally:
+        con.close()
 
 
 # ---------------------------------------------------------------------------

@@ -8,6 +8,7 @@ Handles both KiCad 6 (fp_text reference) and KiCad 8 (property
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import sexpdata
@@ -20,6 +21,8 @@ from phosphor_eda.pcb import (
     PcbCircle,
     PcbFootprint,
     PcbGraphicText,
+    PcbKeepout,
+    PcbKeepoutRules,
     PcbLayer,
     PcbLine,
     PcbModel3D,
@@ -228,12 +231,25 @@ def _parse_pad(
 
     drill_node = sexp.find(pad_sexpr, "drill")
     drill = 0.0
+    drill_shape = "circle"
+    drill_width = 0.0
+    drill_height = 0.0
     if drill_node and len(drill_node) > 1:
-        # (drill 3.2) or (drill oval 0.6 1.2) — take first numeric value
-        for v in drill_node[1:]:
-            if isinstance(v, (int, float)):
-                drill = float(v)
-                break
+        drill_values = [float(v) for v in drill_node[1:] if isinstance(v, (int, float))]
+        if drill_values:
+            if (
+                len(drill_node) > 1
+                and isinstance(drill_node[1], sexpdata.Symbol)
+                and drill_node[1].value() == "oval"
+            ):
+                drill_shape = "oval"
+                drill_width = drill_values[0]
+                drill_height = drill_values[1] if len(drill_values) > 1 else drill_values[0]
+                drill = min(drill_width, drill_height)
+            else:
+                drill = drill_values[0]
+                drill_width = drill
+                drill_height = drill
 
     # Roundrect corner ratio
     rratio_node = sexp.find(pad_sexpr, "roundrect_rratio")
@@ -258,8 +274,11 @@ def _parse_pad(
         net_number=net_num,
         net_name=net_name,
         footprint_ref=fp_ref,
-        rotation=fp_rot + pad_rot,
+        rotation=pad_rot,
         drill=drill,
+        drill_shape=drill_shape,
+        drill_width=drill_width,
+        drill_height=drill_height,
         roundrect_rratio=roundrect_rratio,
         pin_function=pin_function,
         pin_type=pin_type,
@@ -597,8 +616,8 @@ def _parse_fp_models(fp_sexpr: SExpNode) -> list[PcbModel3D]:
 
 def _parse_footprint(
     fp_sexpr: SExpNode,
-) -> tuple[PcbFootprint, list[PcbLine], list[PcbArc], list[PcbPolygon]]:
-    """Parse a footprint, returning (PcbFootprint, edge_cuts_lines, edge_cuts_arcs, fp_polys)."""
+) -> tuple[PcbFootprint, list[PcbLine], list[PcbArc], list[PcbPolygon], list[PcbKeepout]]:
+    """Parse a footprint plus any board-level artwork authored inside it."""
     lib_name = str(fp_sexpr[1])
 
     layer_node = sexp.find(fp_sexpr, "layer")
@@ -630,6 +649,7 @@ def _parse_footprint(
         _FAB_LAYERS | _SILK_LAYERS,
         fp_ref=ref,
     )
+    fp_keepouts = _parse_fp_keepouts(fp_sexpr, fp_x, fp_y, fp_rot, fp_ref=ref)
 
     texts = _parse_fp_texts(fp_sexpr, fp_x, fp_y, fp_rot, ref)
 
@@ -659,7 +679,7 @@ def _parse_footprint(
         bbox=bbox,
         properties=properties,
     )
-    return fp, edge_lines, edge_arcs, fp_polys
+    return fp, edge_lines, edge_arcs, fp_polys, fp_keepouts
 
 
 # ---------------------------------------------------------------------------
@@ -820,6 +840,57 @@ def _parse_zone_polygons(zone_sexpr: SExpNode) -> list[PcbPolygon]:
     return polygons
 
 
+def _parse_zone_keepout(zone_sexpr: SExpNode) -> PcbKeepout | None:
+    """Parse a KiCad keepout/rule-area zone, if present."""
+    keepout_node = sexp.find(zone_sexpr, "keepout")
+    if not keepout_node:
+        return None
+    boundary = _parse_zone_polygon_points(zone_sexpr)
+    if not boundary:
+        return None
+    return PcbKeepout(
+        layers=_zone_layer_names(zone_sexpr),
+        boundary=boundary,
+        rules=_parse_keepout_rules(keepout_node),
+        source="kicad:zone",
+    )
+
+
+def _parse_keepout_rules(keepout_node: SExpNode) -> PcbKeepoutRules:
+    return PcbKeepoutRules(
+        tracks=_keepout_rule_value(keepout_node, "tracks"),
+        vias=_keepout_rule_value(keepout_node, "vias"),
+        pads=_keepout_rule_value(keepout_node, "pads"),
+        copperpour=_keepout_rule_value(keepout_node, "copperpour"),
+        footprints=_keepout_rule_value(keepout_node, "footprints"),
+    )
+
+
+def _keepout_rule_value(keepout_node: SExpNode, name: str) -> str:
+    rule_node = sexp.find(keepout_node, name)
+    return sexp.val(rule_node) if rule_node else ""
+
+
+def _zone_layer_names(zone_sexpr: SExpNode) -> list[str]:
+    layer_node = sexp.find(zone_sexpr, "layer")
+    if layer_node:
+        return [sexp.val(layer_node)]
+    layers_node = sexp.find(zone_sexpr, "layers")
+    return _layers(layers_node) if layers_node else []
+
+
+def _parse_zone_polygon_points(zone_sexpr: SExpNode) -> list[tuple[float, float]]:
+    polygon_node = sexp.find(zone_sexpr, "polygon")
+    if not polygon_node:
+        return []
+    pts_node = sexp.find(polygon_node, "pts")
+    if not pts_node:
+        return []
+    return [
+        (sexp.num(xy_node, 1), sexp.num(xy_node, 2)) for xy_node in sexp.find_all(pts_node, "xy")
+    ]
+
+
 def _parse_gr_poly(item: SExpNode) -> PcbPolygon | None:
     """Parse a (gr_poly ...) as a PcbPolygon."""
     layer_node = sexp.find(item, "layer")
@@ -865,6 +936,34 @@ def _parse_fp_polys(
         if points:
             polys.append(PcbPolygon(points=points, layer=layer, footprint_ref=fp_ref))
     return polys
+
+
+def _parse_fp_keepouts(
+    fp_sexpr: SExpNode,
+    fp_x: float,
+    fp_y: float,
+    fp_rot: float,
+    fp_ref: str,
+) -> list[PcbKeepout]:
+    """Parse footprint-local keepout/rule-area zones and transform them to board space."""
+    keepouts: list[PcbKeepout] = []
+    for zone_sexpr in sexp.find_all(fp_sexpr, "zone"):
+        keepout = _parse_zone_keepout(zone_sexpr)
+        if keepout is None:
+            continue
+        keepouts.append(
+            replace(
+                keepout,
+                boundary=[_transform_point(x, y, fp_x, fp_y, fp_rot) for x, y in keepout.boundary],
+                holes=[
+                    [_transform_point(x, y, fp_x, fp_y, fp_rot) for x, y in hole]
+                    for hole in keepout.holes
+                ],
+                source="kicad:footprint-zone",
+                footprint_ref=fp_ref,
+            )
+        )
+    return keepouts
 
 
 def _parse_trace_arc(arc_sexpr: SExpNode) -> PcbTraceArc | None:
@@ -941,23 +1040,15 @@ def _parse_zone_boundary(zone_sexpr: SExpNode) -> PcbZone | None:
     net_name_node = sexp.find(zone_sexpr, "net_name")
     net_name = sexp.val(net_name_node) if net_name_node else ""
 
-    layer_node = sexp.find(zone_sexpr, "layer")
-    layer = sexp.val(layer_node) if layer_node else ""
+    layers = _zone_layer_names(zone_sexpr)
+    layer = layers[0] if layers else ""
 
     # Priority
     priority_node = sexp.find(zone_sexpr, "priority")
     priority = int(sexp.num(priority_node, 1)) if priority_node and len(priority_node) > 1 else 0
 
     # Boundary polygon
-    polygon_node = sexp.find(zone_sexpr, "polygon")
-    if not polygon_node:
-        return None
-    pts_node = sexp.find(polygon_node, "pts")
-    if not pts_node:
-        return None
-    boundary: list[tuple[float, float]] = []
-    for xy_node in sexp.find_all(pts_node, "xy"):
-        boundary.append((sexp.num(xy_node, 1), sexp.num(xy_node, 2)))
+    boundary = _parse_zone_polygon_points(zone_sexpr)
     if not boundary:
         return None
 
@@ -1142,14 +1233,16 @@ def parse_kicad_pcb_from_sexpr(sexpr: SExpNode, *, default_name: str = "") -> Pc
     edge_lines_from_fps: list[PcbLine] = []
     edge_arcs_from_fps: list[PcbArc] = []
     polygons_from_fps: list[PcbPolygon] = []
+    keepouts_from_fps: list[PcbKeepout] = []
     # KiCad 6+ uses "footprint", KiCad 5 uses "module"
     for tag in ("footprint", "module"):
         for fp_sexpr in sexp.find_all(sexpr, tag):
-            fp, edge_lines, edge_arcs, fp_polys = _parse_footprint(fp_sexpr)
+            fp, edge_lines, edge_arcs, fp_polys, fp_keepouts = _parse_footprint(fp_sexpr)
             footprints.append(fp)
             edge_lines_from_fps.extend(edge_lines)
             edge_arcs_from_fps.extend(edge_arcs)
             polygons_from_fps.extend(fp_polys)
+            keepouts_from_fps.extend(fp_keepouts)
 
     segments = [_parse_segment(s) for s in sexp.find_all(sexpr, "segment")]
     vias = [_parse_via(v) for v in sexp.find_all(sexpr, "via")]
@@ -1157,7 +1250,13 @@ def parse_kicad_pcb_from_sexpr(sexpr: SExpNode, *, default_name: str = "") -> Pc
     # Zones — extract filled_polygon geometry + zone boundaries
     polygons: list[PcbPolygon] = []
     zones: list[PcbZone] = []
+    keepouts: list[PcbKeepout] = []
+    keepouts.extend(keepouts_from_fps)
     for zone_sexpr in sexp.find_all(sexpr, "zone"):
+        keepout = _parse_zone_keepout(zone_sexpr)
+        if keepout:
+            keepouts.append(keepout)
+            continue
         polygons.extend(_parse_zone_polygons(zone_sexpr))
         zone = _parse_zone_boundary(zone_sexpr)
         if zone:
@@ -1210,5 +1309,6 @@ def parse_kicad_pcb_from_sexpr(sexpr: SExpNode, *, default_name: str = "") -> Pc
         trace_arcs=trace_arcs,
         layers=layer_defs,
         zones=zones,
+        keepouts=keepouts,
         graphic_texts=graphic_texts,
     )

@@ -12,6 +12,7 @@ from phosphor_eda.pcb_render_geometry import (
     GeometryTags,
     RenderableGeometry,
 )
+from phosphor_eda.pcb_render_primitives import geometry_to_svg_primitive
 from phosphor_eda.pcb_render_skia import (
     geometry_to_skia_artwork,
     skia_path_to_svg_d,
@@ -193,6 +194,21 @@ def test_skia_converts_polygon_with_holes_to_valid_svg_path() -> None:
 
     _assert_valid_svg_path(path_d)
     assert _move_commands(path_d) == 2
+
+
+def test_svg_primitive_normalizes_invalid_polygon_payload() -> None:
+    polygon = PcbPolygon(
+        points=[(0.0, 0.0), (2.0, 2.0), (0.0, 2.0), (2.0, 0.0)],
+        layer="F.Cu",
+    )
+
+    primitive = geometry_to_svg_primitive(
+        _renderable_polygon(polygon),
+        target_layer_name="F.Cu",
+    )
+
+    assert primitive is not None
+    assert _move_commands(primitive.d) >= 2
 
 
 def _convert_one(item: RenderableGeometry, *, target_layer_name: str = "F.Cu") -> str:

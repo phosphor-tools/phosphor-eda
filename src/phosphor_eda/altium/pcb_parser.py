@@ -38,6 +38,8 @@ from phosphor_eda.pcb import (
     Pcb,
     PcbArc,
     PcbFootprint,
+    PcbKeepout,
+    PcbKeepoutRules,
     PcbLayer,
     PcbLine,
     PcbModel3D,
@@ -96,8 +98,10 @@ _MECHKIND_MAP: dict[str, tuple[LayerFunction, str]] = {
     "componentoutlinebottom": (LayerFunction.FAB, "back"),
     "3dbodytop": (LayerFunction.OTHER, "front"),
     "3dbodybottom": (LayerFunction.OTHER, "back"),
-    "designatortop": (LayerFunction.SILKSCREEN, "front"),
-    "designatorbottom": (LayerFunction.SILKSCREEN, "back"),
+    "designatortop": (LayerFunction.FAB, "front"),
+    "designatorbottom": (LayerFunction.FAB, "back"),
+    "valuetop": (LayerFunction.FAB, "front"),
+    "valuebottom": (LayerFunction.FAB, "back"),
     "fabnotes": (LayerFunction.FAB, ""),
     "vcut": (LayerFunction.MECHANICAL, ""),
 }
@@ -120,6 +124,18 @@ _V7_NAME_TO_NUM: dict[str, int] = {
     **{f"MECHANICAL{i}": 56 + i for i in range(1, 17)},
 }
 
+_V9_STACK_LAYER_ID_TO_NUM: dict[int, int] = {
+    16777217: 1,
+    **{16777218 + index: 2 + index for index in range(30)},
+    16842751: 32,
+    16973830: 33,
+    16973831: 34,
+    16973832: 35,
+    16973833: 36,
+    16973834: 37,
+    16973835: 38,
+}
+
 # Pad shape byte → domain string.
 _PAD_SHAPES: dict[int, str] = {
     1: "circle",
@@ -129,6 +145,9 @@ _PAD_SHAPES: dict[int, str] = {
 
 # Pad shape_alt values (sub6) that override the base shape.
 _PAD_SHAPE_ALT_ROUNDRECT = 9
+
+# Altium region kind values.  Kind 1 is a polygon-pour cutout, not copper.
+_REGION_KIND_POLYGON_CUTOUT = 1
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +218,8 @@ def _build_layer_map(board_props: dict[str, str]) -> dict[int, PcbLayer]:
     for num, (name, fn, side) in _ALTIUM_LAYER_INFO.items():
         layers[num] = PcbLayer(name=name, function=fn, side=side, number=num)
 
+    _apply_v9_stack_layer_names(layers, board_props)
+
     # Override mechanical layer metadata from Board6 if available.
     for i in range(1, 17):
         layer_num = 56 + i
@@ -227,6 +248,38 @@ def _build_layer_map(board_props: dict[str, str]) -> dict[int, PcbLayer]:
             )
 
     return layers
+
+
+def _apply_v9_stack_layer_names(layers: dict[int, PcbLayer], board_props: dict[str, str]) -> None:
+    """Use Altium v9 stackup layer IDs to preserve file-defined physical layer names."""
+    for key, raw_layer_id in board_props.items():
+        if not key.startswith("v9_stack_layer") or not key.endswith("_layerid"):
+            continue
+
+        prefix = key[: -len("layerid")]
+        layer_name = board_props.get(f"{prefix}name", "")
+        if not layer_name:
+            continue
+
+        layer_num = _v9_stack_layer_id_to_num(raw_layer_id)
+        if layer_num is None or layer_num not in layers:
+            continue
+
+        layer = layers[layer_num]
+        layers[layer_num] = PcbLayer(
+            name=layer_name,
+            function=layer.function,
+            side=layer.side,
+            number=layer.number,
+        )
+
+
+def _v9_stack_layer_id_to_num(raw_layer_id: str) -> int | None:
+    try:
+        layer_id = int(raw_layer_id)
+    except ValueError:
+        return None
+    return _V9_STACK_LAYER_ID_TO_NUM.get(layer_id)
 
 
 def _layer_name(num: int, layer_map: dict[int, PcbLayer]) -> str:
@@ -485,15 +538,16 @@ def _parse_vias(data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext) 
 
 def _parse_arcs(
     data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext
-) -> tuple[list[PcbTraceArc], dict[int, list[PcbArc]]]:
+) -> tuple[list[PcbTraceArc], dict[int, list[PcbArc]], list[PcbKeepout]]:
     """Parse Arcs6/Data → board-level trace arcs + per-component arcs.
 
-    Returns (trace_arcs, comp_arcs) where comp_arcs maps component index
-    to a list of PcbArc objects.
+    Returns (trace_arcs, comp_arcs, keepouts) where comp_arcs maps component
+    index to a list of PcbArc objects.
     """
     records = _read_binary_records(data)
     trace_arcs: list[PcbTraceArc] = []
     comp_arcs: dict[int, list[PcbArc]] = {}
+    keepouts: list[PcbKeepout] = []
 
     for rec_type, body in records:
         if rec_type != 1:
@@ -518,6 +572,18 @@ def _parse_arcs(
         sy, my, ey = -sy, -my, -ey
 
         if arc.component == _COMPONENT_NONE and arc.layer in _COPPER_LAYERS:
+            if arc.is_keepout:
+                keepouts.append(
+                    _keepout_from_arc(
+                        layer=layer,
+                        arc=arc,
+                        cx=cx,
+                        cy_orig=cy_orig,
+                        radius=radius,
+                        width=width,
+                    )
+                )
+                continue
             trace_arcs.append(
                 PcbTraceArc(
                     start_x=sx,
@@ -545,7 +611,115 @@ def _parse_arcs(
                 )
             )
 
-    return trace_arcs, comp_arcs
+    return trace_arcs, comp_arcs, keepouts
+
+
+def _keepout_from_arc(
+    *,
+    layer: str,
+    arc: ArcRecord,
+    cx: float,
+    cy_orig: float,
+    radius: float,
+    width: float,
+) -> PcbKeepout:
+    outer_radius = radius + width / 2.0
+    inner_radius = max(radius - width / 2.0, 0.0)
+    boundary = _arc_ring_points(
+        cx=cx,
+        cy_orig=cy_orig,
+        radius=outer_radius,
+        start_deg=arc.start_angle,
+        end_deg=arc.end_angle,
+    )
+    holes: list[list[tuple[float, float]]] = []
+    if _is_full_circle_arc(arc.start_angle, arc.end_angle) and inner_radius > 0:
+        holes.append(
+            list(
+                reversed(
+                    _arc_ring_points(
+                        cx=cx,
+                        cy_orig=cy_orig,
+                        radius=inner_radius,
+                        start_deg=arc.start_angle,
+                        end_deg=arc.end_angle,
+                    )
+                )
+            )
+        )
+    elif inner_radius > 0:
+        inner = list(
+            reversed(
+                _arc_ring_points(
+                    cx=cx,
+                    cy_orig=cy_orig,
+                    radius=inner_radius,
+                    start_deg=arc.start_angle,
+                    end_deg=arc.end_angle,
+                )
+            )
+        )
+        boundary = [*boundary, *inner]
+    return PcbKeepout(
+        layers=[layer],
+        boundary=boundary,
+        holes=holes,
+        rules=_altium_keepout_rules(arc.keepout_restrictions),
+        source=f"altium:arc:{arc.keepout_restrictions}",
+    )
+
+
+def _arc_ring_points(
+    *,
+    cx: float,
+    cy_orig: float,
+    radius: float,
+    start_deg: float,
+    end_deg: float,
+) -> list[tuple[float, float]]:
+    sweep = _arc_sweep_degrees(start_deg, end_deg)
+    segments = max(16, int(abs(sweep) / 360.0 * 96))
+    points: list[tuple[float, float]] = []
+    for index in range(segments):
+        t = index / segments
+        angle = math.radians(start_deg + sweep * t)
+        points.append((cx + radius * math.cos(angle), -(cy_orig + radius * math.sin(angle))))
+    return points
+
+
+def _arc_sweep_degrees(start_deg: float, end_deg: float) -> float:
+    sweep = end_deg - start_deg
+    if _is_full_circle_arc(start_deg, end_deg):
+        return 360.0 if sweep >= 0 else -360.0
+    if sweep < 0:
+        sweep += 360.0
+    return sweep
+
+
+def _is_full_circle_arc(start_deg: float, end_deg: float) -> bool:
+    return abs(end_deg - start_deg) >= 359.999
+
+
+def _altium_keepout_rules(mask: int) -> PcbKeepoutRules:
+    if mask == 0:
+        return PcbKeepoutRules(
+            tracks="not_allowed",
+            vias="not_allowed",
+            pads="not_allowed",
+            copperpour="not_allowed",
+            footprints="not_allowed",
+        )
+
+    def restriction(bit: int) -> str:
+        return "not_allowed" if mask & bit else "allowed"
+
+    return PcbKeepoutRules(
+        tracks=restriction(0x01),
+        vias=restriction(0x02),
+        pads=restriction(0x04),
+        copperpour=restriction(0x08),
+        footprints=restriction(0x10),
+    )
 
 
 def _parse_pads(
@@ -829,6 +1003,8 @@ def _parse_regions(
         layer = _layer_name(resolved_num, layer_map)
         if not layer:
             continue
+        if _region_kind(region.properties) == _REGION_KIND_POLYGON_CUTOUT:
+            continue
 
         points = [(_int_to_mm(int(vx)), -_int_to_mm(int(vy))) for vx, vy in region.vertices]
         if len(points) < 3:
@@ -900,6 +1076,8 @@ def _parse_shape_based_regions(
         layer = _layer_name(resolved_num, layer_map)
         if not layer:
             continue
+        if _region_kind(region.properties) == _REGION_KIND_POLYGON_CUTOUT:
+            continue
 
         # Linearize arc edges, then convert to mm with Y negated
         raw_pts = linearize_arc_vertices(region.vertices)
@@ -932,6 +1110,47 @@ def _parse_shape_based_regions(
             comp_polygons.setdefault(region.component, []).append(poly)
 
     return board_polygons, comp_polygons
+
+
+def _dedupe_shape_based_board_polygons(
+    regions: list[PcbPolygon],
+    shape_based_regions: list[PcbPolygon],
+) -> list[PcbPolygon]:
+    """Drop ShapeBasedRegions6 board polygons already represented by Regions6."""
+    if not regions:
+        return shape_based_regions
+    region_keys = {
+        key for polygon in regions for key in (_polygon_duplicate_key(polygon),) if key is not None
+    }
+    return [
+        polygon
+        for polygon in shape_based_regions
+        if _polygon_duplicate_key(polygon) not in region_keys
+    ]
+
+
+def _polygon_duplicate_key(poly: PcbPolygon) -> tuple[str, float, float, float, float] | None:
+    if len(poly.points) < 3:
+        return None
+    xs = [x for x, _y in poly.points]
+    ys = [y for _x, y in poly.points]
+    return (
+        poly.layer,
+        round(min(xs), 3),
+        round(min(ys), 3),
+        round(max(xs), 3),
+        round(max(ys), 3),
+    )
+
+
+def _region_kind(properties: dict[str, str]) -> int | None:
+    raw_kind = properties.get("kind")
+    if raw_kind is None:
+        return None
+    try:
+        return int(raw_kind)
+    except ValueError:
+        return None
 
 
 def _parse_board_outline(
@@ -1508,7 +1727,7 @@ def parse_altium_pcb(
     # Parse binary streams
     segments, comp_lines = _parse_tracks(tracks_data, layer_map, ctx)
     vias = _parse_vias(vias_data, layer_map, ctx)
-    trace_arcs, comp_arcs = _parse_arcs(arcs_data, layer_map, ctx)
+    trace_arcs, comp_arcs, keepouts = _parse_arcs(arcs_data, layer_map, ctx)
     raw_pads = _parse_pads(pads_data, nets, layer_map, ctx)
     raw_texts = _parse_texts(texts_data, layer_map, ctx)
     fills = _parse_fills(fills_data, layer_map, ctx)
@@ -1529,10 +1748,26 @@ def parse_altium_pcb(
     }
     fab_names = {lyr.name for lyr in layer_map.values() if lyr.function == LayerFunction.FAB}
 
+    free_pads: list[PcbPad] = []
     for comp_idx, pad in raw_pads:
-        if comp_idx < len(footprints):
+        if comp_idx == _COMPONENT_NONE:
+            free_pads.append(pad)
+        elif comp_idx < len(footprints):
             pad.footprint_ref = footprints[comp_idx].reference
             footprints[comp_idx].pads.append(pad)
+    if free_pads:
+        free_pad_footprint = PcbFootprint(
+            reference="FREEPADS",
+            footprint_lib="Altium Free Pads",
+            x=0.0,
+            y=0.0,
+            rotation=0.0,
+            layer=_layer_name(1, layer_map) or "Top Layer",
+        )
+        for pad in free_pads:
+            pad.footprint_ref = free_pad_footprint.reference
+            free_pad_footprint.pads.append(pad)
+        footprints.append(free_pad_footprint)
 
     for comp_idx, text in raw_texts:
         if comp_idx != _COMPONENT_NONE and comp_idx < len(footprints):
@@ -1584,7 +1819,7 @@ def parse_altium_pcb(
     if board_name.endswith(".$$$"):
         board_name = board_name[:-4]
 
-    polygons = fills + regions + sb_board_polys
+    polygons = fills + regions + _dedupe_shape_based_board_polygons(regions, sb_board_polys)
 
     return Pcb(
         name=board_name,
@@ -1598,4 +1833,5 @@ def parse_altium_pcb(
         trace_arcs=trace_arcs,
         layers=list(layer_map.values()),
         zones=zones,
+        keepouts=keepouts,
     )

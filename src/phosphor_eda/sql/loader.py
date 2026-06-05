@@ -18,6 +18,7 @@ from phosphor_eda.sql.geometry import (
     board_outline_polygon,
     footprint_bbox_polygon,
     footprint_side,
+    keepout_geometry,
     pad_polygon,
     pad_side,
     polygon_geometry,
@@ -51,6 +52,7 @@ def load_database(project: Project) -> duckdb.DuckDBPyConnection:
         _load_vias(con, project.pcb)
         _load_polygons(con, project.pcb)
         _load_zones(con, project.pcb)
+        _load_keepouts(con, project.pcb)
         _load_footprint_graphics(con, project.pcb)
         _load_graphic_texts(con, project.pcb)
         _load_dimensions(con, project.pcb)
@@ -264,6 +266,29 @@ def _load_zones(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
                 wkb_val,
             ],
         )
+
+
+def _load_keepouts(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
+    for keepout in pcb.keepouts:
+        geom = keepout_geometry(keepout)
+        wkb_val = _wkb(geom) if geom else None
+        layers = ",".join(keepout.layers)
+        for layer in keepout.layers:
+            _ = con.execute(
+                "INSERT INTO keepouts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))",
+                [
+                    keepout.footprint_ref,
+                    layer,
+                    layers,
+                    keepout.rules.tracks,
+                    keepout.rules.vias,
+                    keepout.rules.pads,
+                    keepout.rules.copperpour,
+                    keepout.rules.footprints,
+                    keepout.source,
+                    wkb_val,
+                ],
+            )
 
 
 def _load_footprint_graphics(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:

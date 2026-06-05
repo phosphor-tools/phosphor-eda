@@ -96,6 +96,20 @@ TABLE_DDL: dict[str, str] = {
             boundary GEOMETRY
         )
     """,
+    "keepouts": """
+        CREATE TABLE keepouts (
+            reference VARCHAR,
+            layer VARCHAR,
+            layers VARCHAR,
+            tracks VARCHAR,
+            vias VARCHAR,
+            pads VARCHAR,
+            copperpour VARCHAR,
+            footprints VARCHAR,
+            source VARCHAR,
+            geom GEOMETRY
+        )
+    """,
     "footprint_graphics": """
         CREATE TABLE footprint_graphics (
             reference VARCHAR,

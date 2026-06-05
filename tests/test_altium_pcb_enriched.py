@@ -15,6 +15,7 @@ from phosphor_eda.altium.pcb_parser import (
     parse_altium_stackup,
     read_text_records,
 )
+from phosphor_eda.pcb import Pcb, PcbPolygon
 from phosphor_eda.project import Stackup
 
 FIXTURE = Path(__file__).parent / "fixtures" / "altium" / "pi-mx8" / "PCB" / "PiMX8MP_r0.3.PcbDoc"
@@ -159,6 +160,42 @@ def test_pcie_diff_pair(diff_pairs) -> None:
 
 
 # ---------------------------------------------------------------------------
+# PCB keepouts
+# ---------------------------------------------------------------------------
+
+
+def test_altium_keepout_arcs_are_not_visible_trace_arcs(pcb: Pcb) -> None:
+    visible_keepout_rings = [
+        arc
+        for arc in pcb.trace_arcs
+        if arc.layer in {"Top Layer", "Bottom Layer"}
+        and arc.net_number == 0
+        and arc.width == pytest.approx(0.2, abs=0.001)
+        and arc.start_x == pytest.approx(arc.end_x, abs=1e-6)
+        and arc.start_y == pytest.approx(arc.end_y, abs=1e-6)
+    ]
+
+    assert visible_keepout_rings == []
+
+
+def test_altium_keepout_arcs_are_preserved_as_queryable_keepouts(pcb: Pcb) -> None:
+    keepout_rings = [
+        keepout
+        for keepout in pcb.keepouts
+        if set(keepout.layers) <= {"Top Layer", "Bottom Layer"}
+        and keepout.rules.tracks == "not_allowed"
+        and keepout.rules.vias == "not_allowed"
+        and keepout.rules.pads == "not_allowed"
+        and keepout.rules.copperpour == "not_allowed"
+    ]
+
+    assert len(keepout_rings) >= 8
+    assert any("Top Layer" in keepout.layers for keepout in keepout_rings)
+    assert any("Bottom Layer" in keepout.layers for keepout in keepout_rings)
+    assert all(len(keepout.boundary) >= 16 for keepout in keepout_rings)
+
+
+# ---------------------------------------------------------------------------
 # Stackup
 # ---------------------------------------------------------------------------
 
@@ -250,14 +287,15 @@ def test_stackup_total_thickness(stackup) -> None:
 
 
 @pytest.fixture(scope="module")
-def pcb():
+def pcb() -> Pcb:
     return parse_altium_pcb(FIXTURE)
 
 
 def test_polygons_with_holes(pcb) -> None:
     """Polygons with holes are preserved."""
     polys_with_holes = [p for p in pcb.polygons if p.holes]
-    assert len(polys_with_holes) >= 50
+    assert len(polys_with_holes) >= 30
+    assert any(len(hole) > 300 for poly in polys_with_holes for hole in poly.holes)
 
 
 def test_polygon_hole_structure(pcb) -> None:
@@ -267,3 +305,38 @@ def test_polygon_hole_structure(pcb) -> None:
     assert len(hole) >= 3
     # Each point is a (float, float) tuple
     assert len(hole[0]) == 2
+
+
+def test_duplicate_shape_based_board_copper_polygons_are_omitted(pcb) -> None:
+    """Altium Regions6 and ShapeBasedRegions6 can duplicate board copper polygons."""
+    copper_area = [
+        poly
+        for poly in pcb.polygons
+        if poly.layer == "Top Layer"
+        and _polygon_bounds_key(poly) == ("Top Layer", 100.871, -146.479, 136.221, -134.629)
+    ]
+
+    assert len(copper_area) == 1
+
+
+def test_polygon_cutout_regions_are_not_emitted_as_copper(pcb) -> None:
+    cutout_area = [
+        poly
+        for poly in pcb.polygons
+        if poly.layer == "Top Layer"
+        and _polygon_bounds_key(poly) == ("Top Layer", 88.821, -173.629, 91.321, -171.129)
+    ]
+
+    assert cutout_area == []
+
+
+def _polygon_bounds_key(poly: PcbPolygon) -> tuple[str, float, float, float, float]:
+    xs = [x for x, _y in poly.points]
+    ys = [y for _x, y in poly.points]
+    return (
+        poly.layer,
+        round(min(xs), 3),
+        round(min(ys), 3),
+        round(max(xs), 3),
+        round(max(ys), 3),
+    )

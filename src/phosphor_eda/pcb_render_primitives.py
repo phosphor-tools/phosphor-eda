@@ -14,14 +14,18 @@ from phosphor_eda.pcb import (
     PcbArc,
     PcbCircle,
     PcbGraphicText,
+    PcbKeepout,
     PcbLine,
     PcbPad,
+    PcbPolygon,
     PcbText,
     PcbVia,
 )
+from phosphor_eda.pcb_render_drills import pad_drill_dimensions, pad_drill_geometry
 from phosphor_eda.pcb_render_geometry import GeometryKind, RenderPoint
 from phosphor_eda.pcb_render_skia import geometry_to_skia_artwork, skia_path_to_svg_d
-from phosphor_eda.sql.geometry import arc_to_polyline
+from phosphor_eda.shapely_geometry import normalize_geometry
+from phosphor_eda.sql.geometry import arc_to_polyline, board_outline_polygon
 from phosphor_eda.text_outlines import text_outline_geometry
 
 if TYPE_CHECKING:
@@ -80,9 +84,9 @@ def geometry_to_svg_primitive(
 def drill_to_svg_primitive(item: RenderableGeometry) -> SvgPrimitive | None:
     """Convert one drill-capable source item into a drill-hole mask primitive."""
     payload = item.payload if item.payload is not None else item.source
-    if (item.kind is GeometryKind.DRILL and isinstance(payload, PcbPad)) or (
-        item.kind is GeometryKind.VIA and isinstance(payload, PcbVia)
-    ):
+    if item.kind is GeometryKind.DRILL and isinstance(payload, PcbPad):
+        d = _pad_drill_path_d(payload)
+    elif item.kind is GeometryKind.VIA and isinstance(payload, PcbVia):
         d = _circle_path_d(payload.x, payload.y, payload.drill / 2.0)
     else:
         return None
@@ -102,7 +106,7 @@ def visible_drill_to_svg_primitive(item: RenderableGeometry) -> SvgPrimitive | N
     payload = item.payload if item.payload is not None else item.source
     if item.kind is not GeometryKind.DRILL or not isinstance(payload, PcbPad):
         return None
-    d = _drill_symbol_path_d(payload.x, payload.y, payload.drill / 2.0)
+    d = _pad_drill_symbol_path_d(payload)
     if not d:
         return None
     return SvgPrimitive(
@@ -188,6 +192,10 @@ def _non_skia_svg_path_d(item: RenderableGeometry) -> str:
         return _arc_svg_path_d(payload)
     if item.kind in _CIRCLE_KINDS and isinstance(payload, PcbCircle):
         return _circle_svg_path_d(payload)
+    if isinstance(payload, PcbPolygon):
+        return _polygon_svg_path_d(payload)
+    if isinstance(payload, PcbKeepout):
+        return _keepout_svg_path_d(payload)
     if isinstance(payload, BaseGeometry):
         return " ".join(_geometry_to_svg_path_parts(payload))
     if isinstance(payload, PcbText | PcbGraphicText):
@@ -225,9 +233,6 @@ def _board_outline_svg_path_d(item: RenderableGeometry) -> str:
         return ""
 
     lines, arcs = outline
-    d = _filled_outline_svg_path_d(lines, arcs)
-    if d:
-        return d
     commands: list[str] = []
     for line in lines:
         commands.append(
@@ -253,6 +258,25 @@ def _board_outline_svg_path_d(item: RenderableGeometry) -> str:
     return " ".join(command for command in commands if command)
 
 
+def _polygon_svg_path_d(polygon: PcbPolygon) -> str:
+    if len(polygon.points) < 3:
+        return ""
+    holes = [hole for hole in polygon.holes if len(hole) >= 3]
+    geometry = normalize_geometry(Polygon(polygon.points, holes=holes or None))
+    if geometry.is_empty:
+        return ""
+    return " ".join(_geometry_to_svg_path_parts(geometry))
+
+
+def _keepout_svg_path_d(keepout: PcbKeepout) -> str:
+    if len(keepout.boundary) < 3:
+        return ""
+    geometry = normalize_geometry(Polygon(keepout.boundary, holes=keepout.holes or None))
+    if geometry.is_empty:
+        return ""
+    return " ".join(_geometry_to_svg_path_parts(geometry))
+
+
 def _outline_for_item(item: RenderableGeometry) -> tuple[list[PcbLine], list[PcbArc]] | None:
     payload = item.payload if item.payload is not None else item.source
     outline = _outline_payload(payload)
@@ -266,6 +290,10 @@ def _outline_for_item(item: RenderableGeometry) -> tuple[list[PcbLine], list[Pcb
 
 
 def _filled_outline_svg_path_d(lines: list[PcbLine], arcs: list[PcbArc]) -> str:
+    outline_geometry = board_outline_polygon(lines, arcs)
+    if outline_geometry is not None and not outline_geometry.is_empty:
+        return " ".join(_geometry_to_svg_path_parts(outline_geometry))
+
     segments: list[tuple[tuple[float, float], ...]] = []
     for line in lines:
         segment = ((line.start_x, line.start_y), (line.end_x, line.end_y))
@@ -420,12 +448,24 @@ def _circle_path_d(cx: float, cy: float, radius: float) -> str:
     return " ".join((f"M {cx + radius:.4f} {cy:.4f}", *curve_commands, "Z"))
 
 
-def _drill_symbol_path_d(cx: float, cy: float, radius: float) -> str:
-    if radius <= 0:
+def _pad_drill_path_d(pad: PcbPad) -> str:
+    geometry = pad_drill_geometry(pad)
+    if geometry is None or geometry.is_empty:
         return ""
-    diagonal = radius / math.sqrt(2)
-    slash = f"M {cx - diagonal:.4f} {cy - diagonal:.4f} L {cx + diagonal:.4f} {cy + diagonal:.4f}"
-    return f"{_circle_path_d(cx, cy, radius)} {slash}"
+    return " ".join(_geometry_to_svg_path_parts(geometry))
+
+
+def _pad_drill_symbol_path_d(pad: PcbPad) -> str:
+    outline = _pad_drill_path_d(pad)
+    if not outline:
+        return ""
+    width, height = pad_drill_dimensions(pad)
+    mark_radius = min(width, height) * 0.175
+    cross = (
+        f"M {pad.x - mark_radius:.4f} {pad.y:.4f} L {pad.x + mark_radius:.4f} {pad.y:.4f} "
+        f"M {pad.x:.4f} {pad.y - mark_radius:.4f} L {pad.x:.4f} {pad.y + mark_radius:.4f}"
+    )
+    return f"{outline} {cross}"
 
 
 def _stroked_polyline_path_d(points: Iterable[tuple[float, float]], width: float) -> str:

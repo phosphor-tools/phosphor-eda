@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
-from shapely import GeometryCollection, Point, Polygon
+from shapely import GeometryCollection, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from phosphor_eda.pcb import (
@@ -15,13 +15,17 @@ from phosphor_eda.pcb import (
     PcbPad,
     PcbVia,
 )
+from phosphor_eda.pcb_render_drills import pad_drill_geometry
 from phosphor_eda.pcb_render_geometry import (
     GeometryKind,
     GeometryLayer,
 )
+from phosphor_eda.pcb_render_primitives import (
+    geometry_to_svg_primitive,
+    pad_solder_mask_opening_primitive,
+)
 from phosphor_eda.shapely_geometry import normalize_geometry, robust_union
 from phosphor_eda.sql.geometry import (
-    VIA_DRILL_QUAD_SEGS,
     board_outline_polygon,
     via_geometry,
 )
@@ -64,6 +68,7 @@ _FUNCTION_ROLE_ALIASES = {
     "courtyard": "courtyard",
     "edge": "edge",
     "drill": "drill",
+    "keepout": "keepout",
     "mechanical": "mechanical",
     "other": "unknown",
 }
@@ -81,6 +86,8 @@ _OBJECT_KIND_ALIASES = {
     "trace_arcs": frozenset({GeometryKind.TRACE_ARC}),
     "zone": frozenset({GeometryKind.ZONE}),
     "zones": frozenset({GeometryKind.ZONE}),
+    "keepout": frozenset({GeometryKind.KEEPOUT}),
+    "keepouts": frozenset({GeometryKind.KEEPOUT}),
     "via": frozenset({GeometryKind.VIA}),
     "vias": frozenset({GeometryKind.VIA}),
     "silkscreen": frozenset(
@@ -256,13 +263,60 @@ def drill_geometry_for_layer(
     return _union_or_empty(drills)
 
 
+def solder_mask_opening_primitives(
+    store: PcbGeometryStore,
+    *,
+    side: str,
+) -> tuple[SvgPrimitive, ...]:
+    """Return source-derived solder-mask openings for manufacturable artwork.
+
+    This intentionally scans the full source geometry inventory instead of the
+    currently visible source selection. Silkscreen must be clipped by real mask
+    apertures even when solder-mask layers are not rendered as visible layers.
+    """
+    mask_layer_name = side_mask_layer_name(store, side)
+    primitives: list[SvgPrimitive] = []
+    for item in store.items:
+        if item.layer.role == "mask" and item.layer.side == side:
+            primitive = geometry_to_svg_primitive(item, target_layer_name=item.layer.name)
+            if primitive is not None:
+                primitives.append(primitive)
+            continue
+        primitive = pad_solder_mask_opening_primitive(
+            item,
+            side=side,
+            target_layer_name=mask_layer_name,
+        )
+        if primitive is not None:
+            primitives.append(primitive)
+    return tuple(primitives)
+
+
+def side_mask_layer_name(store: PcbGeometryStore, side: str) -> str:
+    """Return the native solder-mask layer name for a side."""
+    for item in store.items:
+        if item.layer.role == "mask" and item.layer.side == side:
+            return item.layer.name
+    return "B.Mask" if side == "back" else "F.Mask"
+
+
 def _matches_rule(
     item: RenderableGeometry,
     rule: LayerSelectionRule,
     *,
     active_side: str,
 ) -> bool:
+    if item.kind is GeometryKind.BOARD_MATERIAL:
+        return False
+    if item.kind is GeometryKind.KEEPOUT and not _rule_selects_keepouts(rule):
+        return False
     return rule_selects_layer(rule, item.layer, object_kind=item.kind, active_side=active_side)
+
+
+def _rule_selects_keepouts(rule: LayerSelectionRule) -> bool:
+    return rule.match.function == "keepout" or (
+        bool(rule.objects) and _matches_object_filter(GeometryKind.KEEPOUT, rule.objects)
+    )
 
 
 def _matches_object_filter(kind: GeometryKind, objects: tuple[str, ...]) -> bool:
@@ -287,7 +341,7 @@ def _pad_drill_geometry(payload: object, *, layer_name: str | None) -> BaseGeome
         return None
     if layer_name is not None and not _layer_in_stack(layer_name, payload.layers):
         return None
-    return Point(payload.x, payload.y).buffer(payload.drill / 2, quad_segs=VIA_DRILL_QUAD_SEGS)
+    return pad_drill_geometry(payload)
 
 
 def _via_drill_geometry(payload: object, *, layer_name: str | None) -> BaseGeometry | None:

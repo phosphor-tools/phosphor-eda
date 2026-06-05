@@ -508,13 +508,14 @@ def test_design_preset_renders_all_copper_layers_with_unique_colors() -> None:
     assert len(fills) == len(set(fills))
     assert _style_value(_layer_style(svg, "eda.copper", "F.Cu"), "fill") == "#cc0000"
     assert _style_value(_layer_style(svg, "eda.copper", "B.Cu"), "fill") == "#0000cc"
-    assert all(_style_value(style, "opacity") == "1.0000" for style in copper_styles)
+    assert all(_style_value(style, "opacity") == "0.3500" for style in copper_styles)
     assert "#ffffff" in svg
     assert 'data-type="body"' not in svg
     _assert_svg_contains_in_order(
         svg,
         [
             'data-source-layers="B.Cu"',
+            'data-source-layers="In8.Cu"',
             'data-source-layers="In1.Cu"',
             'data-source-layers="F.Cu"',
         ],
@@ -565,6 +566,101 @@ def test_design_preset_renders_all_silkscreen_layers() -> None:
     assert 'data-role="eda.silkscreen.back" data-source-layers="B.SilkS"' in svg
 
 
+def test_design_preset_omits_component_reference_and_value_text_by_default() -> None:
+    board = _make_board_with_component()
+    board.footprints[0].texts.extend(
+        [
+            PcbText(
+                text="U1",
+                x=10.0,
+                y=8.0,
+                rotation=0.0,
+                layer="F.SilkS",
+                font_size=0.5,
+                kind="reference",
+                footprint_ref="U1",
+            ),
+            PcbText(
+                text="SN74LVC2G66",
+                x=10.0,
+                y=12.0,
+                rotation=0.0,
+                layer="F.SilkS",
+                font_size=0.5,
+                kind="value",
+                footprint_ref="U1",
+            ),
+        ]
+    )
+    board.graphic_texts.append(
+        PcbGraphicText(
+            text="USB",
+            x=5.0,
+            y=5.0,
+            rotation=0.0,
+            layer="F.SilkS",
+            font_size=0.5,
+        )
+    )
+    settings = load_render_settings_json('{"extends": "phosphor:design"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert 'data-kind="silk_line"' in svg
+    assert 'data-kind="board_graphic_text"' in svg
+    assert 'data-kind="ref_text"' not in svg
+    assert 'data-kind="value_text"' not in svg
+
+
+@pytest.mark.parametrize("preset", ["review", "clean"])
+def test_realistic_presets_omit_component_reference_and_value_text_by_default(
+    preset: str,
+) -> None:
+    board = _make_board_with_component()
+    board.footprints[0].texts.extend(
+        [
+            PcbText(
+                text="U1",
+                x=10.0,
+                y=8.0,
+                rotation=0.0,
+                layer="F.SilkS",
+                font_size=0.5,
+                kind="reference",
+                footprint_ref="U1",
+            ),
+            PcbText(
+                text="SN74LVC2G66",
+                x=10.0,
+                y=12.0,
+                rotation=0.0,
+                layer="F.SilkS",
+                font_size=0.5,
+                kind="value",
+                footprint_ref="U1",
+            ),
+        ]
+    )
+    board.graphic_texts.append(
+        PcbGraphicText(
+            text="USB",
+            x=5.0,
+            y=5.0,
+            rotation=0.0,
+            layer="F.SilkS",
+            font_size=0.5,
+        )
+    )
+    settings = load_render_settings_json(json.dumps({"extends": f"phosphor:{preset}"}))
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    assert 'data-kind="silk_line"' in svg
+    assert 'data-kind="board_graphic_text"' in svg
+    assert 'data-kind="ref_text"' not in svg
+    assert 'data-kind="value_text"' not in svg
+
+
 def test_design_preset_renders_visible_drills_as_outline_layer() -> None:
     board = _make_board_with_inner_layers()
     board.footprints[0].pads[0].drill = 0.6
@@ -579,9 +675,122 @@ def test_design_preset_renders_visible_drills_as_outline_layer() -> None:
     assert _style_value(drill_style, "stroke-width") == "0.0600"
     assert 'data-source-id="drill:U1:1:0" data-source-layer="drills" data-kind="drill"' in svg
     assert re.search(
-        r'<path d="[^"]+ L [^"]+"[^>]+data-source-id="drill:U1:1:0"',
+        r'<path d="[^"]+ M [^"]+ L [^"]+ M [^"]+ L [^"]+"[^>]+data-source-id="drill:U1:1:0"',
         svg,
     )
+
+
+def test_design_preset_renders_slotted_pad_drills_as_slot_symbols() -> None:
+    board = _make_board_with_inner_layers()
+    pad = board.footprints[0].pads[0]
+    pad.shape = "oval"
+    pad.drill = 0.6
+    pad.drill_shape = "oval"
+    pad.drill_width = 0.6
+    pad.drill_height = 1.6
+    settings = load_render_settings_json('{"extends": "phosphor:design"}')
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+
+    fragment = _layer_fragment(svg, "eda.drill", "drills")
+    assert fragment is not None
+    assert 'data-source-id="drill:U1:1:0"' in fragment
+    assert 'data-kind="drill"' in fragment
+    path_match = re.search(
+        r'<path d="([^"]+)"[^>]+data-source-id="drill:U1:1:0"',
+        fragment,
+    )
+    assert path_match is not None
+    coordinates = [float(match.group()) for match in re.finditer(r"-?\d+\.\d+", path_match[1])]
+    xs = coordinates[0::2]
+    ys = coordinates[1::2]
+    assert max(xs) - min(xs) == pytest.approx(0.6, abs=0.02)
+    assert max(ys) - min(ys) == pytest.approx(1.6, abs=0.02)
+
+
+def test_kicad_usb_connector_signal_pads_render_with_authored_board_rotation(
+    orangecrab_board: Pcb,
+) -> None:
+    settings = load_render_settings_json('{"extends": "phosphor:design"}')
+
+    svg = render_pcb_svg(orangecrab_board, side="front", width_px=1200, render_settings=settings)
+
+    path_match = re.search(
+        r'<path d="([^"]+)"[^>]+data-source-id="pad:J3:B7:\d+"',
+        svg,
+    )
+    assert path_match is not None
+    coordinates = [float(match.group()) for match in re.finditer(r"-?\d+\.\d+", path_match[1])]
+    xs = coordinates[0::2]
+    ys = coordinates[1::2]
+    assert max(xs) - min(xs) == pytest.approx(1.25, abs=0.02)
+    assert max(ys) - min(ys) == pytest.approx(0.3, abs=0.02)
+
+
+def test_design_preset_renders_altium_board_outline_as_edge_layer(pimx8_board: Pcb) -> None:
+    settings = load_render_settings_json('{"extends": "phosphor:design"}')
+
+    svg = render_pcb_svg(pimx8_board, side="front", width_px=1200, render_settings=settings)
+    fragment = _layer_fragment(svg, "eda.edge", "Mechanical 1")
+    style = _layer_style(svg, "eda.edge", "Mechanical 1")
+
+    assert fragment is not None
+    assert 'data-kind="board_outline"' in fragment
+    assert 'data-kind="board_material"' not in fragment
+    assert " Z" not in fragment
+    assert _style_value(style, "fill") == "none"
+    assert _style_value(style, "stroke") == "#202020"
+
+
+def test_design_preset_uses_normalized_altium_board_mask(pimx8_board: Pcb) -> None:
+    settings = load_render_settings_json('{"extends": "phosphor:design"}')
+
+    svg = render_pcb_svg(pimx8_board, side="front", width_px=1200, render_settings=settings)
+    mask_match = re.search(
+        r'<mask id="layer-clip-[^"]+"[\s\S]*?'
+        r'<path d="([^"]+)" fill="white" fill-rule="evenodd" '
+        r'data-source-id="board_material:0"',
+        svg,
+    )
+
+    assert mask_match is not None
+    assert mask_match[1].count("M ") == 1
+
+
+def test_design_preset_uses_altium_filled_copper_not_pour_boundaries(
+    pimx8_board: Pcb,
+) -> None:
+    settings = load_render_settings_json(
+        """
+        {
+          "extends": "phosphor:design",
+          "source": {
+            "layers": [{ "match": { "name": "Top Layer" } }]
+          }
+        }
+        """
+    )
+
+    svg = render_pcb_svg(pimx8_board, side="front", width_px=1200, render_settings=settings)
+    fragment = _layer_fragment(svg, "eda.copper.front", "Top Layer")
+
+    assert fragment is not None
+    assert 'data-source-collection="polygons"' in fragment
+    assert 'data-source-collection="zones"' not in fragment
+
+
+def test_design_preset_renders_altium_free_pad_drills(pimx8_board: Pcb) -> None:
+    settings = load_render_settings_json('{"extends": "phosphor:design"}')
+
+    svg = render_pcb_svg(pimx8_board, side="front", width_px=1200, render_settings=settings)
+    fragment = _layer_fragment(svg, "eda.drill", "drills")
+    style = _layer_style(svg, "eda.drill", "drills")
+
+    assert fragment is not None
+    assert fragment.count('data-source-collection="pad_drills"') >= 4
+    assert 'data-role="eda.drill"' in fragment
+    assert _style_value(style, "fill") == "none"
+    assert _style_value(style, "stroke") == "#202020"
 
 
 def test_design_drill_layer_is_not_masked_by_drill_clip() -> None:
@@ -606,16 +815,13 @@ def test_design_copper_still_uses_drill_clipping() -> None:
     copper_group_attrs = _layer_group_attrs(svg, "eda.copper.front", "F.Cu")
     assert copper_group_attrs is not None
     assert 'mask="url(' in copper_group_attrs
-    assert re.search(
-        r'<path d="[^"]+" fill="black" fill-rule="evenodd" '
+    drill_mask_path = re.search(
+        r'<path d="([^"]+)" fill="black" fill-rule="evenodd" '
         r'data-source-id="drill:U1:1:0"',
         svg,
     )
-    assert not re.search(
-        r'<path d="[^"]+ L [^"]+" fill="black" fill-rule="evenodd" '
-        r'data-source-id="drill:U1:1:0"',
-        svg,
-    )
+    assert drill_mask_path is not None
+    assert drill_mask_path.group(1).count("M ") == 1
 
 
 def test_copper_layer_paints_traces_zones_then_pads() -> None:
@@ -938,6 +1144,25 @@ def test_structured_highlight_colors_use_inline_style_so_css_does_not_override(
     assert 'data-role="highlight.copper.front"' in overlay
     assert 'data-highlight-target="net:/SWDIO_TMS"' in overlay
     assert 'style="fill: #0057b8' in overlay
+
+
+def test_component_highlight_without_color_uses_preset_default_for_silkscreen() -> None:
+    settings = load_render_settings_json(
+        '{"extends": "phosphor:simplified-high-contrast", "highlights": [{"component": "U1"}]}'
+    )
+
+    svg = render_pcb_svg(
+        _make_board_with_component(),
+        side="front",
+        width_px=1200,
+        render_settings=settings,
+    )
+
+    overlay = svg[svg.index('class="highlight-overlay"') :]
+    assert 'data-role="highlight.copper.front"' in overlay
+    assert 'data-role="highlight.silkscreen.front"' in overlay
+    assert 'data-highlight-target="component:U1"' in overlay
+    assert 'style="fill: #000000' in overlay
 
 
 # ---------------------------------------------------------------------------
@@ -2606,18 +2831,24 @@ def test_realistic_presets_hide_board_outline(board: Pcb, name: str) -> None:
 
 
 @pytest.mark.parametrize("name", ["high-contrast", "simplified-high-contrast"])
-def test_high_contrast_presets_limit_surface_layers_to_active_side(name: str) -> None:
+def test_high_contrast_presets_limit_surface_layers_to_active_side_and_omit_fab_by_default(
+    name: str,
+) -> None:
     settings = load_render_settings_json(json.dumps({"extends": f"phosphor:{name}"}))
     rules_by_function = {
         rule.match.function: rule
         for rule in settings.source.layers
         if rule.match.function in {"silkscreen", "fab", "mechanical"}
     }
+    board = _make_board_with_component()
 
     assert rules_by_function["silkscreen"].match.side == "active"
     assert rules_by_function["silkscreen"].objects == ("silk", "board_graphic_text")
-    assert rules_by_function["fab"].match.side == "active"
+    assert "fab" not in rules_by_function
     assert rules_by_function["mechanical"].objects == ("mechanical",)
+
+    svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
+    assert 'data-role="eda.fabrication.front"' not in svg
 
 
 @pytest.mark.parametrize("name", BUILT_IN_DERIVED_PRESETS)

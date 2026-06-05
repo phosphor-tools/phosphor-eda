@@ -59,10 +59,12 @@ _EDA_DRILL_ANCHOR_COLORS = {
 }
 _EDA_COPPER_FRONT_COLOR = "#cc0000"
 _EDA_COPPER_BACK_COLOR = "#0000cc"
+_EDA_COPPER_OPACITY = 1.0
 _EDA_SILKSCREEN_FRONT_COLOR = "#ffffff"
 _EDA_SILKSCREEN_BACK_COLOR = "#ffff00"
 _EDA_EDGE_COLOR = "#202020"
 _EDA_DRILL_COLOR = "#202020"
+_DIMMED_DEFAULT_OPACITY = 0.25
 
 
 def eda_default_copper_color(source_layer_name: str, copper_order: int | None) -> str:
@@ -94,6 +96,7 @@ def resolve_layer_style(
 ) -> ResolvedStyle:
     """Resolve paint style tokens for a visual layer role."""
     style_values: dict[str, object] = {}
+    dimmed_opacity_explicit = False
     if highlight_color:
         style_values["fill"] = highlight_color
     else:
@@ -102,6 +105,7 @@ def resolve_layer_style(
             style_values["fill"] = _resolve_dimmed_value(
                 tokens,
                 fill_resolution,
+                "fill",
                 dimmed,
                 warn,
                 warned_missing_dimmed_tokens,
@@ -117,9 +121,12 @@ def resolve_layer_style(
             continue
         resolution = _resolve_optional_token(tokens, role, prop)
         if resolution is not None:
+            if dimmed and prop == "opacity" and _dimmed_token(resolution.token) in tokens:
+                dimmed_opacity_explicit = True
             style_values[prop] = _resolve_dimmed_value(
                 tokens,
                 resolution,
+                prop,
                 dimmed,
                 warn,
                 warned_missing_dimmed_tokens,
@@ -128,6 +135,17 @@ def resolve_layer_style(
             default_value = _resolve_eda_default_value(role, prop, eda_layer_order)
             if default_value is not None:
                 style_values[prop] = default_value
+
+    if dimmed and not dimmed_opacity_explicit:
+        opacity = _as_optional_float(style_values.get("opacity"), "opacity")
+        style_values["opacity"] = (
+            _DIMMED_DEFAULT_OPACITY
+            if opacity is None
+            else min(
+                opacity,
+                _DIMMED_DEFAULT_OPACITY,
+            )
+        )
 
     return ResolvedStyle(
         fill=_as_optional_string(style_values.get("fill"), "fill"),
@@ -202,7 +220,7 @@ def _resolve_eda_copper_default(
             return _EDA_COPPER_BACK_COLOR
         return eda_default_copper_color(role.source_layer_name, eda_layer_order)
     if prop == "opacity":
-        return 1.0
+        return _EDA_COPPER_OPACITY
     if prop == "stroke":
         return "none"
     return None
@@ -245,6 +263,7 @@ def _resolve_eda_drill_default(role: VisualRole, prop: str) -> object | None:
 def _resolve_dimmed_value(
     tokens: Mapping[str, object],
     resolution: _TokenResolution,
+    prop: str,
     dimmed: bool,
     warn: WarningCallback,
     warned_missing_dimmed_tokens: set[str] | None,
@@ -255,6 +274,9 @@ def _resolve_dimmed_value(
     dimmed_token = _dimmed_token(resolution.token)
     if dimmed_token in tokens:
         return tokens[dimmed_token]
+
+    if prop == "opacity":
+        return _DIMMED_DEFAULT_OPACITY
 
     if warned_missing_dimmed_tokens is None or dimmed_token not in warned_missing_dimmed_tokens:
         warn(f"Missing dimmed style token {dimmed_token}; using {resolution.token}")

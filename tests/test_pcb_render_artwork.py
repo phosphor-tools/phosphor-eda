@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 
+import pytest
 from shapely import Point, Polygon
 
 from phosphor_eda.pcb import PcbArc, PcbLine, PcbPad, PcbVia
@@ -71,6 +72,29 @@ def test_select_source_artwork_rule_without_object_filter_selects_all_matched_la
     )
 
     assert selected == (front_pad, front_trace)
+
+
+def test_select_source_artwork_requires_explicit_keepout_opt_in() -> None:
+    front_pad = _renderable("pad-1", GeometryKind.PAD, "F.Cu", "copper", "front")
+    front_keepout = _renderable("keepout-1", GeometryKind.KEEPOUT, "F.Cu", "keepout", "front")
+    store = PcbGeometryStore(items=(front_pad, front_keepout))
+
+    selected_by_layer_name = select_source_artwork(
+        store,
+        (LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
+    )
+    selected_by_function = select_source_artwork(
+        store,
+        (LayerSelectionRule(match=LayerMatch(function="keepout")),),
+    )
+    selected_by_object = select_source_artwork(
+        store,
+        (LayerSelectionRule(match=LayerMatch(name="F.Cu"), objects=("keepout",)),),
+    )
+
+    assert selected_by_layer_name == (front_pad,)
+    assert selected_by_function == (front_keepout,)
+    assert selected_by_object == (front_keepout,)
 
 
 def test_derived_layer_is_keyed_by_visual_role_and_carries_primitive_provenance() -> None:
@@ -183,6 +207,35 @@ def test_drill_holes_convert_to_subtractive_geometry() -> None:
     assert geometry.contains(Point(2.0, 0.0))
 
 
+def test_slotted_pad_drills_convert_to_subtractive_slot_geometry() -> None:
+    pad_drill = _renderable(
+        "drill-1",
+        GeometryKind.DRILL,
+        "drills",
+        "drill",
+        "",
+        geometry=_pad(
+            shape="oval",
+            x=0.0,
+            y=0.0,
+            drill=0.6,
+            drill_shape="oval",
+            drill_width=0.6,
+            drill_height=1.6,
+        ),
+    )
+    store = PcbGeometryStore(items=(pad_drill,))
+
+    geometry = drill_geometry_for_layer(store, layer_name="F.Cu")
+
+    min_x, min_y, max_x, max_y = geometry.bounds
+    assert max_x - min_x == pytest.approx(0.6, abs=0.02)
+    assert max_y - min_y == pytest.approx(1.6, abs=0.02)
+    assert geometry.contains(Point(0.0, 0.0))
+    assert geometry.contains(Point(0.0, 0.7))
+    assert not geometry.contains(Point(0.7, 0.0))
+
+
 def _renderable(
     geometry_id: str,
     kind: GeometryKind,
@@ -210,6 +263,9 @@ def _pad(
     x: float = 0.0,
     y: float = 0.0,
     drill: float = 0.0,
+    drill_shape: str = "circle",
+    drill_width: float = 0.0,
+    drill_height: float = 0.0,
 ) -> PcbPad:
     return PcbPad(
         number="1",
@@ -223,6 +279,9 @@ def _pad(
         net_name="GND",
         footprint_ref="J1",
         drill=drill,
+        drill_shape=drill_shape,
+        drill_width=drill_width,
+        drill_height=drill_height,
     )
 
 

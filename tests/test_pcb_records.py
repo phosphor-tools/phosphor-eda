@@ -136,7 +136,10 @@ def test_via_truncated():
 
 def _make_arc_body(
     layer: int = 1,
+    flags1: int = 0,
+    flags2: int = 0,
     net: int = 0,
+    polygon: int = 0xFFFF,
     component: int = 0xFFFF,
     cx: int = 1000,
     cy: int = 2000,
@@ -144,10 +147,15 @@ def _make_arc_body(
     start_angle: float = 0.0,
     end_angle: float = 180.0,
     width: int = 100,
+    subpoly_index: int = 0,
+    keepout_restrictions: int = 0,
 ) -> bytes:
-    body = bytearray(45)
+    body = bytearray(57)
     body[0] = layer
+    body[1] = flags1
+    body[2] = flags2
     body[3:5] = _pack_u16(net)
+    body[5:7] = _pack_u16(polygon)
     body[7:9] = _pack_u16(component)
     body[13:17] = _pack_i32(cx)
     body[17:21] = _pack_i32(cy)
@@ -155,6 +163,8 @@ def _make_arc_body(
     body[25:33] = _pack_f64(start_angle)
     body[33:41] = _pack_f64(end_angle)
     body[41:45] = _pack_u32(width)
+    body[45:47] = _pack_u16(subpoly_index)
+    body[56] = keepout_restrictions
     return bytes(body)
 
 
@@ -168,6 +178,24 @@ def test_arc_from_bytes():
     assert rec.radius == 500
     assert rec.start_angle == 45.0
     assert rec.end_angle == 270.0
+
+
+def test_arc_from_bytes_parses_keepout_metadata():
+    ctx = ParseContext()
+    body = _make_arc_body(
+        flags2=0x02,
+        polygon=3,
+        subpoly_index=7,
+        keepout_restrictions=31,
+    )
+    rec = ArcRecord.from_bytes(body, ctx)
+
+    assert rec is not None
+    assert rec.flags2 == 0x02
+    assert rec.polygon == 3
+    assert rec.subpoly_index == 7
+    assert rec.keepout_restrictions == 31
+    assert rec.is_keepout is True
 
 
 def test_arc_truncated():

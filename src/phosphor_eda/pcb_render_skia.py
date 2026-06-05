@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from importlib import import_module
 from typing import TYPE_CHECKING, Protocol, cast
 
+from shapely import Polygon
+
 from phosphor_eda.pcb import PcbPad, PcbPolygon, PcbSegment, PcbTraceArc, PcbVia, PcbZone
 from phosphor_eda.pcb_render_geometry import GeometryKind, GeometryTags
 from phosphor_eda.sql.geometry import arc_to_polyline
@@ -143,6 +145,8 @@ def geometry_to_skia_artwork(
     elif item.kind is GeometryKind.VIA and isinstance(payload, PcbVia):
         path = _via_path(payload, target_layer_name)
     elif item.kind in _POLYGON_KINDS and isinstance(payload, PcbPolygon):
+        if not _polygon_payload_is_valid(payload):
+            return None
         path = _polygon_path(payload.points, holes=payload.holes)
 
     if path is None:
@@ -352,6 +356,13 @@ def _polygon_path(
         if len(hole) >= 3:
             _append_ring(path, tuple(reversed(hole)))
     return path
+
+
+def _polygon_payload_is_valid(polygon: PcbPolygon) -> bool:
+    if len(polygon.points) < 3:
+        return False
+    holes = [hole for hole in polygon.holes if len(hole) >= 3]
+    return bool(Polygon(polygon.points, holes=holes or None).is_valid)
 
 
 def _append_ring(path: _Path, points: Sequence[tuple[float, float]]) -> None:

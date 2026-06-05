@@ -107,6 +107,32 @@ def test_missing_dimmed_token_warns_once_when_tracker_is_reused() -> None:
     ]
 
 
+def test_explicit_dimmed_opacity_is_not_clamped_to_default() -> None:
+    style = resolve_layer_style(
+        {
+            "eda.copper.front.fill": "#d17a22",
+            "eda.copper.front.opacity": 1.0,
+            "eda.dimmed.copper.front.opacity": 0.6,
+        },
+        VisualRole(namespace="eda", function="copper", side="front"),
+        dimmed=True,
+        warn=lambda _message: None,
+    )
+
+    assert style.opacity == 0.6
+
+
+def test_eda_copper_defaults_to_opaque_opacity() -> None:
+    style = resolve_layer_style(
+        {},
+        VisualRole(namespace="eda", function="copper", side="front"),
+        dimmed=False,
+        warn=lambda _message: None,
+    )
+
+    assert style.opacity == 1.0
+
+
 def test_eda_generated_inner_palette_supports_160_unique_copper_layers() -> None:
     colors = {eda_default_copper_color(f"In{index}.Cu", index) for index in range(1, 161)}
 

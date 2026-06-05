@@ -8,7 +8,6 @@
         "match": { "function": "silkscreen", "side": "active" },
         "objects": ["silk", "board_graphic_text"]
       },
-      { "match": { "function": "fab", "side": "active" } },
       { "match": { "function": "mechanical" }, "objects": ["mechanical"] },
       { "match": { "function": "edge" } }
     ]
@@ -37,6 +36,10 @@
     "highlight.copper.inner.default.opacity": 1,
     "highlight.copper.inner.default.stroke": "none",
     "highlight.copper.inner.default.strokeWidthMm": 0,
+    "highlight.layer.default.fill": "#000000",
+    "highlight.layer.default.opacity": 1,
+    "highlight.layer.default.stroke": "none",
+    "highlight.layer.default.strokeWidthMm": 0,
     "annotation.label.fill": "#000",
     "annotation.label.textHalo": "#fff",
     "annotation.label.textHaloWidthPx": 4,

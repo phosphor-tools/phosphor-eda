@@ -20,6 +20,7 @@ SOURCE_LAYER_FUNCTIONS = (
     "courtyard",
     "edge",
     "drill",
+    "keepout",
     "mechanical",
     "other",
 )

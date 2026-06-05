@@ -8,6 +8,7 @@ import sexpdata
 from phosphor_eda.kicad.pcb_parser import (
     _extract_value,  # pyright: ignore[reportPrivateUsage]
     parse_kicad_pcb,
+    parse_kicad_pcb_from_sexpr,
     parse_kicad_stackup,
 )
 from phosphor_eda.pcb import LayerFunction, Pcb
@@ -253,6 +254,109 @@ def test_trace_arc_count(board: Pcb) -> None:
     assert len(board.trace_arcs) == 0
 
 
+def test_kicad_zone_keepout_is_parsed_as_keepout_not_copper_zone() -> None:
+    data = sexpdata.loads(
+        """
+        (kicad_pcb
+          (layers
+            (0 "F.Cu" signal)
+            (31 "B.Cu" signal)
+          )
+          (zone
+            (net 0)
+            (net_name "")
+            (layers "F.Cu" "B.Cu")
+            (keepout
+              (tracks allowed)
+              (vias not_allowed)
+              (pads not_allowed)
+              (copperpour not_allowed)
+              (footprints allowed)
+            )
+            (polygon
+              (pts
+                (xy 1 1)
+                (xy 4 1)
+                (xy 4 3)
+                (xy 1 3)
+              )
+            )
+            (filled_polygon
+              (layer "F.Cu")
+              (pts
+                (xy 1 1)
+                (xy 4 1)
+                (xy 4 3)
+                (xy 1 3)
+              )
+            )
+          )
+        )
+        """
+    )
+    board = parse_kicad_pcb_from_sexpr(list(data[1:]), default_name="keepout")
+
+    assert len(board.keepouts) == 1
+    keepout = board.keepouts[0]
+    assert keepout.layers == ["F.Cu", "B.Cu"]
+    assert keepout.boundary == [(1.0, 1.0), (4.0, 1.0), (4.0, 3.0), (1.0, 3.0)]
+    assert keepout.rules.tracks == "allowed"
+    assert keepout.rules.vias == "not_allowed"
+    assert keepout.rules.pads == "not_allowed"
+    assert keepout.rules.copperpour == "not_allowed"
+    assert keepout.rules.footprints == "allowed"
+    assert board.zones == []
+    assert board.polygons == []
+
+
+def test_kicad_footprint_keepout_is_parsed_with_footprint_reference() -> None:
+    data = sexpdata.loads(
+        """
+        (kicad_pcb
+          (layers
+            (0 "F.Cu" signal)
+            (31 "B.Cu" signal)
+          )
+          (footprint "Antenna"
+            (layer "F.Cu")
+            (at 10 20)
+            (property "Reference" "AE1")
+            (property "Value" "chip")
+            (zone
+              (net 0)
+              (net_name "")
+              (layer "F.Cu")
+              (keepout
+                (tracks not_allowed)
+                (vias allowed)
+                (pads allowed)
+                (copperpour not_allowed)
+                (footprints allowed)
+              )
+              (polygon
+                (pts
+                  (xy 0 0)
+                  (xy 2 0)
+                  (xy 2 1)
+                  (xy 0 1)
+                )
+              )
+            )
+          )
+        )
+        """
+    )
+    board = parse_kicad_pcb_from_sexpr(list(data[1:]), default_name="footprint-keepout")
+
+    assert len(board.keepouts) == 1
+    keepout = board.keepouts[0]
+    assert keepout.footprint_ref == "AE1"
+    assert keepout.layers == ["F.Cu"]
+    assert keepout.boundary == [(10.0, 20.0), (12.0, 20.0), (12.0, 21.0), (10.0, 21.0)]
+    assert keepout.rules.tracks == "not_allowed"
+    assert keepout.rules.copperpour == "not_allowed"
+
+
 # ---------------------------------------------------------------------------
 # OrangeCrab fixture (KiCad 5, complex board)
 # ---------------------------------------------------------------------------
@@ -277,6 +381,21 @@ def test_orangecrab_polygon_layers(orangecrab_board: Pcb) -> None:
     assert "B.Cu" in layers
 
 
+def test_orangecrab_keepouts_are_not_loaded_as_copper_zones(orangecrab_board: Pcb) -> None:
+    assert any(
+        "F.Cu" in keepout.layers
+        and keepout.rules.tracks == "allowed"
+        and keepout.rules.copperpour == "not_allowed"
+        for keepout in orangecrab_board.keepouts
+    )
+
+    keepout_boundaries = {tuple(keepout.boundary) for keepout in orangecrab_board.keepouts}
+    zone_boundaries = {tuple(zone.boundary) for zone in orangecrab_board.zones}
+
+    assert keepout_boundaries
+    assert keepout_boundaries.isdisjoint(zone_boundaries)
+
+
 def test_orangecrab_pad_layers_are_plain_strings(orangecrab_board: Pcb) -> None:
     """KiCad symbolic layer names should be normalized before entering the domain model."""
     pad_layers = [
@@ -291,6 +410,30 @@ def test_orangecrab_pad_layers_are_plain_strings(orangecrab_board: Pcb) -> None:
     assert all(type(layer) is str for layer in pad_layers)
     assert all(type(layer) is str for layer in via_layers)
     assert "*.Cu" in pad_layers
+
+
+def test_orangecrab_usb_mounting_pads_preserve_oval_drill_dimensions(
+    orangecrab_board: Pcb,
+) -> None:
+    """USB shield mounting pads use oval drill slots, not circular holes."""
+    usb = orangecrab_board.footprint_by_ref("J3")
+    assert usb is not None
+
+    shield_slots = [pad for pad in usb.pads if pad.number == "S1" and pad.drill_shape == "oval"]
+
+    assert len(shield_slots) == 4
+    assert {round(pad.drill_width, 3) for pad in shield_slots} == {0.6}
+    assert {round(pad.drill_height, 3) for pad in shield_slots} == {1.1, 1.5}
+    assert {round(pad.drill, 3) for pad in shield_slots} == {0.6}
+
+
+def test_orangecrab_usb_signal_pads_use_authored_board_rotation(orangecrab_board: Pcb) -> None:
+    """KiCad board-file pad rotations are already in board orientation."""
+    usb = orangecrab_board.footprint_by_ref("J3")
+    assert usb is not None
+    signal_pad = next(pad for pad in usb.pads if pad.number == "B7")
+
+    assert signal_pad.rotation == pytest.approx(270.0)
 
 
 # ---------------------------------------------------------------------------

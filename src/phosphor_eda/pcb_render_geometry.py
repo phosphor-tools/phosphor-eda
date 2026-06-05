@@ -14,6 +14,7 @@ from phosphor_eda.pcb import (
     PcbDimension,
     PcbFootprint,
     PcbGraphicText,
+    PcbKeepout,
     PcbLayer,
     PcbLine,
     PcbPad,
@@ -22,8 +23,8 @@ from phosphor_eda.pcb import (
     PcbText,
     PcbTraceArc,
     PcbVia,
-    PcbZone,
 )
+from phosphor_eda.pcb_render_drills import pad_drill_geometry
 
 
 class GeometryKind(StrEnum):
@@ -34,6 +35,7 @@ class GeometryKind(StrEnum):
     TRACE = "trace"
     TRACE_ARC = "trace_arc"
     ZONE = "zone"
+    KEEPOUT = "keepout"
     VIA = "via"
     SILK_LINE = "silk_line"
     SILK_POLYGON = "silk_polygon"
@@ -146,7 +148,7 @@ def build_geometry_store(board: Pcb, *, side: str) -> PcbGeometryStore:
     layers = _geometry_layers(board)
     items: list[RenderableGeometry] = []
 
-    edge_layer = _synthetic_layer("Edge.Cuts", "edge", "", -300)
+    edge_layer = _board_edge_layer(board, layers, layer_lookup)
     outline_points = _outline_points(board.outline_lines, board.outline_arcs, transform)
     items.append(
         RenderableGeometry(
@@ -200,6 +202,7 @@ def build_geometry_store(board: Pcb, *, side: str) -> PcbGeometryStore:
                 )
             )
             if pad.drill > 0:
+                drill_bbox = _pad_drill_bbox(transformed)
                 items.append(
                     RenderableGeometry(
                         id=f"drill:{footprint.reference}:{pad.number}:{pad_index}",
@@ -216,7 +219,7 @@ def build_geometry_store(board: Pcb, *, side: str) -> PcbGeometryStore:
                         payload=transformed,
                         source=transformed,
                         points=(transform.point(pad.x, pad.y),),
-                        bbox=_circle_bbox(transformed.x, transformed.y, transformed.drill / 2),
+                        bbox=drill_bbox,
                     )
                 )
 
@@ -296,25 +299,28 @@ def build_geometry_store(board: Pcb, *, side: str) -> PcbGeometryStore:
             )
         )
 
-    for index, zone in enumerate(board.zones):
-        transformed = _transform_zone(zone, transform)
-        items.append(
-            RenderableGeometry(
-                id=f"zone:{zone.layer}:{index}",
-                kind=GeometryKind.ZONE,
-                layer=layers.get(zone.layer, _layer_for_name(zone.layer, layer_lookup)),
-                tags=GeometryTags(
-                    source_collection="zones",
-                    source_index=index,
-                    net_number=zone.net_number,
-                    net_name=zone.net_name or _net_name(board, zone.net_number),
-                ),
-                payload=transformed,
-                source=transformed,
-                points=tuple(RenderPoint(x, y) for x, y in transformed.boundary),
-                bbox=_points_bbox(transformed.boundary),
+    for index, keepout in enumerate(board.keepouts):
+        transformed = _transform_keepout(keepout, transform)
+        for layer_name in transformed.layers:
+            layer = _keepout_layer_for_name(layer_name, layers, layer_lookup)
+            layer_payload = replace(transformed, layers=[layer_name])
+            items.append(
+                RenderableGeometry(
+                    id=f"keepout:{layer_name}:{index}",
+                    kind=GeometryKind.KEEPOUT,
+                    layer=layer,
+                    tags=GeometryTags(
+                        source_collection="keepouts",
+                        source_index=index,
+                        component_ref=transformed.footprint_ref,
+                        component_prefix=_component_prefix(transformed.footprint_ref),
+                    ),
+                    payload=layer_payload,
+                    source=transformed,
+                    points=tuple(RenderPoint(x, y) for x, y in transformed.boundary),
+                    bbox=_points_bbox(transformed.boundary),
+                )
             )
-        )
 
     for index, via in enumerate(board.vias):
         transformed = _transform_via(via, transform)
@@ -679,7 +685,6 @@ def _component_tags(
 
 
 def _geometry_layers(board: Pcb) -> dict[str, GeometryLayer]:
-    ordered = _ordered_layers(board)
     return {
         layer.name: GeometryLayer(
             name=layer.name,
@@ -688,29 +693,8 @@ def _geometry_layers(board: Pcb) -> dict[str, GeometryLayer]:
             stack_index=index,
             source=layer,
         )
-        for index, layer in enumerate(ordered)
+        for index, layer in enumerate(board.layers)
     }
-
-
-def _ordered_layers(board: Pcb) -> list[PcbLayer]:
-    def sort_key(layer: PcbLayer) -> tuple[int, int, str]:
-        if layer.function != LayerFunction.COPPER:
-            role_order = {
-                LayerFunction.SOLDER_MASK: 20,
-                LayerFunction.SILKSCREEN: 30,
-                LayerFunction.FAB: 40,
-                LayerFunction.COURTYARD: 45,
-                LayerFunction.MECHANICAL: 50,
-                LayerFunction.EDGE: 60,
-            }.get(layer.function, 55)
-            return (role_order, layer.number if layer.number is not None else 5_000, layer.name)
-        if layer.side == "back":
-            return (0, 0, layer.name)
-        if layer.side == "front":
-            return (10, 10_000, layer.name)
-        return (5, layer.number if layer.number is not None else 5_000, layer.name)
-
-    return sorted(board.layers, key=sort_key)
 
 
 def _layer_for_name(name: str, layer_lookup: dict[str, PcbLayer]) -> GeometryLayer:
@@ -728,6 +712,40 @@ def _layer_for_name(name: str, layer_lookup: dict[str, PcbLayer]) -> GeometryLay
 
 def _synthetic_layer(name: str, role: str, side: str, stack_index: int) -> GeometryLayer:
     return GeometryLayer(name=name, role=role, side=side, stack_index=stack_index)
+
+
+def _keepout_layer_for_name(
+    name: str,
+    layers: dict[str, GeometryLayer],
+    layer_lookup: dict[str, PcbLayer],
+) -> GeometryLayer:
+    layer = layers.get(name, _layer_for_name(name, layer_lookup))
+    return replace(layer, role="keepout")
+
+
+def _board_edge_layer(
+    board: Pcb,
+    layers: dict[str, GeometryLayer],
+    layer_lookup: dict[str, PcbLayer],
+) -> GeometryLayer:
+    for layer_name in _board_outline_layer_names(board):
+        if layer_name in layers:
+            return replace(layers[layer_name], role="edge", side="")
+        if layer_name in layer_lookup:
+            return replace(_layer_for_name(layer_name, layer_lookup), role="edge", side="")
+    for layer in layers.values():
+        if layer.role == "edge":
+            return layer
+    return _synthetic_layer("Edge.Cuts", "edge", "", -300)
+
+
+def _board_outline_layer_names(board: Pcb) -> tuple[str, ...]:
+    names: list[str] = []
+    for line in board.outline_lines:
+        names.append(line.layer)
+    for arc in board.outline_arcs:
+        names.append(arc.layer)
+    return tuple(dict.fromkeys(name for name in names if name))
 
 
 def _rendered_view_transform(
@@ -810,10 +828,14 @@ def _transform_polygon(polygon: PcbPolygon, transform: _RenderedViewTransform) -
     )
 
 
-def _transform_zone(zone: PcbZone, transform: _RenderedViewTransform) -> PcbZone:
+def _transform_keepout(keepout: PcbKeepout, transform: _RenderedViewTransform) -> PcbKeepout:
     if transform.mirror_x is None:
-        return zone
-    return replace(zone, boundary=[(transform.x(x), y) for x, y in zone.boundary])
+        return keepout
+    return replace(
+        keepout,
+        boundary=[(transform.x(x), y) for x, y in keepout.boundary],
+        holes=[[(transform.x(x), y) for x, y in hole] for hole in keepout.holes],
+    )
 
 
 def _transform_text(text: PcbText, transform: _RenderedViewTransform) -> PcbText:
@@ -939,6 +961,14 @@ def _pad_bbox(pad: PcbPad) -> tuple[float, float, float, float]:
         pad.x + pad.width / 2,
         pad.y + pad.height / 2,
     )
+
+
+def _pad_drill_bbox(pad: PcbPad) -> tuple[float, float, float, float]:
+    geometry = pad_drill_geometry(pad)
+    if geometry is None or geometry.is_empty:
+        return _circle_bbox(pad.x, pad.y, pad.drill / 2)
+    min_x, min_y, max_x, max_y = geometry.bounds
+    return (min_x, min_y, max_x, max_y)
 
 
 def _circle_bbox(x: float, y: float, radius: float) -> tuple[float, float, float, float]:

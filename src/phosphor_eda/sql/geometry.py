@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from shapely import LineString, Point, Polygon
 from shapely.affinity import rotate
 
+from phosphor_eda.pcb import PcbPolygon
 from phosphor_eda.shapely_geometry import normalize_geometry, robust_polygonize
 
 if TYPE_CHECKING:
@@ -20,9 +21,9 @@ if TYPE_CHECKING:
     from phosphor_eda.pcb import (
         PcbArc,
         PcbFootprint,
+        PcbKeepout,
         PcbLine,
         PcbPad,
-        PcbPolygon,
         PcbSegment,
         PcbTraceArc,
         PcbVia,
@@ -255,6 +256,13 @@ def polygon_geometry(poly: PcbPolygon) -> Polygon | None:
     if not normalized.is_empty and isinstance(normalized, Polygon):
         return normalized
     return geometry
+
+
+def keepout_geometry(keepout: PcbKeepout) -> Polygon | None:
+    """Convert a PcbKeepout to a Shapely Polygon, or None if degenerate."""
+    return polygon_geometry(
+        PcbPolygon(points=keepout.boundary, layer=keepout.layer, holes=keepout.holes)
+    )
 
 
 # ---------------------------------------------------------------------------

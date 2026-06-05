@@ -68,9 +68,12 @@ class TrackRecord:
 class ArcRecord:
     """Binary arc record (Arcs6, rec_type=1).
 
-    Byte layout (45 bytes):
+    Byte layout (45+ bytes):
       [0]     layer    u8
+      [1]     flags1   u8
+      [2]     flags2   u8
       [3:5]   net      u16
+      [5:7]   polygon  u16
       [7:9]   component u16
       [13:17] cx       i32
       [17:21] cy       i32
@@ -78,18 +81,30 @@ class ArcRecord:
       [25:33] start_angle f64
       [33:41] end_angle   f64
       [41:45] width    u32
+      [45:47] subpoly_index u16
+      [56]    keepout restrictions bitmask, when present
     """
 
     layer: int
+    flags1: int
+    flags2: int
     net: int
+    polygon: int
     component: int
     center: tuple[int, int]
     radius: int
     start_angle: float
     end_angle: float
     width: int
+    subpoly_index: int = 0
+    keepout_restrictions: int = 0
 
     MIN_SIZE: ClassVar[int] = 45
+
+    @property
+    def is_keepout(self) -> bool:
+        """Return whether this arc is an Altium keepout primitive."""
+        return self.flags2 == 0x02
 
     @classmethod
     def from_bytes(cls, body: bytes, ctx: ParseContext) -> Self | None:
@@ -98,13 +113,18 @@ class ArcRecord:
             return None
         return cls(
             layer=body[0],
+            flags1=body[1],
+            flags2=body[2],
             net=u16(body, 3),
+            polygon=u16(body, 5),
             component=u16(body, 7),
             center=(i32(body, 13), i32(body, 17)),
             radius=u32(body, 21),
             start_angle=f64(body, 25),
             end_angle=f64(body, 33),
             width=u32(body, 41),
+            subpoly_index=u16(body, 45) if len(body) >= 47 else 0,
+            keepout_restrictions=body[56] if len(body) >= 57 else 0,
         )
 
 

@@ -13,6 +13,8 @@ from phosphor_eda.pcb import (
     LayerFunction,
     Pcb,
     PcbArc,
+    PcbFootprint,
+    PcbGraphicText,
     PcbLayer,
     PcbLine,
     PcbNet,
@@ -245,6 +247,111 @@ def test_eda_layer_order_ignores_group_size_when_stack_index_matches() -> None:
     assert [layer.source_layers for layer in layers] == [
         ("A.Mechanical",),
         ("B.Mechanical",),
+    ]
+
+
+def test_eda_front_view_renders_source_layers_in_reverse_file_order() -> None:
+    board = _board_with_ordered_layers(
+        layers=(
+            PcbLayer("F.Cu", LayerFunction.COPPER, "front", number=0),
+            PcbLayer("In1.Cu", LayerFunction.COPPER, "", number=1),
+            PcbLayer("In2.Cu", LayerFunction.COPPER, "", number=2),
+            PcbLayer("B.Cu", LayerFunction.COPPER, "back", number=31),
+            PcbLayer("B.SilkS", LayerFunction.SILKSCREEN, "back", number=32),
+            PcbLayer("F.SilkS", LayerFunction.SILKSCREEN, "front", number=33),
+        )
+    )
+    store = build_geometry_store(board, side="front")
+
+    layers = build_eda_layers(
+        store,
+        _settings(
+            rules=(
+                LayerSelectionRule(match=LayerMatch(function="copper")),
+                LayerSelectionRule(match=LayerMatch(function="silkscreen")),
+            ),
+            tokens={},
+        ),
+        warn=lambda _message: None,
+    )
+
+    assert [layer.source_layers for layer in layers] == [
+        ("F.SilkS",),
+        ("B.SilkS",),
+        ("B.Cu",),
+        ("In2.Cu",),
+        ("In1.Cu",),
+        ("F.Cu",),
+    ]
+
+
+def test_eda_back_view_uses_source_layer_file_order() -> None:
+    board = _board_with_ordered_layers(
+        layers=(
+            PcbLayer("F.Cu", LayerFunction.COPPER, "front", number=0),
+            PcbLayer("In1.Cu", LayerFunction.COPPER, "", number=1),
+            PcbLayer("In2.Cu", LayerFunction.COPPER, "", number=2),
+            PcbLayer("B.Cu", LayerFunction.COPPER, "back", number=31),
+            PcbLayer("B.SilkS", LayerFunction.SILKSCREEN, "back", number=32),
+            PcbLayer("F.SilkS", LayerFunction.SILKSCREEN, "front", number=33),
+        )
+    )
+    store = build_geometry_store(board, side="back")
+
+    layers = build_eda_layers(
+        store,
+        _settings(
+            rules=(
+                LayerSelectionRule(match=LayerMatch(function="copper")),
+                LayerSelectionRule(match=LayerMatch(function="silkscreen")),
+            ),
+            tokens={},
+            side="back",
+        ),
+        warn=lambda _message: None,
+    )
+
+    assert [layer.source_layers for layer in layers] == [
+        ("F.Cu",),
+        ("In1.Cu",),
+        ("In2.Cu",),
+        ("B.Cu",),
+        ("B.SilkS",),
+        ("F.SilkS",),
+    ]
+
+
+def test_eda_edge_and_drill_layers_remain_top_overlays_in_back_view() -> None:
+    board = _board_with_ordered_layers(
+        layers=(
+            PcbLayer("F.Cu", LayerFunction.COPPER, "front", number=0),
+            PcbLayer("Edge.Cuts", LayerFunction.EDGE, "", number=44),
+            PcbLayer("B.SilkS", LayerFunction.SILKSCREEN, "back", number=45),
+        ),
+        include_drill=True,
+    )
+    store = build_geometry_store(board, side="back")
+
+    layers = build_eda_layers(
+        store,
+        _settings(
+            rules=(
+                LayerSelectionRule(match=LayerMatch(function="copper")),
+                LayerSelectionRule(match=LayerMatch(function="edge")),
+                LayerSelectionRule(match=LayerMatch(function="silkscreen")),
+                LayerSelectionRule(match=LayerMatch(function="drill")),
+            ),
+            tokens={},
+            side="back",
+        ),
+        warn=lambda _message: None,
+    )
+
+    assert [layer.source_layers for layer in layers] == [
+        ("F.Cu",),
+        ("B.SilkS",),
+        ("Edge.Cuts",),
+        ("drills",),
     ]
 
 
@@ -806,6 +913,128 @@ def test_realistic_solder_mask_openings_include_visible_side_pads() -> None:
     assert tuple(primitive.source_id for primitive in exposed_copper.mask.board) == ("front-pad",)
 
 
+def test_realistic_silkscreen_uses_source_mask_openings_even_when_mask_is_not_visible() -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "front-mask-opening",
+                GeometryKind.MASK,
+                "F.Mask",
+                "mask",
+                "front",
+                geometry=Polygon([(0.25, 0.25), (1.75, 0.25), (1.75, 1.75), (0.25, 1.75)]),
+            ),
+            _renderable(
+                "front-pad",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(
+                    x=3.0,
+                    y=1.0,
+                    width=1.0,
+                    height=1.0,
+                    layers=["F.Cu", "F.Mask"],
+                ),
+            ),
+            _renderable(
+                "front-silk",
+                GeometryKind.SILK_POLYGON,
+                "F.SilkS",
+                "silkscreen",
+                "front",
+                geometry=Polygon([(0.0, 0.0), (4.0, 0.0), (4.0, 2.0), (0.0, 2.0)]),
+            ),
+        )
+    )
+
+    layers = build_realistic_layers(
+        store,
+        _settings(
+            side="front",
+            rules=(LayerSelectionRule(match=LayerMatch(function="silkscreen", side="front")),),
+            tokens=_realistic_tokens(),
+        ),
+        warn=lambda _message: None,
+    )
+
+    silkscreen = next(layer for layer in layers if layer.id == "realistic:silkscreen")
+
+    assert silkscreen.mask is not None
+    assert tuple(primitive.source_id for primitive in silkscreen.mask.openings) == (
+        "front-mask-opening",
+        "front-pad",
+    )
+    assert tuple(primitive.source_layer for primitive in silkscreen.mask.openings) == (
+        "F.Mask",
+        "F.Mask",
+    )
+
+
+def test_eda_silkscreen_uses_source_mask_openings_even_when_mask_is_not_visible() -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "front-mask-opening",
+                GeometryKind.MASK,
+                "F.Mask",
+                "mask",
+                "front",
+                geometry=Polygon([(0.25, 0.25), (1.75, 0.25), (1.75, 1.75), (0.25, 1.75)]),
+            ),
+            _renderable(
+                "front-pad",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(
+                    x=3.0,
+                    y=1.0,
+                    width=1.0,
+                    height=1.0,
+                    layers=["F.Cu", "F.Mask"],
+                ),
+            ),
+            _renderable(
+                "front-silk",
+                GeometryKind.SILK_POLYGON,
+                "F.SilkS",
+                "silkscreen",
+                "front",
+                geometry=Polygon([(0.0, 0.0), (4.0, 0.0), (4.0, 2.0), (0.0, 2.0)]),
+            ),
+        )
+    )
+
+    layers = build_eda_layers(
+        store,
+        _settings(
+            rules=(LayerSelectionRule(match=LayerMatch(function="silkscreen", side="front")),),
+            tokens={
+                "eda.silkscreen.front.fill": "#ffffff",
+                "eda.silkscreen.front.opacity": 1.0,
+            },
+        ),
+        warn=lambda _message: None,
+    )
+
+    silkscreen = next(layer for layer in layers if layer.id == "eda:silkscreen:front")
+
+    assert silkscreen.mask is not None
+    assert tuple(primitive.source_id for primitive in silkscreen.mask.openings) == (
+        "front-mask-opening",
+        "front-pad",
+    )
+    assert tuple(primitive.source_layer for primitive in silkscreen.mask.openings) == (
+        "F.Mask",
+        "F.Mask",
+    )
+
+
 def test_realistic_solder_mask_openings_do_not_include_vias_without_tenting_metadata() -> None:
     store = PcbGeometryStore(
         items=(
@@ -1160,7 +1389,37 @@ def test_base_layers_dim_only_when_dimming_enabled_and_highlights_exist() -> Non
     )
 
     assert without_highlights[0].style == ResolvedStyle(fill="#d17a22", opacity=1, stroke="none")
-    assert with_highlights[0].style == ResolvedStyle(fill="#6f5b48", opacity=1, stroke="none")
+    assert with_highlights[0].style == ResolvedStyle(fill="#6f5b48", opacity=0.25, stroke="none")
+
+
+def test_base_layer_dimming_reduces_opacity_without_dimmed_tokens() -> None:
+    store = PcbGeometryStore(
+        items=(
+            _board_outline(),
+            _renderable(
+                "pad-1",
+                GeometryKind.PAD,
+                "F.Cu",
+                "copper",
+                "front",
+                geometry=_pad(x=1.0, y=1.0),
+                tags=GeometryTags(source_collection="pads", net_name="SIG"),
+            ),
+        )
+    )
+
+    layers = build_eda_layers(
+        store,
+        _settings(
+            rules=(LayerSelectionRule(match=LayerMatch(name="F.Cu")),),
+            tokens={},
+            dimming_enabled=True,
+            highlights=(HighlightSpec(net="SIG"),),
+        ),
+        warn=lambda _message: None,
+    )
+
+    assert layers[0].style == ResolvedStyle(fill="#cc0000", opacity=0.25, stroke="none")
 
 
 def test_eda_layer_contents_do_not_use_artwork_resolution_or_union() -> None:
@@ -1537,9 +1796,19 @@ def test_layer_masks_reconstruct_board_material_from_source_outline_not_points()
     )
 
     assert layers[0].mask is not None
-    assert tuple(primitive.d for primitive in layers[0].mask.board) == (
-        "M 0.0000 0.0000 L 10.0000 0.0000 L 10.0000 5.0000 L 0.0000 5.0000 Z",
-    )
+    assert len(layers[0].mask.board) == 1
+    board_path = layers[0].mask.board[0].d
+    values = board_path.replace("M", "").replace("L", "").replace("Z", "").split()
+    coords = {
+        (float(values[index]), float(values[index + 1])) for index in range(0, len(values), 2)
+    }
+    assert board_path.count("M ") == 1
+    assert coords == {
+        (0.0, 0.0),
+        (10.0, 0.0),
+        (10.0, 5.0),
+        (0.0, 5.0),
+    }
 
 
 def _settings(
@@ -1570,6 +1839,63 @@ def _realistic_tokens() -> dict[str, str | int | float | bool]:
         "realistic.boardOutline.stroke": "#111111",
         "realistic.boardOutline.strokeWidthMm": 0.08,
     }
+
+
+def _board_with_ordered_layers(
+    *,
+    layers: tuple[PcbLayer, ...],
+    include_drill: bool = False,
+) -> Pcb:
+    return Pcb(
+        name="ordered-layers",
+        nets={1: PcbNet(1, "GND")},
+        footprints=[
+            PcbFootprint(
+                reference="J1",
+                footprint_lib="test",
+                x=5.0,
+                y=2.0,
+                rotation=0.0,
+                layer="F.Cu",
+                pads=[
+                    PcbPad(
+                        number="1",
+                        x=5.0,
+                        y=2.0,
+                        width=1.0,
+                        height=1.0,
+                        shape="circle",
+                        layers=["F.Cu", "B.Cu"],
+                        net_number=1,
+                        net_name="GND",
+                        footprint_ref="J1",
+                        drill=0.4,
+                    ),
+                ],
+            )
+        ]
+        if include_drill
+        else [],
+        segments=[
+            PcbSegment(1.0, 1.0, 2.0, 1.0, 0.2, layer.name, 1)
+            for layer in layers
+            if layer.function == LayerFunction.COPPER
+        ],
+        vias=[],
+        outline_lines=[
+            PcbLine(0.0, 0.0, 10.0, 0.0, "Edge.Cuts", 0.1),
+            PcbLine(10.0, 0.0, 10.0, 5.0, "Edge.Cuts", 0.1),
+            PcbLine(10.0, 5.0, 0.0, 5.0, "Edge.Cuts", 0.1),
+            PcbLine(0.0, 5.0, 0.0, 0.0, "Edge.Cuts", 0.1),
+        ],
+        outline_arcs=[],
+        layers=list(layers),
+        graphic_texts=[
+            PcbGraphicText("S", 2.0, 2.0, 0.0, layer.name, 1.0)
+            for layer in layers
+            if layer.function == LayerFunction.SILKSCREEN
+        ],
+    )
 
 
 def _renderable(

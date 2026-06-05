@@ -10,6 +10,7 @@ from phosphor_eda.pcb_render_artwork import (
     DerivedLayer,
     select_source_artwork,
     selected_copper_layers,
+    solder_mask_opening_primitives,
     via_layers,
 )
 from phosphor_eda.pcb_render_geometry import GeometryKind, GeometryLayer
@@ -19,7 +20,6 @@ from phosphor_eda.pcb_render_primitives import (
     SvgPrimitive,
     drill_to_svg_primitive,
     geometry_to_svg_primitive,
-    pad_solder_mask_opening_primitive,
     visible_drill_to_svg_primitive,
 )
 from phosphor_eda.pcb_render_tokens import VisualRole, resolve_layer_style
@@ -86,6 +86,7 @@ def build_eda_layers(
     if profiler is not None:
         profiler.metric("eda.layer_items", count=len(layer_items))
     layer_mask = _layer_mask(store)
+    silkscreen_masks = _silkscreen_masks_by_side(store)
     dimmed = _should_dim_base_layers(store, settings)
     warned_missing_dimmed_tokens: set[str] = set()
     copper_order_by_layer = _copper_order_by_layer(store)
@@ -95,7 +96,10 @@ def build_eda_layers(
         groups[_group_key(item.layer)].append(item)
 
     layers: list[DerivedLayer] = []
-    for key, group in sorted(groups.items(), key=_group_sort_key):
+    for key, group in sorted(
+        groups.items(),
+        key=lambda item: _eda_group_sort_key(item, side=settings.side),
+    ):
         primitives = _primitive_layer_primitives(
             key,
             group,
@@ -129,7 +133,7 @@ def build_eda_layers(
                 source_ids=source_ids,
                 style=style,
                 data={"source-layer": key.source_layer_name},
-                mask=None if key.function in {"edge", "drill"} else layer_mask,
+                mask=_mask_for_group(key, layer_mask, silkscreen_masks),
             )
         )
 
@@ -166,11 +170,7 @@ def build_realistic_layers(
     dimmed = _should_dim_base_layers(store, settings)
     warned_missing_dimmed_tokens: set[str] = set()
 
-    mask_openings = _solder_mask_opening_primitives(
-        selected_items,
-        side=side,
-        mask_layer_name=_side_mask_layer_name(store, side),
-    )
+    mask_openings = solder_mask_opening_primitives(store, side=side)
     copper_primitives = _realistic_side_primitives(
         layer_items,
         role="copper",
@@ -285,6 +285,7 @@ def build_highlight_layers(
 ) -> tuple[HighlightGroup, ...]:
     """Build derived highlight overlay groups from selected raw source geometry."""
     layer_mask = _layer_mask(store)
+    silkscreen_masks = _silkscreen_masks_by_side(store)
     groups: list[HighlightGroup] = []
 
     for highlight in settings.highlights:
@@ -354,7 +355,7 @@ def build_highlight_layers(
                         "data-highlight-target": target,
                         "source-layer": key.source_layer_name,
                     },
-                    mask=None if key.function == "edge" else layer_mask,
+                    mask=_mask_for_group(key, layer_mask, silkscreen_masks),
                 )
             )
 
@@ -516,6 +517,21 @@ def _group_sort_key(
     return (stack_index, key.source_layer_name)
 
 
+def _eda_group_sort_key(
+    item: tuple[_LayerGroupKey, list[_PrimitiveLayerItem]],
+    *,
+    side: str,
+) -> tuple[int, int, str]:
+    key, group = item
+    stack_index = group[0].layer.stack_index if group else 0
+    if key.function == "edge":
+        return (1, 0, key.source_layer_name)
+    if key.function == "drill":
+        return (2, 0, key.source_layer_name)
+    layer_order = stack_index if side == "back" else -stack_index
+    return (0, layer_order, key.source_layer_name)
+
+
 def _primitive_layer_primitives(
     key: _LayerGroupKey,
     group: list[_PrimitiveLayerItem],
@@ -609,34 +625,34 @@ def _realistic_side_primitives(
     return tuple(primitives)
 
 
-def _solder_mask_opening_primitives(
-    selected_items: Iterable[RenderableGeometry],
-    *,
-    side: str,
-    mask_layer_name: str,
-) -> tuple[SvgPrimitive, ...]:
-    primitives: list[SvgPrimitive] = []
-    for item in selected_items:
-        if item.layer.role == "mask" and item.layer.side == side:
-            primitive = geometry_to_svg_primitive(item, target_layer_name=item.layer.name)
-            if primitive is not None:
-                primitives.append(primitive)
-            continue
-        primitive = pad_solder_mask_opening_primitive(
-            item,
-            side=side,
-            target_layer_name=mask_layer_name,
-        )
-        if primitive is not None:
-            primitives.append(primitive)
-    return tuple(primitives)
+def _silkscreen_masks_by_side(store: PcbGeometryStore) -> dict[str, LayerMask | None]:
+    return {
+        "front": _silkscreen_layer_mask(store, side="front"),
+        "back": _silkscreen_layer_mask(store, side="back"),
+    }
 
 
-def _side_mask_layer_name(store: PcbGeometryStore, side: str) -> str:
-    for item in store.items:
-        if item.layer.role == "mask" and item.layer.side == side:
-            return item.layer.name
-    return "B.Mask" if side == "back" else "F.Mask"
+def _silkscreen_layer_mask(store: PcbGeometryStore, *, side: str) -> LayerMask | None:
+    board_primitives = _board_mask_primitives(store)
+    if not board_primitives:
+        return None
+    return LayerMask(
+        board=board_primitives,
+        drills=_drill_mask_primitives(store),
+        openings=solder_mask_opening_primitives(store, side=side),
+    )
+
+
+def _mask_for_group(
+    key: _LayerGroupKey,
+    layer_mask: LayerMask | None,
+    silkscreen_masks: dict[str, LayerMask | None],
+) -> LayerMask | None:
+    if key.function in {"edge", "drill"}:
+        return None
+    if key.function == "silkscreen" and key.side in silkscreen_masks:
+        return silkscreen_masks[key.side]
+    return layer_mask
 
 
 def _selected_board_outline_primitives(

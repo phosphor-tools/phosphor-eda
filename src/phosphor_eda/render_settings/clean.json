@@ -4,7 +4,10 @@
     "layers": [
       { "match": { "function": "copper" } },
       { "match": { "function": "solder_mask", "side": "active" } },
-      { "match": { "function": "silkscreen", "side": "active" } }
+      {
+        "match": { "function": "silkscreen", "side": "active" },
+        "objects": ["silk", "board_graphic_text"]
+      }
     ],
     "excludeComponents": ["R", "C", "L", "TP"]
   },
@@ -28,6 +31,10 @@
     "highlight.copper.inner.default.opacity": 0.85,
     "highlight.copper.inner.default.stroke": "none",
     "highlight.copper.inner.default.strokeWidthMm": 0,
+    "highlight.layer.default.fill": "#ff8a00",
+    "highlight.layer.default.opacity": 0.85,
+    "highlight.layer.default.stroke": "none",
+    "highlight.layer.default.strokeWidthMm": 0,
     "annotation.label.fill": "#fff",
     "annotation.label.textHalo": "#1a5c2a",
     "annotation.label.textHaloWidthPx": 4,

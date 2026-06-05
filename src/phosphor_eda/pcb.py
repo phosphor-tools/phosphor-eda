@@ -142,6 +142,9 @@ class PcbPad:
     footprint_ref: str
     rotation: float = 0.0  # total rotation in board space (degrees)
     drill: float = 0.0  # drill diameter (mm), 0 for SMD pads
+    drill_shape: str = "circle"  # "circle" or "oval"
+    drill_width: float = 0.0  # slot width or circular drill diameter (mm)
+    drill_height: float = 0.0  # slot height or circular drill diameter (mm)
     roundrect_rratio: float = 0.0  # corner ratio for roundrect pads
     pin_function: str = ""  # schematic pin name ("K", "A", "VCC")
     pin_type: str = ""  # electrical type ("passive", "input", "power")
@@ -236,6 +239,34 @@ class PcbZone:
 
 
 @dataclass
+class PcbKeepoutRules:
+    """Object classes constrained by a keepout/rule area."""
+
+    tracks: str = ""
+    vias: str = ""
+    pads: str = ""
+    copperpour: str = ""
+    footprints: str = ""
+
+
+@dataclass
+class PcbKeepout:
+    """A non-copper source keepout/rule area with source restrictions."""
+
+    layers: list[str]
+    boundary: list[tuple[float, float]]
+    rules: PcbKeepoutRules = field(default_factory=PcbKeepoutRules)
+    holes: list[list[tuple[float, float]]] = field(default_factory=list)
+    source: str = ""
+    footprint_ref: str = ""
+
+    @property
+    def layer(self) -> str:
+        """Representative layer for APIs that expect a single layer."""
+        return self.layers[0] if self.layers else ""
+
+
+@dataclass
 class PcbGraphicText:
     """A board-level graphic text (not inside a footprint)."""
 
@@ -285,6 +316,7 @@ class Pcb:
     trace_arcs: list[PcbTraceArc] = field(default_factory=list)
     layers: list[PcbLayer] = field(default_factory=list)
     zones: list[PcbZone] = field(default_factory=list)
+    keepouts: list[PcbKeepout] = field(default_factory=list)
     graphic_texts: list[PcbGraphicText] = field(default_factory=list)
     dimensions: list[PcbDimension] = field(default_factory=list)
 
