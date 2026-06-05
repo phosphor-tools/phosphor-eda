@@ -5,9 +5,10 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from pcb_layer_helpers import make_pcb_layer
 
 from phosphor_eda.convert import load_project
-from phosphor_eda.pcb import LayerFunction, Pcb, PcbArc, PcbLayer, PcbLine
+from phosphor_eda.pcb import LayerRole, Pcb, PcbArc, PcbLine
 from phosphor_eda.project import Project
 from phosphor_eda.sql import load_database
 
@@ -156,9 +157,9 @@ def test_board_graphics_are_loaded_as_queryable_geometry() -> None:
         ],
         outline_arcs=[],
         layers=[
-            PcbLayer("F.Mask", LayerFunction.SOLDER_MASK, "front"),
-            PcbLayer("B.Mask", LayerFunction.SOLDER_MASK, "back"),
-            PcbLayer("Edge.Cuts", LayerFunction.EDGE),
+            make_pcb_layer("F.Mask", LayerRole.SOLDER_MASK, "front"),
+            make_pcb_layer("B.Mask", LayerRole.SOLDER_MASK, "back"),
+            make_pcb_layer("Edge.Cuts", LayerRole.EDGE),
         ],
         graphic_lines=[PcbLine(1.0, 1.0, 3.0, 1.0, "F.Mask", 0.2)],
         graphic_arcs=[PcbArc(1.0, 3.0, 2.0, 4.0, 3.0, 3.0, "B.Mask", 0.15)],
@@ -181,7 +182,35 @@ def test_board_graphics_are_loaded_as_queryable_geometry() -> None:
 
 class TestLayers:
     def test_has_copper(self, db: duckdb.DuckDBPyConnection) -> None:
-        assert _count(db, "SELECT count(*) FROM layers WHERE layer_type = 'copper'") > 0
+        assert _count(db, "SELECT count(*) FROM layers WHERE list_contains(roles, 'copper')") > 0
+
+    def test_roles_array_and_primary_role_are_loaded(self, db: duckdb.DuckDBPyConnection) -> None:
+        row = db.execute(
+            """
+            SELECT primary_role, roles, side
+            FROM layers
+            WHERE name = 'F.CrtYd'
+            """
+        ).fetchone()
+
+        assert row is not None
+        assert row[0] == "courtyard"
+        assert set(row[1]) >= {"auxiliary", "fabrication", "courtyard", "front"}
+        assert row[2] == "front"
+
+    def test_stackup_dielectrics_have_normalized_roles(self, db: duckdb.DuckDBPyConnection) -> None:
+        row = db.execute(
+            """
+            SELECT primary_role, roles
+            FROM layers
+            WHERE layer_type IN ('core', 'prepreg')
+            LIMIT 1
+            """
+        ).fetchone()
+
+        assert row is not None
+        assert row[0] == "dielectric"
+        assert row[1] == ["dielectric"]
 
     def test_position_ordered(self, db: duckdb.DuckDBPyConnection) -> None:
         """Stackup layers should have monotonically increasing positions."""

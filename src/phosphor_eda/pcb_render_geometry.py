@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from phosphor_eda.pcb import (
-    LayerFunction,
+    LayerRole,
     Pcb,
     PcbArc,
     PcbCircle,
@@ -490,23 +490,7 @@ def geometry_matches_selector(
 
 
 def layer_role(layer: PcbLayer) -> str:
-    if layer.function == LayerFunction.COPPER:
-        return "copper"
-    if layer.function == LayerFunction.SILKSCREEN:
-        return "silkscreen"
-    if layer.function == LayerFunction.FAB:
-        return "fabrication"
-    if layer.function == LayerFunction.SOLDER_MASK:
-        return "mask"
-    if layer.function == LayerFunction.SOLDER_PASTE:
-        return "paste"
-    if layer.function == LayerFunction.MECHANICAL:
-        return "mechanical"
-    if layer.function == LayerFunction.COURTYARD:
-        return "courtyard"
-    if layer.function == LayerFunction.EDGE:
-        return "edge"
-    return "unknown"
+    return layer.primary_role.value
 
 
 def _append_footprint_graphics(
@@ -715,11 +699,9 @@ def _pad_mask_aperture_layers(
     layer_lookup: dict[str, PcbLayer],
 ) -> tuple[str, ...]:
     pad_layers = {str(layer_name) for layer_name in pad.layers}
-    copper_layers = [
-        layer for layer in layer_lookup.values() if layer.function == LayerFunction.COPPER
-    ]
+    copper_layers = [layer for layer in layer_lookup.values() if layer.has_role(LayerRole.COPPER)]
     mask_layers = [
-        layer for layer in layer_lookup.values() if layer.function == LayerFunction.SOLDER_MASK
+        layer for layer in layer_lookup.values() if layer.has_role(LayerRole.SOLDER_MASK)
     ]
     sides: list[str] = []
     if "*.Cu" in pad_layers:
@@ -834,7 +816,7 @@ def _geometry_layers(board: Pcb) -> dict[str, GeometryLayer]:
         layer.name: GeometryLayer(
             name=layer.name,
             role=layer_role(layer),
-            side=layer.side or ("inner" if layer.function == LayerFunction.COPPER else ""),
+            side=layer.side,
             stack_index=index,
             source=layer,
         )
@@ -849,7 +831,7 @@ def _layer_for_name(name: str, layer_lookup: dict[str, PcbLayer]) -> GeometryLay
     return GeometryLayer(
         name=layer.name,
         role=layer_role(layer),
-        side=layer.side or ("inner" if layer.function == LayerFunction.COPPER else ""),
+        side=layer.side,
         stack_index=layer.number if layer.number is not None else 10_000,
         source=layer,
     )
@@ -1045,7 +1027,7 @@ def _pad_copper_layers(
             layer_names.extend(_all_copper_layer_names(layer_lookup))
             continue
         layer = layer_lookup.get(layer_name)
-        if layer and layer.function == LayerFunction.COPPER:
+        if layer and layer.has_role(LayerRole.COPPER):
             layer_names.append(layer_name)
     unique_layer_names = tuple(dict.fromkeys(layer_names))
     if unique_layer_names:
@@ -1057,7 +1039,7 @@ def _all_copper_layer_names(layer_lookup: dict[str, PcbLayer]) -> tuple[str, ...
     return tuple(
         layer.name
         for layer in sorted(
-            (layer for layer in layer_lookup.values() if layer.function == LayerFunction.COPPER),
+            (layer for layer in layer_lookup.values() if layer.has_role(LayerRole.COPPER)),
             key=_layer_stack_sort_key,
         )
     )
@@ -1089,9 +1071,9 @@ def _polygon_kind_for_layer(layer: GeometryLayer | None, polygon: PcbPolygon) ->
         return GeometryKind.ZONE
     if layer is not None and layer.role == "silkscreen":
         return GeometryKind.SILK_POLYGON
-    if layer is not None and layer.role == "mask":
+    if layer is not None and layer.role == "solder_mask":
         return GeometryKind.MASK
-    if layer is not None and layer.role == "paste":
+    if layer is not None and layer.role == "solder_paste":
         return GeometryKind.PASTE
     if layer is not None and layer.role == "mechanical":
         return GeometryKind.MECHANICAL
@@ -1103,9 +1085,9 @@ def _graphic_line_kind_for_layer(layer: GeometryLayer) -> GeometryKind:
         return GeometryKind.SILK_LINE
     if layer.role == "fabrication":
         return GeometryKind.FAB_LINE
-    if layer.role == "mask":
+    if layer.role == "solder_mask":
         return GeometryKind.MASK
-    if layer.role == "paste":
+    if layer.role == "solder_paste":
         return GeometryKind.PASTE
     return GeometryKind.MECHANICAL
 
@@ -1115,9 +1097,9 @@ def _graphic_arc_kind_for_layer(layer: GeometryLayer) -> GeometryKind:
         return GeometryKind.SILK_ARC
     if layer.role == "fabrication":
         return GeometryKind.FAB_ARC
-    if layer.role == "mask":
+    if layer.role == "solder_mask":
         return GeometryKind.MASK
-    if layer.role == "paste":
+    if layer.role == "solder_paste":
         return GeometryKind.PASTE
     return GeometryKind.MECHANICAL
 

@@ -2,13 +2,13 @@
   "renderMode": "eda",
   "source": {
     "layers": [
-      { "match": { "function": "copper" } },
+      { "match": { "role": "copper" } },
       {
-        "match": { "function": "silkscreen", "side": "active" },
+        "match": { "role": "silkscreen", "side": "active" },
         "objects": ["silk", "board_graphic_text"]
       },
-      { "match": { "function": "mechanical" }, "objects": ["mechanical"] },
-      { "match": { "function": "edge" } }
+      { "match": { "role": "mechanical" }, "objects": ["mechanical"] },
+      { "match": { "role": "edge" } }
     ]
   },
   "tokens": {

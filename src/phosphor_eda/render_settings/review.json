@@ -2,10 +2,10 @@
   "renderMode": "realistic",
   "source": {
     "layers": [
-      { "match": { "function": "copper" } },
-      { "match": { "function": "solder_mask", "side": "active" } },
+      { "match": { "role": "copper" } },
+      { "match": { "role": "solder_mask", "side": "active" } },
       {
-        "match": { "function": "silkscreen", "side": "active" },
+        "match": { "role": "silkscreen", "side": "active" },
         "objects": ["silk", "board_graphic_text"]
       }
     ]

@@ -1,10 +1,11 @@
 import json
 
+from pcb_layer_helpers import make_pcb_layer
+
 from phosphor_eda.pcb import (
-    LayerFunction,
+    LayerRole,
     Pcb,
     PcbFootprint,
-    PcbLayer,
     PcbLine,
     PcbNet,
     PcbPad,
@@ -60,7 +61,7 @@ def test_build_derived_render_plan_realistic_uses_derived_layers() -> None:
                 "side": "front",
                 "source": {
                     "layers": [
-                        {"match": {"function": "copper", "side": "front"}},
+                        {"match": {"role": "copper", "side": "front"}},
                         {"match": {"name": "Edge.Cuts"}},
                     ]
                 },
@@ -100,7 +101,7 @@ def test_build_derived_render_plan_uses_requested_side_over_settings_side() -> N
                 "side": "back",
                 "source": {
                     "layers": [
-                        {"match": {"function": "copper", "side": "front"}},
+                        {"match": {"role": "copper", "side": "front"}},
                         {"match": {"name": "Edge.Cuts"}},
                     ]
                 },
@@ -234,8 +235,8 @@ def _make_plan_board() -> Pcb:
         ],
         outline_arcs=[],
         layers=[
-            PcbLayer("F.Cu", LayerFunction.COPPER, side="front"),
-            PcbLayer("B.Cu", LayerFunction.COPPER, side="back"),
-            PcbLayer("Edge.Cuts", LayerFunction.EDGE),
+            make_pcb_layer("F.Cu", LayerRole.COPPER, side="front"),
+            make_pcb_layer("B.Cu", LayerRole.COPPER, side="back"),
+            make_pcb_layer("Edge.Cuts", LayerRole.EDGE),
         ],
     )

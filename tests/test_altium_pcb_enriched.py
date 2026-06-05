@@ -215,7 +215,8 @@ def test_altium_component_non_silk_fab_graphics_are_preserved(pcb: Pcb) -> None:
         for line in pcb.graphic_lines
     )
     assert any(
-        arc.layer.startswith("Mechanical ") and arc.footprint_ref for arc in pcb.graphic_arcs
+        arc.layer in {"Top 3D Body", "Bottom 3D Body"} and arc.footprint_ref
+        for arc in pcb.graphic_arcs
     )
 
 

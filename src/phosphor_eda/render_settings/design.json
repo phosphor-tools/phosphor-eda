@@ -2,10 +2,10 @@
   "renderMode": "eda",
   "source": {
     "layers": [
-      { "match": { "function": "copper" } },
-      { "match": { "function": "silkscreen" }, "objects": ["silk", "board_graphic_text"] },
-      { "match": { "function": "edge" } },
-      { "match": { "function": "drill" } }
+      { "match": { "role": "copper" } },
+      { "match": { "role": "silkscreen" }, "objects": ["silk", "board_graphic_text"] },
+      { "match": { "role": "edge" } },
+      { "match": { "role": "drill" } }
     ]
   },
   "tokens": {

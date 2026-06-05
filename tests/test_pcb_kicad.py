@@ -11,7 +11,7 @@ from phosphor_eda.kicad.pcb_parser import (
     parse_kicad_pcb_from_sexpr,
     parse_kicad_stackup,
 )
-from phosphor_eda.pcb import LayerFunction, Pcb
+from phosphor_eda.pcb import LayerRole, Pcb
 from phosphor_eda.project import Stackup
 
 FIXTURE = Path(__file__).parent / "fixtures" / "swd_switch.kicad_pcb"
@@ -35,7 +35,12 @@ def test_layer_definitions_populated(board: Pcb) -> None:
 def test_copper_layer_function(board: Pcb) -> None:
     fcu = board.layer_for("F.Cu")
     assert fcu is not None
-    assert fcu.function == LayerFunction.COPPER
+    assert set(fcu.roles) >= {
+        LayerRole.COPPER,
+        LayerRole.FRONT,
+        LayerRole.OUTER,
+        LayerRole.SIGNAL,
+    }
     assert fcu.side == "front"
     assert fcu.number == 0
 
@@ -43,41 +48,67 @@ def test_copper_layer_function(board: Pcb) -> None:
 def test_back_copper_layer(board: Pcb) -> None:
     bcu = board.layer_for("B.Cu")
     assert bcu is not None
-    assert bcu.function == LayerFunction.COPPER
+    assert set(bcu.roles) >= {
+        LayerRole.COPPER,
+        LayerRole.BACK,
+        LayerRole.OUTER,
+        LayerRole.SIGNAL,
+    }
     assert bcu.side == "back"
 
 
 def test_inner_copper_layer(board: Pcb) -> None:
     in1 = board.layer_for("In1.Cu")
     assert in1 is not None
-    assert in1.function == LayerFunction.COPPER
-    assert in1.side == ""  # inner copper has no side
+    assert set(in1.roles) >= {LayerRole.COPPER, LayerRole.INNER, LayerRole.SIGNAL}
+    assert in1.side == "inner"
 
 
 def test_silk_layer_function(board: Pcb) -> None:
-    layers = board.layers_by_function(LayerFunction.SILKSCREEN)
+    layers = board.layers_by_role(LayerRole.SILKSCREEN)
     assert len(layers) >= 2
     names = {lyr.name for lyr in layers}
     assert "F.SilkS" in names
 
 
 def test_fab_layer_function(board: Pcb) -> None:
-    layers = board.layers_by_function(LayerFunction.FAB)
+    layers = board.layers_by_role(LayerRole.FABRICATION)
     names = {lyr.name for lyr in layers}
     assert "F.Fab" in names
     assert "B.Fab" in names
 
 
 def test_edge_layer(board: Pcb) -> None:
-    layers = board.layers_by_function(LayerFunction.EDGE)
+    layers = board.layers_by_role(LayerRole.EDGE)
     assert len(layers) == 1
     assert layers[0].name == "Edge.Cuts"
 
 
-def test_layers_by_function_filters(board: Pcb) -> None:
-    copper = board.layers_by_function(LayerFunction.COPPER)
-    assert all(lyr.function == LayerFunction.COPPER for lyr in copper)
+def test_layers_by_role_filters(board: Pcb) -> None:
+    copper = board.layers_by_role(LayerRole.COPPER)
+    assert all(lyr.has_role(LayerRole.COPPER) for lyr in copper)
     assert len(copper) >= 2  # At least F.Cu and B.Cu
+
+
+def test_fabrication_and_user_layer_roles_are_normalized(board: Pcb) -> None:
+    fcrtyd = board.layer_for("F.CrtYd")
+    assert fcrtyd is not None
+    assert set(fcrtyd.roles) >= {
+        LayerRole.AUXILIARY,
+        LayerRole.FABRICATION,
+        LayerRole.COURTYARD,
+        LayerRole.FRONT,
+    }
+    assert fcrtyd.native_type == "user"
+    assert fcrtyd.native_user_name == "F.Courtyard"
+
+    ffab = board.layer_for("F.Fab")
+    assert ffab is not None
+    assert set(ffab.roles) >= {LayerRole.AUXILIARY, LayerRole.FABRICATION, LayerRole.FRONT}
+
+    drawings = board.layer_for("Dwgs.User")
+    assert drawings is not None
+    assert set(drawings.roles) >= {LayerRole.AUXILIARY, LayerRole.DRAWING}
 
 
 def test_layer_for_missing(board: Pcb) -> None:

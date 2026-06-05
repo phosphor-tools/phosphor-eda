@@ -551,7 +551,7 @@ def _primitive_layer_primitives(
     with profiler.span(
         "artwork.convert_primitives",
         layer=key.source_layer_name,
-        function=key.function,
+        role=key.function,
         side=key.side,
         items=len(group),
     ):
@@ -559,7 +559,7 @@ def _primitive_layer_primitives(
     profiler.metric(
         "artwork.converted_primitives",
         layer=key.source_layer_name,
-        function=key.function,
+        role=key.function,
         side=key.side,
         sourceItems=len(group),
         primitives=len(primitives),

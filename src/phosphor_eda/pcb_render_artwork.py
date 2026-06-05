@@ -9,6 +9,7 @@ from shapely import GeometryCollection, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from phosphor_eda.pcb import (
+    LayerRole,
     Pcb,
     PcbArc,
     PcbLine,
@@ -59,20 +60,6 @@ class DerivedLayer:
     mask: LayerMask | None = None
 
 
-_FUNCTION_ROLE_ALIASES = {
-    "copper": "copper",
-    "silkscreen": "silkscreen",
-    "solder_mask": "mask",
-    "solder_paste": "paste",
-    "fab": "fabrication",
-    "courtyard": "courtyard",
-    "edge": "edge",
-    "drill": "drill",
-    "keepout": "keepout",
-    "mechanical": "mechanical",
-    "other": "unknown",
-}
-
 _OBJECT_KIND_ALIASES = {
     "board_material": frozenset({GeometryKind.BOARD_MATERIAL}),
     "board_outline": frozenset({GeometryKind.BOARD_OUTLINE}),
@@ -105,7 +92,7 @@ _OBJECT_KIND_ALIASES = {
     "silk_arcs": frozenset({GeometryKind.SILK_ARC}),
     "silk_polygon": frozenset({GeometryKind.SILK_POLYGON}),
     "silk_polygons": frozenset({GeometryKind.SILK_POLYGON}),
-    "fab": frozenset(
+    "fabrication": frozenset(
         {
             GeometryKind.FAB_LINE,
             GeometryKind.FAB_ARC,
@@ -205,7 +192,7 @@ def rule_selects_layer(
         return False
     if rule.match.name and layer.name != rule.match.name:
         return False
-    if rule.match.function and layer.role != source_function_layer_role(rule.match.function):
+    if rule.match.role and not _layer_has_role(layer, rule.match.role):
         return False
     match_side = active_side if rule.match.side == "active" else rule.match.side
     if match_side and layer.side != match_side:
@@ -213,9 +200,13 @@ def rule_selects_layer(
     return _matches_object_filter(object_kind, rule.objects)
 
 
-def source_function_layer_role(function: str) -> str:
-    """Map render-settings source function names to geometry layer roles."""
-    return _FUNCTION_ROLE_ALIASES.get(function, function)
+def _layer_has_role(layer: GeometryLayer, role: str) -> bool:
+    if layer.source is not None:
+        return layer.source.has_role(role)
+    try:
+        return layer.role == LayerRole(role).value
+    except ValueError:
+        return False
 
 
 def via_layers(item: RenderableGeometry) -> frozenset[str]:
@@ -280,7 +271,7 @@ def solder_mask_opening_primitives(
     mask_layer_name = side_mask_layer_name(store, side)
     primitives: list[SvgPrimitive] = []
     for item in store.items:
-        if item.layer.role == "mask" and item.layer.side == side:
+        if item.layer.role == "solder_mask" and item.layer.side == side:
             primitive = geometry_to_svg_primitive(item, target_layer_name=item.layer.name)
             if primitive is not None:
                 primitives.append(primitive)
@@ -300,7 +291,7 @@ def solder_mask_opening_primitives(
 def side_mask_layer_name(store: PcbGeometryStore, side: str) -> str:
     """Return the native solder-mask layer name for a side."""
     for item in store.items:
-        if item.layer.role == "mask" and item.layer.side == side:
+        if item.layer.role == "solder_mask" and item.layer.side == side:
             return item.layer.name
     return "B.Mask" if side == "back" else "F.Mask"
 
@@ -319,7 +310,7 @@ def _matches_rule(
 
 
 def _rule_selects_keepouts(rule: LayerSelectionRule) -> bool:
-    return rule.match.function == "keepout" or (
+    return rule.match.role == "keepout" or (
         bool(rule.objects) and _matches_object_filter(GeometryKind.KEEPOUT, rule.objects)
     )
 

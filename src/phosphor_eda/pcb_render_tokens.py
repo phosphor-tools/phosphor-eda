@@ -66,6 +66,23 @@ _EDA_SILKSCREEN_BACK_COLOR = "#ffff00"
 _EDA_EDGE_COLOR = "#202020"
 _EDA_DRILL_COLOR = "#202020"
 _DIMMED_DEFAULT_OPACITY = 0.25
+_EDA_STYLE_FALLBACK_FUNCTIONS = {
+    "assembly": ("fabrication", "mechanical"),
+    "courtyard": ("fabrication", "mechanical"),
+    "designator": ("fabrication", "mechanical"),
+    "value": ("fabrication", "mechanical"),
+    "component_outline": ("fabrication", "mechanical"),
+    "component_center": ("fabrication", "mechanical"),
+    "dimension": ("fabrication", "mechanical"),
+    "board_shape": ("edge", "mechanical"),
+    "v_cut": ("mechanical",),
+    "route_tool_path": ("mechanical",),
+    "sheet": ("mechanical",),
+    "coating": ("mechanical",),
+    "glue_points": ("mechanical",),
+    "gold_plating": ("mechanical",),
+    "three_d_body": ("mechanical",),
+}
 
 
 def eda_default_copper_color(source_layer_name: str, copper_order: int | None) -> str:
@@ -185,6 +202,16 @@ def _candidate_tokens(role: VisualRole, prop: str) -> tuple[str, ...]:
         candidates.append(f"{role.namespace}.{role.function}.inner.{role.inner_index}.{prop}")
     if role.side:
         candidates.append(f"{role.namespace}.{role.function}.{role.side}.default.{prop}")
+
+    fallback_functions = _EDA_STYLE_FALLBACK_FUNCTIONS.get(role.function, ())
+    if role.namespace == _EDA_NAMESPACE:
+        for fallback_function in fallback_functions:
+            if role.side:
+                candidates.append(f"{role.namespace}.{fallback_function}.{role.side}.{prop}")
+                candidates.append(
+                    f"{role.namespace}.{fallback_function}.{role.side}.default.{prop}"
+                )
+            candidates.append(f"{role.namespace}.{fallback_function}.{prop}")
 
     candidates.append(f"{role.namespace}.layer.default.{prop}")
     return tuple(dict.fromkeys(candidates))

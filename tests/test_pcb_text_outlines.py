@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from pcb_layer_helpers import make_pcb_layer
+
 from phosphor_eda.pcb import (
-    LayerFunction,
+    LayerRole,
     Pcb,
     PcbFootprint,
     PcbGraphicText,
-    PcbLayer,
     PcbLine,
     PcbText,
 )
@@ -54,7 +55,7 @@ def test_footprint_user_text_on_silkscreen_becomes_silkscreen_artwork() -> None:
 
     selected = select_source_artwork(
         store,
-        (LayerSelectionRule(match=LayerMatch(function="silkscreen")),),
+        (LayerSelectionRule(match=LayerMatch(role="silkscreen")),),
     )
     primitives = tuple(
         primitive
@@ -127,10 +128,10 @@ def _empty_board() -> Pcb:
         ],
         outline_arcs=[],
         layers=[
-            PcbLayer("F.Cu", LayerFunction.COPPER, "front", 0),
-            PcbLayer("B.Cu", LayerFunction.COPPER, "back", 1),
-            PcbLayer("F.SilkS", LayerFunction.SILKSCREEN, "front"),
-            PcbLayer("B.SilkS", LayerFunction.SILKSCREEN, "back"),
-            PcbLayer("Edge.Cuts", LayerFunction.EDGE),
+            make_pcb_layer("F.Cu", LayerRole.COPPER, "front", 0),
+            make_pcb_layer("B.Cu", LayerRole.COPPER, "back", 1),
+            make_pcb_layer("F.SilkS", LayerRole.SILKSCREEN, "front"),
+            make_pcb_layer("B.SilkS", LayerRole.SILKSCREEN, "back"),
+            make_pcb_layer("Edge.Cuts", LayerRole.EDGE),
         ],
     )

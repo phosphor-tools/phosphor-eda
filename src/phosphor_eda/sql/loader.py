@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import duckdb
 from shapely import LineString, Point
 
-from phosphor_eda.pcb import PcbPolygon
+from phosphor_eda.pcb import LayerRole, PcbLayer, PcbPolygon, normalize_roles
 from phosphor_eda.sql.geometry import (
     arc_center_from_three_points,
     arc_sweep_angle,
@@ -392,19 +392,18 @@ def _load_layers(con: duckdb.DuckDBPyConnection, pcb: Pcb, stackup: Stackup | No
     # Insert stackup layers first (these have physical properties)
     if stackup:
         for i, sl in enumerate(stackup.layers, start=1):
-            # Find matching PCB layer for function/side info
+            # Find matching PCB layer for normalized role/side info
             pcb_layer = pcb.layer_for(sl.name)
-            func = pcb_layer.function.value if pcb_layer else sl.layer_type
-            side = pcb_layer.side if pcb_layer else sl.side
-            number = pcb_layer.number if pcb_layer else None
+            layer_info = pcb_layer or _stackup_layer_as_pcb_layer(sl.layer_type, sl.side)
             _ = con.execute(
-                "INSERT INTO layers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO layers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     i,
                     sl.name,
-                    func,
-                    side,
-                    number,
+                    layer_info.primary_role.value,
+                    list(layer_info.role_values),
+                    layer_info.side,
+                    pcb_layer.number if pcb_layer else None,
                     sl.thickness_mm if sl.thickness_mm else None,
                     sl.material or None,
                     sl.epsilon_r if sl.epsilon_r else None,
@@ -419,11 +418,12 @@ def _load_layers(con: duckdb.DuckDBPyConnection, pcb: Pcb, stackup: Stackup | No
         if pl.name in stackup_map:
             continue  # Already inserted from stackup
         _ = con.execute(
-            "INSERT INTO layers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO layers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 None,
                 pl.name,
-                pl.function.value,
+                pl.primary_role.value,
+                list(pl.role_values),
                 pl.side,
                 pl.number,
                 None,
@@ -434,6 +434,25 @@ def _load_layers(con: duckdb.DuckDBPyConnection, pcb: Pcb, stackup: Stackup | No
                 None,
             ],
         )
+
+
+def _stackup_layer_as_pcb_layer(layer_type: str, side: str) -> PcbLayer:
+    roles: list[LayerRole] = []
+    if layer_type == "copper":
+        roles.append(LayerRole.COPPER)
+    elif layer_type in {"core", "prepreg", "dielectric"}:
+        roles.append(LayerRole.DIELECTRIC)
+    elif layer_type == "solder_mask":
+        roles.append(LayerRole.SOLDER_MASK)
+    else:
+        roles.append(LayerRole.UNKNOWN)
+    if side == "front":
+        roles.append(LayerRole.FRONT)
+    elif side == "back":
+        roles.append(LayerRole.BACK)
+    elif side == "inner":
+        roles.append(LayerRole.INNER)
+    return PcbLayer(name="", roles=normalize_roles(*roles))
 
 
 def _load_board(con: duckdb.DuckDBPyConnection, pcb: Pcb, stackup: Stackup | None) -> None:

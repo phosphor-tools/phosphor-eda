@@ -15,7 +15,7 @@ import sexpdata
 
 from phosphor_eda.kicad import sexp
 from phosphor_eda.pcb import (
-    LayerFunction,
+    LayerRole,
     Pcb,
     PcbArc,
     PcbCircle,
@@ -100,36 +100,70 @@ def _layers(item: SExpNode) -> list[str]:
 # Layer definitions
 # ---------------------------------------------------------------------------
 
-# KiCad name-pattern → function mapping.
-_KICAD_FUNCTION_RULES: list[tuple[str, LayerFunction]] = [
-    (".Cu", LayerFunction.COPPER),
-    ("SilkS", LayerFunction.SILKSCREEN),
-    ("Silkscreen", LayerFunction.SILKSCREEN),
-    ("Mask", LayerFunction.SOLDER_MASK),
-    ("Paste", LayerFunction.SOLDER_PASTE),
-    ("Fab", LayerFunction.FAB),
-    ("CrtYd", LayerFunction.COURTYARD),
-    ("Courtyard", LayerFunction.COURTYARD),
-]
+
+def _kicad_type_roles(native_type: str) -> tuple[LayerRole, ...]:
+    """Return roles carried by KiCad's board-layer type field."""
+    normalized = native_type.strip().lower()
+    if normalized == "signal":
+        return (LayerRole.COPPER, LayerRole.SIGNAL)
+    if normalized == "power":
+        return (LayerRole.COPPER, LayerRole.POWER)
+    if normalized == "mixed":
+        return (LayerRole.COPPER, LayerRole.MIXED)
+    if normalized == "jumper":
+        return (LayerRole.COPPER, LayerRole.JUMPER)
+    if normalized == "front":
+        return (LayerRole.FRONT,)
+    if normalized == "back":
+        return (LayerRole.BACK,)
+    if normalized in {"auxiliary", "user"}:
+        return (LayerRole.AUXILIARY,)
+    return ()
 
 
-def _infer_kicad_function(name: str) -> LayerFunction:
-    """Infer layer function from a KiCad layer name."""
+def _kicad_name_roles(name: str) -> tuple[LayerRole, ...]:
+    """Return roles implied by KiCad canonical layer names."""
+    if name == "F.Cu":
+        return (LayerRole.COPPER, LayerRole.FRONT, LayerRole.OUTER)
+    if name == "B.Cu":
+        return (LayerRole.COPPER, LayerRole.BACK, LayerRole.OUTER)
+    if name.startswith("In") and name.endswith(".Cu"):
+        return (LayerRole.COPPER, LayerRole.INNER)
+    if name == "F.Mask":
+        return (LayerRole.SOLDER_MASK, LayerRole.FRONT)
+    if name == "B.Mask":
+        return (LayerRole.SOLDER_MASK, LayerRole.BACK)
+    if name == "F.Paste":
+        return (LayerRole.SOLDER_PASTE, LayerRole.FRONT)
+    if name == "B.Paste":
+        return (LayerRole.SOLDER_PASTE, LayerRole.BACK)
+    if name == "F.SilkS":
+        return (LayerRole.SILKSCREEN, LayerRole.FRONT)
+    if name == "B.SilkS":
+        return (LayerRole.SILKSCREEN, LayerRole.BACK)
+    if name == "F.Adhes":
+        return (LayerRole.ADHESIVE, LayerRole.FRONT)
+    if name == "B.Adhes":
+        return (LayerRole.ADHESIVE, LayerRole.BACK)
+    if name == "F.Fab":
+        return (LayerRole.FABRICATION, LayerRole.FRONT)
+    if name == "B.Fab":
+        return (LayerRole.FABRICATION, LayerRole.BACK)
+    if name == "F.CrtYd":
+        return (LayerRole.FABRICATION, LayerRole.COURTYARD, LayerRole.FRONT)
+    if name == "B.CrtYd":
+        return (LayerRole.FABRICATION, LayerRole.COURTYARD, LayerRole.BACK)
     if name == "Edge.Cuts":
-        return LayerFunction.EDGE
-    for pattern, fn in _KICAD_FUNCTION_RULES:
-        if pattern in name:
-            return fn
-    return LayerFunction.OTHER
-
-
-def _infer_kicad_side(name: str) -> str:
-    """Infer front/back side from a KiCad layer name prefix."""
-    if name.startswith("F."):
-        return "front"
-    if name.startswith("B."):
-        return "back"
-    return ""
+        return (LayerRole.EDGE,)
+    if name == "Margin":
+        return (LayerRole.MARGIN,)
+    if name == "Dwgs.User":
+        return (LayerRole.AUXILIARY, LayerRole.DRAWING)
+    if name == "Cmts.User":
+        return (LayerRole.AUXILIARY, LayerRole.COMMENT)
+    if name in {"Eco1.User", "Eco2.User"} or name.startswith("User."):
+        return (LayerRole.AUXILIARY, LayerRole.USER)
+    return ()
 
 
 def _parse_layer_defs(sexpr: SExpNode) -> list[PcbLayer]:
@@ -145,9 +179,18 @@ def _parse_layer_defs(sexpr: SExpNode) -> list[PcbLayer]:
         num = int(raw_num) if isinstance(raw_num, (int, float)) else 0
         raw_name = item[1]
         name = raw_name.value() if isinstance(raw_name, sexpdata.Symbol) else str(raw_name)
-        fn = _infer_kicad_function(name)
-        side = _infer_kicad_side(name)
-        result.append(PcbLayer(name=name, function=fn, side=side, number=num))
+        raw_type = item[2]
+        native_type = raw_type.value() if isinstance(raw_type, sexpdata.Symbol) else str(raw_type)
+        native_user_name = str(item[3]) if len(item) > 3 else ""
+        result.append(
+            PcbLayer(
+                name=name,
+                roles=(*_kicad_type_roles(native_type), *_kicad_name_roles(name)),
+                number=num,
+                native_type=native_type,
+                native_user_name=native_user_name,
+            )
+        )
     return result
 
 

@@ -6,12 +6,13 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from pcb_layer_helpers import make_pcb_layer
 from shapely import Point, Polygon
 
 import phosphor_eda.pcb_render_modes as render_modes
 from phosphor_eda.kicad.pcb_parser import parse_kicad_pcb
 from phosphor_eda.pcb import (
-    LayerFunction,
+    LayerRole,
     Pcb,
     PcbArc,
     PcbFootprint,
@@ -236,7 +237,7 @@ def test_eda_layer_order_ignores_group_size_when_stack_index_matches() -> None:
     layers = build_eda_layers(
         store,
         _settings(
-            rules=(LayerSelectionRule(match=LayerMatch(function="mechanical")),),
+            rules=(LayerSelectionRule(match=LayerMatch(role="mechanical")),),
             tokens={
                 "eda.layer[A.Mechanical].fill": "#55ccff",
                 "eda.layer[B.Mechanical].fill": "#ff55cc",
@@ -254,12 +255,12 @@ def test_eda_layer_order_ignores_group_size_when_stack_index_matches() -> None:
 def test_eda_front_view_renders_source_layers_in_reverse_file_order() -> None:
     board = _board_with_ordered_layers(
         layers=(
-            PcbLayer("F.Cu", LayerFunction.COPPER, "front", number=0),
-            PcbLayer("In1.Cu", LayerFunction.COPPER, "", number=1),
-            PcbLayer("In2.Cu", LayerFunction.COPPER, "", number=2),
-            PcbLayer("B.Cu", LayerFunction.COPPER, "back", number=31),
-            PcbLayer("B.SilkS", LayerFunction.SILKSCREEN, "back", number=32),
-            PcbLayer("F.SilkS", LayerFunction.SILKSCREEN, "front", number=33),
+            make_pcb_layer("F.Cu", LayerRole.COPPER, "front", number=0),
+            make_pcb_layer("In1.Cu", LayerRole.COPPER, "", number=1),
+            make_pcb_layer("In2.Cu", LayerRole.COPPER, "", number=2),
+            make_pcb_layer("B.Cu", LayerRole.COPPER, "back", number=31),
+            make_pcb_layer("B.SilkS", LayerRole.SILKSCREEN, "back", number=32),
+            make_pcb_layer("F.SilkS", LayerRole.SILKSCREEN, "front", number=33),
         )
     )
     store = build_geometry_store(board, side="front")
@@ -268,8 +269,8 @@ def test_eda_front_view_renders_source_layers_in_reverse_file_order() -> None:
         store,
         _settings(
             rules=(
-                LayerSelectionRule(match=LayerMatch(function="copper")),
-                LayerSelectionRule(match=LayerMatch(function="silkscreen")),
+                LayerSelectionRule(match=LayerMatch(role="copper")),
+                LayerSelectionRule(match=LayerMatch(role="silkscreen")),
             ),
             tokens={},
         ),
@@ -289,12 +290,12 @@ def test_eda_front_view_renders_source_layers_in_reverse_file_order() -> None:
 def test_eda_back_view_uses_source_layer_file_order() -> None:
     board = _board_with_ordered_layers(
         layers=(
-            PcbLayer("F.Cu", LayerFunction.COPPER, "front", number=0),
-            PcbLayer("In1.Cu", LayerFunction.COPPER, "", number=1),
-            PcbLayer("In2.Cu", LayerFunction.COPPER, "", number=2),
-            PcbLayer("B.Cu", LayerFunction.COPPER, "back", number=31),
-            PcbLayer("B.SilkS", LayerFunction.SILKSCREEN, "back", number=32),
-            PcbLayer("F.SilkS", LayerFunction.SILKSCREEN, "front", number=33),
+            make_pcb_layer("F.Cu", LayerRole.COPPER, "front", number=0),
+            make_pcb_layer("In1.Cu", LayerRole.COPPER, "", number=1),
+            make_pcb_layer("In2.Cu", LayerRole.COPPER, "", number=2),
+            make_pcb_layer("B.Cu", LayerRole.COPPER, "back", number=31),
+            make_pcb_layer("B.SilkS", LayerRole.SILKSCREEN, "back", number=32),
+            make_pcb_layer("F.SilkS", LayerRole.SILKSCREEN, "front", number=33),
         )
     )
     store = build_geometry_store(board, side="back")
@@ -303,8 +304,8 @@ def test_eda_back_view_uses_source_layer_file_order() -> None:
         store,
         _settings(
             rules=(
-                LayerSelectionRule(match=LayerMatch(function="copper")),
-                LayerSelectionRule(match=LayerMatch(function="silkscreen")),
+                LayerSelectionRule(match=LayerMatch(role="copper")),
+                LayerSelectionRule(match=LayerMatch(role="silkscreen")),
             ),
             tokens={},
             side="back",
@@ -325,9 +326,9 @@ def test_eda_back_view_uses_source_layer_file_order() -> None:
 def test_eda_edge_and_drill_layers_remain_top_overlays_in_back_view() -> None:
     board = _board_with_ordered_layers(
         layers=(
-            PcbLayer("F.Cu", LayerFunction.COPPER, "front", number=0),
-            PcbLayer("Edge.Cuts", LayerFunction.EDGE, "", number=44),
-            PcbLayer("B.SilkS", LayerFunction.SILKSCREEN, "back", number=45),
+            make_pcb_layer("F.Cu", LayerRole.COPPER, "front", number=0),
+            make_pcb_layer("Edge.Cuts", LayerRole.EDGE, "", number=44),
+            make_pcb_layer("B.SilkS", LayerRole.SILKSCREEN, "back", number=45),
         ),
         include_drill=True,
     )
@@ -337,10 +338,10 @@ def test_eda_edge_and_drill_layers_remain_top_overlays_in_back_view() -> None:
         store,
         _settings(
             rules=(
-                LayerSelectionRule(match=LayerMatch(function="copper")),
-                LayerSelectionRule(match=LayerMatch(function="edge")),
-                LayerSelectionRule(match=LayerMatch(function="silkscreen")),
-                LayerSelectionRule(match=LayerMatch(function="drill")),
+                LayerSelectionRule(match=LayerMatch(role="copper")),
+                LayerSelectionRule(match=LayerMatch(role="edge")),
+                LayerSelectionRule(match=LayerMatch(role="silkscreen")),
+                LayerSelectionRule(match=LayerMatch(role="drill")),
             ),
             tokens={},
             side="back",
@@ -571,7 +572,7 @@ def test_realistic_covered_copper_skips_unconvertible_source_without_artwork_fal
         store,
         _settings(
             side="front",
-            rules=(LayerSelectionRule(match=LayerMatch(function="copper")),),
+            rules=(LayerSelectionRule(match=LayerMatch(role="copper")),),
             tokens=_realistic_tokens(),
         ),
         warn=warnings.append,
@@ -735,7 +736,7 @@ def test_realistic_front_layers_project_physical_stack_in_order() -> None:
                 "mask-copper-opening",
                 GeometryKind.MASK,
                 "F.Mask",
-                "mask",
+                "solder_mask",
                 "front",
                 geometry=mask_opening,
             ),
@@ -743,7 +744,7 @@ def test_realistic_front_layers_project_physical_stack_in_order() -> None:
                 "mask-substrate-opening",
                 GeometryKind.MASK,
                 "F.Mask",
-                "mask",
+                "solder_mask",
                 "front",
                 geometry=bare_substrate_opening,
             ),
@@ -779,10 +780,10 @@ def test_realistic_front_layers_project_physical_stack_in_order() -> None:
         _settings(
             side="front",
             rules=(
-                LayerSelectionRule(match=LayerMatch(function="solder_mask", side="front")),
-                LayerSelectionRule(match=LayerMatch(function="copper", side="front")),
-                LayerSelectionRule(match=LayerMatch(function="silkscreen", side="front")),
-                LayerSelectionRule(match=LayerMatch(function="edge")),
+                LayerSelectionRule(match=LayerMatch(role="solder_mask", side="front")),
+                LayerSelectionRule(match=LayerMatch(role="copper", side="front")),
+                LayerSelectionRule(match=LayerMatch(role="silkscreen", side="front")),
+                LayerSelectionRule(match=LayerMatch(role="edge")),
             ),
             tokens=_realistic_tokens(),
         ),
@@ -908,7 +909,7 @@ def test_realistic_solder_mask_openings_include_visible_side_pads() -> None:
         store,
         _settings(
             side="front",
-            rules=(LayerSelectionRule(match=LayerMatch(function="copper")),),
+            rules=(LayerSelectionRule(match=LayerMatch(role="copper")),),
             tokens=_realistic_tokens(),
         ),
         warn=lambda _message: None,
@@ -942,8 +943,8 @@ def test_realistic_solder_mask_openings_include_board_level_mask_graphics() -> N
         ],
         outline_arcs=[],
         layers=[
-            PcbLayer("F.Mask", LayerFunction.SOLDER_MASK, "front"),
-            PcbLayer("Edge.Cuts", LayerFunction.EDGE),
+            make_pcb_layer("F.Mask", LayerRole.SOLDER_MASK, "front"),
+            make_pcb_layer("Edge.Cuts", LayerRole.EDGE),
         ],
         graphic_lines=[PcbLine(1.0, 1.0, 3.0, 1.0, "F.Mask", 0.2)],
     )
@@ -986,8 +987,8 @@ def test_realistic_solder_mask_openings_do_not_fill_closed_board_level_mask_stro
         ],
         outline_arcs=[],
         layers=[
-            PcbLayer("F.Mask", LayerFunction.SOLDER_MASK, "front"),
-            PcbLayer("Edge.Cuts", LayerFunction.EDGE),
+            make_pcb_layer("F.Mask", LayerRole.SOLDER_MASK, "front"),
+            make_pcb_layer("Edge.Cuts", LayerRole.EDGE),
         ],
         graphic_lines=[
             PcbLine(1.0, 1.0, 5.0, 1.0, "F.Mask", 0.1),
@@ -1030,8 +1031,8 @@ def test_realistic_solder_mask_arc_opening_preserves_arc_path_command() -> None:
         ],
         outline_arcs=[],
         layers=[
-            PcbLayer("F.Mask", LayerFunction.SOLDER_MASK, "front"),
-            PcbLayer("Edge.Cuts", LayerFunction.EDGE),
+            make_pcb_layer("F.Mask", LayerRole.SOLDER_MASK, "front"),
+            make_pcb_layer("Edge.Cuts", LayerRole.EDGE),
         ],
         graphic_arcs=[PcbArc(1.0, 3.0, 3.0, 1.0, 5.0, 3.0, "F.Mask", 0.2)],
     )
@@ -1089,11 +1090,11 @@ def test_realistic_solder_mask_openings_expose_through_hole_pad_copper_on_back()
         ],
         outline_arcs=[],
         layers=[
-            PcbLayer("F.Cu", LayerFunction.COPPER, "front"),
-            PcbLayer("B.Cu", LayerFunction.COPPER, "back"),
-            PcbLayer("F.Mask", LayerFunction.SOLDER_MASK, "front"),
-            PcbLayer("B.Mask", LayerFunction.SOLDER_MASK, "back"),
-            PcbLayer("Edge.Cuts", LayerFunction.EDGE),
+            make_pcb_layer("F.Cu", LayerRole.COPPER, "front"),
+            make_pcb_layer("B.Cu", LayerRole.COPPER, "back"),
+            make_pcb_layer("F.Mask", LayerRole.SOLDER_MASK, "front"),
+            make_pcb_layer("B.Mask", LayerRole.SOLDER_MASK, "back"),
+            make_pcb_layer("Edge.Cuts", LayerRole.EDGE),
         ],
     )
     store = build_geometry_store(board, side="back")
@@ -1102,7 +1103,7 @@ def test_realistic_solder_mask_openings_expose_through_hole_pad_copper_on_back()
         store,
         _settings(
             side="back",
-            rules=(LayerSelectionRule(match=LayerMatch(function="copper")),),
+            rules=(LayerSelectionRule(match=LayerMatch(role="copper")),),
             tokens=_realistic_tokens(),
         ),
         warn=lambda _message: None,
@@ -1161,9 +1162,9 @@ def test_realistic_solder_mask_opening_for_drilled_pad_is_not_smaller_than_drill
         ],
         outline_arcs=[],
         layers=[
-            PcbLayer("F.Cu", LayerFunction.COPPER, "front"),
-            PcbLayer("F.Mask", LayerFunction.SOLDER_MASK, "front"),
-            PcbLayer("Edge.Cuts", LayerFunction.EDGE),
+            make_pcb_layer("F.Cu", LayerRole.COPPER, "front"),
+            make_pcb_layer("F.Mask", LayerRole.SOLDER_MASK, "front"),
+            make_pcb_layer("Edge.Cuts", LayerRole.EDGE),
         ],
     )
     store = build_geometry_store(board, side="front")
@@ -1172,7 +1173,7 @@ def test_realistic_solder_mask_opening_for_drilled_pad_is_not_smaller_than_drill
         store,
         _settings(
             side="front",
-            rules=(LayerSelectionRule(match=LayerMatch(function="copper")),),
+            rules=(LayerSelectionRule(match=LayerMatch(role="copper")),),
             tokens=_realistic_tokens(),
         ),
         warn=lambda _message: None,
@@ -1195,7 +1196,7 @@ def test_realistic_silkscreen_uses_source_mask_openings_even_when_mask_is_not_vi
                 "front-mask-opening",
                 GeometryKind.MASK,
                 "F.Mask",
-                "mask",
+                "solder_mask",
                 "front",
                 geometry=Polygon([(0.25, 0.25), (1.75, 0.25), (1.75, 1.75), (0.25, 1.75)]),
             ),
@@ -1228,7 +1229,7 @@ def test_realistic_silkscreen_uses_source_mask_openings_even_when_mask_is_not_vi
         store,
         _settings(
             side="front",
-            rules=(LayerSelectionRule(match=LayerMatch(function="silkscreen", side="front")),),
+            rules=(LayerSelectionRule(match=LayerMatch(role="silkscreen", side="front")),),
             tokens=_realistic_tokens(),
         ),
         warn=lambda _message: None,
@@ -1255,7 +1256,7 @@ def test_eda_silkscreen_uses_source_mask_openings_even_when_mask_is_not_visible(
                 "front-mask-opening",
                 GeometryKind.MASK,
                 "F.Mask",
-                "mask",
+                "solder_mask",
                 "front",
                 geometry=Polygon([(0.25, 0.25), (1.75, 0.25), (1.75, 1.75), (0.25, 1.75)]),
             ),
@@ -1287,7 +1288,7 @@ def test_eda_silkscreen_uses_source_mask_openings_even_when_mask_is_not_visible(
     layers = build_eda_layers(
         store,
         _settings(
-            rules=(LayerSelectionRule(match=LayerMatch(function="silkscreen", side="front")),),
+            rules=(LayerSelectionRule(match=LayerMatch(role="silkscreen", side="front")),),
             tokens={
                 "eda.silkscreen.front.fill": "#ffffff",
                 "eda.silkscreen.front.opacity": 1.0,
@@ -1328,7 +1329,7 @@ def test_realistic_solder_mask_openings_do_not_include_vias_without_tenting_meta
         store,
         _settings(
             side="front",
-            rules=(LayerSelectionRule(match=LayerMatch(function="copper")),),
+            rules=(LayerSelectionRule(match=LayerMatch(role="copper")),),
             tokens=_realistic_tokens(),
         ),
         warn=lambda _message: None,
@@ -1369,7 +1370,7 @@ def test_realistic_projection_uses_visible_side_only() -> None:
         store,
         _settings(
             side="front",
-            rules=(LayerSelectionRule(match=LayerMatch(function="copper")),),
+            rules=(LayerSelectionRule(match=LayerMatch(role="copper")),),
             tokens=_realistic_tokens(),
         ),
         warn=lambda _message: None,
@@ -1435,7 +1436,7 @@ def test_highlight_projection_creates_one_group_per_request_with_layers() -> Non
     groups = build_highlight_layers(
         store,
         _settings(
-            rules=(LayerSelectionRule(match=LayerMatch(function="copper")),),
+            rules=(LayerSelectionRule(match=LayerMatch(role="copper")),),
             tokens={
                 "highlight.copper.front.fill": "#ff8a00",
                 "highlight.copper.back.fill": "#0095ff",
@@ -1513,7 +1514,7 @@ def test_highlight_projection_supports_pad_targets_stroke_tokens_and_drill_clipp
     groups = build_highlight_layers(
         store,
         _settings(
-            rules=(LayerSelectionRule(match=LayerMatch(function="copper")),),
+            rules=(LayerSelectionRule(match=LayerMatch(role="copper")),),
             tokens={
                 "highlight.copper.front.fill": "#ff8a00",
                 "highlight.copper.front.opacity": 0.85,
@@ -1770,7 +1771,7 @@ def test_realistic_layer_contents_do_not_use_artwork_resolution_or_boolean_geome
         store,
         _settings(
             side="front",
-            rules=(LayerSelectionRule(match=LayerMatch(function="copper", side="front")),),
+            rules=(LayerSelectionRule(match=LayerMatch(role="copper", side="front")),),
             tokens=_realistic_tokens(),
         ),
         warn=lambda _message: None,
@@ -1951,7 +1952,7 @@ def test_profiler_reports_primitive_metrics_for_eda_copper() -> None:
     output_data = cast("dict[str, object]", by_name["artwork.converted_primitives"]["data"])
 
     assert convert_data["layer"] == "F.Cu"
-    assert convert_data["function"] == "copper"
+    assert convert_data["role"] == "copper"
     assert convert_data["side"] == "front"
     assert convert_data["items"] == 2
     assert output_data["primitives"] == 2
@@ -2026,7 +2027,7 @@ def test_layer_masks_reconstruct_board_material_from_source_outline_not_points()
             PcbLine(0.0, 5.0, 0.0, 0.0, "Edge.Cuts", 0.1),
         ],
         outline_arcs=[],
-        layers=[PcbLayer("F.Cu", LayerFunction.COPPER, side="front")],
+        layers=[make_pcb_layer("F.Cu", LayerRole.COPPER, side="front")],
     )
     board_layer = GeometryLayer("Edge.Cuts", "edge", "", -300)
     store = PcbGeometryStore(
@@ -2154,7 +2155,7 @@ def _board_with_ordered_layers(
         segments=[
             PcbSegment(1.0, 1.0, 2.0, 1.0, 0.2, layer.name, 1)
             for layer in layers
-            if layer.function == LayerFunction.COPPER
+            if layer.has_role(LayerRole.COPPER)
         ],
         vias=[],
         outline_lines=[
@@ -2168,7 +2169,7 @@ def _board_with_ordered_layers(
         graphic_texts=[
             PcbGraphicText("S", 2.0, 2.0, 0.0, layer.name, 1.0)
             for layer in layers
-            if layer.function == LayerFunction.SILKSCREEN
+            if layer.has_role(LayerRole.SILKSCREEN)
         ],
     )
 

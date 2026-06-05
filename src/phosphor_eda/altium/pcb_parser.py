@@ -36,7 +36,7 @@ from phosphor_eda.altium.pcb_records import (
 )
 from phosphor_eda.altium.record_parser import parse_record_payload
 from phosphor_eda.pcb import (
-    LayerFunction,
+    LayerRole,
     Pcb,
     PcbArc,
     PcbFootprint,
@@ -74,38 +74,112 @@ _MIL_TO_MM = 0.0254
 _NET_UNCONNECTED = NET_UNCONNECTED
 _COMPONENT_NONE = COMPONENT_NONE
 
-# Static Altium layer info: (native_name, function, side).
-# Mechanical layers (57-72) are defaults overridden by Board6 MECHKIND.
-_ALTIUM_LAYER_INFO: dict[int, tuple[str, LayerFunction, str]] = {
-    1: ("Top Layer", LayerFunction.COPPER, "front"),
-    **{i: (f"Mid-Layer {i - 1}", LayerFunction.COPPER, "") for i in range(2, 32)},
-    32: ("Bottom Layer", LayerFunction.COPPER, "back"),
-    33: ("Top Overlay", LayerFunction.SILKSCREEN, "front"),
-    34: ("Bottom Overlay", LayerFunction.SILKSCREEN, "back"),
-    35: ("Top Paste", LayerFunction.SOLDER_PASTE, "front"),
-    36: ("Bottom Paste", LayerFunction.SOLDER_PASTE, "back"),
-    37: ("Top Solder", LayerFunction.SOLDER_MASK, "front"),
-    38: ("Bottom Solder", LayerFunction.SOLDER_MASK, "back"),
-    **{i: (f"Mechanical {i - 56}", LayerFunction.MECHANICAL, "") for i in range(57, 73)},
-}
+# Altium Board6/Data carries layer names and mechanical kinds.  Numeric layer
+# ranges are used only to decode file-format semantics and as missing-metadata
+# fallbacks.
+_ALTIUM_LAYER_NUMBERS = tuple(range(1, 75))
 
-# MECHKIND values from Board6 → (function, side).
-_MECHKIND_MAP: dict[str, tuple[LayerFunction, str]] = {
-    "assemblytop": (LayerFunction.FAB, "front"),
-    "assemblybottom": (LayerFunction.FAB, "back"),
-    "courtyardtop": (LayerFunction.COURTYARD, "front"),
-    "courtyardbottom": (LayerFunction.COURTYARD, "back"),
-    "boardshape": (LayerFunction.EDGE, ""),
-    "componentoutlinetop": (LayerFunction.FAB, "front"),
-    "componentoutlinebottom": (LayerFunction.FAB, "back"),
-    "3dbodytop": (LayerFunction.OTHER, "front"),
-    "3dbodybottom": (LayerFunction.OTHER, "back"),
-    "designatortop": (LayerFunction.FAB, "front"),
-    "designatorbottom": (LayerFunction.FAB, "back"),
-    "valuetop": (LayerFunction.FAB, "front"),
-    "valuebottom": (LayerFunction.FAB, "back"),
-    "fabnotes": (LayerFunction.FAB, ""),
-    "vcut": (LayerFunction.MECHANICAL, ""),
+_MECHKIND_ROLES: dict[str, tuple[LayerRole, ...]] = {
+    "assemblytop": (
+        LayerRole.MECHANICAL,
+        LayerRole.FABRICATION,
+        LayerRole.ASSEMBLY,
+        LayerRole.FRONT,
+    ),
+    "assemblybottom": (
+        LayerRole.MECHANICAL,
+        LayerRole.FABRICATION,
+        LayerRole.ASSEMBLY,
+        LayerRole.BACK,
+    ),
+    "assemblynotes": (LayerRole.MECHANICAL, LayerRole.ASSEMBLY_NOTES),
+    "board": (LayerRole.MECHANICAL, LayerRole.BOARD),
+    "coatingtop": (LayerRole.MECHANICAL, LayerRole.COATING, LayerRole.FRONT),
+    "coatingbottom": (LayerRole.MECHANICAL, LayerRole.COATING, LayerRole.BACK),
+    "componentcentertop": (
+        LayerRole.MECHANICAL,
+        LayerRole.FABRICATION,
+        LayerRole.COMPONENT_CENTER,
+        LayerRole.FRONT,
+    ),
+    "componentcenterbottom": (
+        LayerRole.MECHANICAL,
+        LayerRole.FABRICATION,
+        LayerRole.COMPONENT_CENTER,
+        LayerRole.BACK,
+    ),
+    "componentoutlinetop": (
+        LayerRole.MECHANICAL,
+        LayerRole.FABRICATION,
+        LayerRole.COMPONENT_OUTLINE,
+        LayerRole.FRONT,
+    ),
+    "componentoutlinebottom": (
+        LayerRole.MECHANICAL,
+        LayerRole.FABRICATION,
+        LayerRole.COMPONENT_OUTLINE,
+        LayerRole.BACK,
+    ),
+    "courtyardtop": (
+        LayerRole.MECHANICAL,
+        LayerRole.FABRICATION,
+        LayerRole.COURTYARD,
+        LayerRole.FRONT,
+    ),
+    "courtyardbottom": (
+        LayerRole.MECHANICAL,
+        LayerRole.FABRICATION,
+        LayerRole.COURTYARD,
+        LayerRole.BACK,
+    ),
+    "designatortop": (
+        LayerRole.MECHANICAL,
+        LayerRole.FABRICATION,
+        LayerRole.DESIGNATOR,
+        LayerRole.FRONT,
+    ),
+    "designatorbottom": (
+        LayerRole.MECHANICAL,
+        LayerRole.FABRICATION,
+        LayerRole.DESIGNATOR,
+        LayerRole.BACK,
+    ),
+    "dimensions": (LayerRole.MECHANICAL, LayerRole.DIMENSION),
+    "dimensionstop": (
+        LayerRole.MECHANICAL,
+        LayerRole.FABRICATION,
+        LayerRole.DIMENSION,
+        LayerRole.FRONT,
+    ),
+    "dimensionsbottom": (
+        LayerRole.MECHANICAL,
+        LayerRole.FABRICATION,
+        LayerRole.DIMENSION,
+        LayerRole.BACK,
+    ),
+    "fabnotes": (LayerRole.MECHANICAL, LayerRole.FABRICATION, LayerRole.FAB_NOTES),
+    "gluepointstop": (LayerRole.MECHANICAL, LayerRole.GLUE_POINTS, LayerRole.FRONT),
+    "gluepointsbottom": (LayerRole.MECHANICAL, LayerRole.GLUE_POINTS, LayerRole.BACK),
+    "goldplatingtop": (LayerRole.MECHANICAL, LayerRole.GOLD_PLATING, LayerRole.FRONT),
+    "goldplatingbottom": (LayerRole.MECHANICAL, LayerRole.GOLD_PLATING, LayerRole.BACK),
+    "valuetop": (
+        LayerRole.MECHANICAL,
+        LayerRole.FABRICATION,
+        LayerRole.VALUE,
+        LayerRole.FRONT,
+    ),
+    "valuebottom": (
+        LayerRole.MECHANICAL,
+        LayerRole.FABRICATION,
+        LayerRole.VALUE,
+        LayerRole.BACK,
+    ),
+    "vcut": (LayerRole.MECHANICAL, LayerRole.V_CUT),
+    "3dbodytop": (LayerRole.MECHANICAL, LayerRole.THREE_D_BODY, LayerRole.FRONT),
+    "3dbodybottom": (LayerRole.MECHANICAL, LayerRole.THREE_D_BODY, LayerRole.BACK),
+    "routetoolpath": (LayerRole.MECHANICAL, LayerRole.ROUTE_TOOL_PATH),
+    "sheet": (LayerRole.MECHANICAL, LayerRole.SHEET),
+    "boardshape": (LayerRole.MECHANICAL, LayerRole.BOARD_SHAPE, LayerRole.EDGE),
 }
 
 # Copper layer numbers for filtering.
@@ -228,46 +302,120 @@ def _parse_rotation(s: str) -> float:
 
 
 def _build_layer_map(board_props: dict[str, str]) -> dict[int, PcbLayer]:
-    """Build layer definitions from Board6 properties and static defaults.
-
-    Reads mechanical layer names and MECHKIND from the Board6 property
-    record to determine each mechanical layer's function (assembly,
-    courtyard, board outline, etc.).
-    """
+    """Build layer definitions from Board6 metadata and Altium layer IDs."""
     layers: dict[int, PcbLayer] = {}
-    for num, (name, fn, side) in _ALTIUM_LAYER_INFO.items():
-        layers[num] = PcbLayer(name=name, function=fn, side=side, number=num)
+    for num in _ALTIUM_LAYER_NUMBERS:
+        native_kind = board_props.get(f"layer{num}mechkind", "")
+        name = board_props.get(f"layer{num}name") or _fallback_altium_layer_name(num)
+        layers[num] = PcbLayer(
+            name=name,
+            roles=(
+                *_altium_number_roles(num),
+                *_altium_mechkind_roles(native_kind),
+                *_altium_name_roles(num, name, native_kind),
+            ),
+            number=num,
+            native_kind=native_kind,
+        )
 
     _apply_v9_stack_layer_names(layers, board_props)
-
-    # Override mechanical layer metadata from Board6 if available.
-    for i in range(1, 17):
-        layer_num = 56 + i
-        # Try multiple property name patterns (lowercase from parse_record_payload)
-        name_key = f"mechanical{i}name"
-        kind_key = f"mechanical{i}kind"
-        v9_kind_key = f"v9_mechanical{i}kind"
-
-        custom_name = board_props.get(name_key, "")
-        if custom_name:
-            layers[layer_num] = PcbLayer(
-                name=custom_name,
-                function=layers[layer_num].function,
-                side=layers[layer_num].side,
-                number=layer_num,
-            )
-
-        kind = (board_props.get(kind_key) or board_props.get(v9_kind_key) or "").lower()
-        if kind and kind in _MECHKIND_MAP:
-            fn, side = _MECHKIND_MAP[kind]
-            layers[layer_num] = PcbLayer(
-                name=layers[layer_num].name,
-                function=fn,
-                side=side,
-                number=layer_num,
-            )
-
     return layers
+
+
+def _fallback_altium_layer_name(num: int) -> str:
+    if num == 1:
+        return "Top Layer"
+    if 2 <= num <= 31:
+        return f"Mid-Layer {num - 1}"
+    if num == 32:
+        return "Bottom Layer"
+    if num == 33:
+        return "Top Overlay"
+    if num == 34:
+        return "Bottom Overlay"
+    if num == 35:
+        return "Top Paste"
+    if num == 36:
+        return "Bottom Paste"
+    if num == 37:
+        return "Top Solder"
+    if num == 38:
+        return "Bottom Solder"
+    if 39 <= num <= 54:
+        return f"Internal Plane {num - 38}"
+    if num == 55:
+        return "Drill Guide"
+    if num == 56:
+        return "Keep-Out Layer"
+    if 57 <= num <= 72:
+        return f"Mechanical {num - 56}"
+    if num == 73:
+        return "Drill Drawing"
+    if num == 74:
+        return "Multi-Layer"
+    return f"Layer {num}"
+
+
+def _altium_number_roles(num: int) -> tuple[LayerRole, ...]:
+    if num == 1:
+        return (LayerRole.COPPER, LayerRole.FRONT, LayerRole.OUTER, LayerRole.SIGNAL)
+    if 2 <= num <= 31:
+        return (LayerRole.COPPER, LayerRole.INNER, LayerRole.SIGNAL)
+    if num == 32:
+        return (LayerRole.COPPER, LayerRole.BACK, LayerRole.OUTER, LayerRole.SIGNAL)
+    if num == 33:
+        return (LayerRole.SILKSCREEN, LayerRole.FRONT)
+    if num == 34:
+        return (LayerRole.SILKSCREEN, LayerRole.BACK)
+    if num == 35:
+        return (LayerRole.SOLDER_PASTE, LayerRole.FRONT)
+    if num == 36:
+        return (LayerRole.SOLDER_PASTE, LayerRole.BACK)
+    if num == 37:
+        return (LayerRole.SOLDER_MASK, LayerRole.FRONT)
+    if num == 38:
+        return (LayerRole.SOLDER_MASK, LayerRole.BACK)
+    if 39 <= num <= 54:
+        return (LayerRole.COPPER, LayerRole.INNER, LayerRole.PLANE, LayerRole.INTERNAL_PLANE)
+    if num == 55:
+        return (LayerRole.DRILL, LayerRole.DRILL_GUIDE)
+    if num == 56:
+        return (LayerRole.KEEPOUT,)
+    if 57 <= num <= 72:
+        return (LayerRole.MECHANICAL,)
+    if num == 73:
+        return (LayerRole.DRILL, LayerRole.DRILL_DRAWING)
+    if num == 74:
+        return (LayerRole.MULTI_LAYER,)
+    return (LayerRole.UNKNOWN,)
+
+
+def _altium_mechkind_roles(kind: str) -> tuple[LayerRole, ...]:
+    return _MECHKIND_ROLES.get(kind.lower(), ())
+
+
+def _altium_name_roles(num: int, name: str, native_kind: str) -> tuple[LayerRole, ...]:
+    if native_kind or not (57 <= num <= 72):
+        return ()
+    normalized = name.strip().lower().replace("-", " ").replace("_", " ")
+    roles: list[LayerRole] = []
+    if "outline" in normalized or "board shape" in normalized:
+        roles.extend([LayerRole.BOARD_SHAPE, LayerRole.EDGE])
+    if "courtyard" in normalized:
+        roles.extend([LayerRole.FABRICATION, LayerRole.COURTYARD])
+    if "assembly" in normalized:
+        roles.extend([LayerRole.FABRICATION, LayerRole.ASSEMBLY])
+    if "designator" in normalized or "reference" in normalized:
+        roles.extend([LayerRole.FABRICATION, LayerRole.DESIGNATOR])
+    if "value" in normalized or "comment" in normalized:
+        roles.extend([LayerRole.FABRICATION, LayerRole.VALUE])
+    if "3d body" in normalized or "3dbody" in normalized:
+        roles.append(LayerRole.THREE_D_BODY)
+    if normalized.startswith("top ") or normalized.endswith(" top"):
+        roles.append(LayerRole.FRONT)
+    elif normalized.startswith("bottom ") or normalized.endswith(" bottom"):
+        roles.append(LayerRole.BACK)
+    return tuple(roles)
 
 
 def _apply_v9_stack_layer_names(layers: dict[int, PcbLayer], board_props: dict[str, str]) -> None:
@@ -288,9 +436,12 @@ def _apply_v9_stack_layer_names(layers: dict[int, PcbLayer], board_props: dict[s
         layer = layers[layer_num]
         layers[layer_num] = PcbLayer(
             name=layer_name,
-            function=layer.function,
-            side=layer.side,
+            roles=layer.roles,
             number=layer.number,
+            native_type=layer.native_type,
+            native_kind=layer.native_kind,
+            native_user_name=layer.native_user_name,
+            stack_index=layer.stack_index,
         )
 
 
@@ -512,7 +663,7 @@ def _parse_tracks(
                         net_number=_net_number(track.net),
                     )
                 )
-            elif layer_map[track.layer].function != LayerFunction.EDGE:
+            elif not layer_map[track.layer].has_role(LayerRole.EDGE):
                 graphic_lines.append(
                     PcbLine(
                         start_x=x1,
@@ -633,7 +784,7 @@ def _parse_arcs(
                         net_number=_net_number(arc.net),
                     )
                 )
-            elif layer_map[arc.layer].function != LayerFunction.EDGE:
+            elif not layer_map[arc.layer].has_role(LayerRole.EDGE):
                 graphic_arcs.append(
                     PcbArc(
                         start_x=sx,
@@ -1347,7 +1498,7 @@ def _parse_board_outline(
     # Prefer a layer with EDGE function (from MECHKIND=BoardShape), then
     # fall back to Mechanical 1 (57), then Keep-Out (74).
     edge_layers = [
-        num for num, lyr in layer_map.items() if lyr.function == LayerFunction.EDGE and num >= 57
+        num for num, lyr in layer_map.items() if lyr.has_role(LayerRole.EDGE) and num >= 57
     ]
     candidates = edge_layers or [57]
     candidates.append(74)
@@ -1922,10 +2073,8 @@ def parse_altium_pcb(
 
     # Assemble footprints: assign pads, texts, lines, arcs by component index.
     # Build name→function lookup for categorising component geometry.
-    silk_names = {
-        lyr.name for lyr in layer_map.values() if lyr.function == LayerFunction.SILKSCREEN
-    }
-    fab_names = {lyr.name for lyr in layer_map.values() if lyr.function == LayerFunction.FAB}
+    silk_names = {lyr.name for lyr in layer_map.values() if lyr.has_role(LayerRole.SILKSCREEN)}
+    fab_names = {lyr.name for lyr in layer_map.values() if lyr.has_role(LayerRole.FABRICATION)}
 
     free_pads: list[PcbPad] = []
     for comp_idx, pad in raw_pads:

@@ -36,7 +36,7 @@ def test_select_source_artwork_matches_layer_function_side_and_object_classes() 
         store,
         (
             LayerSelectionRule(
-                match=LayerMatch(function="copper", side="front"),
+                match=LayerMatch(role="copper", side="front"),
                 objects=("pads",),
             ),
         ),
@@ -53,7 +53,7 @@ def test_select_source_artwork_resolves_active_side_from_rendered_side() -> None
 
     selected = select_source_artwork(
         store,
-        (LayerSelectionRule(match=LayerMatch(function="silkscreen", side="active")),),
+        (LayerSelectionRule(match=LayerMatch(role="silkscreen", side="active")),),
         active_side="back",
     )
 
@@ -85,7 +85,7 @@ def test_select_source_artwork_requires_explicit_keepout_opt_in() -> None:
     )
     selected_by_function = select_source_artwork(
         store,
-        (LayerSelectionRule(match=LayerMatch(function="keepout")),),
+        (LayerSelectionRule(match=LayerMatch(role="keepout")),),
     )
     selected_by_object = select_source_artwork(
         store,

@@ -10,20 +10,10 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Literal, TypeGuard, cast
 
+from phosphor_eda.pcb import LayerRole
+
 RENDER_MODES = ("eda", "realistic")
-SOURCE_LAYER_FUNCTIONS = (
-    "copper",
-    "silkscreen",
-    "solder_mask",
-    "solder_paste",
-    "fab",
-    "courtyard",
-    "edge",
-    "drill",
-    "keepout",
-    "mechanical",
-    "other",
-)
+SOURCE_LAYER_ROLES = tuple(role.value for role in LayerRole)
 SOURCE_LAYER_SIDES = ("front", "back", "inner", "active", "")
 
 _BUNDLED_SETTINGS_PACKAGE = "phosphor_eda.render_settings"
@@ -52,7 +42,7 @@ class HighlightSpec:
 @dataclass
 class LayerMatch:
     name: str = ""
-    function: str = ""
+    role: str = ""
     side: str = ""
 
 
@@ -164,9 +154,9 @@ def render_settings_schema() -> dict[str, object]:
                                     "additionalProperties": False,
                                     "properties": {
                                         "name": {"type": "string", "minLength": 1},
-                                        "function": {
+                                        "role": {
                                             "type": "string",
-                                            "enum": list(SOURCE_LAYER_FUNCTIONS),
+                                            "enum": list(SOURCE_LAYER_ROLES),
                                         },
                                         "side": {
                                             "type": "string",
@@ -257,9 +247,9 @@ def render_settings_schema() -> dict[str, object]:
                 "fontSizePx": 40,
                 "source": {
                     "layers": [
-                        {"match": {"function": "copper"}, "visible": True},
+                        {"match": {"role": "copper"}, "visible": True},
                         {
-                            "match": {"function": "silkscreen", "side": "front"},
+                            "match": {"role": "silkscreen", "side": "front"},
                             "visible": True,
                         },
                     ],
@@ -435,14 +425,17 @@ def _parse_layer_match(raw_match: dict[str, object], index: int) -> LayerMatch:
         match.name = name
 
     if "function" in raw_match:
-        function = raw_match["function"]
-        if not isinstance(function, str) or function not in SOURCE_LAYER_FUNCTIONS:
+        msg = f"source.layers[{index}].match.function is no longer supported; use match.role"
+        raise ValueError(msg)
+
+    if "role" in raw_match:
+        role = raw_match["role"]
+        if not isinstance(role, str) or role not in SOURCE_LAYER_ROLES:
             msg = (
-                f"source.layers[{index}].match.function must be one of "
-                f"{', '.join(SOURCE_LAYER_FUNCTIONS)}"
+                f"source.layers[{index}].match.role must be one of {', '.join(SOURCE_LAYER_ROLES)}"
             )
             raise ValueError(msg)
-        match.function = function
+        match.role = role
 
     if "side" in raw_match:
         side = raw_match["side"]
@@ -695,7 +688,7 @@ def _source_layer_rule_key(layer: object) -> tuple[str, str, str] | None:
         return None
     return (
         _string_key_part(raw_match.get("name")),
-        _string_key_part(raw_match.get("function")),
+        _string_key_part(raw_match.get("role")),
         _string_key_part(raw_match.get("side")),
     )
 

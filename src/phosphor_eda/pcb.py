@@ -5,42 +5,224 @@ vias, and board outline.  Coordinates are in millimetres (absolute board
 space, Y increases downward).
 
 Each layer carries its native name (e.g. ``"F.Cu"`` for KiCad,
-``"Top Layer"`` for Altium) plus a :class:`LayerFunction` label and a
-*side* string (``"front"`` / ``"back"`` / ``""`` for inner or N/A).
+``"Top Layer"`` for Altium) plus normalized semantic roles.  Roles are
+multi-valued so a layer can be both ``copper`` and ``inner``, or both
+``fabrication`` and ``courtyard``.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 
-class LayerFunction(Enum):
-    """Semantic purpose of a PCB layer."""
+class LayerRole(StrEnum):
+    """Normalized semantic role for a PCB layer."""
 
     COPPER = "copper"
-    SILKSCREEN = "silkscreen"
+    DIELECTRIC = "dielectric"
     SOLDER_MASK = "solder_mask"
     SOLDER_PASTE = "solder_paste"
-    FAB = "fab"
-    COURTYARD = "courtyard"
+    SILKSCREEN = "silkscreen"
+    ADHESIVE = "adhesive"
     EDGE = "edge"
+    MARGIN = "margin"
     MECHANICAL = "mechanical"
-    OTHER = "other"
+    AUXILIARY = "auxiliary"
+    KEEPOUT = "keepout"
+    DRILL = "drill"
+    DRILL_GUIDE = "drill_guide"
+    DRILL_DRAWING = "drill_drawing"
+    MULTI_LAYER = "multi_layer"
+
+    FRONT = "front"
+    BACK = "back"
+    INNER = "inner"
+    OUTER = "outer"
+
+    SIGNAL = "signal"
+    POWER = "power"
+    MIXED = "mixed"
+    JUMPER = "jumper"
+    PLANE = "plane"
+    INTERNAL_PLANE = "internal_plane"
+
+    FABRICATION = "fabrication"
+    ASSEMBLY = "assembly"
+    COURTYARD = "courtyard"
+    DESIGNATOR = "designator"
+    VALUE = "value"
+    COMPONENT_OUTLINE = "component_outline"
+    COMPONENT_CENTER = "component_center"
+    DIMENSION = "dimension"
+    BOARD = "board"
+    BOARD_SHAPE = "board_shape"
+    V_CUT = "v_cut"
+    ROUTE_TOOL_PATH = "route_tool_path"
+    SHEET = "sheet"
+    DRAWING = "drawing"
+    COMMENT = "comment"
+    ASSEMBLY_NOTES = "assembly_notes"
+    FAB_NOTES = "fab_notes"
+
+    COATING = "coating"
+    GLUE_POINTS = "glue_points"
+    GOLD_PLATING = "gold_plating"
+    THREE_D_BODY = "three_d_body"
+
+    USER = "user"
+    UNKNOWN = "unknown"
+
+
+_ROLE_ORDER: tuple[LayerRole, ...] = (
+    LayerRole.COPPER,
+    LayerRole.DIELECTRIC,
+    LayerRole.SOLDER_MASK,
+    LayerRole.SOLDER_PASTE,
+    LayerRole.SILKSCREEN,
+    LayerRole.ADHESIVE,
+    LayerRole.EDGE,
+    LayerRole.MARGIN,
+    LayerRole.MECHANICAL,
+    LayerRole.AUXILIARY,
+    LayerRole.KEEPOUT,
+    LayerRole.DRILL,
+    LayerRole.DRILL_GUIDE,
+    LayerRole.DRILL_DRAWING,
+    LayerRole.MULTI_LAYER,
+    LayerRole.FABRICATION,
+    LayerRole.ASSEMBLY,
+    LayerRole.COURTYARD,
+    LayerRole.DESIGNATOR,
+    LayerRole.VALUE,
+    LayerRole.COMPONENT_OUTLINE,
+    LayerRole.COMPONENT_CENTER,
+    LayerRole.DIMENSION,
+    LayerRole.BOARD,
+    LayerRole.BOARD_SHAPE,
+    LayerRole.V_CUT,
+    LayerRole.ROUTE_TOOL_PATH,
+    LayerRole.SHEET,
+    LayerRole.DRAWING,
+    LayerRole.COMMENT,
+    LayerRole.ASSEMBLY_NOTES,
+    LayerRole.FAB_NOTES,
+    LayerRole.COATING,
+    LayerRole.GLUE_POINTS,
+    LayerRole.GOLD_PLATING,
+    LayerRole.THREE_D_BODY,
+    LayerRole.FRONT,
+    LayerRole.BACK,
+    LayerRole.INNER,
+    LayerRole.OUTER,
+    LayerRole.SIGNAL,
+    LayerRole.POWER,
+    LayerRole.MIXED,
+    LayerRole.JUMPER,
+    LayerRole.PLANE,
+    LayerRole.INTERNAL_PLANE,
+    LayerRole.USER,
+    LayerRole.UNKNOWN,
+)
+
+_PRIMARY_ROLE_ORDER: tuple[LayerRole, ...] = (
+    LayerRole.EDGE,
+    LayerRole.DRILL,
+    LayerRole.DRILL_GUIDE,
+    LayerRole.DRILL_DRAWING,
+    LayerRole.KEEPOUT,
+    LayerRole.COPPER,
+    LayerRole.SOLDER_MASK,
+    LayerRole.SOLDER_PASTE,
+    LayerRole.SILKSCREEN,
+    LayerRole.COURTYARD,
+    LayerRole.DESIGNATOR,
+    LayerRole.VALUE,
+    LayerRole.ASSEMBLY,
+    LayerRole.COMPONENT_OUTLINE,
+    LayerRole.COMPONENT_CENTER,
+    LayerRole.DIMENSION,
+    LayerRole.BOARD_SHAPE,
+    LayerRole.V_CUT,
+    LayerRole.ROUTE_TOOL_PATH,
+    LayerRole.SHEET,
+    LayerRole.COATING,
+    LayerRole.GLUE_POINTS,
+    LayerRole.GOLD_PLATING,
+    LayerRole.THREE_D_BODY,
+    LayerRole.FABRICATION,
+    LayerRole.MECHANICAL,
+    LayerRole.AUXILIARY,
+    LayerRole.USER,
+    LayerRole.DIELECTRIC,
+    LayerRole.UNKNOWN,
+)
+
+
+def _coerce_role(role: LayerRole | str) -> LayerRole:
+    if isinstance(role, LayerRole):
+        return role
+    return LayerRole(role)
+
+
+def normalize_roles(*roles: LayerRole | str) -> tuple[LayerRole, ...]:
+    """Return unique roles in canonical order."""
+    role_set = {_coerce_role(role) for role in roles}
+    if not role_set:
+        role_set.add(LayerRole.UNKNOWN)
+    return tuple(role for role in _ROLE_ORDER if role in role_set)
 
 
 @dataclass
 class PcbLayer:
-    """A layer definition with function metadata.
+    """A layer definition with normalized role metadata.
 
     ``name`` is the native layer name from the source format (e.g.
     ``"F.Cu"`` for KiCad, ``"Top Layer"`` for Altium).
     """
 
     name: str
-    function: LayerFunction
-    side: str = ""  # "front", "back", or "" for inner/both/N/A
+    roles: tuple[LayerRole, ...]
     number: int | None = None
+    native_type: str = ""
+    native_kind: str = ""
+    native_user_name: str = ""
+    stack_index: int | None = None
+
+    def __post_init__(self) -> None:
+        self.roles = normalize_roles(*self.roles)
+
+    def has_role(self, role: LayerRole | str) -> bool:
+        """Return whether this layer has a normalized role."""
+        return _coerce_role(role) in self.roles
+
+    @property
+    def role_values(self) -> tuple[str, ...]:
+        """String role values suitable for serialization."""
+        return tuple(role.value for role in self.roles)
+
+    @property
+    def primary_role(self) -> LayerRole:
+        """Display/grouping role for single-role consumers such as rendering."""
+        for role in _PRIMARY_ROLE_ORDER:
+            if role in self.roles:
+                return role
+        return LayerRole.UNKNOWN
+
+    @property
+    def side(self) -> str:
+        """Normalized physical side derived from placement roles."""
+        if LayerRole.FRONT in self.roles:
+            return "front"
+        if LayerRole.BACK in self.roles:
+            return "back"
+        if LayerRole.INNER in self.roles:
+            return "inner"
+        return ""
 
 
 @dataclass
@@ -327,9 +509,19 @@ class Pcb:
 
     # -- Layer helpers --------------------------------------------------------
 
-    def layers_by_function(self, fn: LayerFunction) -> list[PcbLayer]:
-        """Return all layers with a given function."""
-        return [lyr for lyr in self.layers if lyr.function == fn]
+    def layers_by_role(self, role: LayerRole | str) -> list[PcbLayer]:
+        """Return all layers with a given normalized role."""
+        return [lyr for lyr in self.layers if lyr.has_role(role)]
+
+    def layers_with_all_roles(self, roles: Iterable[LayerRole | str]) -> list[PcbLayer]:
+        """Return layers that contain every requested role."""
+        normalized = tuple(_coerce_role(role) for role in roles)
+        return [lyr for lyr in self.layers if all(lyr.has_role(role) for role in normalized)]
+
+    def layers_with_any_role(self, roles: Iterable[LayerRole | str]) -> list[PcbLayer]:
+        """Return layers that contain at least one requested role."""
+        normalized = tuple(_coerce_role(role) for role in roles)
+        return [lyr for lyr in self.layers if any(lyr.has_role(role) for role in normalized)]
 
     def layer_for(self, name: str) -> PcbLayer | None:
         """Look up a layer definition by native name."""

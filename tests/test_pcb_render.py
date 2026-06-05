@@ -6,16 +6,16 @@ import re
 from pathlib import Path
 
 import pytest
+from pcb_layer_helpers import make_pcb_layer
 
 import phosphor_eda.pcb_render as pcb_render_module
 from phosphor_eda.altium.pcb_parser import parse_altium_pcb
 from phosphor_eda.kicad.pcb_parser import parse_kicad_pcb
 from phosphor_eda.pcb import (
-    LayerFunction,
+    LayerRole,
     Pcb,
     PcbFootprint,
     PcbGraphicText,
-    PcbLayer,
     PcbLine,
     PcbModel3D,
     PcbNet,
@@ -485,7 +485,7 @@ def test_design_preset_renders_all_copper_layers_with_unique_colors() -> None:
     )
     for index in range(2, 9):
         layer_name = f"In{index}.Cu"
-        board.layers.insert(index, PcbLayer(layer_name, LayerFunction.COPPER, number=index))
+        board.layers.insert(index, make_pcb_layer(layer_name, LayerRole.COPPER, number=index))
         board.segments.append(
             PcbSegment(
                 2.0,
@@ -557,7 +557,7 @@ def test_design_preset_renders_all_silkscreen_layers() -> None:
             PcbLine(4.0, 12.0, 6.0, 12.0, "B.SilkS", 0.12, footprint_ref="U1"),
         ]
     )
-    board.layers.append(PcbLayer("B.SilkS", LayerFunction.SILKSCREEN, side="back"))
+    board.layers.append(make_pcb_layer("B.SilkS", LayerRole.SILKSCREEN, side="back"))
     settings = load_render_settings_json('{"extends": "phosphor:design"}')
 
     svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
@@ -731,8 +731,8 @@ def test_design_preset_renders_altium_board_outline_as_edge_layer(pimx8_board: P
     settings = load_render_settings_json('{"extends": "phosphor:design"}')
 
     svg = render_pcb_svg(pimx8_board, side="front", width_px=1200, render_settings=settings)
-    fragment = _layer_fragment(svg, "eda.edge", "Mechanical 1")
-    style = _layer_style(svg, "eda.edge", "Mechanical 1")
+    fragment = _layer_fragment(svg, "eda.edge", "Outline")
+    style = _layer_style(svg, "eda.edge", "Outline")
 
     assert fragment is not None
     assert 'data-kind="board_outline"' in fragment
@@ -871,8 +871,8 @@ def test_eda_trace_bends_emit_trace_primitives() -> None:
         ],
         outline_arcs=[],
         layers=[
-            PcbLayer("F.Cu", LayerFunction.COPPER, side="front", number=1),
-            PcbLayer("Edge.Cuts", LayerFunction.EDGE),
+            make_pcb_layer("F.Cu", LayerRole.COPPER, side="front", number=1),
+            make_pcb_layer("Edge.Cuts", LayerRole.EDGE),
         ],
     )
     settings = load_render_settings_json(
@@ -1220,11 +1220,11 @@ def _make_board_with_inner_layers() -> Pcb:
         ],
         outline_arcs=[],
         layers=[
-            PcbLayer("F.Cu", LayerFunction.COPPER, side="front"),
-            PcbLayer("In1.Cu", LayerFunction.COPPER, side="", number=1),
-            PcbLayer("B.Cu", LayerFunction.COPPER, side="back"),
-            PcbLayer("F.SilkS", LayerFunction.SILKSCREEN, side="front"),
-            PcbLayer("F.Fab", LayerFunction.FAB, side="front"),
+            make_pcb_layer("F.Cu", LayerRole.COPPER, side="front"),
+            make_pcb_layer("In1.Cu", LayerRole.COPPER, side="", number=1),
+            make_pcb_layer("B.Cu", LayerRole.COPPER, side="back"),
+            make_pcb_layer("F.SilkS", LayerRole.SILKSCREEN, side="front"),
+            make_pcb_layer("F.Fab", LayerRole.FABRICATION, side="front"),
         ],
     )
 
@@ -1233,12 +1233,12 @@ def _make_many_layer_board(*, copper_layer_count: int) -> Pcb:
     assert copper_layer_count >= 2
     inner_count = copper_layer_count - 2
     copper_layers = [
-        PcbLayer("F.Cu", LayerFunction.COPPER, side="front"),
+        make_pcb_layer("F.Cu", LayerRole.COPPER, side="front"),
         *(
-            PcbLayer(f"In{index}.Cu", LayerFunction.COPPER, number=index)
+            make_pcb_layer(f"In{index}.Cu", LayerRole.COPPER, number=index)
             for index in range(1, inner_count + 1)
         ),
-        PcbLayer("B.Cu", LayerFunction.COPPER, side="back"),
+        make_pcb_layer("B.Cu", LayerRole.COPPER, side="back"),
     ]
     layer_names = [layer.name for layer in copper_layers]
     return Pcb(
@@ -1265,7 +1265,7 @@ def _make_many_layer_board(*, copper_layer_count: int) -> Pcb:
             PcbLine(0, 20, 0, 0, "Edge.Cuts", 0.1),
         ],
         outline_arcs=[],
-        layers=[*copper_layers, PcbLayer("Edge.Cuts", LayerFunction.EDGE)],
+        layers=[*copper_layers, make_pcb_layer("Edge.Cuts", LayerRole.EDGE)],
     )
 
 
@@ -1355,14 +1355,14 @@ def _make_altium_style_render_board() -> Pcb:
         ],
         outline_arcs=[],
         layers=[
-            PcbLayer("Top Layer", LayerFunction.COPPER, side="front", number=1),
-            PcbLayer("MidLayer1", LayerFunction.COPPER, number=2),
-            PcbLayer("Bottom Layer", LayerFunction.COPPER, side="back", number=32),
-            PcbLayer("Top Solder", LayerFunction.SOLDER_MASK, side="front"),
-            PcbLayer("Bottom Solder", LayerFunction.SOLDER_MASK, side="back"),
-            PcbLayer("Top Overlay", LayerFunction.SILKSCREEN, side="front"),
-            PcbLayer("Mechanical 13", LayerFunction.MECHANICAL, number=69),
-            PcbLayer("Board Shape", LayerFunction.EDGE),
+            make_pcb_layer("Top Layer", LayerRole.COPPER, side="front", number=1),
+            make_pcb_layer("MidLayer1", LayerRole.COPPER, number=2),
+            make_pcb_layer("Bottom Layer", LayerRole.COPPER, side="back", number=32),
+            make_pcb_layer("Top Solder", LayerRole.SOLDER_MASK, side="front"),
+            make_pcb_layer("Bottom Solder", LayerRole.SOLDER_MASK, side="back"),
+            make_pcb_layer("Top Overlay", LayerRole.SILKSCREEN, side="front"),
+            make_pcb_layer("Mechanical 13", LayerRole.MECHANICAL, number=69),
+            make_pcb_layer("Board Shape", LayerRole.EDGE),
         ],
     )
 
@@ -1605,9 +1605,9 @@ def _make_board_with_component(
         ],
         outline_arcs=[],
         layers=[
-            PcbLayer("F.Cu", LayerFunction.COPPER, side="front"),
-            PcbLayer("F.SilkS", LayerFunction.SILKSCREEN, side="front"),
-            PcbLayer("F.Fab", LayerFunction.FAB, side="front"),
+            make_pcb_layer("F.Cu", LayerRole.COPPER, side="front"),
+            make_pcb_layer("F.SilkS", LayerRole.SILKSCREEN, side="front"),
+            make_pcb_layer("F.Fab", LayerRole.FABRICATION, side="front"),
         ],
     )
 
@@ -1901,7 +1901,7 @@ def test_derived_realistic_svg_uses_derived_path(board: Pcb) -> None:
                 "side": "front",
                 "source": {
                     "layers": [
-                        {"match": {"function": "copper", "side": "front"}},
+                        {"match": {"role": "copper", "side": "front"}},
                         {"match": {"name": "Edge.Cuts"}},
                     ]
                 },
@@ -2488,7 +2488,7 @@ class TestParseRenderSettings:
         layer_props = _as_object_dict(layer_items["properties"])
         match = _as_object_dict(layer_props["match"])
         match_props = _as_object_dict(match["properties"])
-        function = _as_object_dict(match_props["function"])
+        function = _as_object_dict(match_props["role"])
         functions = _as_object_list(function["enum"])
 
         assert "drill" in functions
@@ -2545,7 +2545,7 @@ class TestParseRenderSettings:
                 "source": {
                     "layers": [
                         {
-                            "match": {"function": "copper", "side": "active"},
+                            "match": {"role": "copper", "side": "active"},
                             "visible": True,
                             "objects": ["pads", "traces"],
                         },
@@ -2559,7 +2559,7 @@ class TestParseRenderSettings:
             }
         )
 
-        assert settings.source.layers[0].match.function == "copper"
+        assert settings.source.layers[0].match.role == "copper"
         assert settings.source.layers[0].match.side == "active"
         assert settings.source.layers[0].visible is True
         assert settings.source.layers[0].objects == ("pads", "traces")
@@ -2569,9 +2569,9 @@ class TestParseRenderSettings:
         assert settings.source.exclude_components == ("R", "C")
 
     def test_render_settings_parse_accepts_drill_source_layer_function(self) -> None:
-        settings = parse_render_settings({"source": {"layers": [{"match": {"function": "drill"}}]}})
+        settings = parse_render_settings({"source": {"layers": [{"match": {"role": "drill"}}]}})
 
-        assert settings.source.layers[0].match.function == "drill"
+        assert settings.source.layers[0].match.role == "drill"
 
     def test_render_settings_accepts_dot_and_native_layer_tokens(self) -> None:
         settings = parse_render_settings(
@@ -2627,7 +2627,7 @@ class TestParseRenderSettings:
             "fontSizePx": 24,
             "renderMode": "eda",
             "source": {
-                "layers": [{"match": {"function": "copper"}, "objects": ["pads"]}],
+                "layers": [{"match": {"role": "copper"}, "objects": ["pads"]}],
                 "excludeComponents": ["R", "C"],
             },
             "tokens": {
@@ -2648,7 +2648,7 @@ class TestParseRenderSettings:
         assert settings.width == 1200
         assert settings.font_size == 24.0
         assert settings.render_mode == "eda"
-        assert settings.source.layers[0].match.function == "copper"
+        assert settings.source.layers[0].match.role == "copper"
         assert settings.source.layers[0].objects == ("pads",)
         assert settings.source.exclude_components == ("R", "C")
         assert settings.tokens["eda.copper.front.fill"] == "#d17a22"
@@ -2848,21 +2848,21 @@ def test_realistic_presets_hide_board_outline(board: Pcb, name: str) -> None:
 
 
 @pytest.mark.parametrize("name", ["high-contrast", "simplified-high-contrast"])
-def test_high_contrast_presets_limit_surface_layers_to_active_side_and_omit_fab_by_default(
+def test_high_contrast_presets_limit_surface_layers_to_active_side_and_omit_fabrication_by_default(
     name: str,
 ) -> None:
     settings = load_render_settings_json(json.dumps({"extends": f"phosphor:{name}"}))
-    rules_by_function = {
-        rule.match.function: rule
+    rules_by_role = {
+        rule.match.role: rule
         for rule in settings.source.layers
-        if rule.match.function in {"silkscreen", "fab", "mechanical"}
+        if rule.match.role in {"silkscreen", "fabrication", "mechanical"}
     }
     board = _make_board_with_component()
 
-    assert rules_by_function["silkscreen"].match.side == "active"
-    assert rules_by_function["silkscreen"].objects == ("silk", "board_graphic_text")
-    assert "fab" not in rules_by_function
-    assert rules_by_function["mechanical"].objects == ("mechanical",)
+    assert rules_by_role["silkscreen"].match.side == "active"
+    assert rules_by_role["silkscreen"].objects == ("silk", "board_graphic_text")
+    assert "fabrication" not in rules_by_role
+    assert rules_by_role["mechanical"].objects == ("mechanical",)
 
     svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
     assert 'data-role="eda.fabrication.front"' not in svg
@@ -2955,8 +2955,8 @@ def test_render_settings_extends_merges_v2_policy(tmp_path: Path) -> None:
             {
                 "source": {
                     "layers": [
-                        {"match": {"function": "copper"}, "objects": ["pads"]},
-                        {"match": {"function": "silkscreen", "side": "front"}},
+                        {"match": {"role": "copper"}, "objects": ["pads"]},
+                        {"match": {"role": "silkscreen", "side": "front"}},
                     ],
                     "excludeComponents": ["R"],
                 },
@@ -2976,7 +2976,7 @@ def test_render_settings_extends_merges_v2_policy(tmp_path: Path) -> None:
                 "source": {
                     "layers": [
                         {
-                            "match": {"function": "copper"},
+                            "match": {"role": "copper"},
                             "visible": False,
                             "objects": ["zones"],
                         },
@@ -2995,7 +2995,7 @@ def test_render_settings_extends_merges_v2_policy(tmp_path: Path) -> None:
 
     settings = load_render_settings_file(child)
 
-    assert [rule.match.function for rule in settings.source.layers] == [
+    assert [rule.match.role for rule in settings.source.layers] == [
         "copper",
         "silkscreen",
         "",

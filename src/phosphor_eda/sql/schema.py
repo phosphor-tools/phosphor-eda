@@ -156,7 +156,8 @@ TABLE_DDL: dict[str, str] = {
         CREATE TABLE layers (
             position INTEGER,
             name VARCHAR,
-            function VARCHAR,
+            primary_role VARCHAR,
+            roles VARCHAR[],
             side VARCHAR,
             number INTEGER,
             thickness_mm DOUBLE,
