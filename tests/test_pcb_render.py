@@ -350,7 +350,7 @@ def test_structured_preset_colors_use_inline_style_so_css_does_not_override(
     mask_pos = svg.index('data-role="realistic.solderMask"')
     copper_pos = svg.index('data-role="realistic.coveredCopper"')
     assert substrate_pos < mask_pos < copper_pos
-    assert 'style="fill: #1a5c2a"' in svg
+    assert 'style="fill: #b58b55"' in svg
     assert 'style="fill: #1f7a3a"' in svg
     assert 'style="opacity: 0.6000"' in svg
     assert 'style="fill: #145222"' in svg
@@ -362,7 +362,7 @@ def test_clean_preset_enables_board_material(board: Pcb) -> None:
     svg = render_pcb_svg(board, side="front", width_px=1200, render_settings=settings)
 
     assert 'data-role="realistic.substrate"' in svg
-    assert 'style="fill: #1a5c2a"' in svg
+    assert 'style="fill: #b58b55"' in svg
 
 
 def test_renderable_geometry_store_preserves_component_pad_metadata() -> None:
@@ -1909,6 +1909,7 @@ def test_derived_realistic_svg_uses_derived_path(board: Pcb) -> None:
                     "realistic.substrate.fill": "#244426",
                     "realistic.solderMask.fill": "#0f5f32",
                     "realistic.coveredCopper.fill": "#9a6924",
+                    "realistic.exposedSubstrate.fill": "#244426",
                     "realistic.exposedCopper.fill": "#d6a13d",
                     "realistic.silkscreen.fill": "#ffffff",
                     "realistic.boardOutline.fill": "none",
@@ -2225,6 +2226,16 @@ def test_derived_serializer_preserves_mask_metadata_and_opening_polarity() -> No
                 ),
             ),
             DerivedLayer(
+                id="realistic:exposedSubstrate",
+                role=VisualRole(namespace="realistic", function="exposedSubstrate"),
+                primitives=(board_primitive,),
+                source_layers=("F.Mask", "Edge.Cuts"),
+                source_ids=("mask-opening-1", "board-1"),
+                style=ResolvedStyle(fill="#244426"),
+                clip=LayerClip(board=(board_primitive,)),
+                mask=LayerMask(board=(opening_primitive,), drills=(drill_primitive,)),
+            ),
+            DerivedLayer(
                 id="realistic:exposedCopper",
                 role=VisualRole(namespace="realistic", function="exposedCopper"),
                 primitives=(copper_primitive,),
@@ -2257,6 +2268,12 @@ def test_derived_serializer_preserves_mask_metadata_and_opening_polarity() -> No
     assert re.search(black_opening_pattern, svg)
     assert re.search(white_opening_pattern, svg)
     assert "<clipPath " in svg
+    assert re.search(
+        r'<g data-role="realistic\.exposedSubstrate"[^>]+'
+        r'clip-path="url\(#layer-board-clip-[^"]+\)"[^>]+'
+        r'mask="url\(#layer-clip-[^"]+\)"',
+        svg,
+    )
     assert re.search(
         r'<g data-role="realistic\.exposedCopper"[^>]+'
         r'clip-path="url\(#layer-board-clip-[^"]+\)"[^>]+'

@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, ClassVar, Self
 
 from phosphor_eda.altium._helpers import f64, i32, u16, u32
+from phosphor_eda.altium.enums import PcbPrimitiveFlags2
 from phosphor_eda.altium.record_parser import parse_record_payload
 
 if TYPE_CHECKING:
@@ -104,7 +105,7 @@ class ArcRecord:
     @property
     def is_keepout(self) -> bool:
         """Return whether this arc is an Altium keepout primitive."""
-        return self.flags2 == 0x02
+        return bool(PcbPrimitiveFlags2(self.flags2) & PcbPrimitiveFlags2.KEEPOUT)
 
     @classmethod
     def from_bytes(cls, body: bytes, ctx: ParseContext) -> Self | None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -792,6 +793,7 @@ def test_realistic_front_layers_project_physical_stack_in_order() -> None:
         "realistic:substrate",
         "realistic:solderMask",
         "realistic:coveredCopper",
+        "realistic:exposedSubstrate",
         "realistic:exposedCopper",
         "realistic:silkscreen",
         "realistic:boardOutline",
@@ -800,6 +802,7 @@ def test_realistic_front_layers_project_physical_stack_in_order() -> None:
         "substrate",
         "solderMask",
         "coveredCopper",
+        "exposedSubstrate",
         "exposedCopper",
         "silkscreen",
         "boardOutline",
@@ -808,6 +811,7 @@ def test_realistic_front_layers_project_physical_stack_in_order() -> None:
         "#2d2118",
         "#194d2e",
         "#6d4b1f",
+        "#2d2118",
         "#d6a13d",
         "#ffffff",
         "none",
@@ -817,6 +821,7 @@ def test_realistic_front_layers_project_physical_stack_in_order() -> None:
     assert by_id["realistic:substrate"].primitives
     assert by_id["realistic:solderMask"].primitives
     assert by_id["realistic:coveredCopper"].primitives
+    assert by_id["realistic:exposedSubstrate"].primitives
     assert by_id["realistic:exposedCopper"].primitives
     assert by_id["realistic:silkscreen"].primitives
     assert by_id["realistic:boardOutline"].primitives
@@ -834,6 +839,15 @@ def test_realistic_front_layers_project_physical_stack_in_order() -> None:
     )
     assert by_id["realistic:coveredCopper"].source_ids == ("copper-pad",)
     assert by_id["realistic:coveredCopper"].primitives[0].source_id == "copper-pad"
+    assert by_id["realistic:exposedSubstrate"].source_layers == ("F.Mask",)
+    assert by_id["realistic:exposedSubstrate"].mask is not None
+    assert tuple(
+        primitive.source_id for primitive in by_id["realistic:exposedSubstrate"].mask.board
+    ) == (
+        "mask-copper-opening",
+        "mask-substrate-opening",
+        "copper-pad",
+    )
     assert by_id["realistic:exposedCopper"].source_ids == ("copper-pad",)
     exposed_source_ids = tuple(
         primitive.source_id for primitive in by_id["realistic:exposedCopper"].primitives
@@ -911,6 +925,266 @@ def test_realistic_solder_mask_openings_include_visible_side_pads() -> None:
     assert tuple(primitive.source_id for primitive in exposed_copper.primitives) == ("front-pad",)
     assert exposed_copper.mask is not None
     assert tuple(primitive.source_id for primitive in exposed_copper.mask.board) == ("front-pad",)
+
+
+def test_realistic_solder_mask_openings_include_board_level_mask_graphics() -> None:
+    board = Pcb(
+        name="mask-graphics",
+        nets={},
+        footprints=[],
+        segments=[],
+        vias=[],
+        outline_lines=[
+            PcbLine(0.0, 0.0, 4.0, 0.0, "Edge.Cuts", 0.1),
+            PcbLine(4.0, 0.0, 4.0, 4.0, "Edge.Cuts", 0.1),
+            PcbLine(4.0, 4.0, 0.0, 4.0, "Edge.Cuts", 0.1),
+            PcbLine(0.0, 4.0, 0.0, 0.0, "Edge.Cuts", 0.1),
+        ],
+        outline_arcs=[],
+        layers=[
+            PcbLayer("F.Mask", LayerFunction.SOLDER_MASK, "front"),
+            PcbLayer("Edge.Cuts", LayerFunction.EDGE),
+        ],
+        graphic_lines=[PcbLine(1.0, 1.0, 3.0, 1.0, "F.Mask", 0.2)],
+    )
+    store = build_geometry_store(board, side="front")
+
+    layers = build_realistic_layers(
+        store,
+        _settings(side="front", rules=(), tokens=_realistic_tokens()),
+        warn=lambda _message: None,
+    )
+
+    by_id = {layer.id: layer for layer in layers}
+    solder_mask = by_id["realistic:solderMask"]
+    exposed_substrate = by_id["realistic:exposedSubstrate"]
+
+    assert solder_mask.mask is not None
+    assert tuple(primitive.kind for primitive in solder_mask.mask.openings) == (GeometryKind.MASK,)
+    assert tuple(primitive.source_layer for primitive in solder_mask.mask.openings) == ("F.Mask",)
+    assert tuple(primitive.tags.source_collection for primitive in solder_mask.mask.openings) == (
+        "graphic_lines",
+    )
+    assert exposed_substrate.mask is not None
+    assert tuple(primitive.kind for primitive in exposed_substrate.mask.board) == (
+        GeometryKind.MASK,
+    )
+
+
+def test_realistic_solder_mask_openings_do_not_fill_closed_board_level_mask_strokes() -> None:
+    board = Pcb(
+        name="closed-mask-contour",
+        nets={},
+        footprints=[],
+        segments=[],
+        vias=[],
+        outline_lines=[
+            PcbLine(0.0, 0.0, 6.0, 0.0, "Edge.Cuts", 0.1),
+            PcbLine(6.0, 0.0, 6.0, 6.0, "Edge.Cuts", 0.1),
+            PcbLine(6.0, 6.0, 0.0, 6.0, "Edge.Cuts", 0.1),
+            PcbLine(0.0, 6.0, 0.0, 0.0, "Edge.Cuts", 0.1),
+        ],
+        outline_arcs=[],
+        layers=[
+            PcbLayer("F.Mask", LayerFunction.SOLDER_MASK, "front"),
+            PcbLayer("Edge.Cuts", LayerFunction.EDGE),
+        ],
+        graphic_lines=[
+            PcbLine(1.0, 1.0, 5.0, 1.0, "F.Mask", 0.1),
+            PcbLine(5.0, 1.0, 5.0, 5.0, "F.Mask", 0.1),
+            PcbLine(5.0, 5.0, 1.0, 5.0, "F.Mask", 0.1),
+            PcbLine(1.0, 5.0, 1.0, 1.0, "F.Mask", 0.1),
+        ],
+    )
+    store = build_geometry_store(board, side="front")
+
+    layers = build_realistic_layers(
+        store,
+        _settings(side="front", rules=(), tokens=_realistic_tokens()),
+        warn=lambda _message: None,
+    )
+
+    solder_mask = next(layer for layer in layers if layer.id == "realistic:solderMask")
+    assert solder_mask.mask is not None
+    bounds = [_path_coordinate_bounds(opening.d) for opening in solder_mask.mask.openings]
+
+    assert len(solder_mask.mask.openings) == 4
+    assert all(not (max(xs) - min(xs) >= 3.9 and max(ys) - min(ys) >= 3.9) for xs, ys in bounds)
+    assert {opening.tags.source_collection for opening in solder_mask.mask.openings} == {
+        "graphic_lines"
+    }
+
+
+def test_realistic_solder_mask_arc_opening_preserves_arc_path_command() -> None:
+    board = Pcb(
+        name="mask-arc",
+        nets={},
+        footprints=[],
+        segments=[],
+        vias=[],
+        outline_lines=[
+            PcbLine(0.0, 0.0, 6.0, 0.0, "Edge.Cuts", 0.1),
+            PcbLine(6.0, 0.0, 6.0, 6.0, "Edge.Cuts", 0.1),
+            PcbLine(6.0, 6.0, 0.0, 6.0, "Edge.Cuts", 0.1),
+            PcbLine(0.0, 6.0, 0.0, 0.0, "Edge.Cuts", 0.1),
+        ],
+        outline_arcs=[],
+        layers=[
+            PcbLayer("F.Mask", LayerFunction.SOLDER_MASK, "front"),
+            PcbLayer("Edge.Cuts", LayerFunction.EDGE),
+        ],
+        graphic_arcs=[PcbArc(1.0, 3.0, 3.0, 1.0, 5.0, 3.0, "F.Mask", 0.2)],
+    )
+    store = build_geometry_store(board, side="front")
+
+    layers = build_realistic_layers(
+        store,
+        _settings(side="front", rules=(), tokens=_realistic_tokens()),
+        warn=lambda _message: None,
+    )
+
+    solder_mask = next(layer for layer in layers if layer.id == "realistic:solderMask")
+    assert solder_mask.mask is not None
+    [opening] = solder_mask.mask.openings
+    assert " A " in opening.d
+    assert opening.tags.source_collection == "graphic_arcs"
+
+
+def test_realistic_solder_mask_openings_expose_through_hole_pad_copper_on_back() -> None:
+    board = Pcb(
+        name="through-hole-mask",
+        nets={1: PcbNet(1, "GND")},
+        footprints=[
+            PcbFootprint(
+                reference="J1",
+                footprint_lib="test",
+                x=5.0,
+                y=2.0,
+                rotation=0.0,
+                layer="F.Cu",
+                pads=[
+                    PcbPad(
+                        number="1",
+                        x=5.0,
+                        y=2.0,
+                        width=1.2,
+                        height=1.2,
+                        shape="circle",
+                        layers=["*.Cu", "*.Mask"],
+                        net_number=1,
+                        net_name="GND",
+                        footprint_ref="J1",
+                        drill=0.4,
+                    ),
+                ],
+            )
+        ],
+        segments=[],
+        vias=[],
+        outline_lines=[
+            PcbLine(0.0, 0.0, 10.0, 0.0, "Edge.Cuts", 0.1),
+            PcbLine(10.0, 0.0, 10.0, 5.0, "Edge.Cuts", 0.1),
+            PcbLine(10.0, 5.0, 0.0, 5.0, "Edge.Cuts", 0.1),
+            PcbLine(0.0, 5.0, 0.0, 0.0, "Edge.Cuts", 0.1),
+        ],
+        outline_arcs=[],
+        layers=[
+            PcbLayer("F.Cu", LayerFunction.COPPER, "front"),
+            PcbLayer("B.Cu", LayerFunction.COPPER, "back"),
+            PcbLayer("F.Mask", LayerFunction.SOLDER_MASK, "front"),
+            PcbLayer("B.Mask", LayerFunction.SOLDER_MASK, "back"),
+            PcbLayer("Edge.Cuts", LayerFunction.EDGE),
+        ],
+    )
+    store = build_geometry_store(board, side="back")
+
+    layers = build_realistic_layers(
+        store,
+        _settings(
+            side="back",
+            rules=(LayerSelectionRule(match=LayerMatch(function="copper")),),
+            tokens=_realistic_tokens(),
+        ),
+        warn=lambda _message: None,
+    )
+
+    by_id = {layer.id: layer for layer in layers}
+    solder_mask = by_id["realistic:solderMask"]
+    exposed_copper = by_id["realistic:exposedCopper"]
+
+    assert solder_mask.mask is not None
+    assert tuple(primitive.source_layer for primitive in solder_mask.mask.openings) == ("B.Mask",)
+    assert tuple(primitive.data for primitive in solder_mask.mask.openings) == (
+        {"source-copper-layer": "B.Cu"},
+    )
+    assert tuple(primitive.source_layer for primitive in exposed_copper.primitives) == ("B.Cu",)
+    assert exposed_copper.mask is not None
+    assert tuple(primitive.source_layer for primitive in exposed_copper.mask.board) == ("B.Mask",)
+
+
+def test_realistic_solder_mask_opening_for_drilled_pad_is_not_smaller_than_drill() -> None:
+    board = Pcb(
+        name="drill-larger-than-pad",
+        nets={1: PcbNet(1, "GND")},
+        footprints=[
+            PcbFootprint(
+                reference="MT1",
+                footprint_lib="test",
+                x=5.0,
+                y=5.0,
+                rotation=0.0,
+                layer="F.Cu",
+                pads=[
+                    PcbPad(
+                        number="1",
+                        x=5.0,
+                        y=5.0,
+                        width=1.0,
+                        height=1.0,
+                        shape="circle",
+                        layers=["*.Cu"],
+                        net_number=1,
+                        net_name="GND",
+                        footprint_ref="MT1",
+                        drill=3.2,
+                    ),
+                ],
+            )
+        ],
+        segments=[],
+        vias=[],
+        outline_lines=[
+            PcbLine(0.0, 0.0, 10.0, 0.0, "Edge.Cuts", 0.1),
+            PcbLine(10.0, 0.0, 10.0, 10.0, "Edge.Cuts", 0.1),
+            PcbLine(10.0, 10.0, 0.0, 10.0, "Edge.Cuts", 0.1),
+            PcbLine(0.0, 10.0, 0.0, 0.0, "Edge.Cuts", 0.1),
+        ],
+        outline_arcs=[],
+        layers=[
+            PcbLayer("F.Cu", LayerFunction.COPPER, "front"),
+            PcbLayer("F.Mask", LayerFunction.SOLDER_MASK, "front"),
+            PcbLayer("Edge.Cuts", LayerFunction.EDGE),
+        ],
+    )
+    store = build_geometry_store(board, side="front")
+
+    layers = build_realistic_layers(
+        store,
+        _settings(
+            side="front",
+            rules=(LayerSelectionRule(match=LayerMatch(function="copper")),),
+            tokens=_realistic_tokens(),
+        ),
+        warn=lambda _message: None,
+    )
+
+    solder_mask = next(layer for layer in layers if layer.id == "realistic:solderMask")
+    assert solder_mask.mask is not None
+    [opening] = solder_mask.mask.openings
+    xs, ys = _path_coordinate_bounds(opening.d)
+
+    assert max(xs) - min(xs) >= 3.19
+    assert max(ys) - min(ys) >= 3.19
 
 
 def test_realistic_silkscreen_uses_source_mask_openings_even_when_mask_is_not_visible() -> None:
@@ -1833,6 +2107,7 @@ def _realistic_tokens() -> dict[str, str | int | float | bool]:
         "realistic.substrate.fill": "#2d2118",
         "realistic.solderMask.fill": "#194d2e",
         "realistic.coveredCopper.fill": "#6d4b1f",
+        "realistic.exposedSubstrate.fill": "#2d2118",
         "realistic.exposedCopper.fill": "#d6a13d",
         "realistic.silkscreen.fill": "#ffffff",
         "realistic.boardOutline.fill": "none",
@@ -1929,6 +2204,12 @@ def _require_style(layer: DerivedLayer) -> ResolvedStyle:
         msg = "missing test layer style"
         raise AssertionError(msg)
     return layer.style
+
+
+def _path_coordinate_bounds(path_d: str) -> tuple[list[float], list[float]]:
+    values = [float(value) for value in re.findall(r"-?\d+(?:\.\d+)?", path_d)]
+    coordinates = list(zip(values[0::2], values[1::2], strict=False))
+    return [x for x, _y in coordinates], [y for _x, y in coordinates]
 
 
 def _force_primitive_failure_for_ids(

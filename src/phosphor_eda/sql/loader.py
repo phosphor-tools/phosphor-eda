@@ -15,6 +15,7 @@ from phosphor_eda.pcb import PcbPolygon
 from phosphor_eda.sql.geometry import (
     arc_center_from_three_points,
     arc_sweep_angle,
+    arc_to_polyline,
     board_outline_polygon,
     footprint_bbox_polygon,
     footprint_side,
@@ -54,6 +55,7 @@ def load_database(project: Project) -> duckdb.DuckDBPyConnection:
         _load_zones(con, project.pcb)
         _load_keepouts(con, project.pcb)
         _load_footprint_graphics(con, project.pcb)
+        _load_board_graphics(con, project.pcb)
         _load_graphic_texts(con, project.pcb)
         _load_dimensions(con, project.pcb)
         _load_layers(con, project.pcb, project.stackup)
@@ -119,7 +121,7 @@ def _load_pads(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
             layer = _first_copper_layer(pad.layers)
             _ = con.execute(
                 """INSERT INTO pads VALUES
-                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))""",
+                (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))""",
                 [
                     pad.footprint_ref,
                     pad.number,
@@ -135,6 +137,9 @@ def _load_pads(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
                     layer,
                     pad.pin_function,
                     pad.pin_type,
+                    pad.mask_aperture_width,
+                    pad.mask_aperture_height,
+                    pad.mask_aperture_source or None,
                     _wkb(geom),
                 ],
             )
@@ -323,6 +328,32 @@ def _insert_graphic_lines(
         _ = con.execute(
             "INSERT INTO footprint_graphics VALUES (?, ?, ?, ST_GeomFromWKB(?))",
             [reference, line.layer, kind, _wkb(geom)],
+        )
+
+
+def _load_board_graphics(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
+    for line in pcb.graphic_lines:
+        geom = LineString([(line.start_x, line.start_y), (line.end_x, line.end_y)])
+        _ = con.execute(
+            "INSERT INTO board_graphics VALUES (?, ?, ?, ST_GeomFromWKB(?))",
+            [line.footprint_ref, line.layer, "line", _wkb(geom)],
+        )
+    for arc in pcb.graphic_arcs:
+        points = arc_to_polyline(
+            arc.start_x,
+            arc.start_y,
+            arc.mid_x,
+            arc.mid_y,
+            arc.end_x,
+            arc.end_y,
+            num_points=32,
+        )
+        if len(points) < 2:
+            continue
+        geom = LineString(points)
+        _ = con.execute(
+            "INSERT INTO board_graphics VALUES (?, ?, ?, ST_GeomFromWKB(?))",
+            [arc.footprint_ref, arc.layer, "arc", _wkb(geom)],
         )
 
 

@@ -36,6 +36,7 @@ class _TokenResolution:
 
 _STYLE_PROPERTIES = ("fill", "stroke", "opacity", "strokeWidthMm")
 _EDA_NAMESPACE = "eda"
+_REALISTIC_NAMESPACE = "realistic"
 _EDA_COPPER_ANCHOR_COLORS = {
     "F.Cu": "#cc0000",
     "Top Layer": "#cc0000",
@@ -111,7 +112,7 @@ def resolve_layer_style(
                 warned_missing_dimmed_tokens,
             )
         else:
-            default_fill = _resolve_eda_default_value(role, "fill", eda_layer_order)
+            default_fill = _resolve_default_value(tokens, role, "fill", eda_layer_order)
             if default_fill is None:
                 _raise_missing_token(role, "fill")
             style_values["fill"] = default_fill
@@ -132,7 +133,7 @@ def resolve_layer_style(
                 warned_missing_dimmed_tokens,
             )
         else:
-            default_value = _resolve_eda_default_value(role, prop, eda_layer_order)
+            default_value = _resolve_default_value(tokens, role, prop, eda_layer_order)
             if default_value is not None:
                 style_values[prop] = default_value
 
@@ -187,6 +188,27 @@ def _candidate_tokens(role: VisualRole, prop: str) -> tuple[str, ...]:
 
     candidates.append(f"{role.namespace}.layer.default.{prop}")
     return tuple(dict.fromkeys(candidates))
+
+
+def _resolve_default_value(
+    tokens: Mapping[str, object],
+    role: VisualRole,
+    prop: str,
+    eda_layer_order: int | None,
+) -> object | None:
+    if role.namespace == _REALISTIC_NAMESPACE:
+        return _resolve_realistic_default_value(tokens, role, prop)
+    return _resolve_eda_default_value(role, prop, eda_layer_order)
+
+
+def _resolve_realistic_default_value(
+    tokens: Mapping[str, object],
+    role: VisualRole,
+    prop: str,
+) -> object | None:
+    if role.function == "exposedSubstrate" and prop == "fill":
+        return tokens.get("realistic.substrate.fill")
+    return None
 
 
 def _resolve_eda_default_value(

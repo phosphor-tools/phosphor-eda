@@ -158,6 +158,9 @@ class PcbPad:
     # Mask overrides
     mask_expansion: float | None = None  # solder mask expansion override (mm)
     paste_expansion: float | None = None  # paste mask expansion override (mm)
+    mask_aperture_width: float | None = None  # explicit/derived solder mask opening width (mm)
+    mask_aperture_height: float | None = None  # explicit/derived solder mask opening height (mm)
+    mask_aperture_source: str = ""  # provenance for explicit/derived mask aperture data
 
 
 @dataclass
@@ -317,6 +320,8 @@ class Pcb:
     layers: list[PcbLayer] = field(default_factory=list)
     zones: list[PcbZone] = field(default_factory=list)
     keepouts: list[PcbKeepout] = field(default_factory=list)
+    graphic_lines: list[PcbLine] = field(default_factory=list)
+    graphic_arcs: list[PcbArc] = field(default_factory=list)
     graphic_texts: list[PcbGraphicText] = field(default_factory=list)
     dimensions: list[PcbDimension] = field(default_factory=list)
 

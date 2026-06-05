@@ -134,7 +134,7 @@ def geometry_to_skia_artwork(
     """Convert one raw renderable PCB primitive into Skia artwork."""
     payload = item.payload if item.payload is not None else item.source
     path: _Path | None = None
-    if item.kind is GeometryKind.PAD and isinstance(payload, PcbPad):
+    if item.kind in _PAD_KINDS and isinstance(payload, PcbPad):
         path = _pad_path(payload, target_layer_name)
     elif item.kind is GeometryKind.TRACE and isinstance(payload, PcbSegment):
         path = _trace_path(payload)
@@ -179,6 +179,8 @@ _POLYGON_KINDS = frozenset(
         GeometryKind.MECHANICAL,
     }
 )
+
+_PAD_KINDS = frozenset({GeometryKind.PAD, GeometryKind.MASK, GeometryKind.PASTE})
 
 
 def _new_path() -> _Path:

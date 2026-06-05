@@ -25,7 +25,13 @@ from phosphor_eda.pcb_render_drills import pad_drill_dimensions, pad_drill_geome
 from phosphor_eda.pcb_render_geometry import GeometryKind, RenderPoint
 from phosphor_eda.pcb_render_skia import geometry_to_skia_artwork, skia_path_to_svg_d
 from phosphor_eda.shapely_geometry import normalize_geometry
-from phosphor_eda.sql.geometry import arc_to_polyline, board_outline_polygon
+from phosphor_eda.sql.geometry import (
+    arc_center_from_three_points,
+    arc_sweep_angle,
+    arc_to_polyline,
+    board_outline_polygon,
+    pad_polygon,
+)
 from phosphor_eda.text_outlines import text_outline_geometry
 
 if TYPE_CHECKING:
@@ -128,6 +134,8 @@ def pad_solder_mask_opening_primitive(
     payload = item.payload if item.payload is not None else item.source
     if item.kind is not GeometryKind.PAD or not isinstance(payload, PcbPad):
         return None
+    if payload.mask_aperture_width is not None and payload.mask_aperture_height is not None:
+        return None
     copper_layer_name = _pad_copper_target_layer_name(payload, item.layer.name, side)
     if copper_layer_name is None:
         return None
@@ -145,7 +153,13 @@ def pad_solder_mask_opening_primitive(
     if expanded.width <= 0.0 or expanded.height <= 0.0:
         return None
 
-    temp_item = replace(item, payload=expanded, source=expanded)
+    opening_geometry = _pad_solder_mask_opening_geometry(expanded, expansion)
+    temp_item = replace(
+        item,
+        kind=GeometryKind.MASK,
+        payload=opening_geometry,
+        source=opening_geometry,
+    )
     primitive = geometry_to_svg_primitive(temp_item, target_layer_name=copper_layer_name)
     if primitive is None:
         return None
@@ -157,6 +171,16 @@ def pad_solder_mask_opening_primitive(
         tags=item.tags,
         data={"source-copper-layer": copper_layer_name},
     )
+
+
+def _pad_solder_mask_opening_geometry(pad: PcbPad, expansion: float) -> BaseGeometry:
+    opening = pad_polygon(pad)
+    drill = pad_drill_geometry(pad)
+    if drill is None or drill.is_empty:
+        return opening
+    if expansion > 0.0:
+        drill = drill.buffer(expansion)
+    return normalize_geometry(opening.union(drill))
 
 
 def _pad_copper_target_layer_name(pad: PcbPad, fallback_layer_name: str, side: str) -> str | None:
@@ -378,6 +402,9 @@ def _line_svg_path_d(line: PcbLine) -> str:
 
 
 def _arc_svg_path_d(arc: PcbArc) -> str:
+    arc_path = _stroked_arc_svg_path_d(arc)
+    if arc_path:
+        return arc_path
     return _stroked_polyline_path_d(
         arc_to_polyline(
             arc.start_x,
@@ -390,6 +417,66 @@ def _arc_svg_path_d(arc: PcbArc) -> str:
         ),
         arc.width,
     )
+
+
+def _stroked_arc_svg_path_d(arc: PcbArc) -> str:
+    if arc.width <= 0:
+        return ""
+    cx, cy, radius = arc_center_from_three_points(
+        arc.start_x,
+        arc.start_y,
+        arc.mid_x,
+        arc.mid_y,
+        arc.end_x,
+        arc.end_y,
+    )
+    if not all(math.isfinite(value) for value in (cx, cy, radius)) or radius <= 0:
+        return ""
+
+    half_width = arc.width / 2.0
+    outer_radius = radius + half_width
+    inner_radius = radius - half_width
+    if inner_radius <= 0:
+        return ""
+
+    sweep = arc_sweep_angle(
+        arc.start_x,
+        arc.start_y,
+        arc.mid_x,
+        arc.mid_y,
+        arc.end_x,
+        arc.end_y,
+        cx,
+        cy,
+    )
+    if not math.isfinite(sweep) or math.isclose(sweep, 0.0, abs_tol=1e-9):
+        return ""
+
+    start_angle = math.atan2(arc.start_y - cy, arc.start_x - cx)
+    end_angle = math.atan2(arc.end_y - cy, arc.end_x - cx)
+    outer_start = _arc_point(cx, cy, outer_radius, start_angle)
+    outer_end = _arc_point(cx, cy, outer_radius, end_angle)
+    inner_end = _arc_point(cx, cy, inner_radius, end_angle)
+    inner_start = _arc_point(cx, cy, inner_radius, start_angle)
+    large_arc = 1 if abs(sweep) > 180.0 else 0
+    sweep_flag = 1 if sweep > 0 else 0
+    inner_sweep_flag = 0 if sweep > 0 else 1
+
+    return " ".join(
+        (
+            f"M {outer_start[0]:.4f} {outer_start[1]:.4f}",
+            f"A {outer_radius:.4f} {outer_radius:.4f} 0 {large_arc} {sweep_flag} "
+            f"{outer_end[0]:.4f} {outer_end[1]:.4f}",
+            f"L {inner_end[0]:.4f} {inner_end[1]:.4f}",
+            f"A {inner_radius:.4f} {inner_radius:.4f} 0 {large_arc} {inner_sweep_flag} "
+            f"{inner_start[0]:.4f} {inner_start[1]:.4f}",
+            "Z",
+        )
+    )
+
+
+def _arc_point(cx: float, cy: float, radius: float, angle: float) -> tuple[float, float]:
+    return cx + radius * math.cos(angle), cy + radius * math.sin(angle)
 
 
 def _circle_svg_path_d(circle: PcbCircle) -> str:
@@ -545,13 +632,20 @@ _LINE_KINDS = frozenset(
         GeometryKind.SILK_LINE,
         GeometryKind.FAB_LINE,
         GeometryKind.BODY_LINE,
+        GeometryKind.MASK,
+        GeometryKind.PASTE,
+        GeometryKind.MECHANICAL,
     }
 )
 
 _ARC_KINDS = frozenset(
     {
+        GeometryKind.SILK_ARC,
         GeometryKind.FAB_ARC,
         GeometryKind.BODY_ARC,
+        GeometryKind.MASK,
+        GeometryKind.PASTE,
+        GeometryKind.MECHANICAL,
     }
 )
 

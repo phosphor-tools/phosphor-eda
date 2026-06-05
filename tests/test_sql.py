@@ -7,12 +7,15 @@ import duckdb
 import pytest
 
 from phosphor_eda.convert import load_project
+from phosphor_eda.pcb import LayerFunction, Pcb, PcbArc, PcbLayer, PcbLine
+from phosphor_eda.project import Project
 from phosphor_eda.sql import load_database
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SWD_SWITCH_PCB = FIXTURES / "swd_switch.kicad_pcb"
 JETSON_ORIN_PRO = FIXTURES / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pro"
 ORANGECRAB_PCB = FIXTURES / "orangecrab.kicad_pcb"
+PI_MX8_PCB = FIXTURES / "altium/pi-mx8/PCB/PiMX8MP_r0.3.PcbDoc"
 
 
 def _count(db: duckdb.DuckDBPyConnection, sql: str) -> int:
@@ -64,6 +67,30 @@ class TestPads:
         assert _count(db, "SELECT count(*) FROM pads WHERE geom IS NULL") == 0
 
 
+def test_altium_template_mask_apertures_are_queryable_from_pads_table() -> None:
+    project = load_project(PI_MX8_PCB)
+    con = load_database(project)
+    try:
+        rows = con.execute(
+            """
+            SELECT mask_aperture_width, mask_aperture_height, mask_aperture_source
+            FROM pads
+            WHERE reference = 'FREEPADS'
+              AND pad_number = 'MT'
+              AND mask_aperture_source IS NOT NULL
+            ORDER BY x, y
+            """
+        ).fetchall()
+    finally:
+        con.close()
+
+    assert len(rows) == 4
+    for width, height, source in rows:
+        assert width == pytest.approx(5.8, abs=0.02)
+        assert height == pytest.approx(5.85, abs=0.02)
+        assert source.startswith("altium:drill-manager-template:")
+
+
 class TestSegments:
     def test_count(self, db: duckdb.DuckDBPyConnection) -> None:
         assert _count(db, "SELECT count(*) FROM segments") == 276
@@ -112,6 +139,44 @@ class TestKeepouts:
 class TestGraphicTexts:
     def test_count(self, db: duckdb.DuckDBPyConnection) -> None:
         assert _count(db, "SELECT count(*) FROM graphic_texts") == 8
+
+
+def test_board_graphics_are_loaded_as_queryable_geometry() -> None:
+    pcb = Pcb(
+        name="board-graphics",
+        nets={},
+        footprints=[],
+        segments=[],
+        vias=[],
+        outline_lines=[
+            PcbLine(0.0, 0.0, 4.0, 0.0, "Edge.Cuts", 0.1),
+            PcbLine(4.0, 0.0, 4.0, 4.0, "Edge.Cuts", 0.1),
+            PcbLine(4.0, 4.0, 0.0, 4.0, "Edge.Cuts", 0.1),
+            PcbLine(0.0, 4.0, 0.0, 0.0, "Edge.Cuts", 0.1),
+        ],
+        outline_arcs=[],
+        layers=[
+            PcbLayer("F.Mask", LayerFunction.SOLDER_MASK, "front"),
+            PcbLayer("B.Mask", LayerFunction.SOLDER_MASK, "back"),
+            PcbLayer("Edge.Cuts", LayerFunction.EDGE),
+        ],
+        graphic_lines=[PcbLine(1.0, 1.0, 3.0, 1.0, "F.Mask", 0.2)],
+        graphic_arcs=[PcbArc(1.0, 3.0, 2.0, 4.0, 3.0, 3.0, "B.Mask", 0.15)],
+    )
+    con = load_database(Project(name="board-graphics", pcb=pcb))
+    try:
+        rows = con.execute(
+            """
+            SELECT reference, layer, kind
+            FROM board_graphics
+            WHERE geom IS NOT NULL
+            ORDER BY kind, layer
+            """
+        ).fetchall()
+    finally:
+        con.close()
+
+    assert rows == [("", "B.Mask", "arc"), ("", "F.Mask", "line")]
 
 
 class TestLayers:

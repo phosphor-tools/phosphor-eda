@@ -474,6 +474,8 @@ def _parse_fp_arcs(
 _SILK_LAYERS = {"F.SilkS", "B.SilkS", "F.Silkscreen", "B.Silkscreen"}
 _COURTYARD_LAYERS = {"F.CrtYd", "B.CrtYd"}
 _FAB_LAYERS = {"F.Fab", "B.Fab"}
+_MASK_LAYERS = {"F.Mask", "B.Mask"}
+_PASTE_LAYERS = {"F.Paste", "B.Paste"}
 _EDGE_LAYERS = {"Edge.Cuts"}
 
 
@@ -616,7 +618,15 @@ def _parse_fp_models(fp_sexpr: SExpNode) -> list[PcbModel3D]:
 
 def _parse_footprint(
     fp_sexpr: SExpNode,
-) -> tuple[PcbFootprint, list[PcbLine], list[PcbArc], list[PcbPolygon], list[PcbKeepout]]:
+) -> tuple[
+    PcbFootprint,
+    list[PcbLine],
+    list[PcbArc],
+    list[PcbPolygon],
+    list[PcbKeepout],
+    list[PcbLine],
+    list[PcbArc],
+]:
     """Parse a footprint plus any board-level artwork authored inside it."""
     lib_name = str(fp_sexpr[1])
 
@@ -641,12 +651,15 @@ def _parse_footprint(
     fab_arcs = _parse_fp_arcs(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS, fp_ref=ref)
     edge_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _EDGE_LAYERS)
     edge_arcs = _parse_fp_arcs(fp_sexpr, fp_x, fp_y, fp_rot, _EDGE_LAYERS)
+    graphic_layers = _MASK_LAYERS | _PASTE_LAYERS
+    graphic_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, graphic_layers, fp_ref=ref)
+    graphic_arcs = _parse_fp_arcs(fp_sexpr, fp_x, fp_y, fp_rot, graphic_layers, fp_ref=ref)
     fp_polys = _parse_fp_polys(
         fp_sexpr,
         fp_x,
         fp_y,
         fp_rot,
-        _FAB_LAYERS | _SILK_LAYERS,
+        _FAB_LAYERS | _SILK_LAYERS | _MASK_LAYERS,
         fp_ref=ref,
     )
     fp_keepouts = _parse_fp_keepouts(fp_sexpr, fp_x, fp_y, fp_rot, fp_ref=ref)
@@ -679,7 +692,7 @@ def _parse_footprint(
         bbox=bbox,
         properties=properties,
     )
-    return fp, edge_lines, edge_arcs, fp_polys, fp_keepouts
+    return fp, edge_lines, edge_arcs, fp_polys, fp_keepouts, graphic_lines, graphic_arcs
 
 
 # ---------------------------------------------------------------------------
@@ -726,11 +739,12 @@ def _parse_via(via_sexpr: SExpNode) -> PcbVia:
 # ---------------------------------------------------------------------------
 
 
-def _parse_gr_line(item: SExpNode) -> PcbLine | None:
-    """Parse a (gr_line ...) if it's on Edge.Cuts."""
+def _parse_gr_line_any_layer(item: SExpNode) -> PcbLine | None:
+    """Parse a top-level (gr_line ...) on any layer."""
     layer_node = sexp.find(item, "layer")
-    if not layer_node or sexp.val(layer_node) != "Edge.Cuts":
+    if not layer_node:
         return None
+    layer = sexp.val(layer_node)
     start_node = sexp.find(item, "start")
     end_node = sexp.find(item, "end")
     if not start_node or not end_node:
@@ -746,18 +760,15 @@ def _parse_gr_line(item: SExpNode) -> PcbLine | None:
         w = _float_val(sw) if sw else 0.1
     else:
         w = 0.1
-    return PcbLine(start[0], start[1], end[0], end[1], "Edge.Cuts", w)
+    return PcbLine(start[0], start[1], end[0], end[1], layer, w)
 
 
-def _parse_gr_arc(item: SExpNode) -> PcbArc | None:
-    """Parse a (gr_arc ...) if it's on Edge.Cuts.
-
-    KiCad 6+ uses start/mid/end; KiCad 5 uses start/end/angle where
-    start is the centre and end is one endpoint.
-    """
+def _parse_gr_arc_any_layer(item: SExpNode) -> PcbArc | None:
+    """Parse a top-level (gr_arc ...) on any layer."""
     layer_node = sexp.find(item, "layer")
-    if not layer_node or sexp.val(layer_node) != "Edge.Cuts":
+    if not layer_node:
         return None
+    layer = sexp.val(layer_node)
     mid_node = sexp.find(item, "mid")
     start_node = sexp.find(item, "start")
     end_node = sexp.find(item, "end")
@@ -777,7 +788,7 @@ def _parse_gr_arc(item: SExpNode) -> PcbArc | None:
         start = _xy(start_node)
         mid = _xy(mid_node)
         end = _xy(end_node)
-        return PcbArc(start[0], start[1], mid[0], mid[1], end[0], end[1], "Edge.Cuts", w)
+        return PcbArc(start[0], start[1], mid[0], mid[1], end[0], end[1], layer, w)
     else:
         # KiCad 5: start=centre, end=one endpoint, angle=sweep
         angle_node = sexp.find(item, "angle")
@@ -798,7 +809,7 @@ def _parse_gr_arc(item: SExpNode) -> PcbArc | None:
         cos_f, sin_f = math.cos(rad), math.sin(rad)
         fx = cx + dx * cos_f - dy * sin_f
         fy = cy + dx * sin_f + dy * cos_f
-        return PcbArc(ex, ey, mx, my, fx, fy, "Edge.Cuts", w)
+        return PcbArc(ex, ey, mx, my, fx, fy, layer, w)
 
 
 # ---------------------------------------------------------------------------
@@ -1234,15 +1245,27 @@ def parse_kicad_pcb_from_sexpr(sexpr: SExpNode, *, default_name: str = "") -> Pc
     edge_arcs_from_fps: list[PcbArc] = []
     polygons_from_fps: list[PcbPolygon] = []
     keepouts_from_fps: list[PcbKeepout] = []
+    graphic_lines_from_fps: list[PcbLine] = []
+    graphic_arcs_from_fps: list[PcbArc] = []
     # KiCad 6+ uses "footprint", KiCad 5 uses "module"
     for tag in ("footprint", "module"):
         for fp_sexpr in sexp.find_all(sexpr, tag):
-            fp, edge_lines, edge_arcs, fp_polys, fp_keepouts = _parse_footprint(fp_sexpr)
+            (
+                fp,
+                edge_lines,
+                edge_arcs,
+                fp_polys,
+                fp_keepouts,
+                fp_graphic_lines,
+                fp_graphic_arcs,
+            ) = _parse_footprint(fp_sexpr)
             footprints.append(fp)
             edge_lines_from_fps.extend(edge_lines)
             edge_arcs_from_fps.extend(edge_arcs)
             polygons_from_fps.extend(fp_polys)
             keepouts_from_fps.extend(fp_keepouts)
+            graphic_lines_from_fps.extend(fp_graphic_lines)
+            graphic_arcs_from_fps.extend(fp_graphic_arcs)
 
     segments = [_parse_segment(s) for s in sexp.find_all(sexpr, "segment")]
     vias = [_parse_via(v) for v in sexp.find_all(sexpr, "via")]
@@ -1279,16 +1302,26 @@ def parse_kicad_pcb_from_sexpr(sexpr: SExpNode, *, default_name: str = "") -> Pc
     # Board outline: top-level gr_line/gr_arc on Edge.Cuts + fp-internal ones
     outline_lines: list[PcbLine] = []
     outline_arcs: list[PcbArc] = []
+    graphic_lines: list[PcbLine] = []
+    graphic_arcs: list[PcbArc] = []
     for item in sexp.find_all(sexpr, "gr_line"):
-        ln = _parse_gr_line(item)
+        ln = _parse_gr_line_any_layer(item)
         if ln:
-            outline_lines.append(ln)
+            if ln.layer == "Edge.Cuts":
+                outline_lines.append(ln)
+            else:
+                graphic_lines.append(ln)
     for item in sexp.find_all(sexpr, "gr_arc"):
-        arc = _parse_gr_arc(item)
+        arc = _parse_gr_arc_any_layer(item)
         if arc:
-            outline_arcs.append(arc)
+            if arc.layer == "Edge.Cuts":
+                outline_arcs.append(arc)
+            else:
+                graphic_arcs.append(arc)
     outline_lines.extend(edge_lines_from_fps)
     outline_arcs.extend(edge_arcs_from_fps)
+    graphic_lines.extend(graphic_lines_from_fps)
+    graphic_arcs.extend(graphic_arcs_from_fps)
 
     # Graphic texts (board-level, not inside footprints)
     graphic_texts: list[PcbGraphicText] = []
@@ -1310,5 +1343,7 @@ def parse_kicad_pcb_from_sexpr(sexpr: SExpNode, *, default_name: str = "") -> Pc
         layers=layer_defs,
         zones=zones,
         keepouts=keepouts,
+        graphic_lines=graphic_lines,
+        graphic_arcs=graphic_arcs,
         graphic_texts=graphic_texts,
     )

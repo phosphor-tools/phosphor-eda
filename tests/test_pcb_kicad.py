@@ -249,6 +249,146 @@ def test_polygon_total_points(board: Pcb) -> None:
     assert 5000 < total < 7000
 
 
+def test_footprint_mask_polygon_is_preserved_as_board_polygon() -> None:
+    data = sexpdata.loads(
+        """
+        (kicad_pcb
+          (layers
+            (0 "F.Cu" signal)
+            (31 "B.Cu" signal)
+            (36 "B.Mask" user)
+            (37 "F.Mask" user)
+          )
+          (footprint "Antenna"
+            (layer "F.Cu")
+            (at 10 20 90)
+            (property "Reference" "AE1")
+            (property "Value" "chip")
+            (fp_poly
+              (pts
+                (xy 0 0)
+                (xy 2 0)
+                (xy 2 1)
+                (xy 0 1)
+              )
+              (layer "F.Mask")
+              (width 0)
+              (fill solid)
+            )
+          )
+        )
+        """
+    )
+
+    board = parse_kicad_pcb_from_sexpr(list(data[1:]), default_name="mask-poly")
+
+    mask_polygons = [polygon for polygon in board.polygons if polygon.layer == "F.Mask"]
+    assert len(mask_polygons) == 1
+    assert mask_polygons[0].footprint_ref == "AE1"
+    assert mask_polygons[0].points == [(10.0, 20.0), (10.0, 18.0), (11.0, 18.0), (11.0, 20.0)]
+
+
+def test_top_level_mask_lines_and_arcs_are_preserved_as_board_graphics() -> None:
+    data = sexpdata.loads(
+        """
+        (kicad_pcb
+          (layers
+            (0 "F.Cu" signal)
+            (31 "B.Cu" signal)
+            (36 "B.Mask" user)
+            (37 "F.Mask" user)
+          )
+          (gr_line
+            (start 1 2)
+            (end 3 2)
+            (stroke (width 0.2) (type solid))
+            (layer "F.Mask")
+          )
+          (gr_arc
+            (start 1 4)
+            (mid 2 5)
+            (end 3 4)
+            (stroke (width 0.15) (type solid))
+            (layer "B.Mask")
+          )
+        )
+        """
+    )
+
+    board = parse_kicad_pcb_from_sexpr(list(data[1:]), default_name="mask-graphics")
+
+    assert [
+        (line.layer, line.start_x, line.start_y, line.end_x, line.end_y, line.width)
+        for line in board.graphic_lines
+    ] == [("F.Mask", 1.0, 2.0, 3.0, 2.0, 0.2)]
+    assert [
+        (arc.layer, arc.start_x, arc.mid_x, arc.end_x, arc.width) for arc in board.graphic_arcs
+    ] == [("B.Mask", 1.0, 2.0, 3.0, 0.15)]
+
+
+def test_footprint_mask_lines_and_arcs_are_preserved_as_board_graphics() -> None:
+    data = sexpdata.loads(
+        """
+        (kicad_pcb
+          (layers
+            (0 "F.Cu" signal)
+            (31 "B.Cu" signal)
+            (36 "B.Mask" user)
+            (37 "F.Mask" user)
+          )
+          (footprint "Antenna"
+            (layer "F.Cu")
+            (at 10 20 90)
+            (property "Reference" "AE1")
+            (property "Value" "chip")
+            (fp_line
+              (start 0 0)
+              (end 2 0)
+              (stroke (width 0.2) (type solid))
+              (layer "F.Mask")
+            )
+            (fp_arc
+              (start 0 0)
+              (mid 1 1)
+              (end 2 0)
+              (stroke (width 0.15) (type solid))
+              (layer "B.Mask")
+            )
+          )
+        )
+        """
+    )
+
+    board = parse_kicad_pcb_from_sexpr(list(data[1:]), default_name="footprint-mask-graphics")
+
+    assert [
+        (
+            line.layer,
+            line.footprint_ref,
+            line.start_x,
+            line.start_y,
+            line.end_x,
+            line.end_y,
+            line.width,
+        )
+        for line in board.graphic_lines
+    ] == [("F.Mask", "AE1", 10.0, 20.0, 10.0, 18.0, 0.2)]
+    assert [
+        (
+            arc.layer,
+            arc.footprint_ref,
+            arc.start_x,
+            arc.start_y,
+            arc.mid_x,
+            arc.mid_y,
+            arc.end_x,
+            arc.end_y,
+            arc.width,
+        )
+        for arc in board.graphic_arcs
+    ] == [("B.Mask", "AE1", 10.0, 20.0, 11.0, 19.0, 10.0, 18.0, 0.15)]
+
+
 def test_trace_arc_count(board: Pcb) -> None:
     """swd_switch has no trace arcs."""
     assert len(board.trace_arcs) == 0

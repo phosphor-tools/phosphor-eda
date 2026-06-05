@@ -93,13 +93,16 @@ _OBJECT_KIND_ALIASES = {
     "silkscreen": frozenset(
         {
             GeometryKind.SILK_LINE,
+            GeometryKind.SILK_ARC,
             GeometryKind.SILK_POLYGON,
             GeometryKind.BOARD_GRAPHIC_TEXT,
         }
     ),
-    "silk": frozenset({GeometryKind.SILK_LINE, GeometryKind.SILK_POLYGON}),
+    "silk": frozenset({GeometryKind.SILK_LINE, GeometryKind.SILK_ARC, GeometryKind.SILK_POLYGON}),
     "silk_line": frozenset({GeometryKind.SILK_LINE}),
     "silk_lines": frozenset({GeometryKind.SILK_LINE}),
+    "silk_arc": frozenset({GeometryKind.SILK_ARC}),
+    "silk_arcs": frozenset({GeometryKind.SILK_ARC}),
     "silk_polygon": frozenset({GeometryKind.SILK_POLYGON}),
     "silk_polygons": frozenset({GeometryKind.SILK_POLYGON}),
     "fab": frozenset(
@@ -281,6 +284,8 @@ def solder_mask_opening_primitives(
             primitive = geometry_to_svg_primitive(item, target_layer_name=item.layer.name)
             if primitive is not None:
                 primitives.append(primitive)
+            continue
+        if item.kind is GeometryKind.PAD and item.layer.side not in {"", side}:
             continue
         primitive = pad_solder_mask_opening_primitive(
             item,

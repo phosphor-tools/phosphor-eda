@@ -12,10 +12,11 @@
     "excludeComponents": ["R", "C", "L", "TP"]
   },
   "tokens": {
-    "realistic.substrate.fill": "#1a5c2a",
+    "realistic.substrate.fill": "#b58b55",
     "realistic.solderMask.fill": "#1f7a3a",
     "realistic.coveredCopper.fill": "#31443a",
     "realistic.coveredCopper.opacity": 0.55,
+    "realistic.exposedSubstrate.fill": "#b58b55",
     "realistic.exposedCopper.fill": "#b87333",
     "realistic.exposedCopper.opacity": 0.85,
     "realistic.silkscreen.fill": "#ffffff",

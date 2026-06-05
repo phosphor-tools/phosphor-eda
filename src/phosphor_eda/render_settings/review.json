@@ -11,10 +11,11 @@
     ]
   },
   "tokens": {
-    "realistic.substrate.fill": "#1a5c2a",
+    "realistic.substrate.fill": "#b58b55",
     "realistic.solderMask.fill": "#1f7a3a",
     "realistic.coveredCopper.fill": "#145222",
     "realistic.coveredCopper.opacity": 0.6,
+    "realistic.exposedSubstrate.fill": "#b58b55",
     "realistic.exposedCopper.fill": "#b87333",
     "realistic.exposedCopper.opacity": 0.9,
     "realistic.silkscreen.fill": "#ffffff",

@@ -13,6 +13,8 @@ All output coordinates are in millimetres with Y increasing downward.
 from __future__ import annotations
 
 import math
+import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import olefile
@@ -148,6 +150,24 @@ _PAD_SHAPE_ALT_ROUNDRECT = 9
 
 # Altium region kind values.  Kind 1 is a polygon-pour cutout, not copper.
 _REGION_KIND_POLYGON_CUTOUT = 1
+
+_PAD_TEMPLATE_MASK_RE = re.compile(
+    r"^r(?P<pad_w>\d+)_(?P<pad_h>\d+)hn(?P<drill>\d+)r(?P<rounding>\d+)"
+    r"m(?P<mask_w>\d+)_(?P<mask_h>\d+)$"
+)
+
+
+@dataclass(frozen=True)
+class _PadMaskAperture:
+    width: float
+    height: float
+    source: str
+
+
+@dataclass(frozen=True)
+class _DrillManagerRecord:
+    properties: dict[str, str]
+    primitive_indices: tuple[int, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -450,15 +470,17 @@ def _parse_components(data: bytes, layer_map: dict[int, PcbLayer]) -> list[PcbFo
 
 def _parse_tracks(
     data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext
-) -> tuple[list[PcbSegment], dict[int, list[PcbLine]]]:
+) -> tuple[list[PcbSegment], dict[int, list[PcbLine]], list[PcbLine]]:
     """Parse Tracks6/Data → board-level segments + per-component lines.
 
-    Returns (segments, comp_lines) where comp_lines maps component index
-    to a list of PcbLine objects for silkscreen/fab assignment.
+    Returns (segments, comp_lines, graphic_lines) where comp_lines maps
+    component index to a list of PcbLine objects for silkscreen/fab assignment
+    and graphic_lines preserves board-level non-copper source artwork.
     """
     records = _read_binary_records(data)
     segments: list[PcbSegment] = []
     comp_lines: dict[int, list[PcbLine]] = {}
+    graphic_lines: list[PcbLine] = []
 
     for rec_type, body in records:
         if rec_type != 4:
@@ -490,6 +512,17 @@ def _parse_tracks(
                         net_number=_net_number(track.net),
                     )
                 )
+            elif layer_map[track.layer].function != LayerFunction.EDGE:
+                graphic_lines.append(
+                    PcbLine(
+                        start_x=x1,
+                        start_y=y1,
+                        end_x=x2,
+                        end_y=y2,
+                        layer=layer,
+                        width=width,
+                    )
+                )
         else:
             comp_lines.setdefault(track.component, []).append(
                 PcbLine(
@@ -502,7 +535,7 @@ def _parse_tracks(
                 )
             )
 
-    return segments, comp_lines
+    return segments, comp_lines, graphic_lines
 
 
 def _parse_vias(data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext) -> list[PcbVia]:
@@ -538,16 +571,18 @@ def _parse_vias(data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext) 
 
 def _parse_arcs(
     data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext
-) -> tuple[list[PcbTraceArc], dict[int, list[PcbArc]], list[PcbKeepout]]:
+) -> tuple[list[PcbTraceArc], dict[int, list[PcbArc]], list[PcbKeepout], list[PcbArc]]:
     """Parse Arcs6/Data → board-level trace arcs + per-component arcs.
 
-    Returns (trace_arcs, comp_arcs, keepouts) where comp_arcs maps component
-    index to a list of PcbArc objects.
+    Returns (trace_arcs, comp_arcs, keepouts, graphic_arcs) where comp_arcs
+    maps component index to a list of PcbArc objects and graphic_arcs preserves
+    board-level non-copper source artwork.
     """
     records = _read_binary_records(data)
     trace_arcs: list[PcbTraceArc] = []
     comp_arcs: dict[int, list[PcbArc]] = {}
     keepouts: list[PcbKeepout] = []
+    graphic_arcs: list[PcbArc] = []
 
     for rec_type, body in records:
         if rec_type != 1:
@@ -571,7 +606,7 @@ def _parse_arcs(
         )
         sy, my, ey = -sy, -my, -ey
 
-        if arc.component == _COMPONENT_NONE and arc.layer in _COPPER_LAYERS:
+        if arc.component == _COMPONENT_NONE:
             if arc.is_keepout:
                 keepouts.append(
                     _keepout_from_arc(
@@ -584,19 +619,33 @@ def _parse_arcs(
                     )
                 )
                 continue
-            trace_arcs.append(
-                PcbTraceArc(
-                    start_x=sx,
-                    start_y=sy,
-                    mid_x=mx,
-                    mid_y=my,
-                    end_x=ex,
-                    end_y=ey,
-                    width=width,
-                    layer=layer,
-                    net_number=_net_number(arc.net),
+            if arc.layer in _COPPER_LAYERS:
+                trace_arcs.append(
+                    PcbTraceArc(
+                        start_x=sx,
+                        start_y=sy,
+                        mid_x=mx,
+                        mid_y=my,
+                        end_x=ex,
+                        end_y=ey,
+                        width=width,
+                        layer=layer,
+                        net_number=_net_number(arc.net),
+                    )
                 )
-            )
+            elif layer_map[arc.layer].function != LayerFunction.EDGE:
+                graphic_arcs.append(
+                    PcbArc(
+                        start_x=sx,
+                        start_y=sy,
+                        mid_x=mx,
+                        mid_y=my,
+                        end_x=ex,
+                        end_y=ey,
+                        layer=layer,
+                        width=width,
+                    )
+                )
         elif arc.component != _COMPONENT_NONE:
             comp_arcs.setdefault(arc.component, []).append(
                 PcbArc(
@@ -611,7 +660,7 @@ def _parse_arcs(
                 )
             )
 
-    return trace_arcs, comp_arcs, keepouts
+    return trace_arcs, comp_arcs, keepouts, graphic_arcs
 
 
 def _keepout_from_arc(
@@ -791,6 +840,131 @@ def _parse_pads(
     return pads
 
 
+def _apply_drill_manager_mask_apertures(
+    raw_pads: list[tuple[int, PcbPad]],
+    drill_manager_data: bytes,
+) -> None:
+    """Attach validated Altium pad-template solder-mask apertures to pads.
+
+    Altium pad/via templates can carry mask opening data. This parser only
+    uses a narrow, validated template-name encoding when richer template data
+    is not present in the file streams.
+    """
+    if not drill_manager_data:
+        return
+    for record in _parse_drill_manager_records(drill_manager_data):
+        aperture = _pad_mask_aperture_from_drill_manager_record(record)
+        if aperture is None:
+            continue
+        for primitive_index in record.primitive_indices:
+            if primitive_index < 0 or primitive_index >= len(raw_pads):
+                continue
+            _component, pad = raw_pads[primitive_index]
+            if not _pad_matches_template_aperture_source(pad, record.properties):
+                continue
+            pad.mask_aperture_width = aperture.width
+            pad.mask_aperture_height = aperture.height
+            pad.mask_aperture_source = aperture.source
+
+
+def _parse_drill_manager_records(data: bytes) -> tuple[_DrillManagerRecord, ...]:
+    records: list[_DrillManagerRecord] = []
+    pos = 0
+    while pos < len(data):
+        header_size = _drill_manager_header_size(data, pos)
+        if header_size == 0:
+            break
+        prop_len = u32(data, pos + header_size - 4)
+        prop_start = pos + header_size
+        prop_end = prop_start + prop_len
+        if prop_end > len(data):
+            break
+        properties = parse_record_payload(data[prop_start:prop_end].rstrip(b"\0"))
+        pos = prop_end
+        if pos + 4 > len(data):
+            break
+        primitive_count = u32(data, pos)
+        pos += 4
+        refs_end = pos + primitive_count * 4
+        if refs_end > len(data):
+            break
+        primitive_indices = tuple(u32(data, pos + index * 4) for index in range(primitive_count))
+        pos = refs_end
+        if properties:
+            records.append(
+                _DrillManagerRecord(
+                    properties=properties,
+                    primitive_indices=primitive_indices,
+                )
+            )
+    return tuple(records)
+
+
+def _drill_manager_header_size(data: bytes, pos: int) -> int:
+    for header_size in (8, 12):
+        if pos + header_size > len(data):
+            continue
+        prop_len = u32(data, pos + header_size - 4)
+        prop_start = pos + header_size
+        prop_end = prop_start + prop_len
+        if prop_len <= 0 or prop_end > len(data):
+            continue
+        if data[prop_start : prop_start + 1] == b"|":
+            return header_size
+    return 0
+
+
+def _pad_mask_aperture_from_drill_manager_record(
+    record: _DrillManagerRecord,
+) -> _PadMaskAperture | None:
+    properties = record.properties
+    if properties.get("objectid", "").lower() != "pad":
+        return None
+    template_name = properties.get("templatename", "")
+    match = _PAD_TEMPLATE_MASK_RE.fullmatch(template_name)
+    if match is None:
+        return None
+    mask_width = _template_hundredths_mm(match.group("mask_w"))
+    mask_height = _template_hundredths_mm(match.group("mask_h"))
+    if mask_width <= 0.0 or mask_height <= 0.0:
+        return None
+    return _PadMaskAperture(
+        width=mask_width,
+        height=mask_height,
+        source=f"altium:drill-manager-template:{template_name}",
+    )
+
+
+def _pad_matches_template_aperture_source(
+    pad: PcbPad,
+    properties: dict[str, str],
+) -> bool:
+    template_name = properties.get("templatename", "")
+    match = _PAD_TEMPLATE_MASK_RE.fullmatch(template_name)
+    if match is None:
+        return False
+    expected_width = _template_hundredths_mm(match.group("pad_w"))
+    expected_height = _template_hundredths_mm(match.group("pad_h"))
+    expected_drill = _template_hundredths_mm(match.group("drill"))
+    expected_mask_width = _template_hundredths_mm(match.group("mask_w"))
+    expected_mask_height = _template_hundredths_mm(match.group("mask_h"))
+    return (
+        _close_mm(pad.width, expected_width)
+        and _close_mm(pad.height, expected_height)
+        and _close_mm(pad.drill, expected_drill)
+        and expected_mask_width >= max(pad.width, pad.drill)
+        and expected_mask_height >= max(pad.height, pad.drill)
+    )
+
+
+def _template_hundredths_mm(raw: str) -> float:
+    return int(raw) / 100.0
+
+
+def _close_mm(value: float, expected: float) -> bool:
+    return math.isclose(value, expected, abs_tol=0.03)
+
+
 def _parse_texts(
     data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext
 ) -> list[tuple[int, PcbText]]:
@@ -851,7 +1025,7 @@ def _parse_texts(
 def _parse_fills(
     data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext
 ) -> list[PcbPolygon]:
-    """Parse Fills6/Data → list of PcbPolygon (rectangular copper fills)."""
+    """Parse Fills6/Data → list of rectangular source-layer polygons."""
     records = _read_binary_records(data)
     fills: list[PcbPolygon] = []
 
@@ -859,7 +1033,10 @@ def _parse_fills(
         if rec_type != 6:
             continue
         fill = FillRecord.from_bytes(body, ctx)
-        if fill is None or fill.layer not in _COPPER_LAYERS:
+        if fill is None:
+            continue
+        layer = _layer_name(fill.layer, layer_map)
+        if not layer:
             continue
 
         x1 = _int_to_mm(fill.pos1[0])
@@ -882,8 +1059,8 @@ def _parse_fills(
         fills.append(
             PcbPolygon(
                 points=points,
-                layer=_layer_name(fill.layer, layer_map),
-                net_number=_net_number(fill.net),
+                layer=layer,
+                net_number=_net_number(fill.net) if fill.layer in _COPPER_LAYERS else 0,
             )
         )
 
@@ -1709,6 +1886,7 @@ def parse_altium_pcb(
         sb_regions_data = _read_stream(ole, "ShapeBasedRegions6/Data")
         comp_bodies_data = _read_stream(ole, "ComponentBodies6/Data")
         board_data = _read_stream(ole, "Board6/Data")
+        drill_manager_data = _read_stream(ole, "DrillManager/Data")
     finally:
         ole.close()
 
@@ -1725,10 +1903,11 @@ def parse_altium_pcb(
     footprints = _parse_components(comp_data, layer_map)
 
     # Parse binary streams
-    segments, comp_lines = _parse_tracks(tracks_data, layer_map, ctx)
+    segments, comp_lines, graphic_lines = _parse_tracks(tracks_data, layer_map, ctx)
     vias = _parse_vias(vias_data, layer_map, ctx)
-    trace_arcs, comp_arcs, keepouts = _parse_arcs(arcs_data, layer_map, ctx)
+    trace_arcs, comp_arcs, keepouts, graphic_arcs = _parse_arcs(arcs_data, layer_map, ctx)
     raw_pads = _parse_pads(pads_data, nets, layer_map, ctx)
+    _apply_drill_manager_mask_apertures(raw_pads, drill_manager_data)
     raw_texts = _parse_texts(texts_data, layer_map, ctx)
     fills = _parse_fills(fills_data, layer_map, ctx)
     zones, pour_net_map = _parse_polygon_pours(polygons6_data, nets, layer_map)
@@ -1783,6 +1962,8 @@ def parse_altium_pcb(
                     fp.silkscreen_lines.append(line)
                 elif line.layer in fab_names:
                     fp.fab_lines.append(line)
+                else:
+                    graphic_lines.append(line)
 
     for comp_idx, arcs in comp_arcs.items():
         if comp_idx < len(footprints):
@@ -1791,6 +1972,8 @@ def parse_altium_pcb(
                 arc.footprint_ref = fp.reference
                 if arc.layer in fab_names:
                     fp.fab_arcs.append(arc)
+                else:
+                    graphic_arcs.append(arc)
 
     for comp_idx, polys in sb_comp_polys.items():
         if comp_idx < len(footprints):
@@ -1834,4 +2017,6 @@ def parse_altium_pcb(
         layers=list(layer_map.values()),
         zones=zones,
         keepouts=keepouts,
+        graphic_lines=graphic_lines,
+        graphic_arcs=graphic_arcs,
     )

@@ -195,6 +195,30 @@ def test_altium_keepout_arcs_are_preserved_as_queryable_keepouts(pcb: Pcb) -> No
     assert all(len(keepout.boundary) >= 16 for keepout in keepout_rings)
 
 
+def test_altium_board_level_solder_mask_lines_and_arcs_are_preserved(pcb: Pcb) -> None:
+    top_solder_lines = [line for line in pcb.graphic_lines if line.layer == "Top Solder"]
+    bottom_solder_lines = [line for line in pcb.graphic_lines if line.layer == "Bottom Solder"]
+    top_solder_arcs = [arc for arc in pcb.graphic_arcs if arc.layer == "Top Solder"]
+    bottom_solder_arcs = [arc for arc in pcb.graphic_arcs if arc.layer == "Bottom Solder"]
+
+    assert len(top_solder_lines) == 4
+    assert len(bottom_solder_lines) == 4
+    assert len(top_solder_arcs) == 4
+    assert len(bottom_solder_arcs) == 4
+    assert all(line.width == pytest.approx(0.1, abs=0.001) for line in top_solder_lines)
+    assert all(arc.width == pytest.approx(0.1, abs=0.001) for arc in top_solder_arcs)
+
+
+def test_altium_component_non_silk_fab_graphics_are_preserved(pcb: Pcb) -> None:
+    assert any(
+        line.layer in {"Top Paste", "Bottom Paste"} and line.footprint_ref
+        for line in pcb.graphic_lines
+    )
+    assert any(
+        arc.layer.startswith("Mechanical ") and arc.footprint_ref for arc in pcb.graphic_arcs
+    )
+
+
 # ---------------------------------------------------------------------------
 # Stackup
 # ---------------------------------------------------------------------------

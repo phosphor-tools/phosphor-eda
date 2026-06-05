@@ -39,6 +39,9 @@ TABLE_DDL: dict[str, str] = {
             layer VARCHAR,
             pin_function VARCHAR,
             pin_type VARCHAR,
+            mask_aperture_width DOUBLE,
+            mask_aperture_height DOUBLE,
+            mask_aperture_source VARCHAR,
             geom GEOMETRY
         )
     """,
@@ -112,6 +115,14 @@ TABLE_DDL: dict[str, str] = {
     """,
     "footprint_graphics": """
         CREATE TABLE footprint_graphics (
+            reference VARCHAR,
+            layer VARCHAR,
+            kind VARCHAR,
+            geom GEOMETRY
+        )
+    """,
+    "board_graphics": """
+        CREATE TABLE board_graphics (
             reference VARCHAR,
             layer VARCHAR,
             kind VARCHAR,
