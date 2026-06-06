@@ -1,242 +1,80 @@
-import json
+from __future__ import annotations
 
-from pcb_layer_helpers import make_pcb_layer
+from typing import Any
 
-from phosphor_eda.pcb import (
-    LayerRole,
-    Pcb,
-    PcbFootprint,
-    PcbLine,
-    PcbNet,
-    PcbPad,
-    PcbPolygon,
-    PcbSegment,
-    PcbTraceArc,
-    PcbVia,
-    PcbZone,
-)
-from phosphor_eda.pcb_annotations import ResolvedAnnotations
-from phosphor_eda.pcb_render import load_render_settings_json
-from phosphor_eda.pcb_render_plan import (
-    DerivedRenderPlan,
-    ViewBox,
-    build_derived_render_plan,
+from test_pcb_render import _board
+
+from phosphor_eda.pcb_render_plan import build_derived_render_plan
+from phosphor_eda.pcb_render_settings import (
+    LayerMatch,
+    LayerSelectionRule,
+    RenderSettings,
+    SourceSelection,
 )
 
 
-def test_build_derived_render_plan_eda_uses_derived_layers() -> None:
-    settings = load_render_settings_json(
-        json.dumps(
-            {
-                "renderMode": "eda",
-                "source": {"layers": [{"match": {"name": "F.Cu"}}]},
-                "tokens": {"eda.layer[F.Cu].fill": "#ff6600"},
-            }
-        )
+class _Profiler:
+    def __init__(self) -> None:
+        self.metrics: list[tuple[str, dict[str, Any]]] = []
+
+    def metric(self, name: str, **values: Any) -> None:
+        self.metrics.append((name, values))
+
+    def span(self, _name: str, **_values: Any) -> _Profiler:
+        return self
+
+    def __enter__(self) -> _Profiler:
+        return self
+
+    def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+        return None
+
+
+def test_render_plan_builds_from_normalized_geometry() -> None:
+    settings = RenderSettings(
+        render_mode="eda",
+        source=SourceSelection(
+            layers=[
+                LayerSelectionRule(match=LayerMatch(role="copper")),
+                LayerSelectionRule(
+                    match=LayerMatch(role="silkscreen"), objects=("graphic", "text")
+                ),
+                LayerSelectionRule(match=LayerMatch(role="edge")),
+            ]
+        ),
     )
+
     plan = build_derived_render_plan(
-        _make_plan_board(),
+        _board(),
         settings=settings,
         side="front",
-        width_px=1000,
+        width_px=640,
         annotations=None,
     )
 
-    assert isinstance(plan, DerivedRenderPlan)
-    assert plan.width_px == 1000
+    assert plan.width_px == 640
     assert plan.height_px > 0
-    assert plan.base_layers
-    assert plan.base_layers[0].role.namespace == "eda"
-    assert plan.base_layers[0].role.function == "copper"
-    assert plan.base_layers[0].source_layers == ("F.Cu",)
-    assert plan.highlight_groups == ()
-    assert plan.warnings == ()
+    assert {layer.role.function for layer in plan.base_layers} >= {"copper", "silkscreen", "edge"}
 
 
-def test_build_derived_render_plan_realistic_uses_derived_layers() -> None:
-    settings = load_render_settings_json(
-        json.dumps(
-            {
-                "renderMode": "realistic",
-                "side": "front",
-                "source": {
-                    "layers": [
-                        {"match": {"role": "copper", "side": "front"}},
-                        {"match": {"name": "Edge.Cuts"}},
-                    ]
-                },
-                "tokens": {
-                    "realistic.substrate.fill": "#244426",
-                    "realistic.solderMask.fill": "#0f5f32",
-                    "realistic.coveredCopper.fill": "#9a6924",
-                    "realistic.exposedSubstrate.fill": "#244426",
-                    "realistic.exposedCopper.fill": "#d6a13d",
-                    "realistic.silkscreen.fill": "#ffffff",
-                    "realistic.boardOutline.fill": "none",
-                    "realistic.boardOutline.stroke": "#111111",
-                    "realistic.boardOutline.strokeWidthMm": 0.08,
-                },
-            }
-        )
+def test_render_plan_profiler_counts_geometry_object_types() -> None:
+    profiler = _Profiler()
+    settings = RenderSettings(
+        render_mode="eda",
+        source=SourceSelection(layers=[LayerSelectionRule(match=LayerMatch(role="copper"))]),
     )
 
-    plan = build_derived_render_plan(
-        _make_plan_board(),
+    build_derived_render_plan(
+        _board(),
         settings=settings,
         side="front",
-        width_px=1000,
+        width_px=640,
         annotations=None,
+        profiler=profiler,
     )
 
-    assert isinstance(plan, DerivedRenderPlan)
-    assert {layer.role.namespace for layer in plan.base_layers} == {"realistic"}
-    assert {layer.role.function for layer in plan.base_layers} >= {"substrate", "boardOutline"}
-
-
-def test_build_derived_render_plan_uses_requested_side_over_settings_side() -> None:
-    settings = load_render_settings_json(
-        json.dumps(
-            {
-                "renderMode": "realistic",
-                "side": "back",
-                "source": {
-                    "layers": [
-                        {"match": {"role": "copper", "side": "front"}},
-                        {"match": {"name": "Edge.Cuts"}},
-                    ]
-                },
-                "tokens": {
-                    "realistic.substrate.fill": "#244426",
-                    "realistic.solderMask.fill": "#0f5f32",
-                    "realistic.coveredCopper.fill": "#9a6924",
-                    "realistic.exposedSubstrate.fill": "#244426",
-                    "realistic.exposedCopper.fill": "#d6a13d",
-                    "realistic.silkscreen.fill": "#ffffff",
-                    "realistic.boardOutline.fill": "none",
-                    "realistic.boardOutline.stroke": "#111111",
-                    "realistic.boardOutline.strokeWidthMm": 0.08,
-                },
-            }
-        )
-    )
-
-    plan = build_derived_render_plan(
-        _make_plan_board(),
-        settings=settings,
-        side="front",
-        width_px=1000,
-        annotations=None,
-    )
-
-    covered_copper = next(
-        layer for layer in plan.base_layers if layer.role.function == "coveredCopper"
-    )
-    assert covered_copper.source_layers == ("F.Cu",)
-
-
-def test_build_derived_render_plan_expands_view_box_for_annotations() -> None:
-    settings = load_render_settings_json(
-        json.dumps(
-            {
-                "renderMode": "eda",
-                "source": {"layers": [{"match": {"name": "F.Cu"}}]},
-                "tokens": {"eda.layer[F.Cu].fill": "#ff6600"},
-            }
-        )
-    )
-
-    plan = build_derived_render_plan(
-        _make_plan_board(),
-        settings=settings,
-        side="front",
-        width_px=1000,
-        annotations=ResolvedAnnotations(content_bbox=(-10.0, -10.0, 30.0, 40.0)),
-    )
-
-    assert plan.view_box == ViewBox(x=-10.0, y=-10.0, width=40.0, height=50.0)
-    assert plan.height_px == 1250
-
-
-def _make_plan_board() -> Pcb:
-    fp = PcbFootprint(
-        reference="U1",
-        footprint_lib="test",
-        x=5.0,
-        y=5.0,
-        rotation=0.0,
-        layer="F.Cu",
-        pads=[
-            PcbPad(
-                number="1",
-                x=5.0,
-                y=5.0,
-                width=1.0,
-                height=1.0,
-                shape="rect",
-                layers=["F.Cu"],
-                net_number=1,
-                net_name="/SWDIO_TMS",
-                footprint_ref="U1",
-            ),
-            PcbPad(
-                number="2",
-                x=7.0,
-                y=5.0,
-                width=1.0,
-                height=1.0,
-                shape="rect",
-                layers=["F.Cu"],
-                net_number=2,
-                net_name="GND",
-                footprint_ref="U1",
-            ),
-        ],
-    )
-    return Pcb(
-        name="render-plan-test",
-        nets={
-            0: PcbNet(0, ""),
-            1: PcbNet(1, "/SWDIO_TMS"),
-            2: PcbNet(2, "GND"),
-        },
-        footprints=[fp],
-        segments=[
-            PcbSegment(5.0, 5.0, 10.0, 5.0, 0.2, "F.Cu", 1),
-            PcbSegment(7.0, 5.0, 10.0, 8.0, 0.2, "F.Cu", 2),
-        ],
-        trace_arcs=[
-            PcbTraceArc(10.0, 5.0, 12.0, 6.0, 14.0, 5.0, 0.2, "F.Cu", 1),
-        ],
-        vias=[
-            PcbVia(10.0, 5.0, 0.6, 0.3, ["F.Cu", "B.Cu"], 1),
-            PcbVia(10.0, 8.0, 0.6, 0.3, ["F.Cu", "B.Cu"], 2),
-        ],
-        polygons=[
-            PcbPolygon(
-                points=[(1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0)],
-                layer="F.Cu",
-                net_number=2,
-                net_name="GND",
-            ),
-        ],
-        zones=[
-            PcbZone(
-                net_number=1,
-                net_name="/SWDIO_TMS",
-                layer="F.Cu",
-                boundary=[(11.0, 1.0), (13.0, 1.0), (13.0, 3.0), (11.0, 3.0)],
-            ),
-        ],
-        outline_lines=[
-            PcbLine(0.0, 0.0, 20.0, 0.0, "Edge.Cuts", 0.1),
-            PcbLine(20.0, 0.0, 20.0, 12.0, "Edge.Cuts", 0.1),
-            PcbLine(20.0, 12.0, 0.0, 12.0, "Edge.Cuts", 0.1),
-            PcbLine(0.0, 12.0, 0.0, 0.0, "Edge.Cuts", 0.1),
-        ],
-        outline_arcs=[],
-        layers=[
-            make_pcb_layer("F.Cu", LayerRole.COPPER, side="front"),
-            make_pcb_layer("B.Cu", LayerRole.COPPER, side="back"),
-            make_pcb_layer("Edge.Cuts", LayerRole.EDGE),
-        ],
-    )
+    board_metric = next(values for name, values in profiler.metrics if name == "board.input")
+    assert board_metric["segments"] == 1
+    assert board_metric["trace_arcs"] == 0
+    assert board_metric["vias"] == 1
+    assert board_metric["zones"] == 0

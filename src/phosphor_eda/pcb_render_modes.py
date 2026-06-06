@@ -6,6 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from phosphor_eda.pcb import PcbGeometryObject, PcbGeometryRole, PcbGeometryShape
 from phosphor_eda.pcb_render_artwork import (
     DerivedLayer,
     select_source_artwork,
@@ -13,7 +14,12 @@ from phosphor_eda.pcb_render_artwork import (
     solder_mask_opening_primitives,
     via_layers,
 )
-from phosphor_eda.pcb_render_geometry import GeometryKind, GeometryLayer
+from phosphor_eda.pcb_render_geometry import (
+    SYNTHETIC_BOARD_MATERIAL_ROLE,
+    SYNTHETIC_BOARD_OUTLINE_ROLE,
+    SYNTHETIC_DRILL_ROLE,
+    GeometryLayer,
+)
 from phosphor_eda.pcb_render_primitives import (
     LayerClip,
     LayerMask,
@@ -391,9 +397,13 @@ def _primitive_layer_items(
     via_items: Iterable[RenderableGeometry] | None = None,
     profiler: RenderProfiler | None = None,
 ) -> tuple[_PrimitiveLayerItem, ...]:
-    selected_non_vias = tuple(item for item in selected_items if item.kind is not GeometryKind.VIA)
+    selected_non_vias = tuple(
+        item for item in selected_items if item.object_type != PcbGeometryObject.VIA
+    )
     selected_copper_layer_items = selected_copper_layers(store, rules, active_side=active_side)
-    selected_via_items = store.by_kind(GeometryKind.VIA) if via_items is None else tuple(via_items)
+    selected_via_items = (
+        store.by_object_type(PcbGeometryObject.VIA) if via_items is None else tuple(via_items)
+    )
     items: list[_PrimitiveLayerItem] = [
         _PrimitiveLayerItem(source=item, layer=item.layer) for item in selected_non_vias
     ]
@@ -436,7 +446,7 @@ def _selected_highlight_items(
     return tuple(
         item
         for item in selected_items
-        if item.kind is not GeometryKind.VIA and _matches_highlight(item, highlight)
+        if item.object_type != PcbGeometryObject.VIA and _matches_highlight(item, highlight)
     )
 
 
@@ -454,7 +464,7 @@ def _selected_highlight_vias(
         return ()
     return tuple(
         item
-        for item in store.by_kind(GeometryKind.VIA)
+        for item in store.by_object_type(PcbGeometryObject.VIA)
         if _matches_highlight(item, highlight)
         and _via_intersects_selected_layers(item, selected_copper_layer_items)
     )
@@ -574,7 +584,7 @@ def _primitive_layer_primitives_without_profiling(
 ) -> tuple[SvgPrimitive, ...]:
     primitives: list[SvgPrimitive] = []
     for item in sorted(group, key=_primitive_layer_item_sort_key):
-        if key.function == "drill" and item.source.kind is GeometryKind.DRILL:
+        if key.function == "drill" and item.source.display_role == SYNTHETIC_DRILL_ROLE:
             primitive = visible_drill_to_svg_primitive(item.source)
         else:
             primitive = geometry_to_svg_primitive(
@@ -586,24 +596,26 @@ def _primitive_layer_primitives_without_profiling(
     return tuple(primitives)
 
 
-_PRIMITIVE_KIND_ORDER = {
-    GeometryKind.TRACE: 0,
-    GeometryKind.TRACE_ARC: 0,
-    GeometryKind.ZONE: 1,
-    GeometryKind.SILK_ARC: 1,
-    GeometryKind.SILK_POLYGON: 1,
-    GeometryKind.FAB_POLYGON: 1,
-    GeometryKind.BODY_POLYGON: 1,
-    GeometryKind.MASK: 1,
-    GeometryKind.PASTE: 1,
-    GeometryKind.MECHANICAL: 1,
-    GeometryKind.PAD: 2,
-    GeometryKind.VIA: 2,
-}
-
-
 def _primitive_layer_item_sort_key(item: _PrimitiveLayerItem) -> tuple[int, str]:
-    return (_PRIMITIVE_KIND_ORDER.get(item.source.kind, 3), item.source.id)
+    return (_primitive_order(item.source), item.source.id)
+
+
+def _primitive_order(item: RenderableGeometry) -> int:
+    if item.object_type == PcbGeometryObject.TRACK:
+        return 0
+    if item.object_type == PcbGeometryObject.ZONE:
+        return 1
+    if item.shape == PcbGeometryShape.POLYGON:
+        return 1
+    if item.display_role in {
+        PcbGeometryRole.SOLDER_MASK.value,
+        PcbGeometryRole.SOLDER_PASTE.value,
+        PcbGeometryRole.MECHANICAL.value,
+    }:
+        return 1
+    if item.object_type in {PcbGeometryObject.PAD, PcbGeometryObject.VIA}:
+        return 2
+    return 3
 
 
 def _copper_order_by_layer(store: PcbGeometryStore) -> dict[str, int]:
@@ -670,7 +682,7 @@ def _selected_board_outline_primitives(
     return tuple(
         primitive
         for item in selected_items
-        if item.kind is GeometryKind.BOARD_OUTLINE
+        if item.display_role == SYNTHETIC_BOARD_OUTLINE_ROLE
         if (
             primitive := geometry_to_svg_primitive(
                 item,
@@ -710,7 +722,7 @@ def _source_ids_for_primitives(
 def _board_mask_primitives(store: PcbGeometryStore) -> tuple[SvgPrimitive, ...]:
     primitives = tuple(
         primitive
-        for item in store.by_kind(GeometryKind.BOARD_MATERIAL)
+        for item in store.by_display_role(SYNTHETIC_BOARD_MATERIAL_ROLE)
         if (
             primitive := geometry_to_svg_primitive(
                 item,
@@ -727,7 +739,7 @@ def _board_mask_primitives(store: PcbGeometryStore) -> tuple[SvgPrimitive, ...]:
 def _board_outline_primitives(store: PcbGeometryStore) -> tuple[SvgPrimitive, ...]:
     return tuple(
         primitive
-        for item in store.by_kind(GeometryKind.BOARD_OUTLINE)
+        for item in store.by_display_role(SYNTHETIC_BOARD_OUTLINE_ROLE)
         if (
             primitive := geometry_to_svg_primitive(
                 item,
@@ -747,7 +759,7 @@ def _drill_mask_primitives(store: PcbGeometryStore) -> tuple[SvgPrimitive, ...]:
     return tuple(
         primitive
         for item in store.items
-        if item.kind in {GeometryKind.DRILL, GeometryKind.VIA}
+        if item.display_role == SYNTHETIC_DRILL_ROLE or item.object_type == PcbGeometryObject.VIA
         if (primitive := drill_to_svg_primitive(item)) is not None
     )
 
@@ -787,7 +799,7 @@ def _board_source_layers(store: PcbGeometryStore) -> tuple[str, ...]:
     return _unique_ordered(
         item.layer.name
         for item in store.items
-        if item.kind in {GeometryKind.BOARD_MATERIAL, GeometryKind.BOARD_OUTLINE}
+        if item.display_role in {SYNTHETIC_BOARD_MATERIAL_ROLE, SYNTHETIC_BOARD_OUTLINE_ROLE}
     )
 
 
@@ -795,5 +807,5 @@ def _board_source_ids(store: PcbGeometryStore) -> tuple[str, ...]:
     return tuple(
         item.id
         for item in store.items
-        if item.kind in {GeometryKind.BOARD_MATERIAL, GeometryKind.BOARD_OUTLINE}
+        if item.display_role in {SYNTHETIC_BOARD_MATERIAL_ROLE, SYNTHETIC_BOARD_OUTLINE_ROLE}
     )

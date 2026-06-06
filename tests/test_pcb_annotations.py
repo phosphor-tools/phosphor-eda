@@ -3,11 +3,17 @@
 import pytest
 
 from phosphor_eda.pcb import (
+    LayerRole,
     Pcb,
     PcbFootprint,
-    PcbLine,
+    PcbGeometry,
+    PcbGeometryObject,
+    PcbGeometryRole,
+    PcbGeometryShape,
+    PcbLayer,
+    PcbLineGeometry,
     PcbNet,
-    PcbPad,
+    PcbPadGeometry,
 )
 from phosphor_eda.pcb_annotations import (
     ANNOTATION_FONT_PX,
@@ -36,58 +42,6 @@ from phosphor_eda.pcb_annotations import (
 
 def _make_test_board() -> Pcb:
     """Board with two footprints (U1, U2) and a shared net for target resolution tests."""
-    u1_pads = [
-        PcbPad(
-            number="1",
-            x=10.0,
-            y=10.0,
-            width=1.0,
-            height=1.0,
-            shape="rect",
-            layers=["F.Cu"],
-            net_number=1,
-            net_name="VCC",
-            footprint_ref="U1",
-        ),
-        PcbPad(
-            number="2",
-            x=12.0,
-            y=10.0,
-            width=1.0,
-            height=1.0,
-            shape="rect",
-            layers=["F.Cu"],
-            net_number=2,
-            net_name="SPI_CLK",
-            footprint_ref="U1",
-        ),
-    ]
-    u2_pads = [
-        PcbPad(
-            number="1",
-            x=30.0,
-            y=10.0,
-            width=1.0,
-            height=1.0,
-            shape="rect",
-            layers=["F.Cu"],
-            net_number=2,
-            net_name="SPI_CLK",
-            footprint_ref="U2",
-        ),
-        PcbPad(
-            number="2",
-            x=32.0,
-            y=10.0,
-            width=1.0,
-            height=1.0,
-            shape="rect",
-            layers=["F.Cu"],
-            net_number=3,
-            net_name="SPI_MOSI",
-            footprint_ref="U2",
-        ),
-    ]
     u1 = PcbFootprint(
         reference="U1",
         footprint_lib="Package_SO:SOIC-8",
@@ -96,13 +50,6 @@ def _make_test_board() -> Pcb:
         rotation=0.0,
         layer="F.Cu",
         value="MCU",
-        pads=u1_pads,
-        fab_lines=[
-            PcbLine(9, 9, 13, 9, "F.Fab", 0.1, footprint_ref="U1"),
-            PcbLine(13, 9, 13, 11, "F.Fab", 0.1, footprint_ref="U1"),
-            PcbLine(13, 11, 9, 11, "F.Fab", 0.1, footprint_ref="U1"),
-            PcbLine(9, 11, 9, 9, "F.Fab", 0.1, footprint_ref="U1"),
-        ],
         bbox=(9.0, 9.0, 13.0, 11.0),
     )
     u2 = PcbFootprint(
@@ -113,13 +60,6 @@ def _make_test_board() -> Pcb:
         rotation=0.0,
         layer="F.Cu",
         value="ADC",
-        pads=u2_pads,
-        fab_lines=[
-            PcbLine(29, 9, 33, 9, "F.Fab", 0.1, footprint_ref="U2"),
-            PcbLine(33, 9, 33, 11, "F.Fab", 0.1, footprint_ref="U2"),
-            PcbLine(33, 11, 29, 11, "F.Fab", 0.1, footprint_ref="U2"),
-            PcbLine(29, 11, 29, 9, "F.Fab", 0.1, footprint_ref="U2"),
-        ],
         bbox=(29.0, 9.0, 33.0, 11.0),
     )
     return Pcb(
@@ -131,15 +71,82 @@ def _make_test_board() -> Pcb:
             3: PcbNet(3, "SPI_MOSI"),
         },
         footprints=[u1, u2],
-        segments=[],
-        vias=[],
-        outline_lines=[
-            PcbLine(0, 0, 40, 0, "Edge.Cuts", 0.1),
-            PcbLine(40, 0, 40, 20, "Edge.Cuts", 0.1),
-            PcbLine(40, 20, 0, 20, "Edge.Cuts", 0.1),
-            PcbLine(0, 20, 0, 0, "Edge.Cuts", 0.1),
+        geometry=[
+            _pad("U1", "1", 10.0, 10.0, 1, "VCC"),
+            _pad("U1", "2", 12.0, 10.0, 2, "SPI_CLK"),
+            _pad("U2", "1", 30.0, 10.0, 2, "SPI_CLK"),
+            _pad("U2", "2", 32.0, 10.0, 3, "SPI_MOSI"),
+            *_box_lines("U1", 9.0, 9.0, 13.0, 11.0),
+            *_box_lines("U2", 29.0, 9.0, 33.0, 11.0),
+            *_outline_lines(),
         ],
-        outline_arcs=[],
+        layers=[
+            PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT), number=0),
+            PcbLayer("F.Fab", (LayerRole.FABRICATION, LayerRole.FRONT), number=36),
+            PcbLayer("Edge.Cuts", (LayerRole.EDGE,), number=44),
+        ],
+    )
+
+
+def _pad(ref: str, number: str, x: float, y: float, net_number: int, net_name: str) -> PcbGeometry:
+    return PcbGeometry(
+        id=f"pad:{ref}:{number}",
+        object_type=PcbGeometryObject.PAD,
+        shape=PcbGeometryShape.RECTANGLE,
+        roles=(
+            PcbGeometryRole.COPPER,
+            PcbGeometryRole.CONDUCTOR,
+            PcbGeometryRole.SMD,
+            PcbGeometryRole.FOOTPRINT_MEMBER,
+        ),
+        data=PcbPadGeometry(number, x, y, 1.0, 1.0, "rect"),
+        layers=("F.Cu",),
+        net_number=net_number,
+        net_name=net_name,
+        footprint_ref=ref,
+    )
+
+
+def _box_lines(ref: str, x1: float, y1: float, x2: float, y2: float) -> list[PcbGeometry]:
+    return [
+        _line(f"fab:{ref}:0", x1, y1, x2, y1, "F.Fab", ref),
+        _line(f"fab:{ref}:1", x2, y1, x2, y2, "F.Fab", ref),
+        _line(f"fab:{ref}:2", x2, y2, x1, y2, "F.Fab", ref),
+        _line(f"fab:{ref}:3", x1, y2, x1, y1, "F.Fab", ref),
+    ]
+
+
+def _outline_lines() -> list[PcbGeometry]:
+    return [
+        _line("edge:0", 0, 0, 40, 0, "Edge.Cuts", ""),
+        _line("edge:1", 40, 0, 40, 20, "Edge.Cuts", ""),
+        _line("edge:2", 40, 20, 0, 20, "Edge.Cuts", ""),
+        _line("edge:3", 0, 20, 0, 0, "Edge.Cuts", ""),
+    ]
+
+
+def _line(
+    id_: str,
+    start_x: float,
+    start_y: float,
+    end_x: float,
+    end_y: float,
+    layer: str,
+    footprint_ref: str,
+) -> PcbGeometry:
+    roles = [PcbGeometryRole.BOARD_LEVEL]
+    if layer == "Edge.Cuts":
+        roles.extend((PcbGeometryRole.EDGE, PcbGeometryRole.BOARD_OUTLINE))
+    else:
+        roles.extend((PcbGeometryRole.FABRICATION, PcbGeometryRole.FOOTPRINT_MEMBER))
+    return PcbGeometry(
+        id=id_,
+        object_type=PcbGeometryObject.GRAPHIC,
+        shape=PcbGeometryShape.LINE,
+        roles=tuple(roles),
+        data=PcbLineGeometry(start_x, start_y, end_x, end_y, 0.1),
+        layers=(layer,),
+        footprint_ref=footprint_ref,
     )
 
 

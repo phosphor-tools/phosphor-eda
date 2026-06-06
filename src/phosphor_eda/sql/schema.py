@@ -23,6 +23,29 @@ TABLE_DDL: dict[str, str] = {
             geom GEOMETRY
         )
     """,
+    "geometry": """
+        CREATE TABLE geometry (
+            id VARCHAR,
+            object_type VARCHAR,
+            shape VARCHAR,
+            display_role VARCHAR,
+            primary_role VARCHAR,
+            roles VARCHAR[],
+            primary_layer VARCHAR,
+            layers VARCHAR[],
+            side VARCHAR,
+            net_name VARCHAR,
+            net_number INTEGER,
+            footprint_ref VARCHAR,
+            source_format VARCHAR,
+            native_type VARCHAR,
+            native_kind VARCHAR,
+            native_id VARCHAR,
+            native_index INTEGER,
+            metadata JSON,
+            geom GEOMETRY
+        )
+    """,
     "pads": """
         CREATE TABLE pads (
             reference VARCHAR,

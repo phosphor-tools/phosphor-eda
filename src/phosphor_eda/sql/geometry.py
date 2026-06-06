@@ -12,21 +12,19 @@ from typing import TYPE_CHECKING
 from shapely import LineString, Point, Polygon
 from shapely.affinity import rotate
 
-from phosphor_eda.pcb import PcbPolygon
+from phosphor_eda.pcb import PcbArcGeometry, PcbLineGeometry
 from phosphor_eda.shapely_geometry import normalize_geometry, robust_polygonize
 
 if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry
 
     from phosphor_eda.pcb import (
-        PcbArc,
         PcbFootprint,
-        PcbKeepout,
-        PcbLine,
-        PcbPad,
-        PcbSegment,
-        PcbTraceArc,
-        PcbVia,
+        PcbGeometry,
+        PcbKeepoutGeometry,
+        PcbPadGeometry,
+        PcbPolygonGeometry,
+        PcbViaGeometry,
     )
 
 # Layer names indicating front copper (KiCad and Altium conventions)
@@ -47,7 +45,7 @@ def _box(min_x: float, min_y: float, max_x: float, max_y: float) -> Polygon:
 # ---------------------------------------------------------------------------
 
 
-def pad_polygon(pad: PcbPad) -> BaseGeometry:
+def pad_polygon(pad: PcbPadGeometry) -> BaseGeometry:
     """Construct the actual copper polygon for a pad in board coordinates."""
     cx, cy = pad.x, pad.y
     w, h = pad.width, pad.height
@@ -97,7 +95,7 @@ def pad_polygon(pad: PcbPad) -> BaseGeometry:
 # ---------------------------------------------------------------------------
 
 
-def segment_geometry(seg: PcbSegment) -> tuple[LineString, Polygon]:
+def segment_geometry(seg: PcbLineGeometry) -> tuple[LineString, Polygon]:
     """Return (centerline, copper corridor) for a straight trace segment."""
     centerline = LineString([(seg.start_x, seg.start_y), (seg.end_x, seg.end_y)])
     corridor = centerline.buffer(seg.width / 2, cap_style="flat")
@@ -221,7 +219,7 @@ def arc_to_polyline(
     return points
 
 
-def trace_arc_geometry(arc: PcbTraceArc) -> tuple[LineString, Polygon]:
+def trace_arc_geometry(arc: PcbArcGeometry) -> tuple[LineString, Polygon]:
     """Return (centerline, copper corridor) for a curved trace arc."""
     points = arc_to_polyline(arc.start_x, arc.start_y, arc.mid_x, arc.mid_y, arc.end_x, arc.end_y)
     centerline = LineString(points)
@@ -234,7 +232,7 @@ def trace_arc_geometry(arc: PcbTraceArc) -> tuple[LineString, Polygon]:
 # ---------------------------------------------------------------------------
 
 
-def via_geometry(via: PcbVia) -> tuple[Polygon, Polygon]:
+def via_geometry(via: PcbViaGeometry) -> tuple[Polygon, Polygon]:
     """Return (copper annular ring, drill hole) as circle polygons."""
     copper = Point(via.x, via.y).buffer(via.size / 2, quad_segs=VIA_DRILL_QUAD_SEGS)
     drill = Point(via.x, via.y).buffer(via.drill / 2, quad_segs=VIA_DRILL_QUAD_SEGS)
@@ -246,8 +244,8 @@ def via_geometry(via: PcbVia) -> tuple[Polygon, Polygon]:
 # ---------------------------------------------------------------------------
 
 
-def polygon_geometry(poly: PcbPolygon) -> Polygon | None:
-    """Convert a PcbPolygon to a Shapely Polygon, or None if degenerate."""
+def polygon_geometry(poly: PcbPolygonGeometry) -> Polygon | None:
+    """Convert polygon geometry to a Shapely Polygon, or None if degenerate."""
     if len(poly.points) < 3:
         return None
     holes = [h for h in poly.holes if len(h) >= 3]
@@ -258,11 +256,16 @@ def polygon_geometry(poly: PcbPolygon) -> Polygon | None:
     return geometry
 
 
-def keepout_geometry(keepout: PcbKeepout) -> Polygon | None:
+def keepout_geometry(keepout: PcbKeepoutGeometry) -> Polygon | None:
     """Convert a PcbKeepout to a Shapely Polygon, or None if degenerate."""
-    return polygon_geometry(
-        PcbPolygon(points=keepout.boundary, layer=keepout.layer, holes=keepout.holes)
-    )
+    if len(keepout.boundary) < 3:
+        return None
+    holes = [hole for hole in keepout.holes if len(hole) >= 3]
+    geometry = Polygon(keepout.boundary, holes=holes or None)
+    normalized = normalize_geometry(geometry)
+    if not normalized.is_empty and isinstance(normalized, Polygon):
+        return normalized
+    return geometry
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +273,7 @@ def keepout_geometry(keepout: PcbKeepout) -> Polygon | None:
 # ---------------------------------------------------------------------------
 
 
-def board_outline_polygon(lines: list[PcbLine], arcs: list[PcbArc]) -> Polygon | None:
+def board_outline_polygon(outline: list[PcbGeometry]) -> Polygon | None:
     """Assemble board outline from edge-cut lines and arcs into a polygon.
 
     Linearizes arcs, collects all segments, and uses shapely.ops.polygonize
@@ -278,24 +281,27 @@ def board_outline_polygon(lines: list[PcbLine], arcs: list[PcbArc]) -> Polygon |
     """
     segments: list[LineString] = []
 
-    for ln in lines:
-        segments.append(LineString([(ln.start_x, ln.start_y), (ln.end_x, ln.end_y)]))
+    for item in outline:
+        if isinstance(item.data, PcbLineGeometry):
+            ln = item.data
+            segments.append(LineString([(ln.start_x, ln.start_y), (ln.end_x, ln.end_y)]))
 
-    for arc in arcs:
-        points = arc_to_polyline(
-            arc.start_x,
-            arc.start_y,
-            arc.mid_x,
-            arc.mid_y,
-            arc.end_x,
-            arc.end_y,
-            num_points=32,
-        )
-        if len(points) >= 2:
-            # Snap endpoints to the exact arc start/end to avoid precision gaps
-            points[0] = (arc.start_x, arc.start_y)
-            points[-1] = (arc.end_x, arc.end_y)
-            segments.append(LineString(points))
+        elif isinstance(item.data, PcbArcGeometry):
+            arc = item.data
+            points = arc_to_polyline(
+                arc.start_x,
+                arc.start_y,
+                arc.mid_x,
+                arc.mid_y,
+                arc.end_x,
+                arc.end_y,
+                num_points=32,
+            )
+            if len(points) >= 2:
+                # Snap endpoints to the exact arc start/end to avoid precision gaps
+                points[0] = (arc.start_x, arc.start_y)
+                points[-1] = (arc.end_x, arc.end_y)
+                segments.append(LineString(points))
 
     if not segments:
         return None
@@ -313,21 +319,15 @@ def footprint_bbox_polygon(fp: PcbFootprint) -> Polygon | None:
     if fp.bbox:
         min_x, min_y, max_x, max_y = fp.bbox
         return _box(min_x, min_y, max_x, max_y)
-    # Fallback: compute from pad extents
-    if not fp.pads:
-        return None
-    xs = [p.x for p in fp.pads]
-    ys = [p.y for p in fp.pads]
-    margin = max(max(p.width, p.height) for p in fp.pads) / 2
-    return _box(min(xs) - margin, min(ys) - margin, max(xs) + margin, max(ys) + margin)
+    return None
 
 
-def pad_side(pad: PcbPad) -> str:
+def pad_side(layers: tuple[str, ...]) -> str:
     """Determine which board side a pad is accessible from."""
-    layers = [str(layer) for layer in pad.layers]
-    has_wildcard = any("*" in ly for ly in layers)
-    has_front = any(ly in _FRONT_LAYERS for ly in layers)
-    has_back = any(ly in _BACK_LAYERS for ly in layers)
+    layer_names = [str(layer) for layer in layers]
+    has_wildcard = any("*" in ly for ly in layer_names)
+    has_front = any(ly in _FRONT_LAYERS for ly in layer_names)
+    has_back = any(ly in _BACK_LAYERS for ly in layer_names)
 
     if has_wildcard or (has_front and has_back):
         return "through"

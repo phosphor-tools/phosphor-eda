@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 import olefile
@@ -38,21 +38,28 @@ from phosphor_eda.altium.record_parser import parse_record_payload
 from phosphor_eda.pcb import (
     LayerRole,
     Pcb,
-    PcbArc,
+    PcbArcGeometry,
     PcbFootprint,
-    PcbKeepout,
+    PcbFootprintMetadata,
+    PcbGeometry,
+    PcbGeometryMetadata,
+    PcbGeometryObject,
+    PcbGeometryRole,
+    PcbGeometryShape,
+    PcbKeepoutGeometry,
     PcbKeepoutRules,
     PcbLayer,
-    PcbLine,
-    PcbModel3D,
+    PcbLayerMetadata,
+    PcbLineGeometry,
+    PcbMetadata,
+    PcbModel3DGeometry,
     PcbNet,
-    PcbPad,
-    PcbPolygon,
-    PcbSegment,
-    PcbText,
-    PcbTraceArc,
-    PcbVia,
-    PcbZone,
+    PcbPadGeometry,
+    PcbPolygonGeometry,
+    PcbTextGeometry,
+    PcbViaGeometry,
+    PcbZoneGeometry,
+    normalize_geometry_roles,
 )
 from phosphor_eda.project import DesignRule, DiffPair, NetClass, Stackup, StackupLayer
 from phosphor_eda.text import strip_overline
@@ -315,7 +322,7 @@ def _build_layer_map(board_props: dict[str, str]) -> dict[int, PcbLayer]:
                 *_altium_name_roles(num, name, native_kind),
             ),
             number=num,
-            native_kind=native_kind,
+            metadata=PcbLayerMetadata(source_format="altium", native_kind=native_kind),
         )
 
     _apply_v9_stack_layer_names(layers, board_props)
@@ -438,10 +445,8 @@ def _apply_v9_stack_layer_names(layers: dict[int, PcbLayer], board_props: dict[s
             name=layer_name,
             roles=layer.roles,
             number=layer.number,
-            native_type=layer.native_type,
-            native_kind=layer.native_kind,
-            native_user_name=layer.native_user_name,
             stack_index=layer.stack_index,
+            metadata=layer.metadata,
         )
 
 
@@ -462,6 +467,79 @@ def _layer_name(num: int, layer_map: dict[int, PcbLayer]) -> str:
 def _net_number(raw: int) -> int:
     """Map Altium net index to domain net number (0 = unconnected)."""
     return 0 if raw == _NET_UNCONNECTED else raw + 1
+
+
+_LAYER_TO_GEOMETRY_ROLES: dict[LayerRole, PcbGeometryRole] = {
+    LayerRole.COPPER: PcbGeometryRole.COPPER,
+    LayerRole.SOLDER_MASK: PcbGeometryRole.SOLDER_MASK,
+    LayerRole.SOLDER_PASTE: PcbGeometryRole.SOLDER_PASTE,
+    LayerRole.SILKSCREEN: PcbGeometryRole.SILKSCREEN,
+    LayerRole.FABRICATION: PcbGeometryRole.FABRICATION,
+    LayerRole.ASSEMBLY: PcbGeometryRole.ASSEMBLY,
+    LayerRole.COURTYARD: PcbGeometryRole.COURTYARD,
+    LayerRole.DESIGNATOR: PcbGeometryRole.DESIGNATOR,
+    LayerRole.VALUE: PcbGeometryRole.VALUE,
+    LayerRole.COMMENT: PcbGeometryRole.COMMENT,
+    LayerRole.EDGE: PcbGeometryRole.EDGE,
+    LayerRole.MECHANICAL: PcbGeometryRole.MECHANICAL,
+    LayerRole.AUXILIARY: PcbGeometryRole.AUXILIARY,
+    LayerRole.ROUTE_TOOL_PATH: PcbGeometryRole.ROUTE_TOOL_PATH,
+    LayerRole.V_CUT: PcbGeometryRole.V_CUT,
+}
+
+
+def _layer_geometry_roles(
+    layer_num: int,
+    layer_map: dict[int, PcbLayer],
+) -> tuple[PcbGeometryRole, ...]:
+    layer = layer_map.get(layer_num)
+    if layer is None:
+        return (PcbGeometryRole.UNKNOWN,)
+    return tuple(
+        geometry_role
+        for role in layer.roles
+        if (geometry_role := _LAYER_TO_GEOMETRY_ROLES.get(role)) is not None
+    )
+
+
+def _geometry_metadata(
+    *,
+    native_type: str,
+    source_collection: str,
+    native_kind: str = "",
+    native_index: int | None = None,
+    native_component_index: int | None = None,
+    native_polygon_index: int | None = None,
+    native_subpolygon_index: int | None = None,
+    properties: dict[str, str] | None = None,
+) -> PcbGeometryMetadata:
+    return PcbGeometryMetadata(
+        source_format="altium",
+        native_type=native_type,
+        native_kind=native_kind,
+        native_index=native_index,
+        source_collection=source_collection,
+        native_component_index=native_component_index,
+        native_polygon_index=native_polygon_index,
+        native_subpolygon_index=native_subpolygon_index,
+        properties=properties or {},
+    )
+
+
+def _layered_geometry_roles(
+    layer_num: int,
+    layer_map: dict[int, PcbLayer],
+    *roles: PcbGeometryRole,
+) -> tuple[PcbGeometryRole, ...]:
+    return normalize_geometry_roles(*_layer_geometry_roles(layer_num, layer_map), *roles)
+
+
+def _with_footprint_ref(item: PcbGeometry, footprint_ref: str) -> PcbGeometry:
+    return replace(
+        item,
+        footprint_ref=footprint_ref,
+        roles=normalize_geometry_roles(*item.roles, PcbGeometryRole.FOOTPRINT_MEMBER),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -614,6 +692,14 @@ def _parse_components(data: bytes, layer_map: dict[int, PcbLayer]) -> list[PcbFo
                 y=y_mm,
                 rotation=rot,
                 layer=layer,
+                metadata=PcbFootprintMetadata(
+                    source_format="altium",
+                    native_type="component",
+                    source_designator=ref,
+                    source_unique_id=rec.get("uniqueid", ""),
+                    source_footprint_library=pattern,
+                    source_component_library=rec.get("sourcelibref", ""),
+                ),
             )
         )
     return footprints
@@ -621,19 +707,12 @@ def _parse_components(data: bytes, layer_map: dict[int, PcbLayer]) -> list[PcbFo
 
 def _parse_tracks(
     data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext
-) -> tuple[list[PcbSegment], dict[int, list[PcbLine]], list[PcbLine]]:
-    """Parse Tracks6/Data → board-level segments + per-component lines.
-
-    Returns (segments, comp_lines, graphic_lines) where comp_lines maps
-    component index to a list of PcbLine objects for silkscreen/fab assignment
-    and graphic_lines preserves board-level non-copper source artwork.
-    """
+) -> list[PcbGeometry]:
+    """Parse Tracks6/Data into normalized line geometry."""
     records = _read_binary_records(data)
-    segments: list[PcbSegment] = []
-    comp_lines: dict[int, list[PcbLine]] = {}
-    graphic_lines: list[PcbLine] = []
+    geometry: list[PcbGeometry] = []
 
-    for rec_type, body in records:
+    for index, (rec_type, body) in enumerate(records):
         if rec_type != 4:
             continue
         track = TrackRecord.from_bytes(body, ctx)
@@ -650,51 +729,71 @@ def _parse_tracks(
         y2 = -_int_to_mm(track.end[1])
         width = _int_to_mm(track.width)
 
-        if track.component == _COMPONENT_NONE:
-            if track.layer in _COPPER_LAYERS:
-                segments.append(
-                    PcbSegment(
-                        start_x=x1,
-                        start_y=y1,
-                        end_x=x2,
-                        end_y=y2,
-                        width=width,
-                        layer=layer,
-                        net_number=_net_number(track.net),
-                    )
-                )
-            elif not layer_map[track.layer].has_role(LayerRole.EDGE):
-                graphic_lines.append(
-                    PcbLine(
-                        start_x=x1,
-                        start_y=y1,
-                        end_x=x2,
-                        end_y=y2,
-                        layer=layer,
-                        width=width,
-                    )
-                )
-        else:
-            comp_lines.setdefault(track.component, []).append(
-                PcbLine(
-                    start_x=x1,
-                    start_y=y1,
-                    end_x=x2,
-                    end_y=y2,
-                    layer=layer,
-                    width=width,
-                )
+        component_index = None if track.component == _COMPONENT_NONE else track.component
+        footprint_role = (
+            PcbGeometryRole.FOOTPRINT_MEMBER
+            if component_index is not None
+            else PcbGeometryRole.BOARD_LEVEL
+        )
+        if track.layer in _COPPER_LAYERS:
+            object_type = PcbGeometryObject.TRACK
+            roles = _layered_geometry_roles(
+                track.layer,
+                layer_map,
+                PcbGeometryRole.CONDUCTOR,
+                PcbGeometryRole.ROUTE,
+                PcbGeometryRole.TRACE,
+                footprint_role,
             )
+            source_collection = "segments"
+            net_number = _net_number(track.net)
+        elif layer_map[track.layer].has_role(LayerRole.EDGE):
+            object_type = PcbGeometryObject.GRAPHIC
+            roles = _layered_geometry_roles(
+                track.layer,
+                layer_map,
+                PcbGeometryRole.BOARD_OUTLINE,
+                PcbGeometryRole.BOARD_LEVEL,
+            )
+            source_collection = "board_outline"
+            net_number = 0
+        else:
+            object_type = PcbGeometryObject.GRAPHIC
+            roles = _layered_geometry_roles(track.layer, layer_map, footprint_role)
+            source_collection = (
+                "footprint_graphics" if component_index is not None else "graphic_lines"
+            )
+            net_number = 0
 
-    return segments, comp_lines, graphic_lines
+        geometry.append(
+            PcbGeometry(
+                id=f"track:{track.layer}:{index}",
+                object_type=object_type,
+                shape=PcbGeometryShape.LINE,
+                roles=roles,
+                data=PcbLineGeometry(x1, y1, x2, y2, width),
+                layers=(layer,),
+                net_number=net_number,
+                metadata=_geometry_metadata(
+                    native_type="TRACK",
+                    source_collection=source_collection,
+                    native_index=index,
+                    native_component_index=component_index,
+                ),
+            )
+        )
+
+    return geometry
 
 
-def _parse_vias(data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext) -> list[PcbVia]:
-    """Parse Vias6/Data → list of PcbVia."""
+def _parse_vias(
+    data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext
+) -> list[PcbGeometry]:
+    """Parse Vias6/Data into normalized via geometry."""
     records = _read_binary_records(data)
-    vias: list[PcbVia] = []
+    vias: list[PcbGeometry] = []
 
-    for rec_type, body in records:
+    for index, (rec_type, body) in enumerate(records):
         if rec_type != 3:
             continue
         via = ViaRecord.from_bytes(body, ctx)
@@ -706,14 +805,41 @@ def _parse_vias(data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext) 
         if not layers:
             continue
 
+        roles = [
+            PcbGeometryRole.COPPER,
+            PcbGeometryRole.CONDUCTOR,
+            PcbGeometryRole.DRILL,
+        ]
+        if via.start_layer == 1 and via.end_layer == 32:
+            roles.append(PcbGeometryRole.THROUGH_HOLE)
+        elif via.start_layer == via.end_layer:
+            roles.append(PcbGeometryRole.FREE_VIA)
+        else:
+            roles.append(PcbGeometryRole.BLIND_VIA)
+
         vias.append(
-            PcbVia(
-                x=_int_to_mm(via.position[0]),
-                y=-_int_to_mm(via.position[1]),
-                size=_int_to_mm(via.diameter),
-                drill=_int_to_mm(via.hole_size),
-                layers=layers,
+            PcbGeometry(
+                id=f"via:{index}",
+                object_type=PcbGeometryObject.VIA,
+                shape=PcbGeometryShape.CIRCLE,
+                roles=tuple(roles),
+                data=PcbViaGeometry(
+                    x=_int_to_mm(via.position[0]),
+                    y=-_int_to_mm(via.position[1]),
+                    size=_int_to_mm(via.diameter),
+                    drill=_int_to_mm(via.hole_size),
+                ),
+                layers=tuple(layers),
                 net_number=_net_number(via.net),
+                metadata=_geometry_metadata(
+                    native_type="VIA",
+                    source_collection="vias",
+                    native_index=index,
+                    properties={
+                        "start_layer": str(via.start_layer),
+                        "end_layer": str(via.end_layer),
+                    },
+                ),
             )
         )
 
@@ -722,20 +848,12 @@ def _parse_vias(data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext) 
 
 def _parse_arcs(
     data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext
-) -> tuple[list[PcbTraceArc], dict[int, list[PcbArc]], list[PcbKeepout], list[PcbArc]]:
-    """Parse Arcs6/Data → board-level trace arcs + per-component arcs.
-
-    Returns (trace_arcs, comp_arcs, keepouts, graphic_arcs) where comp_arcs
-    maps component index to a list of PcbArc objects and graphic_arcs preserves
-    board-level non-copper source artwork.
-    """
+) -> list[PcbGeometry]:
+    """Parse Arcs6/Data into normalized arc and keepout geometry."""
     records = _read_binary_records(data)
-    trace_arcs: list[PcbTraceArc] = []
-    comp_arcs: dict[int, list[PcbArc]] = {}
-    keepouts: list[PcbKeepout] = []
-    graphic_arcs: list[PcbArc] = []
+    geometry: list[PcbGeometry] = []
 
-    for rec_type, body in records:
+    for index, (rec_type, body) in enumerate(records):
         if rec_type != 1:
             continue
         arc = ArcRecord.from_bytes(body, ctx)
@@ -757,72 +875,95 @@ def _parse_arcs(
         )
         sy, my, ey = -sy, -my, -ey
 
-        if arc.component == _COMPONENT_NONE:
-            if arc.is_keepout:
-                keepouts.append(
-                    _keepout_from_arc(
-                        layer=layer,
-                        arc=arc,
-                        cx=cx,
-                        cy_orig=cy_orig,
-                        radius=radius,
-                        width=width,
-                    )
-                )
-                continue
-            if arc.layer in _COPPER_LAYERS:
-                trace_arcs.append(
-                    PcbTraceArc(
-                        start_x=sx,
-                        start_y=sy,
-                        mid_x=mx,
-                        mid_y=my,
-                        end_x=ex,
-                        end_y=ey,
-                        width=width,
-                        layer=layer,
-                        net_number=_net_number(arc.net),
-                    )
-                )
-            elif not layer_map[arc.layer].has_role(LayerRole.EDGE):
-                graphic_arcs.append(
-                    PcbArc(
-                        start_x=sx,
-                        start_y=sy,
-                        mid_x=mx,
-                        mid_y=my,
-                        end_x=ex,
-                        end_y=ey,
-                        layer=layer,
-                        width=width,
-                    )
-                )
-        elif arc.component != _COMPONENT_NONE:
-            comp_arcs.setdefault(arc.component, []).append(
-                PcbArc(
-                    start_x=sx,
-                    start_y=sy,
-                    mid_x=mx,
-                    mid_y=my,
-                    end_x=ex,
-                    end_y=ey,
+        component_index = None if arc.component == _COMPONENT_NONE else arc.component
+        if arc.is_keepout:
+            geometry.append(
+                _keepout_from_arc(
                     layer=layer,
+                    layer_num=arc.layer,
+                    layer_map=layer_map,
+                    arc=arc,
+                    cx=cx,
+                    cy_orig=cy_orig,
+                    radius=radius,
                     width=width,
+                    index=index,
+                    component_index=component_index,
                 )
             )
+            continue
 
-    return trace_arcs, comp_arcs, keepouts, graphic_arcs
+        footprint_role = (
+            PcbGeometryRole.FOOTPRINT_MEMBER
+            if component_index is not None
+            else PcbGeometryRole.BOARD_LEVEL
+        )
+        if arc.layer in _COPPER_LAYERS:
+            object_type = PcbGeometryObject.TRACK
+            roles = _layered_geometry_roles(
+                arc.layer,
+                layer_map,
+                PcbGeometryRole.CONDUCTOR,
+                PcbGeometryRole.ROUTE,
+                PcbGeometryRole.TRACE,
+                footprint_role,
+            )
+            source_collection = "trace_arcs"
+            net_number = _net_number(arc.net)
+        elif layer_map[arc.layer].has_role(LayerRole.EDGE):
+            object_type = PcbGeometryObject.GRAPHIC
+            roles = _layered_geometry_roles(
+                arc.layer,
+                layer_map,
+                PcbGeometryRole.BOARD_OUTLINE,
+                PcbGeometryRole.BOARD_LEVEL,
+            )
+            source_collection = "board_outline"
+            net_number = 0
+        else:
+            object_type = PcbGeometryObject.GRAPHIC
+            roles = _layered_geometry_roles(arc.layer, layer_map, footprint_role)
+            source_collection = (
+                "footprint_graphics" if component_index is not None else "graphic_arcs"
+            )
+            net_number = 0
+
+        geometry.append(
+            PcbGeometry(
+                id=f"arc:{arc.layer}:{index}",
+                object_type=object_type,
+                shape=PcbGeometryShape.ARC,
+                roles=roles,
+                data=PcbArcGeometry(sx, sy, mx, my, ex, ey, width),
+                layers=(layer,),
+                net_number=net_number,
+                metadata=_geometry_metadata(
+                    native_type="ARC",
+                    source_collection=source_collection,
+                    native_index=index,
+                    native_component_index=component_index,
+                    native_polygon_index=arc.polygon,
+                    native_subpolygon_index=arc.subpoly_index,
+                ),
+            )
+        )
+
+    return geometry
 
 
 def _keepout_from_arc(
     *,
     layer: str,
+    layer_num: int,
+    layer_map: dict[int, PcbLayer],
     arc: ArcRecord,
     cx: float,
     cy_orig: float,
     radius: float,
     width: float,
-) -> PcbKeepout:
+    index: int,
+    component_index: int | None,
+) -> PcbGeometry:
     outer_radius = radius + width / 2.0
     inner_radius = max(radius - width / 2.0, 0.0)
     boundary = _arc_ring_points(
@@ -860,12 +1001,37 @@ def _keepout_from_arc(
             )
         )
         boundary = [*boundary, *inner]
-    return PcbKeepout(
-        layers=[layer],
-        boundary=boundary,
-        holes=holes,
-        rules=_altium_keepout_rules(arc.keepout_restrictions),
-        source=f"altium:arc:{arc.keepout_restrictions}",
+    footprint_role = (
+        PcbGeometryRole.FOOTPRINT_MEMBER
+        if component_index is not None
+        else PcbGeometryRole.BOARD_LEVEL
+    )
+    return PcbGeometry(
+        id=f"keepout_arc:{layer_num}:{index}",
+        object_type=PcbGeometryObject.KEEP_OUT,
+        shape=PcbGeometryShape.POLYGON,
+        roles=_layered_geometry_roles(
+            layer_num,
+            layer_map,
+            PcbGeometryRole.KEEPOUT,
+            PcbGeometryRole.RULE_AREA,
+            footprint_role,
+            *_altium_keepout_rule_roles(arc.keepout_restrictions),
+        ),
+        data=PcbKeepoutGeometry(
+            boundary=boundary,
+            holes=holes,
+            rules=_altium_keepout_rules(arc.keepout_restrictions),
+        ),
+        layers=(layer,),
+        metadata=_geometry_metadata(
+            native_type="ARC",
+            native_kind="keepout",
+            source_collection="keepouts",
+            native_index=index,
+            native_component_index=component_index,
+            properties={"keepout_restrictions": str(arc.keepout_restrictions)},
+        ),
     )
 
 
@@ -922,16 +1088,41 @@ def _altium_keepout_rules(mask: int) -> PcbKeepoutRules:
     )
 
 
+def _altium_keepout_rule_roles(mask: int) -> tuple[PcbGeometryRole, ...]:
+    if mask == 0:
+        return (
+            PcbGeometryRole.TRACK_KEEPOUT,
+            PcbGeometryRole.VIA_KEEPOUT,
+            PcbGeometryRole.PAD_KEEPOUT,
+            PcbGeometryRole.COPPER_POUR_KEEPOUT,
+            PcbGeometryRole.FOOTPRINT_KEEPOUT,
+        )
+
+    roles: list[PcbGeometryRole] = []
+    if mask & 0x01:
+        roles.append(PcbGeometryRole.TRACK_KEEPOUT)
+    if mask & 0x02:
+        roles.append(PcbGeometryRole.VIA_KEEPOUT)
+    if mask & 0x04:
+        roles.append(PcbGeometryRole.PAD_KEEPOUT)
+    if mask & 0x08:
+        roles.append(PcbGeometryRole.COPPER_POUR_KEEPOUT)
+    if mask & 0x10:
+        roles.append(PcbGeometryRole.FOOTPRINT_KEEPOUT)
+    return tuple(roles)
+
+
 def _parse_pads(
     data: bytes, nets: dict[int, PcbNet], layer_map: dict[int, PcbLayer], ctx: ParseContext
-) -> list[tuple[int, PcbPad]]:
-    """Parse Pads6/Data → list of (component_index, PcbPad).
+) -> list[tuple[int, PcbGeometry]]:
+    """Parse Pads6/Data into component-indexed pad geometry.
 
     Each pad record has 6 subrecords: name, skip, skip, skip, geometry,
     per-layer-overrides. PadRecord.from_bytes handles the subrecord chain.
     """
-    pads: list[tuple[int, PcbPad]] = []
+    pads: list[tuple[int, PcbGeometry]] = []
     pos = 0
+    index = 0
 
     while pos < len(data):
         if data[pos] != 2:
@@ -969,30 +1160,65 @@ def _parse_pads(
         net_obj = nets.get(net_num)
         net_name = net_obj.name if net_obj else ""
 
+        roles = [PcbGeometryRole.CONDUCTOR]
+        if pad.layer in _COPPER_LAYERS or pad.layer == 74:
+            roles.append(PcbGeometryRole.COPPER)
+        else:
+            roles.extend(_layer_geometry_roles(pad.layer, layer_map))
+        if pad.hole_size > 0:
+            roles.extend((PcbGeometryRole.DRILL, PcbGeometryRole.THROUGH_HOLE))
+            roles.append(PcbGeometryRole.PLATED_HOLE)
+        else:
+            roles.append(PcbGeometryRole.SMD)
+
+        geometry_shape = (
+            PcbGeometryShape.CIRCLE if shape == "circle" else PcbGeometryShape.RECTANGLE
+        )
+        if shape in {"oval", "roundrect"}:
+            geometry_shape = PcbGeometryShape.POLYGON
+
         pads.append(
             (
                 pad.component,
-                PcbPad(
-                    number=pad.name,
-                    x=_int_to_mm(pad.position[0]),
-                    y=-_int_to_mm(pad.position[1]),
-                    width=_int_to_mm(pad.top_size[0]),
-                    height=_int_to_mm(pad.top_size[1]),
-                    shape=shape,
-                    layers=layers,
+                PcbGeometry(
+                    id=f"pad:{index}:{pad.name}",
+                    object_type=PcbGeometryObject.PAD,
+                    shape=geometry_shape,
+                    roles=tuple(roles),
+                    data=PcbPadGeometry(
+                        number=pad.name,
+                        x=_int_to_mm(pad.position[0]),
+                        y=-_int_to_mm(pad.position[1]),
+                        width=_int_to_mm(pad.top_size[0]),
+                        height=_int_to_mm(pad.top_size[1]),
+                        shape=shape,
+                        drill=_int_to_mm(pad.hole_size),
+                    ),
+                    layers=tuple(layers),
                     net_number=net_num,
                     net_name=net_name,
-                    footprint_ref="",
-                    drill=_int_to_mm(pad.hole_size),
+                    metadata=_geometry_metadata(
+                        native_type="PAD",
+                        source_collection="pads",
+                        native_index=index,
+                        native_component_index=None
+                        if pad.component == _COMPONENT_NONE
+                        else pad.component,
+                        properties={
+                            "pad_mode": str(pad.layer),
+                            "shape_alt": "" if pad.shape_alt is None else str(pad.shape_alt),
+                        },
+                    ),
                 ),
             )
         )
+        index += 1
 
     return pads
 
 
 def _apply_drill_manager_mask_apertures(
-    raw_pads: list[tuple[int, PcbPad]],
+    raw_pads: list[tuple[int, PcbGeometry]],
     drill_manager_data: bytes,
 ) -> None:
     """Attach validated Altium pad-template solder-mask apertures to pads.
@@ -1010,7 +1236,10 @@ def _apply_drill_manager_mask_apertures(
         for primitive_index in record.primitive_indices:
             if primitive_index < 0 or primitive_index >= len(raw_pads):
                 continue
-            _component, pad = raw_pads[primitive_index]
+            _component, pad_geometry = raw_pads[primitive_index]
+            if not isinstance(pad_geometry.data, PcbPadGeometry):
+                continue
+            pad = pad_geometry.data
             if not _pad_matches_template_aperture_source(pad, record.properties):
                 continue
             pad.mask_aperture_width = aperture.width
@@ -1087,7 +1316,7 @@ def _pad_mask_aperture_from_drill_manager_record(
 
 
 def _pad_matches_template_aperture_source(
-    pad: PcbPad,
+    pad: PcbPadGeometry,
     properties: dict[str, str],
 ) -> bool:
     template_name = properties.get("templatename", "")
@@ -1118,14 +1347,15 @@ def _close_mm(value: float, expected: float) -> bool:
 
 def _parse_texts(
     data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext
-) -> list[tuple[int, PcbText]]:
-    """Parse Texts6/Data → list of (component_index, PcbText).
+) -> list[tuple[int, PcbGeometry]]:
+    """Parse Texts6/Data into component-indexed text geometry.
 
     Each text record has 2 subrecords: binary properties + Pascal string.
     TextRecord.from_bytes handles both subrecords.
     """
-    texts: list[tuple[int, PcbText]] = []
+    texts: list[tuple[int, PcbGeometry]] = []
     pos = 0
+    index = 0
 
     while pos < len(data):
         if data[pos] != 5:
@@ -1149,38 +1379,62 @@ def _parse_texts(
         if not layer:
             continue
 
-        kind = ""
+        roles = list(_layer_geometry_roles(text_rec.layer, layer_map))
+        roles.append(PcbGeometryRole.TEXT)
         if text_rec.is_designator:
-            kind = "reference"
+            roles.append(PcbGeometryRole.DESIGNATOR)
         elif text_rec.is_comment:
-            kind = "value"
+            roles.append(PcbGeometryRole.VALUE)
+        else:
+            roles.append(PcbGeometryRole.USER_TEXT)
+
+        component_index = None if text_rec.component == _COMPONENT_NONE else text_rec.component
+        roles.append(
+            PcbGeometryRole.FOOTPRINT_MEMBER
+            if component_index is not None
+            else PcbGeometryRole.BOARD_LEVEL
+        )
 
         texts.append(
             (
                 text_rec.component,
-                PcbText(
-                    text=text_rec.text,
-                    x=_int_to_mm(text_rec.position[0]),
-                    y=-_int_to_mm(text_rec.position[1]),
-                    rotation=text_rec.rotation,
-                    layer=layer,
-                    font_size=_int_to_mm(text_rec.height),
-                    kind=kind,
+                PcbGeometry(
+                    id=f"text:{index}",
+                    object_type=PcbGeometryObject.TEXT,
+                    shape=PcbGeometryShape.TEXT,
+                    roles=tuple(roles),
+                    data=PcbTextGeometry(
+                        text=text_rec.text,
+                        x=_int_to_mm(text_rec.position[0]),
+                        y=-_int_to_mm(text_rec.position[1]),
+                        rotation=text_rec.rotation,
+                        font_size=_int_to_mm(text_rec.height),
+                    ),
+                    layers=(layer,),
+                    metadata=_geometry_metadata(
+                        native_type="TEXT",
+                        source_collection="graphic_texts"
+                        if component_index is None
+                        else "footprint_texts",
+                        native_index=index,
+                        native_component_index=component_index,
+                    ),
                 ),
             )
         )
+        index += 1
 
     return texts
 
 
 def _parse_fills(
     data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext
-) -> list[PcbPolygon]:
-    """Parse Fills6/Data → list of rectangular source-layer polygons."""
+) -> list[PcbGeometry]:
+    """Parse Fills6/Data into rectangular source-layer geometry."""
     records = _read_binary_records(data)
-    fills: list[PcbPolygon] = []
+    fills: list[PcbGeometry] = []
 
-    for rec_type, body in records:
+    for index, (rec_type, body) in enumerate(records):
         if rec_type != 6:
             continue
         fill = FillRecord.from_bytes(body, ctx)
@@ -1207,11 +1461,24 @@ def _parse_fills(
 
         points = [(cx + dx, cy + dy) for dx, dy in corners]
 
+        roles = list(_layer_geometry_roles(fill.layer, layer_map))
+        if fill.layer in _COPPER_LAYERS:
+            roles.append(PcbGeometryRole.CONDUCTOR)
+
         fills.append(
-            PcbPolygon(
-                points=points,
-                layer=layer,
+            PcbGeometry(
+                id=f"fill:{fill.layer}:{index}",
+                object_type=PcbGeometryObject.GRAPHIC,
+                shape=PcbGeometryShape.POLYGON,
+                roles=normalize_geometry_roles(*roles, PcbGeometryRole.BOARD_LEVEL),
+                data=PcbPolygonGeometry(points=points),
+                layers=(layer,),
                 net_number=_net_number(fill.net) if fill.layer in _COPPER_LAYERS else 0,
+                metadata=_geometry_metadata(
+                    native_type="FILL",
+                    source_collection="polygons",
+                    native_index=index,
+                ),
             )
         )
 
@@ -1222,7 +1489,7 @@ def _parse_polygon_pours(
     data: bytes,
     nets: dict[int, PcbNet],
     layer_map: dict[int, PcbLayer],
-) -> tuple[list[PcbZone], dict[int, int]]:
+) -> tuple[list[PcbGeometry], dict[int, int]]:
     """Parse Polygons6/Data → zone definitions and pour-to-net mapping.
 
     Returns (zones, pour_net_map) where pour_net_map maps pourindex → net_number
@@ -1230,10 +1497,10 @@ def _parse_polygon_pours(
     to inherit net assignments for filled copper regions.
     """
     records = read_text_records(data)
-    zones: list[PcbZone] = []
+    zones: list[PcbGeometry] = []
     pour_net_map: dict[int, int] = {}
 
-    for rec in records:
+    for index, rec in enumerate(records):
         pourindex = int(rec.get("pourindex", "-1") or "-1")
 
         # Resolve net: text records store 0-based Nets6 index,
@@ -1281,14 +1548,33 @@ def _parse_polygon_pours(
         min_thickness = _parse_mil(trackwidth_str) if trackwidth_str else 0.0
 
         zones.append(
-            PcbZone(
+            PcbGeometry(
+                id=f"polygon_pour:{pourindex}:{index}",
+                object_type=PcbGeometryObject.ZONE,
+                shape=PcbGeometryShape.POLYGON,
+                roles=_layered_geometry_roles(
+                    layer_num,
+                    layer_map,
+                    PcbGeometryRole.POUR,
+                    PcbGeometryRole.ZONE_OUTLINE,
+                    PcbGeometryRole.BOARD_LEVEL,
+                ),
+                data=PcbZoneGeometry(
+                    boundary=boundary,
+                    priority=pourindex,
+                    min_thickness_mm=min_thickness,
+                    fill_type=fill_type,
+                ),
+                layers=(layer,),
                 net_number=net_num,
                 net_name=net_name,
-                layer=layer,
-                boundary=boundary,
-                priority=pourindex,
-                min_thickness_mm=min_thickness,
-                fill_type=fill_type,
+                metadata=_geometry_metadata(
+                    native_type="POLYGON",
+                    source_collection="zones",
+                    native_index=index,
+                    native_polygon_index=pourindex,
+                    properties=rec,
+                ),
             )
         )
 
@@ -1301,8 +1587,8 @@ def _parse_regions(
     layer_map: dict[int, PcbLayer],
     ctx: ParseContext,
     pour_net_map: dict[int, int] | None = None,
-) -> list[PcbPolygon]:
-    """Parse Regions6/Data → list of PcbPolygon.
+) -> list[PcbGeometry]:
+    """Parse Regions6/Data into polygon geometry.
 
     Region records contain a property string followed by vertex data
     (pairs of float64 in Altium internal units).  All layers are included —
@@ -1313,9 +1599,9 @@ def _parse_regions(
     a valid subpolyindex will inherit the net from their parent polygon pour.
     """
     records = _read_binary_records(data)
-    polygons: list[PcbPolygon] = []
+    polygons: list[PcbGeometry] = []
 
-    for rec_type, body in records:
+    for index, (rec_type, body) in enumerate(records):
         if rec_type != 11:
             continue
         region = RegionRecord.from_bytes(body, ctx)
@@ -1331,8 +1617,7 @@ def _parse_regions(
         layer = _layer_name(resolved_num, layer_map)
         if not layer:
             continue
-        if _region_kind(region.properties) == _REGION_KIND_POLYGON_CUTOUT:
-            continue
+        region_kind = _region_kind(region.properties)
 
         points = [(_int_to_mm(int(vx)), -_int_to_mm(int(vy))) for vx, vy in region.vertices]
         if len(points) < 3:
@@ -1359,13 +1644,43 @@ def _parse_regions(
         net_obj = nets.get(net_num)
         net_name = net_obj.name if net_obj else ""
 
+        roles = list(_layer_geometry_roles(resolved_num, layer_map))
+        if resolved_num in _COPPER_LAYERS:
+            roles.append(PcbGeometryRole.CONDUCTOR)
+            if "subpolyindex" in region.properties:
+                roles.extend((PcbGeometryRole.POUR, PcbGeometryRole.ZONE_FILL))
+        if region_kind == _REGION_KIND_POLYGON_CUTOUT:
+            roles.append(PcbGeometryRole.POLYGON_CUTOUT)
+
+        component_index = None if region.component == _COMPONENT_NONE else region.component
+        roles.append(
+            PcbGeometryRole.FOOTPRINT_MEMBER
+            if component_index is not None
+            else PcbGeometryRole.BOARD_LEVEL
+        )
+
         polygons.append(
-            PcbPolygon(
-                points=points,
-                layer=layer,
+            PcbGeometry(
+                id=f"region:{resolved_num}:{index}",
+                object_type=PcbGeometryObject.GRAPHIC,
+                shape=PcbGeometryShape.POLYGON,
+                roles=tuple(roles),
+                data=PcbPolygonGeometry(points=points, holes=holes),
+                layers=(layer,),
                 net_number=net_num,
                 net_name=net_name,
-                holes=holes,
+                metadata=_geometry_metadata(
+                    native_type="REGION",
+                    native_kind="" if region_kind is None else str(region_kind),
+                    source_collection="polygons",
+                    native_index=index,
+                    native_component_index=component_index,
+                    native_polygon_index=int(region.properties.get("polygonindex", "-1") or "-1"),
+                    native_subpolygon_index=int(
+                        region.properties.get("subpolyindex", "-1") or "-1"
+                    ),
+                    properties=region.properties,
+                ),
             )
         )
 
@@ -1377,18 +1692,15 @@ def _parse_shape_based_regions(
     nets: dict[int, PcbNet],
     layer_map: dict[int, PcbLayer],
     ctx: ParseContext,
-) -> tuple[list[PcbPolygon], dict[int, list[PcbPolygon]]]:
-    """Parse ShapeBasedRegions6/Data → board polygons + per-component polygons.
+) -> list[PcbGeometry]:
+    """Parse ShapeBasedRegions6/Data into polygon geometry.
 
     Uses the extended vertex format (37 bytes per vertex with arc support).
-    Returns (board_polygons, comp_polygons) where comp_polygons maps
-    component index → list of body-outline polygons.
     """
     records = _read_binary_records(data)
-    board_polygons: list[PcbPolygon] = []
-    comp_polygons: dict[int, list[PcbPolygon]] = {}
+    polygons: list[PcbGeometry] = []
 
-    for rec_type, body in records:
+    for index, (rec_type, body) in enumerate(records):
         if rec_type != 11:
             continue
         region = ShapeBasedRegionRecord.from_bytes(body, ctx)
@@ -1404,8 +1716,7 @@ def _parse_shape_based_regions(
         layer = _layer_name(resolved_num, layer_map)
         if not layer:
             continue
-        if _region_kind(region.properties) == _REGION_KIND_POLYGON_CUTOUT:
-            continue
+        region_kind = _region_kind(region.properties)
 
         # Linearize arc edges, then convert to mm with Y negated
         raw_pts = linearize_arc_vertices(region.vertices)
@@ -1424,26 +1735,47 @@ def _parse_shape_based_regions(
         net_obj = nets.get(net_num)
         net_name = net_obj.name if net_obj else ""
 
-        poly = PcbPolygon(
-            points=points,
-            layer=layer,
-            net_number=net_num,
-            net_name=net_name,
-            holes=holes,
+        roles = list(_layer_geometry_roles(resolved_num, layer_map))
+        if resolved_num in _COPPER_LAYERS:
+            roles.append(PcbGeometryRole.CONDUCTOR)
+        if region_kind == _REGION_KIND_POLYGON_CUTOUT:
+            roles.append(PcbGeometryRole.POLYGON_CUTOUT)
+
+        component_index = None if region.component == _COMPONENT_NONE else region.component
+        roles.append(
+            PcbGeometryRole.FOOTPRINT_MEMBER
+            if component_index is not None
+            else PcbGeometryRole.BOARD_LEVEL
         )
 
-        if region.component == _COMPONENT_NONE:
-            board_polygons.append(poly)
-        else:
-            comp_polygons.setdefault(region.component, []).append(poly)
+        polygons.append(
+            PcbGeometry(
+                id=f"shape_region:{resolved_num}:{index}",
+                object_type=PcbGeometryObject.GRAPHIC,
+                shape=PcbGeometryShape.POLYGON,
+                roles=tuple(roles),
+                data=PcbPolygonGeometry(points=points, holes=holes),
+                layers=(layer,),
+                net_number=net_num,
+                net_name=net_name,
+                metadata=_geometry_metadata(
+                    native_type="SHAPE_BASED_REGION",
+                    native_kind="" if region_kind is None else str(region_kind),
+                    source_collection="polygons",
+                    native_index=index,
+                    native_component_index=component_index,
+                    properties=region.properties,
+                ),
+            )
+        )
 
-    return board_polygons, comp_polygons
+    return polygons
 
 
 def _dedupe_shape_based_board_polygons(
-    regions: list[PcbPolygon],
-    shape_based_regions: list[PcbPolygon],
-) -> list[PcbPolygon]:
+    regions: list[PcbGeometry],
+    shape_based_regions: list[PcbGeometry],
+) -> list[PcbGeometry]:
     """Drop ShapeBasedRegions6 board polygons already represented by Regions6."""
     if not regions:
         return shape_based_regions
@@ -1457,13 +1789,13 @@ def _dedupe_shape_based_board_polygons(
     ]
 
 
-def _polygon_duplicate_key(poly: PcbPolygon) -> tuple[str, float, float, float, float] | None:
-    if len(poly.points) < 3:
+def _polygon_duplicate_key(poly: PcbGeometry) -> tuple[str, float, float, float, float] | None:
+    if not isinstance(poly.data, PcbPolygonGeometry) or len(poly.data.points) < 3:
         return None
-    xs = [x for x, _y in poly.points]
-    ys = [y for _x, y in poly.points]
+    xs = [x for x, _y in poly.data.points]
+    ys = [y for _x, y in poly.data.points]
     return (
-        poly.layer,
+        poly.primary_layer,
         round(min(xs), 3),
         round(min(ys), 3),
         round(max(xs), 3),
@@ -1486,14 +1818,13 @@ def _parse_board_outline(
     arcs_data: bytes,
     layer_map: dict[int, PcbLayer],
     ctx: ParseContext,
-) -> tuple[list[PcbLine], list[PcbArc]]:
-    """Extract board outline from tracks and arcs on Mechanical 1 (layer 57).
+) -> list[PcbGeometry]:
+    """Extract board outline geometry from fallback mechanical/keepout layers.
 
     Falls back to Keep-Out layer (74) if no Mechanical 1 primitives found.
     Also checks for any mechanical layer whose MECHKIND is EDGE.
     """
-    outline_lines: list[PcbLine] = []
-    outline_arcs: list[PcbArc] = []
+    outline: list[PcbGeometry] = []
 
     # Prefer a layer with EDGE function (from MECHKIND=BoardShape), then
     # fall back to Mechanical 1 (57), then Keep-Out (74).
@@ -1511,12 +1842,12 @@ def _parse_board_outline(
             target_layers.append(n)
 
     for target_layer in target_layers:
-        if outline_lines or outline_arcs:
+        if outline:
             break
 
         edge_name = _layer_name(target_layer, layer_map) or "Edge"
 
-        for rec_type, body in _read_binary_records(tracks_data):
+        for index, (rec_type, body) in enumerate(_read_binary_records(tracks_data)):
             if rec_type != 4:
                 continue
             track = TrackRecord.from_bytes(body, ctx)
@@ -1525,18 +1856,35 @@ def _parse_board_outline(
             if track.component != _COMPONENT_NONE:
                 continue
 
-            outline_lines.append(
-                PcbLine(
-                    start_x=_int_to_mm(track.start[0]),
-                    start_y=-_int_to_mm(track.start[1]),
-                    end_x=_int_to_mm(track.end[0]),
-                    end_y=-_int_to_mm(track.end[1]),
-                    layer=edge_name,
-                    width=_int_to_mm(track.width),
+            outline.append(
+                PcbGeometry(
+                    id=f"outline_track:{target_layer}:{index}",
+                    object_type=PcbGeometryObject.GRAPHIC,
+                    shape=PcbGeometryShape.LINE,
+                    roles=_layered_geometry_roles(
+                        target_layer,
+                        layer_map,
+                        PcbGeometryRole.BOARD_OUTLINE,
+                        PcbGeometryRole.BOARD_LEVEL,
+                    ),
+                    data=PcbLineGeometry(
+                        start_x=_int_to_mm(track.start[0]),
+                        start_y=-_int_to_mm(track.start[1]),
+                        end_x=_int_to_mm(track.end[0]),
+                        end_y=-_int_to_mm(track.end[1]),
+                        width=_int_to_mm(track.width),
+                    ),
+                    layers=(edge_name,),
+                    metadata=_geometry_metadata(
+                        native_type="TRACK",
+                        native_kind="board_outline",
+                        source_collection="board_outline",
+                        native_index=index,
+                    ),
                 )
             )
 
-        for rec_type, body in _read_binary_records(arcs_data):
+        for index, (rec_type, body) in enumerate(_read_binary_records(arcs_data)):
             if rec_type != 1:
                 continue
             arc = ArcRecord.from_bytes(body, ctx)
@@ -1555,24 +1903,33 @@ def _parse_board_outline(
                 cx, cy_orig, radius, arc.start_angle, arc.end_angle
             )
             sy, my, ey = -sy, -my, -ey
-            outline_arcs.append(
-                PcbArc(
-                    start_x=sx,
-                    start_y=sy,
-                    mid_x=mx,
-                    mid_y=my,
-                    end_x=ex,
-                    end_y=ey,
-                    layer=edge_name,
-                    width=width,
+            outline.append(
+                PcbGeometry(
+                    id=f"outline_arc:{target_layer}:{index}",
+                    object_type=PcbGeometryObject.GRAPHIC,
+                    shape=PcbGeometryShape.ARC,
+                    roles=_layered_geometry_roles(
+                        target_layer,
+                        layer_map,
+                        PcbGeometryRole.BOARD_OUTLINE,
+                        PcbGeometryRole.BOARD_LEVEL,
+                    ),
+                    data=PcbArcGeometry(sx, sy, mx, my, ex, ey, width),
+                    layers=(edge_name,),
+                    metadata=_geometry_metadata(
+                        native_type="ARC",
+                        native_kind="board_outline",
+                        source_collection="board_outline",
+                        native_index=index,
+                    ),
                 )
             )
 
-    return outline_lines, outline_arcs
+    return outline
 
 
-def _parse_component_bodies(data: bytes) -> dict[int, list[PcbModel3D]]:
-    """Parse ComponentBodies6/Data → {component_index: [PcbModel3D, ...]}.
+def _parse_component_bodies(data: bytes) -> dict[int, list[PcbGeometry]]:
+    """Parse ComponentBodies6/Data into component-indexed model geometry.
 
     Text records with pipe-delimited properties. Key properties:
     - ``MODELID``: OLE stream ID for the embedded STEP data
@@ -1582,9 +1939,9 @@ def _parse_component_bodies(data: bytes) -> dict[int, list[PcbModel3D]]:
     - ``MODEL.3D.DZ``: Z offset in mil
     """
     records = read_text_records(data)
-    result: dict[int, list[PcbModel3D]] = {}
+    result: dict[int, list[PcbGeometry]] = {}
 
-    for rec in records:
+    for index, rec in enumerate(records):
         model_id = rec.get("modelid", "")
         if not model_id:
             continue
@@ -1611,10 +1968,26 @@ def _parse_component_bodies(data: bytes) -> dict[int, list[PcbModel3D]]:
         rot_y = float(rec.get("model.3d.roty", "0"))
         rot_z = float(rec.get("model.3d.rotz", "0"))
 
-        model = PcbModel3D(
-            source=model_id,
-            offset=(offset_x, offset_y, offset_z),
-            rotation=(rot_x, rot_y, rot_z),
+        model = PcbGeometry(
+            id=f"component_body:{comp_idx}:{index}",
+            object_type=PcbGeometryObject.MODEL_3D,
+            shape=PcbGeometryShape.MODEL,
+            roles=(
+                PcbGeometryRole.COMPONENT_BODY,
+                PcbGeometryRole.FOOTPRINT_MEMBER,
+            ),
+            data=PcbModel3DGeometry(
+                source=model_id,
+                offset=(offset_x, offset_y, offset_z),
+                rotation=(rot_x, rot_y, rot_z),
+            ),
+            metadata=_geometry_metadata(
+                native_type="COMPONENT_BODY",
+                source_collection="models_3d",
+                native_index=index,
+                native_component_index=comp_idx,
+                properties=rec,
+            ),
         )
         result.setdefault(comp_idx, []).append(model)
 
@@ -1622,13 +1995,14 @@ def _parse_component_bodies(data: bytes) -> dict[int, list[PcbModel3D]]:
 
 
 def _compute_bbox(
-    fp: PcbFootprint,
+    pads: list[PcbGeometry],
 ) -> tuple[float, float, float, float] | None:
     """Compute footprint bounding box from pads with 0.5mm margin."""
-    if not fp.pads:
+    pad_payloads = [pad.data for pad in pads if isinstance(pad.data, PcbPadGeometry)]
+    if not pad_payloads:
         return None
-    xs = [p.x - p.width / 2 for p in fp.pads] + [p.x + p.width / 2 for p in fp.pads]
-    ys = [p.y - p.height / 2 for p in fp.pads] + [p.y + p.height / 2 for p in fp.pads]
+    xs = [p.x - p.width / 2 for p in pad_payloads] + [p.x + p.width / 2 for p in pad_payloads]
+    ys = [p.y - p.height / 2 for p in pad_payloads] + [p.y + p.height / 2 for p in pad_payloads]
     margin = 0.5
     return (min(xs) - margin, min(ys) - margin, max(xs) + margin, max(ys) + margin)
 
@@ -2054,36 +2428,41 @@ def parse_altium_pcb(
     footprints = _parse_components(comp_data, layer_map)
 
     # Parse binary streams
-    segments, comp_lines, graphic_lines = _parse_tracks(tracks_data, layer_map, ctx)
+    track_geometry = _parse_tracks(tracks_data, layer_map, ctx)
     vias = _parse_vias(vias_data, layer_map, ctx)
-    trace_arcs, comp_arcs, keepouts, graphic_arcs = _parse_arcs(arcs_data, layer_map, ctx)
+    arc_geometry = _parse_arcs(arcs_data, layer_map, ctx)
     raw_pads = _parse_pads(pads_data, nets, layer_map, ctx)
     _apply_drill_manager_mask_apertures(raw_pads, drill_manager_data)
     raw_texts = _parse_texts(texts_data, layer_map, ctx)
     fills = _parse_fills(fills_data, layer_map, ctx)
     zones, pour_net_map = _parse_polygon_pours(polygons6_data, nets, layer_map)
     regions = _parse_regions(regions_data, nets, layer_map, ctx, pour_net_map)
-    sb_board_polys, sb_comp_polys = _parse_shape_based_regions(
-        sb_regions_data, nets, layer_map, ctx
-    )
+    shape_regions = _parse_shape_based_regions(sb_regions_data, nets, layer_map, ctx)
     comp_models = _parse_component_bodies(comp_bodies_data)
 
-    # Board outline
-    outline_lines, outline_arcs = _parse_board_outline(tracks_data, arcs_data, layer_map, ctx)
+    geometry = [
+        *[item for item in track_geometry if item.metadata.native_component_index is None],
+        *vias,
+        *[item for item in arc_geometry if item.metadata.native_component_index is None],
+        *fills,
+        *zones,
+        *regions,
+        *_dedupe_shape_based_board_polygons(
+            regions,
+            [item for item in shape_regions if item.metadata.native_component_index is None],
+        ),
+    ]
+    if not any(item.has_role(PcbGeometryRole.BOARD_OUTLINE) for item in geometry):
+        geometry.extend(_parse_board_outline(tracks_data, arcs_data, layer_map, ctx))
 
-    # Assemble footprints: assign pads, texts, lines, arcs by component index.
-    # Build name→function lookup for categorising component geometry.
-    silk_names = {lyr.name for lyr in layer_map.values() if lyr.has_role(LayerRole.SILKSCREEN)}
-    fab_names = {lyr.name for lyr in layer_map.values() if lyr.has_role(LayerRole.FABRICATION)}
-
-    free_pads: list[PcbPad] = []
+    free_pad_geometry: list[PcbGeometry] = []
     for comp_idx, pad in raw_pads:
         if comp_idx == _COMPONENT_NONE:
-            free_pads.append(pad)
+            free_pad_geometry.append(pad)
         elif comp_idx < len(footprints):
-            pad.footprint_ref = footprints[comp_idx].reference
-            footprints[comp_idx].pads.append(pad)
-    if free_pads:
+            geometry.append(_with_footprint_ref(pad, footprints[comp_idx].reference))
+
+    if free_pad_geometry:
         free_pad_footprint = PcbFootprint(
             reference="FREEPADS",
             footprint_lib="Altium Free Pads",
@@ -2091,58 +2470,55 @@ def parse_altium_pcb(
             y=0.0,
             rotation=0.0,
             layer=_layer_name(1, layer_map) or "Top Layer",
+            metadata=PcbFootprintMetadata(
+                source_format="altium",
+                native_type="free_pads",
+            ),
         )
-        for pad in free_pads:
-            pad.footprint_ref = free_pad_footprint.reference
-            free_pad_footprint.pads.append(pad)
         footprints.append(free_pad_footprint)
+        geometry.extend(
+            _with_footprint_ref(pad, free_pad_footprint.reference) for pad in free_pad_geometry
+        )
 
     for comp_idx, text in raw_texts:
         if comp_idx != _COMPONENT_NONE and comp_idx < len(footprints):
-            text.footprint_ref = footprints[comp_idx].reference
-            footprints[comp_idx].texts.append(text)
+            geometry.append(_with_footprint_ref(text, footprints[comp_idx].reference))
+        elif comp_idx == _COMPONENT_NONE:
+            geometry.append(text)
 
-    for comp_idx, lines in comp_lines.items():
+    for item in track_geometry + arc_geometry + shape_regions:
+        comp_idx = item.metadata.native_component_index
+        if comp_idx is None:
+            continue
         if comp_idx < len(footprints):
-            fp = footprints[comp_idx]
-            for line in lines:
-                line.footprint_ref = fp.reference
-                if line.layer in silk_names:
-                    fp.silkscreen_lines.append(line)
-                elif line.layer in fab_names:
-                    fp.fab_lines.append(line)
-                else:
-                    graphic_lines.append(line)
-
-    for comp_idx, arcs in comp_arcs.items():
-        if comp_idx < len(footprints):
-            fp = footprints[comp_idx]
-            for arc in arcs:
-                arc.footprint_ref = fp.reference
-                if arc.layer in fab_names:
-                    fp.fab_arcs.append(arc)
-                else:
-                    graphic_arcs.append(arc)
-
-    for comp_idx, polys in sb_comp_polys.items():
-        if comp_idx < len(footprints):
-            fp = footprints[comp_idx]
-            for poly in polys:
-                poly.footprint_ref = fp.reference
-                if poly.layer in silk_names:
-                    fp.silkscreen_polygons.append(poly)
-                elif poly.layer in fab_names:
-                    fp.fab_polygons.append(poly)
+            geometry.append(_with_footprint_ref(item, footprints[comp_idx].reference))
 
     for comp_idx, models in comp_models.items():
         if comp_idx < len(footprints):
-            footprints[comp_idx].models_3d.extend(models)
+            geometry.extend(
+                _with_footprint_ref(model, footprints[comp_idx].reference) for model in models
+            )
 
     # Extract value text and compute bounding boxes
     for fp in footprints:
         if not fp.value:
-            fp.value = next((t.text for t in fp.texts if t.kind == "value"), "")
-        fp.bbox = _compute_bbox(fp)
+            fp.value = next(
+                (
+                    text.data.text
+                    for text in geometry
+                    if text.footprint_ref == fp.reference
+                    and text.has_role(PcbGeometryRole.VALUE)
+                    and isinstance(text.data, PcbTextGeometry)
+                ),
+                "",
+            )
+        fp.bbox = _compute_bbox(
+            [
+                item
+                for item in geometry
+                if item.footprint_ref == fp.reference and item.object_type == PcbGeometryObject.PAD
+            ]
+        )
 
     # Board name from Board6/Data (board_props already parsed above)
     board_name = board_props.get("filename", "")
@@ -2151,21 +2527,11 @@ def parse_altium_pcb(
     if board_name.endswith(".$$$"):
         board_name = board_name[:-4]
 
-    polygons = fills + regions + _dedupe_shape_based_board_polygons(regions, sb_board_polys)
-
     return Pcb(
         name=board_name,
         nets=nets,
         footprints=footprints,
-        segments=segments,
-        vias=vias,
-        outline_lines=outline_lines,
-        outline_arcs=outline_arcs,
-        polygons=polygons,
-        trace_arcs=trace_arcs,
+        geometry=geometry,
         layers=list(layer_map.values()),
-        zones=zones,
-        keepouts=keepouts,
-        graphic_lines=graphic_lines,
-        graphic_arcs=graphic_arcs,
+        metadata=PcbMetadata(source_format="altium"),
     )

@@ -42,10 +42,7 @@ def test_pcb_role_helpers_match_multi_role_layers() -> None:
         name="roles",
         nets={},
         footprints=[],
-        segments=[],
-        vias=[],
-        outline_lines=[],
-        outline_arcs=[],
+        geometry=[],
         layers=[
             PcbLayer("F.Fab", (LayerRole.FABRICATION, LayerRole.FRONT)),
             PcbLayer(

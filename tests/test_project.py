@@ -102,10 +102,7 @@ def test_project_with_all_submodels():
             name="test-board",
             nets={0: PcbNet(number=0, name="")},
             footprints=[],
-            segments=[],
-            vias=[],
-            outline_lines=[],
-            outline_arcs=[],
+            geometry=[],
         ),
         stackup=Stackup(
             layers=[StackupLayer(name="F.Cu", layer_type="copper", thickness_mm=0.035)],

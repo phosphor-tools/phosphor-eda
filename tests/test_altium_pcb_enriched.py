@@ -15,7 +15,17 @@ from phosphor_eda.altium.pcb_parser import (
     parse_altium_stackup,
     read_text_records,
 )
-from phosphor_eda.pcb import Pcb, PcbPolygon
+from phosphor_eda.pcb import (
+    Pcb,
+    PcbArcGeometry,
+    PcbGeometry,
+    PcbGeometryObject,
+    PcbGeometryRole,
+    PcbGeometryShape,
+    PcbKeepoutGeometry,
+    PcbLineGeometry,
+    PcbPolygonGeometry,
+)
 from phosphor_eda.project import Stackup
 
 FIXTURE = Path(__file__).parent / "fixtures" / "altium" / "pi-mx8" / "PCB" / "PiMX8MP_r0.3.PcbDoc"
@@ -166,13 +176,16 @@ def test_pcie_diff_pair(diff_pairs) -> None:
 
 def test_altium_keepout_arcs_are_not_visible_trace_arcs(pcb: Pcb) -> None:
     visible_keepout_rings = [
-        arc
-        for arc in pcb.trace_arcs
-        if arc.layer in {"Top Layer", "Bottom Layer"}
-        and arc.net_number == 0
-        and arc.width == pytest.approx(0.2, abs=0.001)
-        and arc.start_x == pytest.approx(arc.end_x, abs=1e-6)
-        and arc.start_y == pytest.approx(arc.end_y, abs=1e-6)
+        item
+        for item in pcb.geometry
+        if item.object_type == PcbGeometryObject.TRACK
+        and item.shape == PcbGeometryShape.ARC
+        and isinstance(item.data, PcbArcGeometry)
+        and item.primary_layer in {"Top Layer", "Bottom Layer"}
+        and item.net_number == 0
+        and item.data.width == pytest.approx(0.2, abs=0.001)
+        and item.data.start_x == pytest.approx(item.data.end_x, abs=1e-6)
+        and item.data.start_y == pytest.approx(item.data.end_y, abs=1e-6)
     ]
 
     assert visible_keepout_rings == []
@@ -180,43 +193,78 @@ def test_altium_keepout_arcs_are_not_visible_trace_arcs(pcb: Pcb) -> None:
 
 def test_altium_keepout_arcs_are_preserved_as_queryable_keepouts(pcb: Pcb) -> None:
     keepout_rings = [
-        keepout
-        for keepout in pcb.keepouts
-        if set(keepout.layers) <= {"Top Layer", "Bottom Layer"}
-        and keepout.rules.tracks == "not_allowed"
-        and keepout.rules.vias == "not_allowed"
-        and keepout.rules.pads == "not_allowed"
-        and keepout.rules.copperpour == "not_allowed"
+        item
+        for item in pcb.geometry
+        if item.object_type == PcbGeometryObject.KEEP_OUT
+        and isinstance(item.data, PcbKeepoutGeometry)
+        and set(item.layers) <= {"Top Layer", "Bottom Layer"}
+        and item.data.rules.tracks == "not_allowed"
+        and item.data.rules.vias == "not_allowed"
+        and item.data.rules.pads == "not_allowed"
+        and item.data.rules.copperpour == "not_allowed"
     ]
 
     assert len(keepout_rings) >= 8
-    assert any("Top Layer" in keepout.layers for keepout in keepout_rings)
-    assert any("Bottom Layer" in keepout.layers for keepout in keepout_rings)
-    assert all(len(keepout.boundary) >= 16 for keepout in keepout_rings)
+    assert any("Top Layer" in item.layers for item in keepout_rings)
+    assert any("Bottom Layer" in item.layers for item in keepout_rings)
+    assert all(
+        isinstance(item.data, PcbKeepoutGeometry) and len(item.data.boundary) >= 16
+        for item in keepout_rings
+    )
 
 
 def test_altium_board_level_solder_mask_lines_and_arcs_are_preserved(pcb: Pcb) -> None:
-    top_solder_lines = [line for line in pcb.graphic_lines if line.layer == "Top Solder"]
-    bottom_solder_lines = [line for line in pcb.graphic_lines if line.layer == "Bottom Solder"]
-    top_solder_arcs = [arc for arc in pcb.graphic_arcs if arc.layer == "Top Solder"]
-    bottom_solder_arcs = [arc for arc in pcb.graphic_arcs if arc.layer == "Bottom Solder"]
+    top_solder_lines = [
+        item
+        for item in pcb.geometry
+        if item.object_type == PcbGeometryObject.GRAPHIC
+        and item.primary_layer == "Top Solder"
+        and isinstance(item.data, PcbLineGeometry)
+        and not item.footprint_ref
+    ]
+    bottom_solder_lines = [
+        item
+        for item in pcb.geometry
+        if item.object_type == PcbGeometryObject.GRAPHIC
+        and item.primary_layer == "Bottom Solder"
+        and isinstance(item.data, PcbLineGeometry)
+        and not item.footprint_ref
+    ]
+    top_solder_arcs = [
+        item
+        for item in pcb.geometry
+        if item.object_type == PcbGeometryObject.GRAPHIC
+        and item.primary_layer == "Top Solder"
+        and isinstance(item.data, PcbArcGeometry)
+        and not item.footprint_ref
+    ]
+    bottom_solder_arcs = [
+        item
+        for item in pcb.geometry
+        if item.object_type == PcbGeometryObject.GRAPHIC
+        and item.primary_layer == "Bottom Solder"
+        and isinstance(item.data, PcbArcGeometry)
+        and not item.footprint_ref
+    ]
 
     assert len(top_solder_lines) == 4
     assert len(bottom_solder_lines) == 4
     assert len(top_solder_arcs) == 4
     assert len(bottom_solder_arcs) == 4
-    assert all(line.width == pytest.approx(0.1, abs=0.001) for line in top_solder_lines)
-    assert all(arc.width == pytest.approx(0.1, abs=0.001) for arc in top_solder_arcs)
+    assert all(item.data.width == pytest.approx(0.1, abs=0.001) for item in top_solder_lines)
+    assert all(item.data.width == pytest.approx(0.1, abs=0.001) for item in top_solder_arcs)
 
 
 def test_altium_component_non_silk_fab_graphics_are_preserved(pcb: Pcb) -> None:
     assert any(
-        line.layer in {"Top Paste", "Bottom Paste"} and line.footprint_ref
-        for line in pcb.graphic_lines
+        line.primary_layer in {"Top Paste", "Bottom Paste"} and line.footprint_ref
+        for line in pcb.geometry
+        if isinstance(line.data, PcbLineGeometry)
     )
     assert any(
-        arc.layer in {"Top 3D Body", "Bottom 3D Body"} and arc.footprint_ref
-        for arc in pcb.graphic_arcs
+        arc.primary_layer in {"Top 3D Body", "Bottom 3D Body"} and arc.footprint_ref
+        for arc in pcb.geometry
+        if isinstance(arc.data, PcbArcGeometry)
     )
 
 
@@ -318,15 +366,15 @@ def pcb() -> Pcb:
 
 def test_polygons_with_holes(pcb) -> None:
     """Polygons with holes are preserved."""
-    polys_with_holes = [p for p in pcb.polygons if p.holes]
+    polys_with_holes = [p for p in _polygon_geometry(pcb) if p.data.holes]
     assert len(polys_with_holes) >= 30
-    assert any(len(hole) > 300 for poly in polys_with_holes for hole in poly.holes)
+    assert any(len(hole) > 300 for poly in polys_with_holes for hole in poly.data.holes)
 
 
 def test_polygon_hole_structure(pcb) -> None:
     """Each hole is a list of at least 3 coordinate pairs."""
-    poly = next(p for p in pcb.polygons if p.holes)
-    hole = poly.holes[0]
+    poly = next(p for p in _polygon_geometry(pcb) if p.data.holes)
+    hole = poly.data.holes[0]
     assert len(hole) >= 3
     # Each point is a (float, float) tuple
     assert len(hole[0]) == 2
@@ -336,8 +384,8 @@ def test_duplicate_shape_based_board_copper_polygons_are_omitted(pcb) -> None:
     """Altium Regions6 and ShapeBasedRegions6 can duplicate board copper polygons."""
     copper_area = [
         poly
-        for poly in pcb.polygons
-        if poly.layer == "Top Layer"
+        for poly in _polygon_geometry(pcb)
+        if poly.primary_layer == "Top Layer"
         and _polygon_bounds_key(poly) == ("Top Layer", 100.871, -146.479, 136.221, -134.629)
     ]
 
@@ -347,19 +395,30 @@ def test_duplicate_shape_based_board_copper_polygons_are_omitted(pcb) -> None:
 def test_polygon_cutout_regions_are_not_emitted_as_copper(pcb) -> None:
     cutout_area = [
         poly
-        for poly in pcb.polygons
-        if poly.layer == "Top Layer"
+        for poly in _polygon_geometry(pcb)
+        if poly.primary_layer == "Top Layer"
         and _polygon_bounds_key(poly) == ("Top Layer", 88.821, -173.629, 91.321, -171.129)
     ]
 
     assert cutout_area == []
 
 
-def _polygon_bounds_key(poly: PcbPolygon) -> tuple[str, float, float, float, float]:
-    xs = [x for x, _y in poly.points]
-    ys = [y for _x, y in poly.points]
+def _polygon_geometry(pcb: Pcb) -> list[PcbGeometry]:
+    return [
+        item
+        for item in pcb.geometry
+        if item.object_type in {PcbGeometryObject.GRAPHIC, PcbGeometryObject.ZONE}
+        and isinstance(item.data, PcbPolygonGeometry)
+        and not item.has_role(PcbGeometryRole.POLYGON_CUTOUT)
+    ]
+
+
+def _polygon_bounds_key(poly: PcbGeometry) -> tuple[str, float, float, float, float]:
+    assert isinstance(poly.data, PcbPolygonGeometry)
+    xs = [x for x, _y in poly.data.points]
+    ys = [y for _x, y in poly.data.points]
     return (
-        poly.layer,
+        poly.primary_layer,
         round(min(xs), 3),
         round(min(ys), 3),
         round(max(xs), 3),

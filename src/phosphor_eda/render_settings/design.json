@@ -3,7 +3,7 @@
   "source": {
     "layers": [
       { "match": { "role": "copper" } },
-      { "match": { "role": "silkscreen" }, "objects": ["silk", "board_graphic_text"] },
+      { "match": { "role": "silkscreen" }, "objects": ["graphic", "text"] },
       { "match": { "role": "edge" } },
       { "match": { "role": "drill" } }
     ]

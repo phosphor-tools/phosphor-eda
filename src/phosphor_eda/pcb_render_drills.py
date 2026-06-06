@@ -13,17 +13,17 @@ from phosphor_eda.sql.geometry import VIA_DRILL_QUAD_SEGS
 if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry
 
-    from phosphor_eda.pcb import PcbPad
+    from phosphor_eda.pcb import PcbPadGeometry
 
 
-def pad_drill_dimensions(pad: PcbPad) -> tuple[float, float]:
+def pad_drill_dimensions(pad: PcbPadGeometry) -> tuple[float, float]:
     """Return the drill aperture dimensions for a pad in millimetres."""
     width = pad.drill_width if pad.drill_width > 0.0 else pad.drill
     height = pad.drill_height if pad.drill_height > 0.0 else pad.drill
     return width, height
 
 
-def pad_drill_geometry(pad: PcbPad) -> BaseGeometry | None:
+def pad_drill_geometry(pad: PcbPadGeometry) -> BaseGeometry | None:
     """Return the subtractive drill aperture for a pad."""
     width, height = pad_drill_dimensions(pad)
     if width <= 0.0 or height <= 0.0:

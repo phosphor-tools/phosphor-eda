@@ -10,16 +10,23 @@ from shapely.geometry.base import BaseGeometry
 
 from phosphor_eda.pcb import (
     LayerRole,
-    Pcb,
-    PcbArc,
-    PcbLine,
-    PcbPad,
-    PcbVia,
+    PcbGeometryObject,
+    PcbGeometryRole,
+    PcbGeometryShape,
+    PcbPadGeometry,
+    PcbViaGeometry,
+)
+from phosphor_eda.pcb import (
+    PcbGeometry as DomainPcbGeometry,
 )
 from phosphor_eda.pcb_render_drills import pad_drill_geometry
 from phosphor_eda.pcb_render_geometry import (
-    GeometryKind,
+    SYNTHETIC_BOARD_MATERIAL_ROLE,
+    SYNTHETIC_BOARD_OUTLINE_ROLE,
+    SYNTHETIC_DRILL_ROLE,
     GeometryLayer,
+    GeometryTags,
+    RenderableGeometry,
 )
 from phosphor_eda.pcb_render_primitives import (
     geometry_to_svg_primitive,
@@ -36,7 +43,6 @@ if TYPE_CHECKING:
 
     from phosphor_eda.pcb_render_geometry import (
         PcbGeometryStore,
-        RenderableGeometry,
     )
     from phosphor_eda.pcb_render_primitives import LayerClip, LayerMask, SvgPrimitive
     from phosphor_eda.pcb_render_settings import LayerSelectionRule
@@ -58,64 +64,6 @@ class DerivedLayer:
     data: Mapping[str, str] = field(default_factory=_empty_data)
     clip: LayerClip | None = None
     mask: LayerMask | None = None
-
-
-_OBJECT_KIND_ALIASES = {
-    "board_material": frozenset({GeometryKind.BOARD_MATERIAL}),
-    "board_outline": frozenset({GeometryKind.BOARD_OUTLINE}),
-    "drill": frozenset({GeometryKind.DRILL}),
-    "drills": frozenset({GeometryKind.DRILL}),
-    "pad": frozenset({GeometryKind.PAD}),
-    "pads": frozenset({GeometryKind.PAD}),
-    "trace": frozenset({GeometryKind.TRACE, GeometryKind.TRACE_ARC}),
-    "traces": frozenset({GeometryKind.TRACE, GeometryKind.TRACE_ARC}),
-    "trace_arc": frozenset({GeometryKind.TRACE_ARC}),
-    "trace_arcs": frozenset({GeometryKind.TRACE_ARC}),
-    "zone": frozenset({GeometryKind.ZONE}),
-    "zones": frozenset({GeometryKind.ZONE}),
-    "keepout": frozenset({GeometryKind.KEEPOUT}),
-    "keepouts": frozenset({GeometryKind.KEEPOUT}),
-    "via": frozenset({GeometryKind.VIA}),
-    "vias": frozenset({GeometryKind.VIA}),
-    "silkscreen": frozenset(
-        {
-            GeometryKind.SILK_LINE,
-            GeometryKind.SILK_ARC,
-            GeometryKind.SILK_POLYGON,
-            GeometryKind.BOARD_GRAPHIC_TEXT,
-        }
-    ),
-    "silk": frozenset({GeometryKind.SILK_LINE, GeometryKind.SILK_ARC, GeometryKind.SILK_POLYGON}),
-    "silk_line": frozenset({GeometryKind.SILK_LINE}),
-    "silk_lines": frozenset({GeometryKind.SILK_LINE}),
-    "silk_arc": frozenset({GeometryKind.SILK_ARC}),
-    "silk_arcs": frozenset({GeometryKind.SILK_ARC}),
-    "silk_polygon": frozenset({GeometryKind.SILK_POLYGON}),
-    "silk_polygons": frozenset({GeometryKind.SILK_POLYGON}),
-    "fabrication": frozenset(
-        {
-            GeometryKind.FAB_LINE,
-            GeometryKind.FAB_ARC,
-            GeometryKind.FAB_CIRCLE,
-            GeometryKind.FAB_POLYGON,
-        }
-    ),
-    "text": frozenset(
-        {
-            GeometryKind.REF_TEXT,
-            GeometryKind.VALUE_TEXT,
-            GeometryKind.USER_TEXT,
-            GeometryKind.BOARD_GRAPHIC_TEXT,
-        }
-    ),
-    "reference_text": frozenset({GeometryKind.REF_TEXT}),
-    "value_text": frozenset({GeometryKind.VALUE_TEXT}),
-    "user_text": frozenset({GeometryKind.USER_TEXT}),
-    "board_graphic_text": frozenset({GeometryKind.BOARD_GRAPHIC_TEXT}),
-    "mask": frozenset({GeometryKind.MASK}),
-    "paste": frozenset({GeometryKind.PASTE}),
-    "mechanical": frozenset({GeometryKind.MECHANICAL}),
-}
 
 
 def select_source_artwork(
@@ -154,7 +102,7 @@ def selected_copper_layers(
             rule_selects_layer(
                 rule,
                 item.layer,
-                object_kind=GeometryKind.VIA,
+                item=_via_selection_probe(),
                 active_side=active_side,
             )
             for rule in rule_tuple
@@ -162,7 +110,7 @@ def selected_copper_layers(
             continue
         layers[item.layer.name] = item.layer
 
-    for item in store.by_kind(GeometryKind.VIA):
+    for item in store.by_object_type(PcbGeometryObject.VIA):
         for layer_name in via_layers(item):
             if layer_name == "*.Cu":
                 continue
@@ -171,7 +119,7 @@ def selected_copper_layers(
                 rule_selects_layer(
                     rule,
                     layer,
-                    object_kind=GeometryKind.VIA,
+                    item=item,
                     active_side=active_side,
                 )
                 for rule in rule_tuple
@@ -184,7 +132,7 @@ def rule_selects_layer(
     rule: LayerSelectionRule,
     layer: GeometryLayer,
     *,
-    object_kind: GeometryKind,
+    item: RenderableGeometry,
     active_side: str,
 ) -> bool:
     """Return whether a source-layer rule selects an object on a geometry layer."""
@@ -197,7 +145,7 @@ def rule_selects_layer(
     match_side = active_side if rule.match.side == "active" else rule.match.side
     if match_side and layer.side != match_side:
         return False
-    return _matches_object_filter(object_kind, rule.objects)
+    return _matches_object_filter(item, rule.objects)
 
 
 def _layer_has_role(layer: GeometryLayer, role: str) -> bool:
@@ -211,23 +159,22 @@ def _layer_has_role(layer: GeometryLayer, role: str) -> bool:
 
 def via_layers(item: RenderableGeometry) -> frozenset[str]:
     """Return the copper-layer span of a via renderable item."""
-    payload = item.payload if item.payload is not None else item.source
-    if not isinstance(payload, PcbVia):
-        return frozenset()
-    return frozenset(str(layer) for layer in payload.layers)
+    if isinstance(item.source, DomainPcbGeometry):
+        return frozenset(str(layer) for layer in item.source.layers)
+    return frozenset()
 
 
 def board_outline_geometry(store: PcbGeometryStore) -> BaseGeometry:
     """Return the board outline polygon assembled from edge-cut primitives."""
     outlines: list[BaseGeometry] = []
-    for item in store.by_kind(GeometryKind.BOARD_OUTLINE):
+    for item in store.by_display_role(SYNTHETIC_BOARD_OUTLINE_ROLE):
         geometry = _board_outline_from_item(item)
         if geometry is not None and not geometry.is_empty:
             outlines.append(geometry)
     outline = _union_or_empty(outlines)
     if not outline.is_empty:
         return outline
-    for item in store.by_kind(GeometryKind.BOARD_MATERIAL):
+    for item in store.by_display_role(SYNTHETIC_BOARD_MATERIAL_ROLE):
         geometry = _board_material_geometry(_item_payload(item))
         if geometry is not None and not geometry.is_empty:
             return geometry
@@ -246,9 +193,9 @@ def drill_geometry_for_layer(
     """
     drills: list[BaseGeometry] = []
     for item in store.items:
-        if item.kind is GeometryKind.DRILL:
+        if item.display_role == SYNTHETIC_DRILL_ROLE:
             drill = _pad_drill_geometry(_item_payload(item), layer_name=layer_name)
-        elif item.kind is GeometryKind.VIA:
+        elif item.object_type == PcbGeometryObject.VIA:
             drill = _via_drill_geometry(_item_payload(item), layer_name=layer_name)
         else:
             drill = None
@@ -276,7 +223,7 @@ def solder_mask_opening_primitives(
             if primitive is not None:
                 primitives.append(primitive)
             continue
-        if item.kind is GeometryKind.PAD and item.layer.side not in {"", side}:
+        if item.object_type == PcbGeometryObject.PAD and item.layer.side not in {"", side}:
             continue
         primitive = pad_solder_mask_opening_primitive(
             item,
@@ -302,30 +249,80 @@ def _matches_rule(
     *,
     active_side: str,
 ) -> bool:
-    if item.kind is GeometryKind.BOARD_MATERIAL:
+    if item.display_role == SYNTHETIC_BOARD_MATERIAL_ROLE:
         return False
-    if item.kind is GeometryKind.KEEPOUT and not _rule_selects_keepouts(rule):
+    if item.object_type == PcbGeometryObject.KEEP_OUT and not _rule_selects_keepouts(rule):
         return False
-    return rule_selects_layer(rule, item.layer, object_kind=item.kind, active_side=active_side)
+    return rule_selects_layer(rule, item.layer, item=item, active_side=active_side)
 
 
 def _rule_selects_keepouts(rule: LayerSelectionRule) -> bool:
     return rule.match.role == "keepout" or (
-        bool(rule.objects) and _matches_object_filter(GeometryKind.KEEPOUT, rule.objects)
+        bool(rule.objects) and _matches_object_filter(_keepout_selection_probe(), rule.objects)
     )
 
 
-def _matches_object_filter(kind: GeometryKind, objects: tuple[str, ...]) -> bool:
+def _matches_object_filter(item: RenderableGeometry, objects: tuple[str, ...]) -> bool:
     if not objects:
         return True
-    return any(kind in _object_class_kinds(object_class) for object_class in objects)
+    return any(_matches_object_class(item, object_class) for object_class in objects)
 
 
-def _object_class_kinds(object_class: str) -> frozenset[GeometryKind]:
+def _matches_object_class(item: RenderableGeometry, object_class: str) -> bool:
     normalized = object_class.strip().lower().replace("-", "_")
-    if normalized in _OBJECT_KIND_ALIASES:
-        return _OBJECT_KIND_ALIASES[normalized]
-    return frozenset(kind for kind in GeometryKind if kind.value == normalized)
+    if normalized.startswith("shape:"):
+        try:
+            return item.shape == PcbGeometryShape(normalized.removeprefix("shape:"))
+        except ValueError:
+            return False
+    if normalized == item.display_role:
+        return True
+    try:
+        if item.object_type == PcbGeometryObject(normalized):
+            return True
+    except ValueError:
+        pass
+    try:
+        return PcbGeometryRole(normalized) in item.roles
+    except ValueError:
+        return False
+
+
+def _via_selection_probe() -> RenderableGeometry:
+    return _selection_probe(
+        object_type=PcbGeometryObject.VIA,
+        shape=PcbGeometryShape.CIRCLE,
+        roles=(PcbGeometryRole.COPPER, PcbGeometryRole.CONDUCTOR, PcbGeometryRole.DRILL),
+        display_role=PcbGeometryObject.VIA.value,
+    )
+
+
+def _keepout_selection_probe() -> RenderableGeometry:
+    return _selection_probe(
+        object_type=PcbGeometryObject.KEEP_OUT,
+        shape=PcbGeometryShape.UNKNOWN,
+        roles=(PcbGeometryRole.KEEPOUT,),
+        display_role=PcbGeometryRole.KEEPOUT.value,
+    )
+
+
+def _selection_probe(
+    *,
+    object_type: PcbGeometryObject,
+    shape: PcbGeometryShape,
+    roles: tuple[PcbGeometryRole, ...],
+    display_role: str,
+) -> RenderableGeometry:
+    return RenderableGeometry(
+        id="selection-probe",
+        object_type=object_type,
+        shape=shape,
+        roles=roles,
+        display_role=display_role,
+        layer=GeometryLayer(name="", role="", side="", stack_index=0),
+        tags=GeometryTags(),
+        payload=None,
+    )
 
 
 def _item_payload(item: RenderableGeometry) -> object:
@@ -333,25 +330,18 @@ def _item_payload(item: RenderableGeometry) -> object:
 
 
 def _pad_drill_geometry(payload: object, *, layer_name: str | None) -> BaseGeometry | None:
-    if not isinstance(payload, PcbPad) or payload.drill <= 0:
+    if not isinstance(payload, PcbPadGeometry) or payload.drill <= 0:
         return None
-    if layer_name is not None and not _layer_in_stack(layer_name, payload.layers):
-        return None
+    _ = layer_name
     return pad_drill_geometry(payload)
 
 
 def _via_drill_geometry(payload: object, *, layer_name: str | None) -> BaseGeometry | None:
-    if not isinstance(payload, PcbVia) or payload.drill <= 0:
+    if not isinstance(payload, PcbViaGeometry) or payload.drill <= 0:
         return None
-    if layer_name is not None and not _layer_in_stack(layer_name, payload.layers):
-        return None
+    _ = layer_name
     _copper, drill = via_geometry(payload)
     return drill
-
-
-def _layer_in_stack(layer_name: str, layers: list[str]) -> bool:
-    normalized_layers = {str(layer) for layer in layers}
-    return layer_name in normalized_layers or "*.Cu" in normalized_layers
 
 
 def _copper_layer_for_name(name: str) -> GeometryLayer:
@@ -378,39 +368,23 @@ def _board_outline_from_item(item: RenderableGeometry) -> BaseGeometry | None:
     payload = _item_payload(item)
     if isinstance(payload, BaseGeometry):
         return payload
-    if isinstance(payload, Pcb):
-        return board_outline_polygon(payload.outline_lines, payload.outline_arcs)
     outline_payload = _outline_payload(payload)
     if outline_payload is not None:
-        lines, arcs = outline_payload
-        return board_outline_polygon(lines, arcs)
-    if isinstance(item.source, Pcb):
-        return board_outline_polygon(item.source.outline_lines, item.source.outline_arcs)
+        return board_outline_polygon(outline_payload)
+    if isinstance(item.source, tuple):
+        outline_payload = _outline_payload(cast("tuple[object, ...]", item.source))
+        if outline_payload is not None:
+            return board_outline_polygon(outline_payload)
     return None
 
 
-def _outline_payload(payload: object) -> tuple[list[PcbLine], list[PcbArc]] | None:
+def _outline_payload(payload: object) -> list[DomainPcbGeometry] | None:
     if not isinstance(payload, tuple):
         return None
     payload_tuple = cast("tuple[object, ...]", payload)
-    if len(payload_tuple) != 2:
+    if not all(isinstance(item, DomainPcbGeometry) for item in payload_tuple):
         return None
-    lines_object, arcs_object = payload_tuple
-    if not isinstance(lines_object, list) or not isinstance(arcs_object, list):
-        return None
-    raw_lines = cast("list[object]", lines_object)
-    raw_arcs = cast("list[object]", arcs_object)
-    lines: list[PcbLine] = []
-    for line in raw_lines:
-        if not isinstance(line, PcbLine):
-            return None
-        lines.append(line)
-    arcs: list[PcbArc] = []
-    for arc in raw_arcs:
-        if not isinstance(arc, PcbArc):
-            return None
-        arcs.append(arc)
-    return lines, arcs
+    return list(cast("tuple[DomainPcbGeometry, ...]", payload_tuple))
 
 
 def _board_material_geometry(payload: object) -> BaseGeometry | None:

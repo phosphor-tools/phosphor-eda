@@ -178,20 +178,57 @@ def normalize_roles(*roles: LayerRole | str) -> tuple[LayerRole, ...]:
 
 
 @dataclass
-class PcbLayer:
-    """A layer definition with normalized role metadata.
+class PcbMetadata:
+    """Native/source metadata common to PCB domain entities."""
 
-    ``name`` is the native layer name from the source format (e.g.
-    ``"F.Cu"`` for KiCad, ``"Top Layer"`` for Altium).
-    """
+    source_format: str = ""
+    native_type: str = ""
+    native_kind: str = ""
+    native_id: str = ""
+    native_index: int | None = None
+    properties: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class PcbLayerMetadata(PcbMetadata):
+    native_user_name: str = ""
+
+
+@dataclass
+class PcbNetMetadata(PcbMetadata):
+    pass
+
+
+@dataclass
+class PcbFootprintMetadata(PcbMetadata):
+    source_designator: str = ""
+    source_unique_id: str = ""
+    source_footprint_library: str = ""
+    source_component_library: str = ""
+    source_hierarchical_path: str = ""
+
+
+@dataclass
+class PcbGeometryMetadata(PcbMetadata):
+    source_collection: str = ""
+    source_index: int | None = None
+    native_layer_id: str = ""
+    native_component_index: int | None = None
+    native_polygon_index: int | None = None
+    native_subpolygon_index: int | None = None
+    locked: bool = False
+    hidden: bool = False
+
+
+@dataclass
+class PcbLayer:
+    """A layer definition with normalized role metadata."""
 
     name: str
     roles: tuple[LayerRole, ...]
     number: int | None = None
-    native_type: str = ""
-    native_kind: str = ""
-    native_user_name: str = ""
     stack_index: int | None = None
+    metadata: PcbLayerMetadata = field(default_factory=PcbLayerMetadata)
 
     def __post_init__(self) -> None:
         self.roles = normalize_roles(*self.roles)
@@ -225,202 +262,319 @@ class PcbLayer:
         return ""
 
 
-@dataclass
-class PcbLine:
-    """A line segment (silkscreen, courtyard, or board outline)."""
+class PcbGeometryObject(StrEnum):
+    TRACK = "track"
+    VIA = "via"
+    PAD = "pad"
+    ZONE = "zone"
+    GRAPHIC = "graphic"
+    TEXT = "text"
+    DIMENSION = "dimension"
+    KEEP_OUT = "keepout"
+    MODEL_3D = "model_3d"
+    COMPONENT_BODY = "component_body"
+    IMAGE = "image"
+    TABLE = "table"
+    TABLE_CELL = "table_cell"
+    TARGET = "target"
+    POINT = "point"
+    GROUP = "group"
+    UNKNOWN = "unknown"
 
+
+class PcbGeometryShape(StrEnum):
+    NONE = "none"
+    POINT = "point"
+    LINE = "line"
+    ARC = "arc"
+    CIRCLE = "circle"
+    RECTANGLE = "rectangle"
+    POLYGON = "polygon"
+    TEXT = "text"
+    MODEL = "model"
+    GROUP = "group"
+    UNKNOWN = "unknown"
+
+
+class PcbGeometryRole(StrEnum):
+    COPPER = "copper"
+    SOLDER_MASK = "solder_mask"
+    SOLDER_PASTE = "solder_paste"
+    SILKSCREEN = "silkscreen"
+    FABRICATION = "fabrication"
+    ASSEMBLY = "assembly"
+    COURTYARD = "courtyard"
+    DESIGNATOR = "designator"
+    VALUE = "value"
+    COMMENT = "comment"
+    EDGE = "edge"
+    MECHANICAL = "mechanical"
+    AUXILIARY = "auxiliary"
+
+    BOARD_OUTLINE = "board_outline"
+    BOARD_CUTOUT = "board_cutout"
+    POLYGON_CUTOUT = "polygon_cutout"
+    CAVITY_DEFINITION = "cavity_definition"
+    ROUTE_TOOL_PATH = "route_tool_path"
+    V_CUT = "v_cut"
+
+    CONDUCTOR = "conductor"
+    ROUTE = "route"
+    TRACE = "trace"
+    POUR = "pour"
+    ZONE_OUTLINE = "zone_outline"
+    ZONE_FILL = "zone_fill"
+    POLYGON_OUTLINE = "polygon_outline"
+    DIFF_PAIR = "diff_pair"
+    FROM_TO = "from_to"
+    TESTPOINT = "testpoint"
+
+    DRILL = "drill"
+    PLATED_HOLE = "plated_hole"
+    NON_PLATED_HOLE = "non_plated_hole"
+    THROUGH_HOLE = "through_hole"
+    SMD = "smd"
+    CUSTOM_PAD = "custom_pad"
+    BLIND_VIA = "blind_via"
+    BURIED_VIA = "buried_via"
+    MICROVIA = "microvia"
+    FREE_VIA = "free_via"
+    TENTED = "tented"
+    TENTED_FRONT = "tented_front"
+    TENTED_BACK = "tented_back"
+
+    KEEPOUT = "keepout"
+    RULE_AREA = "rule_area"
+    TRACK_KEEPOUT = "track_keepout"
+    VIA_KEEPOUT = "via_keepout"
+    PAD_KEEPOUT = "pad_keepout"
+    COPPER_POUR_KEEPOUT = "copper_pour_keepout"
+    FOOTPRINT_KEEPOUT = "footprint_keepout"
+
+    TEXT = "text"
+    USER_TEXT = "user_text"
+    BARCODE = "barcode"
+    DIMENSION = "dimension"
+    LEADER = "leader"
+    DATUM = "datum"
+    RADIAL = "radial"
+    ORTHOGONAL = "orthogonal"
+    CENTER_MARK = "center_mark"
+
+    BOARD_LEVEL = "board_level"
+    FOOTPRINT_MEMBER = "footprint_member"
+    PAD_PRIMITIVE = "pad_primitive"
+    CUSTOM_PAD_PRIMITIVE = "custom_pad_primitive"
+    COMPONENT_BODY = "component_body"
+    GENERATED = "generated"
+
+    UNKNOWN = "unknown"
+
+
+_GEOMETRY_ROLE_ORDER: tuple[PcbGeometryRole, ...] = (
+    PcbGeometryRole.COPPER,
+    PcbGeometryRole.SOLDER_MASK,
+    PcbGeometryRole.SOLDER_PASTE,
+    PcbGeometryRole.SILKSCREEN,
+    PcbGeometryRole.FABRICATION,
+    PcbGeometryRole.ASSEMBLY,
+    PcbGeometryRole.COURTYARD,
+    PcbGeometryRole.DESIGNATOR,
+    PcbGeometryRole.VALUE,
+    PcbGeometryRole.COMMENT,
+    PcbGeometryRole.EDGE,
+    PcbGeometryRole.MECHANICAL,
+    PcbGeometryRole.AUXILIARY,
+    PcbGeometryRole.BOARD_OUTLINE,
+    PcbGeometryRole.BOARD_CUTOUT,
+    PcbGeometryRole.POLYGON_CUTOUT,
+    PcbGeometryRole.CAVITY_DEFINITION,
+    PcbGeometryRole.ROUTE_TOOL_PATH,
+    PcbGeometryRole.V_CUT,
+    PcbGeometryRole.CONDUCTOR,
+    PcbGeometryRole.ROUTE,
+    PcbGeometryRole.TRACE,
+    PcbGeometryRole.POUR,
+    PcbGeometryRole.ZONE_OUTLINE,
+    PcbGeometryRole.ZONE_FILL,
+    PcbGeometryRole.POLYGON_OUTLINE,
+    PcbGeometryRole.DIFF_PAIR,
+    PcbGeometryRole.FROM_TO,
+    PcbGeometryRole.TESTPOINT,
+    PcbGeometryRole.DRILL,
+    PcbGeometryRole.PLATED_HOLE,
+    PcbGeometryRole.NON_PLATED_HOLE,
+    PcbGeometryRole.THROUGH_HOLE,
+    PcbGeometryRole.SMD,
+    PcbGeometryRole.CUSTOM_PAD,
+    PcbGeometryRole.BLIND_VIA,
+    PcbGeometryRole.BURIED_VIA,
+    PcbGeometryRole.MICROVIA,
+    PcbGeometryRole.FREE_VIA,
+    PcbGeometryRole.TENTED,
+    PcbGeometryRole.TENTED_FRONT,
+    PcbGeometryRole.TENTED_BACK,
+    PcbGeometryRole.KEEPOUT,
+    PcbGeometryRole.RULE_AREA,
+    PcbGeometryRole.TRACK_KEEPOUT,
+    PcbGeometryRole.VIA_KEEPOUT,
+    PcbGeometryRole.PAD_KEEPOUT,
+    PcbGeometryRole.COPPER_POUR_KEEPOUT,
+    PcbGeometryRole.FOOTPRINT_KEEPOUT,
+    PcbGeometryRole.TEXT,
+    PcbGeometryRole.USER_TEXT,
+    PcbGeometryRole.BARCODE,
+    PcbGeometryRole.DIMENSION,
+    PcbGeometryRole.LEADER,
+    PcbGeometryRole.DATUM,
+    PcbGeometryRole.RADIAL,
+    PcbGeometryRole.ORTHOGONAL,
+    PcbGeometryRole.CENTER_MARK,
+    PcbGeometryRole.BOARD_LEVEL,
+    PcbGeometryRole.FOOTPRINT_MEMBER,
+    PcbGeometryRole.PAD_PRIMITIVE,
+    PcbGeometryRole.CUSTOM_PAD_PRIMITIVE,
+    PcbGeometryRole.COMPONENT_BODY,
+    PcbGeometryRole.GENERATED,
+    PcbGeometryRole.UNKNOWN,
+)
+
+_GEOMETRY_PRIMARY_ROLE_ORDER: tuple[PcbGeometryRole, ...] = (
+    PcbGeometryRole.BOARD_CUTOUT,
+    PcbGeometryRole.BOARD_OUTLINE,
+    PcbGeometryRole.EDGE,
+    PcbGeometryRole.DRILL,
+    PcbGeometryRole.KEEPOUT,
+    PcbGeometryRole.TRACE,
+    PcbGeometryRole.ROUTE,
+    PcbGeometryRole.POUR,
+    PcbGeometryRole.ZONE_FILL,
+    PcbGeometryRole.COPPER,
+    PcbGeometryRole.SOLDER_MASK,
+    PcbGeometryRole.SOLDER_PASTE,
+    PcbGeometryRole.SILKSCREEN,
+    PcbGeometryRole.COURTYARD,
+    PcbGeometryRole.DESIGNATOR,
+    PcbGeometryRole.VALUE,
+    PcbGeometryRole.ASSEMBLY,
+    PcbGeometryRole.FABRICATION,
+    PcbGeometryRole.DIMENSION,
+    PcbGeometryRole.BARCODE,
+    PcbGeometryRole.TEXT,
+    PcbGeometryRole.COMPONENT_BODY,
+    PcbGeometryRole.MECHANICAL,
+    PcbGeometryRole.AUXILIARY,
+    PcbGeometryRole.GENERATED,
+    PcbGeometryRole.UNKNOWN,
+)
+
+
+def _coerce_geometry_role(role: PcbGeometryRole | str) -> PcbGeometryRole:
+    if isinstance(role, PcbGeometryRole):
+        return role
+    return PcbGeometryRole(role)
+
+
+def normalize_geometry_roles(*roles: PcbGeometryRole | str) -> tuple[PcbGeometryRole, ...]:
+    """Return unique geometry roles in canonical order."""
+    role_set = {_coerce_geometry_role(role) for role in roles}
+    if not role_set:
+        role_set.add(PcbGeometryRole.UNKNOWN)
+    return tuple(role for role in _GEOMETRY_ROLE_ORDER if role in role_set)
+
+
+@dataclass
+class PcbLineGeometry:
     start_x: float
     start_y: float
     end_x: float
     end_y: float
-    layer: str
     width: float
-    footprint_ref: str = ""
 
 
 @dataclass
-class PcbCircle:
-    """A circle (component body outlines, etc.)."""
-
-    cx: float
-    cy: float
-    radius: float
-    layer: str
-    width: float
-    fill: bool = False
-    footprint_ref: str = ""
-
-
-@dataclass
-class PcbArc:
-    """An arc defined by start, midpoint, and end (board outline, etc.)."""
-
+class PcbArcGeometry:
     start_x: float
     start_y: float
     mid_x: float
     mid_y: float
     end_x: float
     end_y: float
-    layer: str
     width: float
-    footprint_ref: str = ""
 
 
 @dataclass
-class PcbText:
-    """A text label (reference designator, value, etc.) in absolute coords."""
-
-    text: str
-    x: float
-    y: float
-    rotation: float  # degrees
-    layer: str
-    font_size: float
-    kind: str = ""  # "reference", "value", "user"
-    hidden: bool = False
-    footprint_ref: str = ""
+class PcbCircleGeometry:
+    cx: float
+    cy: float
+    radius: float
+    width: float
+    fill: bool = False
 
 
 @dataclass
-class PcbPolygon:
-    """A closed polygon — zone fill, graphic polygon, or footprint polygon."""
-
+class PcbPolygonGeometry:
     points: list[tuple[float, float]]
-    layer: str
-    net_number: int = 0
-    net_name: str = ""
-    footprint_ref: str = ""
     holes: list[list[tuple[float, float]]] = field(default_factory=list)
 
 
 @dataclass
-class PcbTraceArc:
-    """A curved copper trace arc (arc segment with net)."""
-
-    start_x: float
-    start_y: float
-    mid_x: float
-    mid_y: float
-    end_x: float
-    end_y: float
-    width: float
-    layer: str
-    net_number: int
+class PcbTextGeometry:
+    text: str
+    x: float
+    y: float
+    rotation: float
+    font_size: float
+    justify: str = ""
 
 
 @dataclass
-class PcbPad:
-    """A pad within a footprint (absolute board coordinates)."""
-
+class PcbPadGeometry:
     number: str
     x: float
     y: float
     width: float
     height: float
-    shape: str  # "circle", "rect", "roundrect", "oval", "custom"
-    layers: list[str]
-    net_number: int
-    net_name: str
-    footprint_ref: str
-    rotation: float = 0.0  # total rotation in board space (degrees)
-    drill: float = 0.0  # drill diameter (mm), 0 for SMD pads
-    drill_shape: str = "circle"  # "circle" or "oval"
-    drill_width: float = 0.0  # slot width or circular drill diameter (mm)
-    drill_height: float = 0.0  # slot height or circular drill diameter (mm)
-    roundrect_rratio: float = 0.0  # corner ratio for roundrect pads
-    pin_function: str = ""  # schematic pin name ("K", "A", "VCC")
-    pin_type: str = ""  # electrical type ("passive", "input", "power")
-    # Altium multi-layer pad sizes
+    shape: str
+    rotation: float = 0.0
+    drill: float = 0.0
+    drill_shape: str = "circle"
+    drill_width: float = 0.0
+    drill_height: float = 0.0
+    roundrect_rratio: float = 0.0
+    pin_function: str = ""
+    pin_type: str = ""
     mid_width: float | None = None
     mid_height: float | None = None
     bot_width: float | None = None
     bot_height: float | None = None
     mid_shape: str = ""
     bot_shape: str = ""
-    # Mask overrides
-    mask_expansion: float | None = None  # solder mask expansion override (mm)
-    paste_expansion: float | None = None  # paste mask expansion override (mm)
-    mask_aperture_width: float | None = None  # explicit/derived solder mask opening width (mm)
-    mask_aperture_height: float | None = None  # explicit/derived solder mask opening height (mm)
-    mask_aperture_source: str = ""  # provenance for explicit/derived mask aperture data
+    mask_expansion: float | None = None
+    paste_expansion: float | None = None
+    mask_aperture_width: float | None = None
+    mask_aperture_height: float | None = None
+    mask_aperture_source: str = ""
 
 
 @dataclass
-class PcbModel3D:
-    """A 3D model reference attached to a footprint."""
-
-    source: str  # raw model path (KiCad) or OLE model ID (Altium)
-    offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    rotation: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
-    cache_key: str = ""  # sha256 of model content, set by cache functions
-
-
-@dataclass
-class PcbFootprint:
-    """A placed footprint (component) on the board."""
-
-    reference: str
-    footprint_lib: str
-    x: float
-    y: float
-    rotation: float
-    layer: str  # "F.Cu" or "B.Cu"
-    value: str = ""
-    pads: list[PcbPad] = field(default_factory=list)
-    silkscreen_lines: list[PcbLine] = field(default_factory=list)
-    silkscreen_polygons: list[PcbPolygon] = field(default_factory=list)
-    courtyard_lines: list[PcbLine] = field(default_factory=list)
-    fab_lines: list[PcbLine] = field(default_factory=list)
-    fab_circles: list[PcbCircle] = field(default_factory=list)
-    fab_arcs: list[PcbArc] = field(default_factory=list)
-    fab_polygons: list[PcbPolygon] = field(default_factory=list)
-    texts: list[PcbText] = field(default_factory=list)
-    models_3d: list[PcbModel3D] = field(default_factory=list)
-    bbox: tuple[float, float, float, float] | None = None  # min_x, min_y, max_x, max_y
-    properties: dict[str, str] = field(default_factory=dict)  # custom properties (MPN, DKPN, etc.)
-
-
-@dataclass
-class PcbSegment:
-    """A copper trace segment."""
-
-    start_x: float
-    start_y: float
-    end_x: float
-    end_y: float
-    width: float
-    layer: str
-    net_number: int
-
-
-@dataclass
-class PcbVia:
-    """A via connecting copper layers."""
-
+class PcbViaGeometry:
     x: float
     y: float
     size: float
     drill: float
-    layers: list[str]
-    net_number: int
-    via_mode: str = ""  # "simple", "full_stack", "microvia"
+    via_mode: str = ""
 
 
 @dataclass
-class PcbZone:
-    """A copper zone (fill area) with properties."""
-
-    net_number: int
-    net_name: str
-    layer: str
+class PcbZoneGeometry:
     boundary: list[tuple[float, float]]
     priority: int = 0
     min_thickness_mm: float = 0.0
     thermal_gap_mm: float = 0.0
     thermal_bridge_width_mm: float = 0.0
     connect_pads_clearance_mm: float = 0.0
-    fill_type: str = ""  # "solid", "hatch"
+    fill_type: str = ""
 
 
 @dataclass
@@ -435,42 +589,16 @@ class PcbKeepoutRules:
 
 
 @dataclass
-class PcbKeepout:
-    """A non-copper source keepout/rule area with source restrictions."""
-
-    layers: list[str]
+class PcbKeepoutGeometry:
     boundary: list[tuple[float, float]]
     rules: PcbKeepoutRules = field(default_factory=PcbKeepoutRules)
     holes: list[list[tuple[float, float]]] = field(default_factory=list)
-    source: str = ""
-    footprint_ref: str = ""
-
-    @property
-    def layer(self) -> str:
-        """Representative layer for APIs that expect a single layer."""
-        return self.layers[0] if self.layers else ""
 
 
 @dataclass
-class PcbGraphicText:
-    """A board-level graphic text (not inside a footprint)."""
-
-    text: str
-    x: float
-    y: float
-    rotation: float
-    layer: str
-    font_size: float
-    justify: str = ""  # "left", "center", "right"
-
-
-@dataclass
-class PcbDimension:
-    """A measurement dimension annotation on the board."""
-
-    kind: str  # "aligned", "orthogonal", "leader", "center"
+class PcbDimensionGeometry:
+    kind: str
     value_mm: float
-    layer: str
     start_x: float
     start_y: float
     end_x: float
@@ -479,11 +607,97 @@ class PcbDimension:
 
 
 @dataclass
+class PcbModel3DGeometry:
+    source: str
+    offset: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    rotation: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    scale: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    cache_key: str = ""
+
+
+PcbGeometryData = (
+    PcbLineGeometry
+    | PcbArcGeometry
+    | PcbCircleGeometry
+    | PcbPolygonGeometry
+    | PcbTextGeometry
+    | PcbPadGeometry
+    | PcbViaGeometry
+    | PcbZoneGeometry
+    | PcbKeepoutGeometry
+    | PcbDimensionGeometry
+    | PcbModel3DGeometry
+)
+
+
+@dataclass
+class PcbGeometry:
+    id: str
+    object_type: PcbGeometryObject
+    shape: PcbGeometryShape
+    roles: tuple[PcbGeometryRole, ...]
+    data: PcbGeometryData
+    layers: tuple[str, ...] = ()
+    net_number: int = 0
+    net_name: str = ""
+    footprint_ref: str = ""
+    metadata: PcbGeometryMetadata = field(default_factory=PcbGeometryMetadata)
+
+    def __post_init__(self) -> None:
+        self.roles = normalize_geometry_roles(*self.roles)
+        self.layers = tuple(self.layers)
+
+    def has_role(self, role: PcbGeometryRole | str) -> bool:
+        """Return whether this geometry has a normalized role."""
+        return _coerce_geometry_role(role) in self.roles
+
+    @property
+    def role_values(self) -> tuple[str, ...]:
+        """String role values suitable for serialization."""
+        return tuple(role.value for role in self.roles)
+
+    @property
+    def primary_role(self) -> PcbGeometryRole:
+        """Display/grouping role for single-role consumers such as rendering."""
+        for role in _GEOMETRY_PRIMARY_ROLE_ORDER:
+            if role in self.roles:
+                return role
+        return PcbGeometryRole.UNKNOWN
+
+    @property
+    def primary_layer(self) -> str:
+        return self.layers[0] if self.layers else ""
+
+    @property
+    def display_role(self) -> str:
+        if self.object_type in {PcbGeometryObject.PAD, PcbGeometryObject.VIA}:
+            return self.object_type.value
+        return self.primary_role.value
+
+
+@dataclass
+class PcbFootprint:
+    """A placed footprint (component) on the board."""
+
+    reference: str
+    footprint_lib: str
+    x: float
+    y: float
+    rotation: float
+    layer: str
+    value: str = ""
+    bbox: tuple[float, float, float, float] | None = None
+    properties: dict[str, str] = field(default_factory=dict)
+    metadata: PcbFootprintMetadata = field(default_factory=PcbFootprintMetadata)
+
+
+@dataclass
 class PcbNet:
     """A named electrical net."""
 
     number: int
     name: str
+    metadata: PcbNetMetadata = field(default_factory=PcbNetMetadata)
 
 
 @dataclass
@@ -493,19 +707,9 @@ class Pcb:
     name: str
     nets: dict[int, PcbNet]
     footprints: list[PcbFootprint]
-    segments: list[PcbSegment]
-    vias: list[PcbVia]
-    outline_lines: list[PcbLine]
-    outline_arcs: list[PcbArc]
-    polygons: list[PcbPolygon] = field(default_factory=list)
-    trace_arcs: list[PcbTraceArc] = field(default_factory=list)
+    geometry: list[PcbGeometry]
     layers: list[PcbLayer] = field(default_factory=list)
-    zones: list[PcbZone] = field(default_factory=list)
-    keepouts: list[PcbKeepout] = field(default_factory=list)
-    graphic_lines: list[PcbLine] = field(default_factory=list)
-    graphic_arcs: list[PcbArc] = field(default_factory=list)
-    graphic_texts: list[PcbGraphicText] = field(default_factory=list)
-    dimensions: list[PcbDimension] = field(default_factory=list)
+    metadata: PcbMetadata = field(default_factory=PcbMetadata)
 
     # -- Layer helpers --------------------------------------------------------
 
@@ -530,6 +734,57 @@ class Pcb:
                 return lyr
         return None
 
+    # -- Geometry helpers -----------------------------------------------------
+
+    def geometry_by_role(self, role: PcbGeometryRole | str) -> list[PcbGeometry]:
+        """Return all geometry with a given normalized role."""
+        return [item for item in self.geometry if item.has_role(role)]
+
+    def geometry_with_all_roles(self, roles: Iterable[PcbGeometryRole | str]) -> list[PcbGeometry]:
+        """Return geometry that contains every requested role."""
+        normalized = tuple(_coerce_geometry_role(role) for role in roles)
+        return [item for item in self.geometry if all(item.has_role(role) for role in normalized)]
+
+    def geometry_with_any_role(self, roles: Iterable[PcbGeometryRole | str]) -> list[PcbGeometry]:
+        """Return geometry that contains at least one requested role."""
+        normalized = tuple(_coerce_geometry_role(role) for role in roles)
+        return [item for item in self.geometry if any(item.has_role(role) for role in normalized)]
+
+    def geometry_by_object_type(self, object_type: PcbGeometryObject | str) -> list[PcbGeometry]:
+        """Return geometry with a given object family."""
+        normalized = (
+            object_type
+            if isinstance(object_type, PcbGeometryObject)
+            else PcbGeometryObject(object_type)
+        )
+        return [item for item in self.geometry if item.object_type is normalized]
+
+    def geometry_by_shape(self, shape: PcbGeometryShape | str) -> list[PcbGeometry]:
+        """Return geometry with a given shape."""
+        normalized = shape if isinstance(shape, PcbGeometryShape) else PcbGeometryShape(shape)
+        return [item for item in self.geometry if item.shape is normalized]
+
+    def geometry_on_layer(self, layer_name: str) -> list[PcbGeometry]:
+        """Return geometry that references a native layer name."""
+        return [item for item in self.geometry if layer_name in item.layers]
+
+    def geometry_for_footprint(self, ref: str) -> list[PcbGeometry]:
+        """Return geometry owned by a footprint reference designator."""
+        ref_upper = ref.upper()
+        return [item for item in self.geometry if item.footprint_ref.upper() == ref_upper]
+
+    def geometry_for_net(self, net_number: int) -> list[PcbGeometry]:
+        """Return geometry connected to a net number."""
+        return [item for item in self.geometry if item.net_number == net_number]
+
+    def board_outline_geometry(self) -> list[PcbGeometry]:
+        """Return geometry that defines the board outline."""
+        return [
+            item
+            for item in self.geometry
+            if item.has_role(PcbGeometryRole.BOARD_OUTLINE) or item.has_role(PcbGeometryRole.EDGE)
+        ]
+
     # -- Component helpers ----------------------------------------------------
 
     def footprint_by_ref(self, ref: str) -> PcbFootprint | None:
@@ -541,11 +796,10 @@ class Pcb:
         return None
 
     def nets_for_component(self, ref: str) -> set[int]:
-        """Return all net numbers connected to a component's pads."""
-        fp = self.footprint_by_ref(ref)
-        if fp is None:
-            return set()
-        return {p.net_number for p in fp.pads if p.net_number != 0}
+        """Return all net numbers connected to a component's geometry."""
+        return {
+            item.net_number for item in self.geometry_for_footprint(ref) if item.net_number != 0
+        }
 
     def net_numbers_by_name(self, name: str) -> set[int]:
         """Return net numbers matching *name* (case-insensitive exact match)."""
@@ -553,21 +807,39 @@ class Pcb:
         return {n.number for n in self.nets.values() if n.name and n.name.upper() == needle}
 
     def bbox(self) -> tuple[float, float, float, float]:
-        """Board bounding box from outline geometry."""
+        """Board bounding box from normalized outline geometry."""
         xs: list[float] = []
         ys: list[float] = []
-        for ln in self.outline_lines:
-            xs.extend([ln.start_x, ln.end_x])
-            ys.extend([ln.start_y, ln.end_y])
-        for arc in self.outline_arcs:
-            xs.extend([arc.start_x, arc.mid_x, arc.end_x])
-            ys.extend([arc.start_y, arc.mid_y, arc.end_y])
+        for item in self.board_outline_geometry():
+            _extend_geometry_bounds(xs, ys, item)
         if not xs:
-            # Fallback: use pad extents
-            for fp in self.footprints:
-                for p in fp.pads:
-                    xs.extend([p.x - p.width / 2, p.x + p.width / 2])
-                    ys.extend([p.y - p.height / 2, p.y + p.height / 2])
+            for item in self.geometry_by_object_type(PcbGeometryObject.PAD):
+                if isinstance(item.data, PcbPadGeometry):
+                    xs.extend(
+                        [item.data.x - item.data.width / 2, item.data.x + item.data.width / 2]
+                    )
+                    ys.extend(
+                        [item.data.y - item.data.height / 2, item.data.y + item.data.height / 2]
+                    )
         if not xs:
             return (0.0, 0.0, 100.0, 100.0)
         return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _extend_geometry_bounds(xs: list[float], ys: list[float], item: PcbGeometry) -> None:
+    data = item.data
+    if isinstance(data, PcbLineGeometry):
+        xs.extend([data.start_x, data.end_x])
+        ys.extend([data.start_y, data.end_y])
+    elif isinstance(data, PcbArcGeometry):
+        xs.extend([data.start_x, data.mid_x, data.end_x])
+        ys.extend([data.start_y, data.mid_y, data.end_y])
+    elif isinstance(data, PcbCircleGeometry):
+        xs.extend([data.cx - data.radius, data.cx + data.radius])
+        ys.extend([data.cy - data.radius, data.cy + data.radius])
+    elif isinstance(data, PcbPolygonGeometry):
+        xs.extend(x for x, _y in data.points)
+        ys.extend(y for _x, y in data.points)
+    elif isinstance(data, PcbPadGeometry):
+        xs.extend([data.x - data.width / 2, data.x + data.width / 2])
+        ys.extend([data.y - data.height / 2, data.y + data.height / 2])

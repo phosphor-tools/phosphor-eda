@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
+from phosphor_eda.pcb import PcbGeometryObject, PcbGeometryShape
 from phosphor_eda.pcb_render_geometry import build_geometry_store
 from phosphor_eda.pcb_render_modes import (
     HighlightGroup,
@@ -70,10 +71,16 @@ def build_derived_render_plan(
         profiler.metric(
             "board.input",
             footprints=len(board.footprints),
-            segments=len(board.segments),
-            trace_arcs=len(board.trace_arcs),
-            vias=len(board.vias),
-            zones=len(board.zones),
+            segments=len(board.geometry_by_object_type(PcbGeometryObject.TRACK)),
+            trace_arcs=len(
+                [
+                    item
+                    for item in board.geometry_by_object_type(PcbGeometryObject.TRACK)
+                    if item.shape == PcbGeometryShape.ARC
+                ]
+            ),
+            vias=len(board.geometry_by_object_type(PcbGeometryObject.VIA)),
+            zones=len(board.geometry_by_object_type(PcbGeometryObject.ZONE)),
             layers=len(board.layers),
         )
     if profiler is None:

@@ -8,7 +8,16 @@ import pytest
 from pcb_layer_helpers import make_pcb_layer
 
 from phosphor_eda.convert import load_project
-from phosphor_eda.pcb import LayerRole, Pcb, PcbArc, PcbLine
+from phosphor_eda.pcb import (
+    LayerRole,
+    Pcb,
+    PcbArcGeometry,
+    PcbGeometry,
+    PcbGeometryObject,
+    PcbGeometryRole,
+    PcbGeometryShape,
+    PcbLineGeometry,
+)
 from phosphor_eda.project import Project
 from phosphor_eda.sql import load_database
 
@@ -66,6 +75,30 @@ class TestPads:
 
     def test_have_geometry(self, db: duckdb.DuckDBPyConnection) -> None:
         assert _count(db, "SELECT count(*) FROM pads WHERE geom IS NULL") == 0
+
+
+class TestGeometry:
+    def test_geometry_table_exists(self, db: duckdb.DuckDBPyConnection) -> None:
+        assert _count(db, "SELECT count(*) FROM geometry") > 0
+
+    def test_roles_array_is_queryable(self, db: duckdb.DuckDBPyConnection) -> None:
+        assert _count(db, "SELECT count(*) FROM geometry WHERE list_contains(roles, 'copper')") > 0
+
+    def test_pads_are_queryable_by_object_type(self, db: duckdb.DuckDBPyConnection) -> None:
+        assert _count(db, "SELECT count(*) FROM geometry WHERE object_type = 'pad'") == 120
+
+    def test_route_traces_are_queryable_by_role(self, db: duckdb.DuckDBPyConnection) -> None:
+        assert (
+            _count(
+                db,
+                "SELECT count(*) FROM geometry WHERE object_type = 'track' "
+                "AND list_contains(roles, 'trace')",
+            )
+            == 276
+        )
+
+    def test_footprint_owned_geometry_is_queryable(self, db: duckdb.DuckDBPyConnection) -> None:
+        assert _count(db, "SELECT count(*) FROM geometry WHERE footprint_ref = 'D1'") > 0
 
 
 def test_altium_template_mask_apertures_are_queryable_from_pads_table() -> None:
@@ -147,22 +180,77 @@ def test_board_graphics_are_loaded_as_queryable_geometry() -> None:
         name="board-graphics",
         nets={},
         footprints=[],
-        segments=[],
-        vias=[],
-        outline_lines=[
-            PcbLine(0.0, 0.0, 4.0, 0.0, "Edge.Cuts", 0.1),
-            PcbLine(4.0, 0.0, 4.0, 4.0, "Edge.Cuts", 0.1),
-            PcbLine(4.0, 4.0, 0.0, 4.0, "Edge.Cuts", 0.1),
-            PcbLine(0.0, 4.0, 0.0, 0.0, "Edge.Cuts", 0.1),
+        geometry=[
+            PcbGeometry(
+                id="edge-1",
+                object_type=PcbGeometryObject.GRAPHIC,
+                shape=PcbGeometryShape.LINE,
+                roles=(
+                    PcbGeometryRole.EDGE,
+                    PcbGeometryRole.BOARD_OUTLINE,
+                    PcbGeometryRole.BOARD_LEVEL,
+                ),
+                data=PcbLineGeometry(0.0, 0.0, 4.0, 0.0, 0.1),
+                layers=("Edge.Cuts",),
+            ),
+            PcbGeometry(
+                id="edge-2",
+                object_type=PcbGeometryObject.GRAPHIC,
+                shape=PcbGeometryShape.LINE,
+                roles=(
+                    PcbGeometryRole.EDGE,
+                    PcbGeometryRole.BOARD_OUTLINE,
+                    PcbGeometryRole.BOARD_LEVEL,
+                ),
+                data=PcbLineGeometry(4.0, 0.0, 4.0, 4.0, 0.1),
+                layers=("Edge.Cuts",),
+            ),
+            PcbGeometry(
+                id="edge-3",
+                object_type=PcbGeometryObject.GRAPHIC,
+                shape=PcbGeometryShape.LINE,
+                roles=(
+                    PcbGeometryRole.EDGE,
+                    PcbGeometryRole.BOARD_OUTLINE,
+                    PcbGeometryRole.BOARD_LEVEL,
+                ),
+                data=PcbLineGeometry(4.0, 4.0, 0.0, 4.0, 0.1),
+                layers=("Edge.Cuts",),
+            ),
+            PcbGeometry(
+                id="edge-4",
+                object_type=PcbGeometryObject.GRAPHIC,
+                shape=PcbGeometryShape.LINE,
+                roles=(
+                    PcbGeometryRole.EDGE,
+                    PcbGeometryRole.BOARD_OUTLINE,
+                    PcbGeometryRole.BOARD_LEVEL,
+                ),
+                data=PcbLineGeometry(0.0, 4.0, 0.0, 0.0, 0.1),
+                layers=("Edge.Cuts",),
+            ),
+            PcbGeometry(
+                id="mask-line",
+                object_type=PcbGeometryObject.GRAPHIC,
+                shape=PcbGeometryShape.LINE,
+                roles=(PcbGeometryRole.SOLDER_MASK, PcbGeometryRole.BOARD_LEVEL),
+                data=PcbLineGeometry(1.0, 1.0, 3.0, 1.0, 0.2),
+                layers=("F.Mask",),
+            ),
+            PcbGeometry(
+                id="mask-arc",
+                object_type=PcbGeometryObject.GRAPHIC,
+                shape=PcbGeometryShape.ARC,
+                roles=(PcbGeometryRole.SOLDER_MASK, PcbGeometryRole.BOARD_LEVEL),
+                data=PcbArcGeometry(1.0, 3.0, 2.0, 4.0, 3.0, 3.0, 0.15),
+                layers=("B.Mask",),
+            ),
         ],
-        outline_arcs=[],
         layers=[
             make_pcb_layer("F.Mask", LayerRole.SOLDER_MASK, "front"),
             make_pcb_layer("B.Mask", LayerRole.SOLDER_MASK, "back"),
             make_pcb_layer("Edge.Cuts", LayerRole.EDGE),
         ],
-        graphic_lines=[PcbLine(1.0, 1.0, 3.0, 1.0, "F.Mask", 0.2)],
-        graphic_arcs=[PcbArc(1.0, 3.0, 2.0, 4.0, 3.0, 3.0, "B.Mask", 0.15)],
     )
     con = load_database(Project(name="board-graphics", pcb=pcb))
     try:

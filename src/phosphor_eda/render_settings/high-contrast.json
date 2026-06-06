@@ -5,9 +5,9 @@
       { "match": { "role": "copper" } },
       {
         "match": { "role": "silkscreen", "side": "active" },
-        "objects": ["silk", "board_graphic_text"]
+        "objects": ["graphic", "text"]
       },
-      { "match": { "role": "mechanical" }, "objects": ["mechanical"] },
+      { "match": { "role": "mechanical" }, "objects": ["graphic"] },
       { "match": { "role": "edge" } }
     ]
   },

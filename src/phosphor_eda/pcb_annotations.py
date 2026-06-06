@@ -27,14 +27,12 @@ CP-SAT solver from OR-Tools ensures labels never overlap within a margin.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 from ortools.sat.python import cp_model
 
+from phosphor_eda.pcb import Pcb, PcbGeometryObject, PcbPadGeometry
 from phosphor_eda.text_metrics import measure_text
-
-if TYPE_CHECKING:
-    from phosphor_eda.pcb import Pcb
 
 # JSON data from json.loads() is inherently untyped — Any is the correct
 # boundary type for validating external input before converting to dataclasses.
@@ -333,9 +331,11 @@ def _resolve_pad_target(ref_pad: str, board: Pcb) -> tuple[float, float]:
     if fp is None:
         msg = f"Component '{ref}' not found on board"
         raise ValueError(msg)
-    for pad in fp.pads:
-        if pad.number == pad_num:
-            return (pad.x, pad.y)
+    for item in board.geometry_for_footprint(ref):
+        if item.object_type != PcbGeometryObject.PAD or not isinstance(item.data, PcbPadGeometry):
+            continue
+        if item.data.number == pad_num:
+            return (item.data.x, item.data.y)
     msg = f"Pad '{pad_num}' not found on component '{ref}'"
     raise ValueError(msg)
 
@@ -349,11 +349,16 @@ def _resolve_net_target(net_name: str, near_ref: str, board: Pcb) -> tuple[float
     if fp is None:
         msg = f"Component '{near_ref}' not found on board"
         raise ValueError(msg)
-    needle = net_name.upper()
-    for pad in fp.pads:
-        if pad.net_name.upper() == needle:
-            return (pad.x, pad.y)
-    msg = f"Net '{net_name}' not found on component '{near_ref}'"
+    requested_net_name = net_name
+    needle = requested_net_name.upper()
+    for item in board.geometry_for_footprint(near_ref):
+        if item.object_type != PcbGeometryObject.PAD or not isinstance(item.data, PcbPadGeometry):
+            continue
+        net = board.nets.get(item.net_number)
+        candidate_net_name = item.net_name or (net.name if net is not None else "")
+        if candidate_net_name.upper() == needle:
+            return (item.data.x, item.data.y)
+    msg = f"Net '{requested_net_name}' not found on component '{near_ref}'"
     raise ValueError(msg)
 
 

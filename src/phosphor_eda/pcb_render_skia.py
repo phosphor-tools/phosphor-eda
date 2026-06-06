@@ -9,14 +9,23 @@ from typing import TYPE_CHECKING, Protocol, cast
 
 from shapely import Polygon
 
-from phosphor_eda.pcb import PcbPad, PcbPolygon, PcbSegment, PcbTraceArc, PcbVia, PcbZone
-from phosphor_eda.pcb_render_geometry import GeometryKind, GeometryTags
+from phosphor_eda.pcb import (
+    PcbArcGeometry,
+    PcbGeometryObject,
+    PcbGeometryRole,
+    PcbGeometryShape,
+    PcbLineGeometry,
+    PcbPadGeometry,
+    PcbPolygonGeometry,
+    PcbViaGeometry,
+    PcbZoneGeometry,
+)
 from phosphor_eda.sql.geometry import arc_to_polyline
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from phosphor_eda.pcb_render_geometry import RenderableGeometry
+    from phosphor_eda.pcb_render_geometry import GeometryTags, RenderableGeometry
 
 
 SKIA_CONIC_TO_QUAD_TOLERANCE = 0.02
@@ -134,17 +143,17 @@ def geometry_to_skia_artwork(
     """Convert one raw renderable PCB primitive into Skia artwork."""
     payload = item.payload if item.payload is not None else item.source
     path: _Path | None = None
-    if item.kind in _PAD_KINDS and isinstance(payload, PcbPad):
+    if _is_pad_like(item) and isinstance(payload, PcbPadGeometry):
         path = _pad_path(payload, target_layer_name)
-    elif item.kind is GeometryKind.TRACE and isinstance(payload, PcbSegment):
+    elif _is_track_line(item) and isinstance(payload, PcbLineGeometry):
         path = _trace_path(payload)
-    elif item.kind is GeometryKind.TRACE_ARC and isinstance(payload, PcbTraceArc):
+    elif _is_track_arc(item) and isinstance(payload, PcbArcGeometry):
         path = _trace_arc_path(payload)
-    elif item.kind is GeometryKind.ZONE and isinstance(payload, PcbZone):
+    elif item.object_type == PcbGeometryObject.ZONE and isinstance(payload, PcbZoneGeometry):
         path = _zone_path(payload)
-    elif item.kind is GeometryKind.VIA and isinstance(payload, PcbVia):
+    elif item.object_type == PcbGeometryObject.VIA and isinstance(payload, PcbViaGeometry):
         path = _via_path(payload, target_layer_name)
-    elif item.kind in _POLYGON_KINDS and isinstance(payload, PcbPolygon):
+    elif _is_polygon_renderable(item) and isinstance(payload, PcbPolygonGeometry):
         if not _polygon_payload_is_valid(payload):
             return None
         path = _polygon_path(payload.points, holes=payload.holes)
@@ -168,29 +177,37 @@ def skia_path_to_svg_d(path: _Path) -> str:
     return pen.svg_d()
 
 
-_POLYGON_KINDS = frozenset(
+_PAD_DISPLAY_ROLES = frozenset(
     {
-        GeometryKind.ZONE,
-        GeometryKind.SILK_POLYGON,
-        GeometryKind.FAB_POLYGON,
-        GeometryKind.BODY_POLYGON,
-        GeometryKind.MASK,
-        GeometryKind.PASTE,
-        GeometryKind.MECHANICAL,
+        PcbGeometryObject.PAD.value,
+        PcbGeometryRole.SOLDER_MASK.value,
+        PcbGeometryRole.SOLDER_PASTE.value,
     }
 )
 
-_PAD_KINDS = frozenset({GeometryKind.PAD, GeometryKind.MASK, GeometryKind.PASTE})
+
+def _is_pad_like(item: RenderableGeometry) -> bool:
+    return item.object_type == PcbGeometryObject.PAD and item.display_role in _PAD_DISPLAY_ROLES
+
+
+def _is_track_line(item: RenderableGeometry) -> bool:
+    return item.object_type == PcbGeometryObject.TRACK and item.shape == PcbGeometryShape.LINE
+
+
+def _is_track_arc(item: RenderableGeometry) -> bool:
+    return item.object_type == PcbGeometryObject.TRACK and item.shape == PcbGeometryShape.ARC
+
+
+def _is_polygon_renderable(item: RenderableGeometry) -> bool:
+    return item.shape == PcbGeometryShape.POLYGON
 
 
 def _new_path() -> _Path:
     return _PATHOPS.Path()
 
 
-def _pad_path(pad: PcbPad, target_layer_name: str) -> _Path | None:
-    if not _layer_in_stack(target_layer_name, pad.layers):
-        return None
-
+def _pad_path(pad: PcbPadGeometry, target_layer_name: str) -> _Path | None:
+    _ = target_layer_name
     width, height, shape = _pad_layer_dimension(pad, target_layer_name)
     if width <= 0.0 or height <= 0.0:
         return None
@@ -207,7 +224,7 @@ def _pad_path(pad: PcbPad, target_layer_name: str) -> _Path | None:
     return None
 
 
-def _pad_layer_dimension(pad: PcbPad, target_layer_name: str) -> tuple[float, float, str]:
+def _pad_layer_dimension(pad: PcbPadGeometry, target_layer_name: str) -> tuple[float, float, str]:
     if (
         _is_back_layer(target_layer_name)
         and pad.bot_width is not None
@@ -223,13 +240,14 @@ def _pad_layer_dimension(pad: PcbPad, target_layer_name: str) -> tuple[float, fl
     return pad.width, pad.height, pad.shape
 
 
-def _via_path(via: PcbVia, target_layer_name: str) -> _Path | None:
-    if via.size <= 0.0 or not _layer_in_stack(target_layer_name, via.layers):
+def _via_path(via: PcbViaGeometry, target_layer_name: str) -> _Path | None:
+    _ = target_layer_name
+    if via.size <= 0.0:
         return None
     return _circle_path(via.x, via.y, via.size / 2.0)
 
 
-def _trace_path(segment: PcbSegment) -> _Path | None:
+def _trace_path(segment: PcbLineGeometry) -> _Path | None:
     if segment.width <= 0.0:
         return None
     return _buffered_polyline_path(
@@ -238,7 +256,7 @@ def _trace_path(segment: PcbSegment) -> _Path | None:
     )
 
 
-def _trace_arc_path(trace_arc: PcbTraceArc) -> _Path | None:
+def _trace_arc_path(trace_arc: PcbArcGeometry) -> _Path | None:
     if trace_arc.width <= 0.0:
         return None
     points = arc_to_polyline(
@@ -253,7 +271,7 @@ def _trace_arc_path(trace_arc: PcbTraceArc) -> _Path | None:
     return _buffered_polyline_path(points, trace_arc.width)
 
 
-def _zone_path(zone: PcbZone) -> _Path | None:
+def _zone_path(zone: PcbZoneGeometry) -> _Path | None:
     if len(zone.boundary) < 3:
         return None
     return _polygon_path(zone.boundary)
@@ -360,7 +378,7 @@ def _polygon_path(
     return path
 
 
-def _polygon_payload_is_valid(polygon: PcbPolygon) -> bool:
+def _polygon_payload_is_valid(polygon: PcbPolygonGeometry) -> bool:
     if len(polygon.points) < 3:
         return False
     holes = [hole for hole in polygon.holes if len(hole) >= 3]
@@ -437,22 +455,6 @@ def _rotate_point(
 
 def _convert_conics(path: _Path) -> None:
     path.convertConicsToQuads(SKIA_CONIC_TO_QUAD_TOLERANCE)
-
-
-def _layer_in_stack(layer_name: str, layers: list[str]) -> bool:
-    normalized_layers = {str(layer) for layer in layers}
-    return layer_name in normalized_layers or (
-        "*.Cu" in normalized_layers and _is_copper_layer(layer_name)
-    )
-
-
-def _is_copper_layer(layer_name: str) -> bool:
-    return (
-        layer_name.endswith(".Cu")
-        or _is_front_layer(layer_name)
-        or _is_back_layer(layer_name)
-        or layer_name.startswith("MidLayer")
-    )
 
 
 def _is_front_layer(layer_name: str) -> bool:

@@ -4,58 +4,34 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, replace
-from enum import StrEnum
 
 from phosphor_eda.pcb import (
     LayerRole,
     Pcb,
-    PcbArc,
-    PcbCircle,
-    PcbDimension,
+    PcbArcGeometry,
+    PcbCircleGeometry,
+    PcbDimensionGeometry,
     PcbFootprint,
-    PcbGraphicText,
-    PcbKeepout,
+    PcbGeometryObject,
+    PcbGeometryRole,
+    PcbGeometryShape,
+    PcbKeepoutGeometry,
     PcbLayer,
-    PcbLine,
-    PcbPad,
-    PcbPolygon,
-    PcbSegment,
-    PcbText,
-    PcbTraceArc,
-    PcbVia,
+    PcbLineGeometry,
+    PcbPadGeometry,
+    PcbPolygonGeometry,
+    PcbTextGeometry,
+    PcbViaGeometry,
+    PcbZoneGeometry,
+)
+from phosphor_eda.pcb import (
+    PcbGeometry as DomainPcbGeometry,
 )
 from phosphor_eda.pcb_render_drills import pad_drill_geometry
 
-
-class GeometryKind(StrEnum):
-    BOARD_MATERIAL = "board_material"
-    BOARD_OUTLINE = "board_outline"
-    DRILL = "drill"
-    PAD = "pad"
-    TRACE = "trace"
-    TRACE_ARC = "trace_arc"
-    ZONE = "zone"
-    KEEPOUT = "keepout"
-    VIA = "via"
-    SILK_LINE = "silk_line"
-    SILK_ARC = "silk_arc"
-    SILK_POLYGON = "silk_polygon"
-    FAB_LINE = "fab_line"
-    FAB_ARC = "fab_arc"
-    FAB_CIRCLE = "fab_circle"
-    FAB_POLYGON = "fab_polygon"
-    BODY_LINE = "body_line"
-    BODY_ARC = "body_arc"
-    BODY_CIRCLE = "body_circle"
-    BODY_POLYGON = "body_polygon"
-    REF_TEXT = "ref_text"
-    VALUE_TEXT = "value_text"
-    USER_TEXT = "user_text"
-    BOARD_GRAPHIC_TEXT = "board_graphic_text"
-    DIMENSION = "dimension"
-    MASK = "mask"
-    PASTE = "paste"
-    MECHANICAL = "mechanical"
+SYNTHETIC_BOARD_MATERIAL_ROLE = "board_material"
+SYNTHETIC_BOARD_OUTLINE_ROLE = "board_outline"
+SYNTHETIC_DRILL_ROLE = "drill"
 
 
 @dataclass(frozen=True)
@@ -90,7 +66,10 @@ class GeometryTags:
 @dataclass(frozen=True)
 class RenderableGeometry:
     id: str
-    kind: GeometryKind
+    object_type: PcbGeometryObject
+    shape: PcbGeometryShape
+    roles: tuple[PcbGeometryRole, ...]
+    display_role: str
     layer: GeometryLayer
     tags: GeometryTags
     payload: object
@@ -110,14 +89,23 @@ class PcbGeometryStore:
                 return item
         return None
 
-    def by_kind(self, kind: GeometryKind) -> tuple[RenderableGeometry, ...]:
-        return tuple(item for item in self.items if item.kind is kind)
+    def by_display_role(self, display_role: str) -> tuple[RenderableGeometry, ...]:
+        return tuple(item for item in self.items if item.display_role == display_role)
+
+    def by_object_type(
+        self, object_type: PcbGeometryObject | str
+    ) -> tuple[RenderableGeometry, ...]:
+        normalized = PcbGeometryObject(object_type)
+        return tuple(item for item in self.items if item.object_type == normalized)
 
 
 @dataclass(frozen=True)
 class GeometrySelector:
-    kinds: frozenset[GeometryKind] = frozenset()
-    role: str = ""
+    object_types: frozenset[PcbGeometryObject] = frozenset()
+    shapes: frozenset[PcbGeometryShape] = frozenset()
+    roles: frozenset[PcbGeometryRole] = frozenset()
+    display_roles: frozenset[str] = frozenset()
+    layer_role: str = ""
     side: str = ""
     layer_name: str = ""
     net_name: str = ""
@@ -150,11 +138,15 @@ def build_geometry_store(board: Pcb, *, side: str) -> PcbGeometryStore:
     items: list[RenderableGeometry] = []
 
     edge_layer = _board_edge_layer(board, layers, layer_lookup)
-    outline_points = _outline_points(board.outline_lines, board.outline_arcs, transform)
+    outline_geometry = board.board_outline_geometry()
+    outline_points = _outline_points_from_geometry(outline_geometry, transform)
     items.append(
         RenderableGeometry(
             id="board_material:0",
-            kind=GeometryKind.BOARD_MATERIAL,
+            object_type=PcbGeometryObject.GROUP,
+            shape=PcbGeometryShape.POLYGON,
+            roles=(PcbGeometryRole.GENERATED,),
+            display_role=SYNTHETIC_BOARD_MATERIAL_ROLE,
             layer=edge_layer,
             tags=GeometryTags(source_collection="board"),
             payload=board_bbox,
@@ -166,11 +158,16 @@ def build_geometry_store(board: Pcb, *, side: str) -> PcbGeometryStore:
     items.append(
         RenderableGeometry(
             id="board_outline:0",
-            kind=GeometryKind.BOARD_OUTLINE,
+            object_type=PcbGeometryObject.GRAPHIC,
+            shape=PcbGeometryShape.GROUP,
+            roles=(PcbGeometryRole.EDGE, PcbGeometryRole.BOARD_OUTLINE, PcbGeometryRole.GENERATED),
+            display_role=SYNTHETIC_BOARD_OUTLINE_ROLE,
             layer=edge_layer,
             tags=GeometryTags(source_collection="outline"),
-            payload=(board.outline_lines, board.outline_arcs),
-            source=board,
+            payload=tuple(
+                _transform_geometry_payload(item.data, transform) for item in outline_geometry
+            ),
+            source=tuple(outline_geometry),
             points=outline_points,
             bbox=board_bbox,
             clipped=False,
@@ -178,285 +175,218 @@ def build_geometry_store(board: Pcb, *, side: str) -> PcbGeometryStore:
     )
 
     footprints_by_ref = {footprint.reference: footprint for footprint in board.footprints}
-
-    for fp_index, footprint in enumerate(board.footprints):
-        for pad_index, pad in enumerate(footprint.pads):
-            transformed = _transform_pad(pad, transform)
-            pad_layer_names = _pad_copper_layers(pad, footprint.layer, layer_lookup)
-            for layer_name in pad_layer_names:
-                items.append(
-                    RenderableGeometry(
-                        id=_pad_geometry_id(
-                            footprint.reference,
-                            pad.number,
-                            pad_index,
-                            layer_name=layer_name,
-                            layer_count=len(pad_layer_names),
-                        ),
-                        kind=GeometryKind.PAD,
-                        layer=layers.get(layer_name, _layer_for_name(layer_name, layer_lookup)),
-                        tags=_component_tags(
-                            footprint,
-                            source_collection="pads",
-                            source_index=pad_index,
-                            pad_number=pad.number,
-                            net_number=pad.net_number,
-                            net_name=pad.net_name or _net_name(board, pad.net_number),
-                        ),
-                        payload=transformed,
-                        source=transformed,
-                        points=(transform.point(pad.x, pad.y),),
-                        bbox=_pad_bbox(transformed),
-                    )
-                )
-            if pad.drill > 0:
-                drill_bbox = _pad_drill_bbox(transformed)
-                items.append(
-                    RenderableGeometry(
-                        id=f"drill:{footprint.reference}:{pad.number}:{pad_index}",
-                        kind=GeometryKind.DRILL,
-                        layer=_synthetic_layer("drills", "drill", "", 900),
-                        tags=_component_tags(
-                            footprint,
-                            source_collection="pad_drills",
-                            source_index=pad_index,
-                            pad_number=pad.number,
-                            net_number=pad.net_number,
-                            net_name=pad.net_name or _net_name(board, pad.net_number),
-                        ),
-                        payload=transformed,
-                        source=transformed,
-                        points=(transform.point(pad.x, pad.y),),
-                        bbox=drill_bbox,
-                    )
-                )
-            _append_pad_mask_apertures(
-                items,
-                footprint,
-                pad_index,
-                transformed,
+    for index, geometry in enumerate(board.geometry):
+        items.extend(
+            _renderable_items_for_geometry(
+                board,
+                geometry,
+                index,
                 layers,
                 layer_lookup,
+                footprints_by_ref,
                 transform,
             )
-
-        _append_footprint_graphics(items, footprint, fp_index, layers, layer_lookup, transform)
-
-    for index, segment in enumerate(board.segments):
-        transformed = _transform_segment(segment, transform)
-        items.append(
-            RenderableGeometry(
-                id=f"trace:{segment.layer}:{index}",
-                kind=GeometryKind.TRACE,
-                layer=layers.get(segment.layer, _layer_for_name(segment.layer, layer_lookup)),
-                tags=GeometryTags(
-                    source_collection="segments",
-                    source_index=index,
-                    net_number=segment.net_number,
-                    net_name=_net_name(board, segment.net_number),
-                ),
-                payload=transformed,
-                source=transformed,
-                points=(
-                    transform.point(segment.start_x, segment.start_y),
-                    transform.point(segment.end_x, segment.end_y),
-                ),
-                bbox=_line_bbox(
-                    transformed.start_x,
-                    transformed.start_y,
-                    transformed.end_x,
-                    transformed.end_y,
-                ),
-            )
         )
 
-    for index, trace_arc in enumerate(board.trace_arcs):
-        transformed = _transform_trace_arc(trace_arc, transform)
-        items.append(
-            RenderableGeometry(
-                id=f"trace_arc:{trace_arc.layer}:{index}",
-                kind=GeometryKind.TRACE_ARC,
-                layer=layers.get(trace_arc.layer, _layer_for_name(trace_arc.layer, layer_lookup)),
-                tags=GeometryTags(
-                    source_collection="trace_arcs",
-                    source_index=index,
-                    net_number=trace_arc.net_number,
-                    net_name=_net_name(board, trace_arc.net_number),
-                ),
-                payload=transformed,
-                source=transformed,
-                points=(
-                    transform.point(trace_arc.start_x, trace_arc.start_y),
-                    transform.point(trace_arc.mid_x, trace_arc.mid_y),
-                    transform.point(trace_arc.end_x, trace_arc.end_y),
-                ),
-                bbox=_points_bbox(
-                    (
-                        (transformed.start_x, transformed.start_y),
-                        (transformed.mid_x, transformed.mid_y),
-                        (transformed.end_x, transformed.end_y),
-                    )
-                ),
-            )
-        )
-
-    for index, polygon in enumerate(board.polygons):
-        transformed = _transform_polygon(polygon, transform)
-        kind = _polygon_kind_for_layer(layers.get(polygon.layer), polygon)
-        items.append(
-            RenderableGeometry(
-                id=f"{kind.value}:{polygon.layer}:{index}",
-                kind=kind,
-                layer=layers.get(polygon.layer, _layer_for_name(polygon.layer, layer_lookup)),
-                tags=_tags_for_polygon(board, polygon, index),
-                payload=transformed,
-                source=transformed,
-                points=tuple(RenderPoint(x, y) for x, y in transformed.points),
-                bbox=_points_bbox(transformed.points),
-            )
-        )
-
-    for index, line in enumerate(board.graphic_lines):
-        transformed = _transform_line(line, transform)
-        layer = layers.get(line.layer, _layer_for_name(line.layer, layer_lookup))
-        kind = _graphic_line_kind_for_layer(layer)
-        items.append(
-            RenderableGeometry(
-                id=f"{kind.value}_line:{line.layer}:{index}",
-                kind=kind,
-                layer=layer,
-                tags=GeometryTags(source_collection="graphic_lines", source_index=index),
-                payload=transformed,
-                source=transformed,
-                points=(
-                    transform.point(line.start_x, line.start_y),
-                    transform.point(line.end_x, line.end_y),
-                ),
-                bbox=_line_bbox(
-                    transformed.start_x,
-                    transformed.start_y,
-                    transformed.end_x,
-                    transformed.end_y,
-                ),
-            )
-        )
-
-    for index, arc in enumerate(board.graphic_arcs):
-        transformed = _transform_arc(arc, transform)
-        layer = layers.get(arc.layer, _layer_for_name(arc.layer, layer_lookup))
-        kind = _graphic_arc_kind_for_layer(layer)
-        items.append(
-            RenderableGeometry(
-                id=f"{kind.value}_arc:{arc.layer}:{index}",
-                kind=kind,
-                layer=layer,
-                tags=GeometryTags(source_collection="graphic_arcs", source_index=index),
-                payload=transformed,
-                source=transformed,
-                points=(
-                    transform.point(arc.start_x, arc.start_y),
-                    transform.point(arc.mid_x, arc.mid_y),
-                    transform.point(arc.end_x, arc.end_y),
-                ),
-                bbox=_points_bbox(
-                    (
-                        (transformed.start_x, transformed.start_y),
-                        (transformed.mid_x, transformed.mid_y),
-                        (transformed.end_x, transformed.end_y),
-                    )
-                ),
-            )
-        )
-
-    for index, keepout in enumerate(board.keepouts):
-        transformed = _transform_keepout(keepout, transform)
-        for layer_name in transformed.layers:
-            layer = _keepout_layer_for_name(layer_name, layers, layer_lookup)
-            layer_payload = replace(transformed, layers=[layer_name])
-            items.append(
-                RenderableGeometry(
-                    id=f"keepout:{layer_name}:{index}",
-                    kind=GeometryKind.KEEPOUT,
-                    layer=layer,
-                    tags=GeometryTags(
-                        source_collection="keepouts",
-                        source_index=index,
-                        component_ref=transformed.footprint_ref,
-                        component_prefix=_component_prefix(transformed.footprint_ref),
-                    ),
-                    payload=layer_payload,
-                    source=transformed,
-                    points=tuple(RenderPoint(x, y) for x, y in transformed.boundary),
-                    bbox=_points_bbox(transformed.boundary),
-                )
-            )
-
-    for index, via in enumerate(board.vias):
-        transformed = _transform_via(via, transform)
-        items.append(
-            RenderableGeometry(
-                id=f"via:{index}",
-                kind=GeometryKind.VIA,
-                layer=_synthetic_layer("vias", "via", "", 800),
-                tags=GeometryTags(
-                    source_collection="vias",
-                    source_index=index,
-                    net_number=via.net_number,
-                    net_name=_net_name(board, via.net_number),
-                ),
-                payload=transformed,
-                source=transformed,
-                points=(transform.point(via.x, via.y),),
-                bbox=_circle_bbox(transformed.x, transformed.y, transformed.size / 2),
-            )
-        )
-
-    for index, graphic_text in enumerate(board.graphic_texts):
-        transformed = _transform_graphic_text(graphic_text, transform)
-        items.append(
-            RenderableGeometry(
-                id=f"board_text:{graphic_text.layer}:{index}",
-                kind=GeometryKind.BOARD_GRAPHIC_TEXT,
-                layer=layers.get(
-                    graphic_text.layer,
-                    _layer_for_name(graphic_text.layer, layer_lookup),
-                ),
-                tags=GeometryTags(
-                    source_collection="graphic_texts",
-                    source_index=index,
-                    text_kind="board",
-                ),
-                payload=transformed,
-                source=transformed,
-                points=(transform.point(graphic_text.x, graphic_text.y),),
-            )
-        )
-
-    for index, dimension in enumerate(board.dimensions):
-        transformed = _transform_dimension(dimension, transform)
-        items.append(
-            RenderableGeometry(
-                id=f"dimension:{dimension.layer}:{index}",
-                kind=GeometryKind.DIMENSION,
-                layer=layers.get(dimension.layer, _layer_for_name(dimension.layer, layer_lookup)),
-                tags=GeometryTags(source_collection="dimensions", source_index=index),
-                payload=transformed,
-                source=transformed,
-                points=(
-                    transform.point(dimension.start_x, dimension.start_y),
-                    transform.point(dimension.end_x, dimension.end_y),
-                ),
-                bbox=_line_bbox(
-                    transformed.start_x,
-                    transformed.start_y,
-                    transformed.end_x,
-                    transformed.end_y,
-                ),
-            )
-        )
-
-    _append_model_only_bodies(items, board.footprints, footprints_by_ref)
     return PcbGeometryStore(items=tuple(items))
+
+
+def _renderable_items_for_geometry(
+    board: Pcb,
+    geometry: DomainPcbGeometry,
+    index: int,
+    layers: dict[str, GeometryLayer],
+    layer_lookup: dict[str, PcbLayer],
+    footprints_by_ref: dict[str, PcbFootprint],
+    transform: _RenderedViewTransform,
+) -> list[RenderableGeometry]:
+    if geometry.has_role(PcbGeometryRole.BOARD_OUTLINE):
+        return []
+
+    payload = _transform_geometry_payload(geometry.data, transform)
+    footprint = footprints_by_ref.get(geometry.footprint_ref)
+    source_collection = geometry.metadata.source_collection
+    source_index = geometry.metadata.source_index
+    if source_index is None:
+        source_index = (
+            geometry.metadata.native_index if geometry.metadata.native_index is not None else index
+        )
+    tags = _geometry_tags(board, geometry, footprint, source_collection, source_index)
+
+    if geometry.object_type == PcbGeometryObject.PAD and isinstance(payload, PcbPadGeometry):
+        return _renderable_pad_items(geometry, payload, tags, layers, layer_lookup, transform)
+
+    if geometry.object_type == PcbGeometryObject.VIA and isinstance(payload, PcbViaGeometry):
+        return [
+            RenderableGeometry(
+                id=geometry.id,
+                object_type=geometry.object_type,
+                shape=geometry.shape,
+                roles=geometry.roles,
+                display_role=geometry.display_role,
+                layer=_synthetic_layer("vias", "via", "", 800),
+                tags=tags,
+                payload=payload,
+                source=geometry,
+                points=(transform.point(payload.x, payload.y),),
+                bbox=_circle_bbox(payload.x, payload.y, payload.size / 2),
+            )
+        ]
+
+    display_role = _geometry_display_role(geometry)
+    if not display_role:
+        return []
+    layer_name = geometry.primary_layer
+    layer = layers.get(layer_name, _layer_for_name(layer_name, layer_lookup))
+    if geometry.object_type == PcbGeometryObject.KEEP_OUT:
+        layer = replace(layer, role="keepout")
+
+    return [
+        RenderableGeometry(
+            id=geometry.id,
+            object_type=geometry.object_type,
+            shape=geometry.shape,
+            roles=geometry.roles,
+            display_role=display_role,
+            layer=layer,
+            tags=tags,
+            payload=payload,
+            source=geometry,
+            points=_geometry_points(geometry.data, transform),
+            bbox=_geometry_bbox(payload),
+        )
+    ]
+
+
+def _geometry_tags(
+    board: Pcb,
+    geometry: DomainPcbGeometry,
+    footprint: PcbFootprint | None,
+    source_collection: str,
+    source_index: int,
+) -> GeometryTags:
+    pad_number = geometry.data.number if isinstance(geometry.data, PcbPadGeometry) else ""
+    text_kind = ""
+    if geometry.has_role(PcbGeometryRole.DESIGNATOR):
+        text_kind = "reference"
+    elif geometry.has_role(PcbGeometryRole.VALUE):
+        text_kind = "value"
+    elif geometry.has_role(PcbGeometryRole.USER_TEXT):
+        text_kind = "user"
+    elif geometry.has_role(PcbGeometryRole.COMMENT):
+        text_kind = "board"
+    return GeometryTags(
+        source_collection=source_collection,
+        source_index=source_index,
+        component_ref=geometry.footprint_ref,
+        component_prefix=_component_prefix(geometry.footprint_ref),
+        pad_number=pad_number,
+        net_number=geometry.net_number,
+        net_name=geometry.net_name or _net_name(board, geometry.net_number),
+        text_kind=text_kind,
+        footprint_lib=footprint.footprint_lib if footprint else "",
+        value=footprint.value if footprint else "",
+    )
+
+
+def _renderable_pad_items(
+    geometry: DomainPcbGeometry,
+    pad: PcbPadGeometry,
+    tags: GeometryTags,
+    layers: dict[str, GeometryLayer],
+    layer_lookup: dict[str, PcbLayer],
+    transform: _RenderedViewTransform,
+) -> list[RenderableGeometry]:
+    items: list[RenderableGeometry] = []
+    pad_layer_names = _pad_copper_layers(geometry.layers, layer_lookup)
+    for layer_name in pad_layer_names:
+        items.append(
+            RenderableGeometry(
+                id=_pad_geometry_id(
+                    geometry.footprint_ref,
+                    pad.number,
+                    tags.source_index,
+                    layer_name=layer_name,
+                    layer_count=len(pad_layer_names),
+                ),
+                object_type=geometry.object_type,
+                shape=geometry.shape,
+                roles=geometry.roles,
+                display_role=geometry.display_role,
+                layer=layers.get(layer_name, _layer_for_name(layer_name, layer_lookup)),
+                tags=tags,
+                payload=pad,
+                source=geometry,
+                points=(transform.point(pad.x, pad.y),),
+                bbox=_pad_bbox(pad),
+            )
+        )
+    if pad.drill > 0:
+        items.append(
+            RenderableGeometry(
+                id=f"drill:{geometry.footprint_ref}:{pad.number}:{tags.source_index}",
+                object_type=PcbGeometryObject.PAD,
+                shape=PcbGeometryShape.CIRCLE,
+                roles=(*geometry.roles, PcbGeometryRole.DRILL),
+                display_role=SYNTHETIC_DRILL_ROLE,
+                layer=_synthetic_layer("drills", "drill", "", 900),
+                tags=replace(tags, source_collection="pad_drills"),
+                payload=pad,
+                source=geometry,
+                points=(transform.point(pad.x, pad.y),),
+                bbox=_pad_drill_bbox(pad),
+            )
+        )
+    _append_pad_mask_apertures_for_geometry(
+        items, geometry, pad, tags, layers, layer_lookup, transform
+    )
+    return items
+
+
+def _geometry_display_role(geometry: DomainPcbGeometry) -> str:
+    if geometry.object_type == PcbGeometryObject.TRACK:
+        return PcbGeometryRole.TRACE.value
+    if geometry.object_type == PcbGeometryObject.ZONE:
+        return geometry.primary_role.value
+    if geometry.object_type == PcbGeometryObject.KEEP_OUT:
+        return PcbGeometryRole.KEEPOUT.value
+    if geometry.object_type == PcbGeometryObject.DIMENSION:
+        return PcbGeometryRole.DIMENSION.value
+    if geometry.object_type == PcbGeometryObject.TEXT:
+        if geometry.has_role(PcbGeometryRole.DESIGNATOR):
+            return PcbGeometryRole.DESIGNATOR.value
+        if geometry.has_role(PcbGeometryRole.VALUE):
+            return PcbGeometryRole.VALUE.value
+        if not geometry.footprint_ref:
+            return (
+                PcbGeometryRole.COMMENT.value
+                if geometry.has_role(PcbGeometryRole.COMMENT)
+                else PcbGeometryRole.TEXT.value
+            )
+        return PcbGeometryRole.USER_TEXT.value
+    if geometry.object_type == PcbGeometryObject.GRAPHIC:
+        if geometry.has_role(PcbGeometryRole.SOLDER_MASK):
+            return PcbGeometryRole.SOLDER_MASK.value
+        if geometry.has_role(PcbGeometryRole.SOLDER_PASTE):
+            return PcbGeometryRole.SOLDER_PASTE.value
+        if geometry.has_role(PcbGeometryRole.SILKSCREEN):
+            return PcbGeometryRole.SILKSCREEN.value
+        if geometry.has_role(PcbGeometryRole.FABRICATION):
+            return geometry.primary_role.value
+        if geometry.shape == PcbGeometryShape.POLYGON:
+            return PcbGeometryRole.MECHANICAL.value
+        if geometry.shape == PcbGeometryShape.ARC:
+            return (
+                PcbGeometryRole.COMPONENT_BODY.value
+                if geometry.footprint_ref
+                else PcbGeometryRole.MECHANICAL.value
+            )
+        return (
+            PcbGeometryRole.COMPONENT_BODY.value
+            if geometry.footprint_ref
+            else PcbGeometryRole.MECHANICAL.value
+        )
+    return geometry.display_role
 
 
 def geometry_matches_selector(
@@ -465,9 +395,15 @@ def geometry_matches_selector(
     *,
     active_side: str,
 ) -> bool:
-    if selector.kinds and geometry.kind not in selector.kinds:
+    if selector.object_types and geometry.object_type not in selector.object_types:
         return False
-    if selector.role and geometry.layer.role != selector.role:
+    if selector.shapes and geometry.shape not in selector.shapes:
+        return False
+    if selector.roles and not selector.roles.intersection(geometry.roles):
+        return False
+    if selector.display_roles and geometry.display_role not in selector.display_roles:
+        return False
+    if selector.layer_role and geometry.layer.role != selector.layer_role:
         return False
     if selector.side and not _side_matches(geometry.layer.side, selector.side, active_side):
         return False
@@ -493,222 +429,21 @@ def layer_role(layer: PcbLayer) -> str:
     return layer.primary_role.value
 
 
-def _append_footprint_graphics(
-    items: list[RenderableGeometry],
-    footprint: PcbFootprint,
-    footprint_index: int,
-    layers: dict[str, GeometryLayer],
-    layer_lookup: dict[str, PcbLayer],
-    transform: _RenderedViewTransform,
-) -> None:
-    for index, line in enumerate(footprint.silkscreen_lines):
-        transformed = _transform_line(line, transform)
-        items.append(
-            _footprint_item(
-                id_prefix="silk_line",
-                kind=GeometryKind.SILK_LINE,
-                footprint=footprint,
-                footprint_index=footprint_index,
-                index=index,
-                layer=layers.get(line.layer, _layer_for_name(line.layer, layer_lookup)),
-                source_collection="silkscreen_lines",
-                payload=transformed,
-                points=(
-                    transform.point(line.start_x, line.start_y),
-                    transform.point(line.end_x, line.end_y),
-                ),
-                bbox=_line_bbox(
-                    transformed.start_x,
-                    transformed.start_y,
-                    transformed.end_x,
-                    transformed.end_y,
-                ),
-            )
-        )
-
-    for index, polygon in enumerate(footprint.silkscreen_polygons):
-        transformed = _transform_polygon(polygon, transform)
-        items.append(
-            _footprint_item(
-                id_prefix="silk_polygon",
-                kind=GeometryKind.SILK_POLYGON,
-                footprint=footprint,
-                footprint_index=footprint_index,
-                index=index,
-                layer=layers.get(polygon.layer, _layer_for_name(polygon.layer, layer_lookup)),
-                source_collection="silkscreen_polygons",
-                payload=transformed,
-                points=tuple(RenderPoint(x, y) for x, y in transformed.points),
-                bbox=_points_bbox(transformed.points),
-            )
-        )
-    for index, line in enumerate(footprint.fab_lines):
-        transformed = _transform_line(line, transform)
-        items.append(
-            _footprint_item(
-                id_prefix="fab_line",
-                kind=GeometryKind.FAB_LINE,
-                footprint=footprint,
-                footprint_index=footprint_index,
-                index=index,
-                layer=layers.get(line.layer, _layer_for_name(line.layer, layer_lookup)),
-                source_collection="fab_lines",
-                payload=transformed,
-                points=(
-                    transform.point(line.start_x, line.start_y),
-                    transform.point(line.end_x, line.end_y),
-                ),
-                bbox=_line_bbox(
-                    transformed.start_x,
-                    transformed.start_y,
-                    transformed.end_x,
-                    transformed.end_y,
-                ),
-            )
-        )
-    for index, circle in enumerate(footprint.fab_circles):
-        transformed = _transform_circle(circle, transform)
-        items.append(
-            _footprint_item(
-                id_prefix="fab_circle",
-                kind=GeometryKind.FAB_CIRCLE,
-                footprint=footprint,
-                footprint_index=footprint_index,
-                index=index,
-                layer=layers.get(circle.layer, _layer_for_name(circle.layer, layer_lookup)),
-                source_collection="fab_circles",
-                payload=transformed,
-                points=(transform.point(circle.cx, circle.cy),),
-                bbox=_circle_bbox(transformed.cx, transformed.cy, transformed.radius),
-            )
-        )
-    for index, arc in enumerate(footprint.fab_arcs):
-        transformed = _transform_arc(arc, transform)
-        items.append(
-            _footprint_item(
-                id_prefix="fab_arc",
-                kind=GeometryKind.FAB_ARC,
-                footprint=footprint,
-                footprint_index=footprint_index,
-                index=index,
-                layer=layers.get(arc.layer, _layer_for_name(arc.layer, layer_lookup)),
-                source_collection="fab_arcs",
-                payload=transformed,
-                points=(
-                    transform.point(arc.start_x, arc.start_y),
-                    transform.point(arc.mid_x, arc.mid_y),
-                    transform.point(arc.end_x, arc.end_y),
-                ),
-                bbox=_points_bbox(
-                    (
-                        (transformed.start_x, transformed.start_y),
-                        (transformed.mid_x, transformed.mid_y),
-                        (transformed.end_x, transformed.end_y),
-                    )
-                ),
-            )
-        )
-    for index, polygon in enumerate(footprint.fab_polygons):
-        transformed = _transform_polygon(polygon, transform)
-        items.append(
-            _footprint_item(
-                id_prefix="fab_polygon",
-                kind=GeometryKind.FAB_POLYGON,
-                footprint=footprint,
-                footprint_index=footprint_index,
-                index=index,
-                layer=layers.get(polygon.layer, _layer_for_name(polygon.layer, layer_lookup)),
-                source_collection="fab_polygons",
-                payload=transformed,
-                points=tuple(RenderPoint(x, y) for x, y in transformed.points),
-                bbox=_points_bbox(transformed.points),
-            )
-        )
-    for index, text in enumerate(footprint.texts):
-        if text.hidden:
-            continue
-        transformed = _transform_text(text, transform)
-        items.append(
-            _footprint_item(
-                id_prefix=_text_kind(text).value,
-                kind=_text_kind(text),
-                footprint=footprint,
-                footprint_index=footprint_index,
-                index=index,
-                layer=layers.get(text.layer, _layer_for_name(text.layer, layer_lookup)),
-                source_collection="texts",
-                payload=transformed,
-                points=(transform.point(text.x, text.y),),
-                text_kind=text.kind or "user",
-            )
-        )
-
-
-def _append_pad_mask_apertures(
-    items: list[RenderableGeometry],
-    footprint: PcbFootprint,
-    pad_index: int,
-    pad: PcbPad,
-    layers: dict[str, GeometryLayer],
-    layer_lookup: dict[str, PcbLayer],
-    transform: _RenderedViewTransform,
-) -> None:
-    if pad.mask_aperture_width is None or pad.mask_aperture_height is None:
-        return
-    if pad.mask_aperture_width <= 0.0 or pad.mask_aperture_height <= 0.0:
-        return
-
-    for mask_layer_name in _pad_mask_aperture_layers(pad, layer_lookup):
-        aperture = replace(
-            pad,
-            width=pad.mask_aperture_width,
-            height=pad.mask_aperture_height,
-            mid_width=None,
-            mid_height=None,
-            bot_width=None,
-            bot_height=None,
-            layers=[mask_layer_name],
-        )
-        layer = layers.get(mask_layer_name, _layer_for_name(mask_layer_name, layer_lookup))
-        items.append(
-            RenderableGeometry(
-                id=(
-                    "pad_mask_aperture:"
-                    f"{footprint.reference}:{pad.number}:{pad_index}:{mask_layer_name}"
-                ),
-                kind=GeometryKind.MASK,
-                layer=layer,
-                tags=_component_tags(
-                    footprint,
-                    source_collection="pad_mask_apertures",
-                    source_index=pad_index,
-                    pad_number=pad.number,
-                    net_number=pad.net_number,
-                    net_name=pad.net_name,
-                ),
-                payload=aperture,
-                source=aperture,
-                points=(transform.point(pad.x, pad.y),),
-                bbox=_pad_bbox(aperture),
-            )
-        )
-
-
 def _pad_mask_aperture_layers(
-    pad: PcbPad,
+    pad_layers: tuple[str, ...],
     layer_lookup: dict[str, PcbLayer],
 ) -> tuple[str, ...]:
-    pad_layers = {str(layer_name) for layer_name in pad.layers}
+    pad_layer_names = {str(layer_name) for layer_name in pad_layers}
     copper_layers = [layer for layer in layer_lookup.values() if layer.has_role(LayerRole.COPPER)]
     mask_layers = [
         layer for layer in layer_lookup.values() if layer.has_role(LayerRole.SOLDER_MASK)
     ]
     sides: list[str] = []
-    if "*.Cu" in pad_layers:
+    if "*.Cu" in pad_layer_names:
         sides.extend(("front", "back"))
     else:
         for layer in copper_layers:
-            if layer.name in pad_layers and layer.side in {"front", "back"}:
+            if layer.name in pad_layer_names and layer.side in {"front", "back"}:
                 sides.append(layer.side)
     if not sides:
         sides.append("front")
@@ -717,98 +452,151 @@ def _pad_mask_aperture_layers(
     )
 
 
-def _append_model_only_bodies(
+def _append_pad_mask_apertures_for_geometry(
     items: list[RenderableGeometry],
-    footprints: list[PcbFootprint],
-    _footprints_by_ref: dict[str, PcbFootprint],
+    geometry: DomainPcbGeometry,
+    pad: PcbPadGeometry,
+    tags: GeometryTags,
+    layers: dict[str, GeometryLayer],
+    layer_lookup: dict[str, PcbLayer],
+    transform: _RenderedViewTransform,
 ) -> None:
-    body_refs = {
-        item.tags.component_ref
-        for item in items
-        if item.kind
-        in {
-            GeometryKind.FAB_LINE,
-            GeometryKind.FAB_ARC,
-            GeometryKind.FAB_CIRCLE,
-            GeometryKind.FAB_POLYGON,
-        }
-    }
-    model_layer = _synthetic_layer("models", "fabrication", "", 1200)
-    for index, footprint in enumerate(footprints):
-        if footprint.reference in body_refs or not any(
-            model.cache_key for model in footprint.models_3d
-        ):
-            continue
+    if pad.mask_aperture_width is None or pad.mask_aperture_height is None:
+        return
+    if pad.mask_aperture_width <= 0.0 or pad.mask_aperture_height <= 0.0:
+        return
+    for mask_layer_name in _pad_mask_aperture_layers(geometry.layers, layer_lookup):
+        aperture = replace(
+            pad,
+            width=pad.mask_aperture_width,
+            height=pad.mask_aperture_height,
+        )
+        layer = layers.get(mask_layer_name, _layer_for_name(mask_layer_name, layer_lookup))
         items.append(
             RenderableGeometry(
-                id=f"body_model:{footprint.reference}:{index}",
-                kind=GeometryKind.BODY_POLYGON,
-                layer=model_layer,
-                tags=_component_tags(
-                    footprint,
-                    source_collection="models_3d",
-                    source_index=index,
+                id=(
+                    "pad_mask_aperture:"
+                    f"{geometry.footprint_ref}:{pad.number}:{tags.source_index}:{mask_layer_name}"
                 ),
-                payload=footprint,
-                source=footprint,
-                bbox=footprint.bbox,
+                object_type=PcbGeometryObject.PAD,
+                shape=geometry.shape,
+                roles=(*geometry.roles, PcbGeometryRole.SOLDER_MASK),
+                display_role=PcbGeometryRole.SOLDER_MASK.value,
+                layer=layer,
+                tags=replace(tags, source_collection="pad_mask_apertures"),
+                payload=aperture,
+                source=geometry,
+                points=(transform.point(aperture.x, aperture.y),),
+                bbox=_pad_bbox(aperture),
             )
         )
 
 
-def _footprint_item(
-    *,
-    id_prefix: str,
-    kind: GeometryKind,
-    footprint: PcbFootprint,
-    footprint_index: int,
-    index: int,
-    layer: GeometryLayer,
-    source_collection: str,
-    payload: object,
-    points: tuple[RenderPoint, ...] = (),
-    bbox: tuple[float, float, float, float] | None = None,
-    text_kind: str = "",
-) -> RenderableGeometry:
-    return RenderableGeometry(
-        id=f"{id_prefix}:{footprint.reference}:{footprint_index}:{index}",
-        kind=kind,
-        layer=layer,
-        tags=_component_tags(
-            footprint,
-            source_collection=source_collection,
-            source_index=index,
-            text_kind=text_kind,
-        ),
-        payload=payload,
-        source=payload,
-        points=points,
-        bbox=bbox,
-    )
+def _transform_geometry_payload(data: object, transform: _RenderedViewTransform) -> object:
+    if transform.mirror_x is None:
+        return data
+    if isinstance(data, PcbPadGeometry):
+        return replace(
+            data,
+            x=transform.x(data.x),
+            rotation=(-data.rotation) % 360 if data.rotation else 0.0,
+        )
+    if isinstance(data, PcbViaGeometry):
+        return replace(data, x=transform.x(data.x))
+    if isinstance(data, PcbLineGeometry):
+        return replace(data, start_x=transform.x(data.start_x), end_x=transform.x(data.end_x))
+    if isinstance(data, PcbArcGeometry):
+        return replace(
+            data,
+            start_x=transform.x(data.start_x),
+            mid_x=transform.x(data.mid_x),
+            end_x=transform.x(data.end_x),
+        )
+    if isinstance(data, PcbCircleGeometry):
+        return replace(data, cx=transform.x(data.cx))
+    if isinstance(data, PcbPolygonGeometry):
+        return replace(
+            data,
+            points=[(transform.x(x), y) for x, y in data.points],
+            holes=[[(transform.x(x), y) for x, y in hole] for hole in data.holes],
+        )
+    if isinstance(data, PcbKeepoutGeometry):
+        return replace(
+            data,
+            boundary=[(transform.x(x), y) for x, y in data.boundary],
+            holes=[[(transform.x(x), y) for x, y in hole] for hole in data.holes],
+        )
+    if isinstance(data, PcbZoneGeometry):
+        return replace(data, boundary=[(transform.x(x), y) for x, y in data.boundary])
+    if isinstance(data, PcbTextGeometry):
+        return replace(data, x=transform.x(data.x), rotation=180.0 - data.rotation)
+    if isinstance(data, PcbDimensionGeometry):
+        return replace(data, start_x=transform.x(data.start_x), end_x=transform.x(data.end_x))
+    return data
 
 
-def _component_tags(
-    footprint: PcbFootprint,
-    *,
-    source_collection: str,
-    source_index: int,
-    pad_number: str = "",
-    net_number: int | None = None,
-    net_name: str = "",
-    text_kind: str = "",
-) -> GeometryTags:
-    return GeometryTags(
-        source_collection=source_collection,
-        source_index=source_index,
-        component_ref=footprint.reference,
-        component_prefix=_component_prefix(footprint.reference),
-        pad_number=pad_number,
-        net_number=net_number,
-        net_name=net_name,
-        text_kind=text_kind,
-        footprint_lib=footprint.footprint_lib,
-        value=footprint.value,
-    )
+def _geometry_points(data: object, transform: _RenderedViewTransform) -> tuple[RenderPoint, ...]:
+    if isinstance(data, PcbLineGeometry):
+        return (
+            transform.point(data.start_x, data.start_y),
+            transform.point(data.end_x, data.end_y),
+        )
+    if isinstance(data, PcbArcGeometry):
+        return (
+            transform.point(data.start_x, data.start_y),
+            transform.point(data.mid_x, data.mid_y),
+            transform.point(data.end_x, data.end_y),
+        )
+    if isinstance(data, PcbPolygonGeometry):
+        return tuple(RenderPoint(transform.x(x), y) for x, y in data.points)
+    if isinstance(data, PcbKeepoutGeometry):
+        return tuple(RenderPoint(transform.x(x), y) for x, y in data.boundary)
+    if isinstance(data, PcbZoneGeometry):
+        return tuple(RenderPoint(transform.x(x), y) for x, y in data.boundary)
+    if isinstance(data, PcbCircleGeometry):
+        return (transform.point(data.cx, data.cy),)
+    if isinstance(data, PcbTextGeometry):
+        return (transform.point(data.x, data.y),)
+    if isinstance(data, PcbDimensionGeometry):
+        return (
+            transform.point(data.start_x, data.start_y),
+            transform.point(data.end_x, data.end_y),
+        )
+    return ()
+
+
+def _geometry_bbox(data: object) -> tuple[float, float, float, float] | None:
+    if isinstance(data, PcbLineGeometry):
+        return _line_bbox(data.start_x, data.start_y, data.end_x, data.end_y)
+    if isinstance(data, PcbArcGeometry):
+        return _points_bbox(
+            ((data.start_x, data.start_y), (data.mid_x, data.mid_y), (data.end_x, data.end_y))
+        )
+    if isinstance(data, PcbPolygonGeometry):
+        return _points_bbox(data.points)
+    if isinstance(data, PcbKeepoutGeometry):
+        return _points_bbox(data.boundary)
+    if isinstance(data, PcbZoneGeometry):
+        return _points_bbox(data.boundary)
+    if isinstance(data, PcbCircleGeometry):
+        return _circle_bbox(data.cx, data.cy, data.radius)
+    if isinstance(data, PcbPadGeometry):
+        return _pad_bbox(data)
+    if isinstance(data, PcbViaGeometry):
+        return _circle_bbox(data.x, data.y, data.size / 2)
+    if isinstance(data, PcbDimensionGeometry):
+        return _line_bbox(data.start_x, data.start_y, data.end_x, data.end_y)
+    return None
+
+
+def _outline_points_from_geometry(
+    outline: list[DomainPcbGeometry],
+    transform: _RenderedViewTransform,
+) -> tuple[RenderPoint, ...]:
+    points: list[RenderPoint] = []
+    for item in outline:
+        points.extend(_geometry_points(item.data, transform))
+    return tuple(points)
 
 
 def _geometry_layers(board: Pcb) -> dict[str, GeometryLayer]:
@@ -841,15 +629,6 @@ def _synthetic_layer(name: str, role: str, side: str, stack_index: int) -> Geome
     return GeometryLayer(name=name, role=role, side=side, stack_index=stack_index)
 
 
-def _keepout_layer_for_name(
-    name: str,
-    layers: dict[str, GeometryLayer],
-    layer_lookup: dict[str, PcbLayer],
-) -> GeometryLayer:
-    layer = layers.get(name, _layer_for_name(name, layer_lookup))
-    return replace(layer, role="keepout")
-
-
 def _board_edge_layer(
     board: Pcb,
     layers: dict[str, GeometryLayer],
@@ -867,11 +646,9 @@ def _board_edge_layer(
 
 
 def _board_outline_layer_names(board: Pcb) -> tuple[str, ...]:
-    names: list[str] = []
-    for line in board.outline_lines:
-        names.append(line.layer)
-    for arc in board.outline_arcs:
-        names.append(arc.layer)
+    names: list[str] = [
+        item.primary_layer for item in board.board_outline_geometry() if item.primary_layer
+    ]
     return tuple(dict.fromkeys(name for name in names if name))
 
 
@@ -886,142 +663,12 @@ def _rendered_view_transform(
     return _RenderedViewTransform(mirror_x=bx0 + bx1)
 
 
-def _transform_pad(pad: PcbPad, transform: _RenderedViewTransform) -> PcbPad:
-    if transform.mirror_x is None:
-        return pad
-    return replace(
-        pad,
-        x=transform.x(pad.x),
-        rotation=(-pad.rotation) % 360 if pad.rotation else 0.0,
-    )
-
-
-def _transform_segment(segment: PcbSegment, transform: _RenderedViewTransform) -> PcbSegment:
-    if transform.mirror_x is None:
-        return segment
-    return replace(segment, start_x=transform.x(segment.start_x), end_x=transform.x(segment.end_x))
-
-
-def _transform_trace_arc(
-    trace_arc: PcbTraceArc,
-    transform: _RenderedViewTransform,
-) -> PcbTraceArc:
-    if transform.mirror_x is None:
-        return trace_arc
-    return replace(
-        trace_arc,
-        start_x=transform.x(trace_arc.start_x),
-        mid_x=transform.x(trace_arc.mid_x),
-        end_x=transform.x(trace_arc.end_x),
-    )
-
-
-def _transform_via(via: PcbVia, transform: _RenderedViewTransform) -> PcbVia:
-    if transform.mirror_x is None:
-        return via
-    return replace(via, x=transform.x(via.x))
-
-
-def _transform_line(line: PcbLine, transform: _RenderedViewTransform) -> PcbLine:
-    if transform.mirror_x is None:
-        return line
-    return replace(line, start_x=transform.x(line.start_x), end_x=transform.x(line.end_x))
-
-
-def _transform_circle(circle: PcbCircle, transform: _RenderedViewTransform) -> PcbCircle:
-    if transform.mirror_x is None:
-        return circle
-    return replace(circle, cx=transform.x(circle.cx))
-
-
-def _transform_arc(arc: PcbArc, transform: _RenderedViewTransform) -> PcbArc:
-    if transform.mirror_x is None:
-        return arc
-    return replace(
-        arc,
-        start_x=transform.x(arc.start_x),
-        mid_x=transform.x(arc.mid_x),
-        end_x=transform.x(arc.end_x),
-    )
-
-
-def _transform_polygon(polygon: PcbPolygon, transform: _RenderedViewTransform) -> PcbPolygon:
-    if transform.mirror_x is None:
-        return polygon
-    return replace(
-        polygon,
-        points=[(transform.x(x), y) for x, y in polygon.points],
-        holes=[[(transform.x(x), y) for x, y in hole] for hole in polygon.holes],
-    )
-
-
-def _transform_keepout(keepout: PcbKeepout, transform: _RenderedViewTransform) -> PcbKeepout:
-    if transform.mirror_x is None:
-        return keepout
-    return replace(
-        keepout,
-        boundary=[(transform.x(x), y) for x, y in keepout.boundary],
-        holes=[[(transform.x(x), y) for x, y in hole] for hole in keepout.holes],
-    )
-
-
-def _transform_text(text: PcbText, transform: _RenderedViewTransform) -> PcbText:
-    if transform.mirror_x is None:
-        return text
-    rotation = 180.0 - text.rotation
-    return replace(text, x=transform.x(text.x), rotation=rotation)
-
-
-def _transform_graphic_text(
-    text: PcbGraphicText,
-    transform: _RenderedViewTransform,
-) -> PcbGraphicText:
-    if transform.mirror_x is None:
-        return text
-    rotation = 180.0 - text.rotation
-    return replace(text, x=transform.x(text.x), rotation=rotation)
-
-
-def _transform_dimension(
-    dimension: PcbDimension,
-    transform: _RenderedViewTransform,
-) -> PcbDimension:
-    if transform.mirror_x is None:
-        return dimension
-    return replace(
-        dimension,
-        start_x=transform.x(dimension.start_x),
-        end_x=transform.x(dimension.end_x),
-    )
-
-
-def _outline_points(
-    lines: list[PcbLine],
-    arcs: list[PcbArc],
-    transform: _RenderedViewTransform,
-) -> tuple[RenderPoint, ...]:
-    if not lines and not arcs:
-        return ()
-    points: list[RenderPoint] = []
-    for line in lines:
-        if not points:
-            points.append(transform.point(line.start_x, line.start_y))
-        points.append(transform.point(line.end_x, line.end_y))
-    for arc in arcs:
-        if not points:
-            points.append(transform.point(arc.start_x, arc.start_y))
-        points.append(transform.point(arc.mid_x, arc.mid_y))
-        points.append(transform.point(arc.end_x, arc.end_y))
-    return tuple(points)
-
-
 def _pad_copper_layers(
-    pad: PcbPad,
-    footprint_layer: str,
+    pad_layers: tuple[str, ...],
     layer_lookup: dict[str, PcbLayer],
 ) -> tuple[str, ...]:
     layer_names: list[str] = []
-    for raw_layer_name in pad.layers:
+    for raw_layer_name in pad_layers:
         layer_name = str(raw_layer_name)
         if layer_name == "*.Cu":
             layer_names.extend(_all_copper_layer_names(layer_lookup))
@@ -1032,7 +679,7 @@ def _pad_copper_layers(
     unique_layer_names = tuple(dict.fromkeys(layer_names))
     if unique_layer_names:
         return unique_layer_names
-    return (footprint_layer,)
+    return tuple(pad_layers[:1])
 
 
 def _all_copper_layer_names(layer_lookup: dict[str, PcbLayer]) -> tuple[str, ...]:
@@ -1064,65 +711,6 @@ def _pad_geometry_id(
     return f"{base_id}:{safe_layer_name}"
 
 
-def _polygon_kind_for_layer(layer: GeometryLayer | None, polygon: PcbPolygon) -> GeometryKind:
-    if polygon.footprint_ref and layer is not None and layer.role == "fabrication":
-        return GeometryKind.FAB_POLYGON
-    if layer is not None and layer.role == "copper":
-        return GeometryKind.ZONE
-    if layer is not None and layer.role == "silkscreen":
-        return GeometryKind.SILK_POLYGON
-    if layer is not None and layer.role == "solder_mask":
-        return GeometryKind.MASK
-    if layer is not None and layer.role == "solder_paste":
-        return GeometryKind.PASTE
-    if layer is not None and layer.role == "mechanical":
-        return GeometryKind.MECHANICAL
-    return GeometryKind.MECHANICAL
-
-
-def _graphic_line_kind_for_layer(layer: GeometryLayer) -> GeometryKind:
-    if layer.role == "silkscreen":
-        return GeometryKind.SILK_LINE
-    if layer.role == "fabrication":
-        return GeometryKind.FAB_LINE
-    if layer.role == "solder_mask":
-        return GeometryKind.MASK
-    if layer.role == "solder_paste":
-        return GeometryKind.PASTE
-    return GeometryKind.MECHANICAL
-
-
-def _graphic_arc_kind_for_layer(layer: GeometryLayer) -> GeometryKind:
-    if layer.role == "silkscreen":
-        return GeometryKind.SILK_ARC
-    if layer.role == "fabrication":
-        return GeometryKind.FAB_ARC
-    if layer.role == "solder_mask":
-        return GeometryKind.MASK
-    if layer.role == "solder_paste":
-        return GeometryKind.PASTE
-    return GeometryKind.MECHANICAL
-
-
-def _tags_for_polygon(board: Pcb, polygon: PcbPolygon, index: int) -> GeometryTags:
-    return GeometryTags(
-        source_collection="polygons",
-        source_index=index,
-        component_ref=polygon.footprint_ref,
-        component_prefix=_component_prefix(polygon.footprint_ref),
-        net_number=polygon.net_number,
-        net_name=polygon.net_name or _net_name(board, polygon.net_number),
-    )
-
-
-def _text_kind(text: PcbText) -> GeometryKind:
-    if text.kind == "reference":
-        return GeometryKind.REF_TEXT
-    if text.kind == "value":
-        return GeometryKind.VALUE_TEXT
-    return GeometryKind.USER_TEXT
-
-
 def _side_matches(layer_side: str, expected: str, active_side: str) -> bool:
     if expected in ("", "any"):
         return True
@@ -1143,7 +731,7 @@ def _net_name(board: Pcb, net_number: int) -> str:
     return net.name if net else ""
 
 
-def _pad_bbox(pad: PcbPad) -> tuple[float, float, float, float]:
+def _pad_bbox(pad: PcbPadGeometry) -> tuple[float, float, float, float]:
     return (
         pad.x - pad.width / 2,
         pad.y - pad.height / 2,
@@ -1152,7 +740,7 @@ def _pad_bbox(pad: PcbPad) -> tuple[float, float, float, float]:
     )
 
 
-def _pad_drill_bbox(pad: PcbPad) -> tuple[float, float, float, float]:
+def _pad_drill_bbox(pad: PcbPadGeometry) -> tuple[float, float, float, float]:
     geometry = pad_drill_geometry(pad)
     if geometry is None or geometry.is_empty:
         return _circle_bbox(pad.x, pad.y, pad.drill / 2)

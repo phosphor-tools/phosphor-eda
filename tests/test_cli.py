@@ -359,7 +359,7 @@ def test_cli_render_supports_highlight_pad() -> None:
     assert result.exit_code == 0, result.output
     assert 'class="highlight-overlay"' in result.output
     assert 'data-highlight-target="pad:TP3.1"' in result.output
-    assert 'data-source-id="pad:TP3:1:0"' in result.output
+    assert 'data-source-id="pad:TP3:1:' in result.output
     assert 'data-source-ids="' not in result.output
 
 

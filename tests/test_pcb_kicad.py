@@ -11,7 +11,22 @@ from phosphor_eda.kicad.pcb_parser import (
     parse_kicad_pcb_from_sexpr,
     parse_kicad_stackup,
 )
-from phosphor_eda.pcb import LayerRole, Pcb
+from phosphor_eda.pcb import (
+    LayerRole,
+    Pcb,
+    PcbArcGeometry,
+    PcbGeometry,
+    PcbGeometryObject,
+    PcbGeometryRole,
+    PcbGeometryShape,
+    PcbKeepoutGeometry,
+    PcbLineGeometry,
+    PcbModel3DGeometry,
+    PcbPadGeometry,
+    PcbPolygonGeometry,
+    PcbTextGeometry,
+    PcbZoneGeometry,
+)
 from phosphor_eda.project import Stackup
 
 FIXTURE = Path(__file__).parent / "fixtures" / "swd_switch.kicad_pcb"
@@ -20,6 +35,71 @@ FIXTURE = Path(__file__).parent / "fixtures" / "swd_switch.kicad_pcb"
 @pytest.fixture(scope="module")
 def board() -> Pcb:
     return parse_kicad_pcb(FIXTURE)
+
+
+def _geometry(
+    board: Pcb,
+    *,
+    object_type: PcbGeometryObject | None = None,
+    shape: PcbGeometryShape | None = None,
+    role: PcbGeometryRole | None = None,
+    layer: str | None = None,
+    footprint_ref: str | None = None,
+    source_collection: str | None = None,
+) -> list[PcbGeometry]:
+    result = board.geometry
+    if object_type is not None:
+        result = [item for item in result if item.object_type == object_type]
+    if shape is not None:
+        result = [item for item in result if item.shape == shape]
+    if role is not None:
+        result = [item for item in result if item.has_role(role)]
+    if layer is not None:
+        result = [item for item in result if layer in item.layers]
+    if footprint_ref is not None:
+        result = [item for item in result if item.footprint_ref == footprint_ref]
+    if source_collection is not None:
+        result = [item for item in result if item.metadata.source_collection == source_collection]
+    return result
+
+
+def _pads(board: Pcb, ref: str | None = None) -> list[PcbGeometry]:
+    return _geometry(board, object_type=PcbGeometryObject.PAD, footprint_ref=ref)
+
+
+def _pad_data(item: PcbGeometry) -> PcbPadGeometry:
+    assert isinstance(item.data, PcbPadGeometry)
+    return item.data
+
+
+def _line_data(item: PcbGeometry) -> PcbLineGeometry:
+    assert isinstance(item.data, PcbLineGeometry)
+    return item.data
+
+
+def _arc_data(item: PcbGeometry) -> PcbArcGeometry:
+    assert isinstance(item.data, PcbArcGeometry)
+    return item.data
+
+
+def _polygon_data(item: PcbGeometry) -> PcbPolygonGeometry:
+    assert isinstance(item.data, PcbPolygonGeometry)
+    return item.data
+
+
+def _keepout_data(item: PcbGeometry) -> PcbKeepoutGeometry:
+    assert isinstance(item.data, PcbKeepoutGeometry)
+    return item.data
+
+
+def _text_data(item: PcbGeometry) -> PcbTextGeometry:
+    assert isinstance(item.data, PcbTextGeometry)
+    return item.data
+
+
+def _model_data(item: PcbGeometry) -> PcbModel3DGeometry:
+    assert isinstance(item.data, PcbModel3DGeometry)
+    return item.data
 
 
 # ---------------------------------------------------------------------------
@@ -99,8 +179,8 @@ def test_fabrication_and_user_layer_roles_are_normalized(board: Pcb) -> None:
         LayerRole.COURTYARD,
         LayerRole.FRONT,
     }
-    assert fcrtyd.native_type == "user"
-    assert fcrtyd.native_user_name == "F.Courtyard"
+    assert fcrtyd.metadata.native_type == "user"
+    assert fcrtyd.metadata.native_user_name == "F.Courtyard"
 
     ffab = board.layer_for("F.Fab")
     assert ffab is not None
@@ -163,44 +243,51 @@ def test_footprint_position(board: Pcb) -> None:
 
 
 def test_pad_count(board: Pcb) -> None:
-    d1 = board.footprint_by_ref("D1")
-    assert d1 is not None
-    assert len(d1.pads) == 2
-    tp3 = board.footprint_by_ref("TP3")
-    assert tp3 is not None
-    assert len(tp3.pads) == 1
+    assert len(_pads(board, "D1")) == 2
+    assert len(_pads(board, "TP3")) == 1
 
 
 def test_pad_net(board: Pcb) -> None:
-    tp3 = board.footprint_by_ref("TP3")
-    assert tp3 is not None
-    assert tp3.pads[0].net_name == "/SWD_EN_EXT"
+    assert _pads(board, "TP3")[0].net_name == "/SWD_EN_EXT"
 
 
 def test_pad_absolute_coords(board: Pcb) -> None:
     """Pad coords should be in absolute board space, not footprint-local."""
-    tp3 = board.footprint_by_ref("TP3")
-    assert tp3 is not None
-    pad = tp3.pads[0]
+    pad = _pad_data(_pads(board, "TP3")[0])
     # TP3 at (93.5, 64.5), pad at local (0, 0) -> absolute (93.5, 64.5)
     assert pad.x == pytest.approx(93.5, abs=0.1)
     assert pad.y == pytest.approx(64.5, abs=0.1)
 
 
 def test_segment_count(board: Pcb) -> None:
-    assert len(board.segments) == 276
+    segments = _geometry(
+        board,
+        object_type=PcbGeometryObject.TRACK,
+        shape=PcbGeometryShape.LINE,
+        source_collection="segments",
+    )
+    assert len(segments) == 276
+    assert all(segment.has_role(PcbGeometryRole.TRACE) for segment in segments)
 
 
 def test_via_count(board: Pcb) -> None:
-    assert len(board.vias) == 49
+    vias = _geometry(board, object_type=PcbGeometryObject.VIA)
+    assert len(vias) == 49
+    assert all(via.has_role(PcbGeometryRole.DRILL) for via in vias)
 
 
 def test_board_outline(board: Pcb) -> None:
-    assert len(board.outline_lines) > 0
-    assert len(board.outline_arcs) > 0
+    outline_lines = [
+        item for item in board.board_outline_geometry() if item.shape == PcbGeometryShape.LINE
+    ]
+    outline_arcs = [
+        item for item in board.board_outline_geometry() if item.shape == PcbGeometryShape.ARC
+    ]
+    assert len(outline_lines) > 0
+    assert len(outline_arcs) > 0
     # Outline includes both gr_line and fp_line on Edge.Cuts
-    assert len(board.outline_lines) == 10
-    assert len(board.outline_arcs) == 6  # 4 board corners + 2 USB notch corners
+    assert len(outline_lines) == 10
+    assert len(outline_arcs) == 6  # 4 board corners + 2 USB notch corners
 
 
 def test_board_bbox(board: Pcb) -> None:
@@ -251,32 +338,38 @@ def test_footprint_by_ref_missing(board: Pcb) -> None:
 
 def test_polygon_count(board: Pcb) -> None:
     """swd_switch has 2 zones with multiple filled_polygon entries."""
-    assert len(board.polygons) > 0
+    assert len(_geometry(board, role=PcbGeometryRole.ZONE_FILL)) > 0
 
 
 def test_polygon_layers(board: Pcb) -> None:
     """Zone polygons should be on inner copper layers."""
-    layers = {p.layer for p in board.polygons}
+    layers = {item.primary_layer for item in _geometry(board, role=PcbGeometryRole.ZONE_FILL)}
     assert "In1.Cu" in layers
     assert "In2.Cu" in layers
 
 
 def test_polygon_net(board: Pcb) -> None:
     """Zone polygons should carry net info from their parent zone."""
-    nets = {(p.net_number, p.net_name) for p in board.polygons}
+    nets = {
+        (item.net_number, item.net_name)
+        for item in _geometry(board, role=PcbGeometryRole.ZONE_FILL)
+    }
     assert (2, "GND") in nets
     assert (1, "VCC") in nets
 
 
 def test_polygon_has_points(board: Pcb) -> None:
     """Every polygon should have a non-empty points list."""
-    for p in board.polygons:
-        assert len(p.points) >= 3
+    for polygon in _geometry(board, role=PcbGeometryRole.ZONE_FILL):
+        assert len(_polygon_data(polygon).points) >= 3
 
 
 def test_polygon_total_points(board: Pcb) -> None:
     """Sanity check: total filled_polygon points should be ~5726."""
-    total = sum(len(p.points) for p in board.polygons)
+    total = sum(
+        len(_polygon_data(polygon).points)
+        for polygon in _geometry(board, role=PcbGeometryRole.ZONE_FILL)
+    )
     assert 5000 < total < 7000
 
 
@@ -313,10 +406,20 @@ def test_footprint_mask_polygon_is_preserved_as_board_polygon() -> None:
 
     board = parse_kicad_pcb_from_sexpr(list(data[1:]), default_name="mask-poly")
 
-    mask_polygons = [polygon for polygon in board.polygons if polygon.layer == "F.Mask"]
+    mask_polygons = _geometry(
+        board,
+        object_type=PcbGeometryObject.GRAPHIC,
+        shape=PcbGeometryShape.POLYGON,
+        layer="F.Mask",
+        footprint_ref="AE1",
+    )
     assert len(mask_polygons) == 1
-    assert mask_polygons[0].footprint_ref == "AE1"
-    assert mask_polygons[0].points == [(10.0, 20.0), (10.0, 18.0), (11.0, 18.0), (11.0, 20.0)]
+    assert _polygon_data(mask_polygons[0]).points == [
+        (10.0, 20.0),
+        (10.0, 18.0),
+        (11.0, 18.0),
+        (11.0, 20.0),
+    ]
 
 
 def test_top_level_mask_lines_and_arcs_are_preserved_as_board_graphics() -> None:
@@ -348,12 +451,38 @@ def test_top_level_mask_lines_and_arcs_are_preserved_as_board_graphics() -> None
 
     board = parse_kicad_pcb_from_sexpr(list(data[1:]), default_name="mask-graphics")
 
+    lines = _geometry(
+        board,
+        object_type=PcbGeometryObject.GRAPHIC,
+        shape=PcbGeometryShape.LINE,
+        source_collection="graphic_lines",
+    )
+    arcs = _geometry(
+        board,
+        object_type=PcbGeometryObject.GRAPHIC,
+        shape=PcbGeometryShape.ARC,
+        source_collection="graphic_arcs",
+    )
     assert [
-        (line.layer, line.start_x, line.start_y, line.end_x, line.end_y, line.width)
-        for line in board.graphic_lines
+        (
+            line.primary_layer,
+            _line_data(line).start_x,
+            _line_data(line).start_y,
+            _line_data(line).end_x,
+            _line_data(line).end_y,
+            _line_data(line).width,
+        )
+        for line in lines
     ] == [("F.Mask", 1.0, 2.0, 3.0, 2.0, 0.2)]
     assert [
-        (arc.layer, arc.start_x, arc.mid_x, arc.end_x, arc.width) for arc in board.graphic_arcs
+        (
+            arc.primary_layer,
+            _arc_data(arc).start_x,
+            _arc_data(arc).mid_x,
+            _arc_data(arc).end_x,
+            _arc_data(arc).width,
+        )
+        for arc in arcs
     ] == [("B.Mask", 1.0, 2.0, 3.0, 0.15)]
 
 
@@ -392,37 +521,59 @@ def test_footprint_mask_lines_and_arcs_are_preserved_as_board_graphics() -> None
 
     board = parse_kicad_pcb_from_sexpr(list(data[1:]), default_name="footprint-mask-graphics")
 
+    lines = _geometry(
+        board,
+        object_type=PcbGeometryObject.GRAPHIC,
+        shape=PcbGeometryShape.LINE,
+        footprint_ref="AE1",
+    )
+    arcs = _geometry(
+        board,
+        object_type=PcbGeometryObject.GRAPHIC,
+        shape=PcbGeometryShape.ARC,
+        footprint_ref="AE1",
+    )
     assert [
         (
-            line.layer,
+            line.primary_layer,
             line.footprint_ref,
-            line.start_x,
-            line.start_y,
-            line.end_x,
-            line.end_y,
-            line.width,
+            _line_data(line).start_x,
+            _line_data(line).start_y,
+            _line_data(line).end_x,
+            _line_data(line).end_y,
+            _line_data(line).width,
         )
-        for line in board.graphic_lines
+        for line in lines
     ] == [("F.Mask", "AE1", 10.0, 20.0, 10.0, 18.0, 0.2)]
     assert [
         (
-            arc.layer,
+            arc.primary_layer,
             arc.footprint_ref,
-            arc.start_x,
-            arc.start_y,
-            arc.mid_x,
-            arc.mid_y,
-            arc.end_x,
-            arc.end_y,
-            arc.width,
+            _arc_data(arc).start_x,
+            _arc_data(arc).start_y,
+            _arc_data(arc).mid_x,
+            _arc_data(arc).mid_y,
+            _arc_data(arc).end_x,
+            _arc_data(arc).end_y,
+            _arc_data(arc).width,
         )
-        for arc in board.graphic_arcs
+        for arc in arcs
     ] == [("B.Mask", "AE1", 10.0, 20.0, 11.0, 19.0, 10.0, 18.0, 0.15)]
 
 
 def test_trace_arc_count(board: Pcb) -> None:
     """swd_switch has no trace arcs."""
-    assert len(board.trace_arcs) == 0
+    assert (
+        len(
+            _geometry(
+                board,
+                object_type=PcbGeometryObject.TRACK,
+                shape=PcbGeometryShape.ARC,
+                source_collection="trace_arcs",
+            )
+        )
+        == 0
+    )
 
 
 def test_kicad_zone_keepout_is_parsed_as_keepout_not_copper_zone() -> None:
@@ -467,17 +618,23 @@ def test_kicad_zone_keepout_is_parsed_as_keepout_not_copper_zone() -> None:
     )
     board = parse_kicad_pcb_from_sexpr(list(data[1:]), default_name="keepout")
 
-    assert len(board.keepouts) == 1
-    keepout = board.keepouts[0]
-    assert keepout.layers == ["F.Cu", "B.Cu"]
-    assert keepout.boundary == [(1.0, 1.0), (4.0, 1.0), (4.0, 3.0), (1.0, 3.0)]
-    assert keepout.rules.tracks == "allowed"
-    assert keepout.rules.vias == "not_allowed"
-    assert keepout.rules.pads == "not_allowed"
-    assert keepout.rules.copperpour == "not_allowed"
-    assert keepout.rules.footprints == "allowed"
-    assert board.zones == []
-    assert board.polygons == []
+    keepouts = _geometry(board, object_type=PcbGeometryObject.KEEP_OUT)
+    assert len(keepouts) == 1
+    keepout = keepouts[0]
+    keepout_data = _keepout_data(keepout)
+    assert keepout.layers == ("F.Cu", "B.Cu")
+    assert keepout_data.boundary == [
+        (1.0, 1.0),
+        (4.0, 1.0),
+        (4.0, 3.0),
+        (1.0, 3.0),
+    ]
+    assert keepout_data.rules.tracks == "allowed"
+    assert keepout_data.rules.vias == "not_allowed"
+    assert keepout_data.rules.pads == "not_allowed"
+    assert keepout_data.rules.copperpour == "not_allowed"
+    assert keepout_data.rules.footprints == "allowed"
+    assert _geometry(board, object_type=PcbGeometryObject.ZONE) == []
 
 
 def test_kicad_footprint_keepout_is_parsed_with_footprint_reference() -> None:
@@ -519,13 +676,20 @@ def test_kicad_footprint_keepout_is_parsed_with_footprint_reference() -> None:
     )
     board = parse_kicad_pcb_from_sexpr(list(data[1:]), default_name="footprint-keepout")
 
-    assert len(board.keepouts) == 1
-    keepout = board.keepouts[0]
+    keepouts = _geometry(board, object_type=PcbGeometryObject.KEEP_OUT)
+    assert len(keepouts) == 1
+    keepout = keepouts[0]
+    keepout_data = _keepout_data(keepout)
     assert keepout.footprint_ref == "AE1"
-    assert keepout.layers == ["F.Cu"]
-    assert keepout.boundary == [(10.0, 20.0), (12.0, 20.0), (12.0, 21.0), (10.0, 21.0)]
-    assert keepout.rules.tracks == "not_allowed"
-    assert keepout.rules.copperpour == "not_allowed"
+    assert keepout.layers == ("F.Cu",)
+    assert keepout_data.boundary == [
+        (10.0, 20.0),
+        (12.0, 20.0),
+        (12.0, 21.0),
+        (10.0, 21.0),
+    ]
+    assert keepout_data.rules.tracks == "not_allowed"
+    assert keepout_data.rules.copperpour == "not_allowed"
 
 
 # ---------------------------------------------------------------------------
@@ -542,26 +706,39 @@ def orangecrab_board() -> Pcb:
 
 def test_orangecrab_polygon_count(orangecrab_board: Pcb) -> None:
     """OrangeCrab has 40 zones — should produce many polygons."""
-    assert len(orangecrab_board.polygons) > 40
+    assert len(_geometry(orangecrab_board, role=PcbGeometryRole.ZONE_FILL)) > 40
 
 
 def test_orangecrab_polygon_layers(orangecrab_board: Pcb) -> None:
     """Zone polygons should span multiple copper layers."""
-    layers = {p.layer for p in orangecrab_board.polygons}
+    layers = {
+        item.primary_layer for item in _geometry(orangecrab_board, role=PcbGeometryRole.ZONE_FILL)
+    }
     assert "F.Cu" in layers
     assert "B.Cu" in layers
 
 
 def test_orangecrab_keepouts_are_not_loaded_as_copper_zones(orangecrab_board: Pcb) -> None:
+    keepouts = _geometry(orangecrab_board, object_type=PcbGeometryObject.KEEP_OUT)
+    zone_outlines = _geometry(
+        orangecrab_board,
+        object_type=PcbGeometryObject.ZONE,
+        role=PcbGeometryRole.ZONE_OUTLINE,
+    )
     assert any(
         "F.Cu" in keepout.layers
-        and keepout.rules.tracks == "allowed"
-        and keepout.rules.copperpour == "not_allowed"
-        for keepout in orangecrab_board.keepouts
+        and isinstance(keepout.data, PcbKeepoutGeometry)
+        and keepout.data.rules.tracks == "allowed"
+        and keepout.data.rules.copperpour == "not_allowed"
+        for keepout in keepouts
     )
 
-    keepout_boundaries = {tuple(keepout.boundary) for keepout in orangecrab_board.keepouts}
-    zone_boundaries = {tuple(zone.boundary) for zone in orangecrab_board.zones}
+    keepout_boundaries = {tuple(_keepout_data(keepout).boundary) for keepout in keepouts}
+    zone_boundaries = {
+        tuple(zone.data.boundary)
+        for zone in zone_outlines
+        if isinstance(zone.data, PcbZoneGeometry)
+    }
 
     assert keepout_boundaries
     assert keepout_boundaries.isdisjoint(zone_boundaries)
@@ -569,13 +746,12 @@ def test_orangecrab_keepouts_are_not_loaded_as_copper_zones(orangecrab_board: Pc
 
 def test_orangecrab_pad_layers_are_plain_strings(orangecrab_board: Pcb) -> None:
     """KiCad symbolic layer names should be normalized before entering the domain model."""
-    pad_layers = [
+    pad_layers = [layer for pad in _pads(orangecrab_board) for layer in pad.layers]
+    via_layers = [
         layer
-        for footprint in orangecrab_board.footprints
-        for pad in footprint.pads
-        for layer in pad.layers
+        for via in _geometry(orangecrab_board, object_type=PcbGeometryObject.VIA)
+        for layer in via.layers
     ]
-    via_layers = [layer for via in orangecrab_board.vias for layer in via.layers]
 
     assert pad_layers
     assert all(type(layer) is str for layer in pad_layers)
@@ -590,7 +766,11 @@ def test_orangecrab_usb_mounting_pads_preserve_oval_drill_dimensions(
     usb = orangecrab_board.footprint_by_ref("J3")
     assert usb is not None
 
-    shield_slots = [pad for pad in usb.pads if pad.number == "S1" and pad.drill_shape == "oval"]
+    shield_slots = [
+        _pad_data(pad)
+        for pad in _pads(orangecrab_board, "J3")
+        if _pad_data(pad).number == "S1" and _pad_data(pad).drill_shape == "oval"
+    ]
 
     assert len(shield_slots) == 4
     assert {round(pad.drill_width, 3) for pad in shield_slots} == {0.6}
@@ -602,7 +782,9 @@ def test_orangecrab_usb_signal_pads_use_authored_board_rotation(orangecrab_board
     """KiCad board-file pad rotations are already in board orientation."""
     usb = orangecrab_board.footprint_by_ref("J3")
     assert usb is not None
-    signal_pad = next(pad for pad in usb.pads if pad.number == "B7")
+    signal_pad = next(
+        _pad_data(pad) for pad in _pads(orangecrab_board, "J3") if _pad_data(pad).number == "B7"
+    )
 
     assert signal_pad.rotation == pytest.approx(270.0)
 
@@ -616,14 +798,16 @@ def test_footprint_has_models(board: Pcb) -> None:
     """D1 (LED) should have exactly 1 model entry."""
     d1 = board.footprint_by_ref("D1")
     assert d1 is not None
-    assert len(d1.models_3d) == 1
+    assert len(_geometry(board, object_type=PcbGeometryObject.MODEL_3D, footprint_ref="D1")) == 1
 
 
 def test_model_source_path(board: Pcb) -> None:
     """Model source should preserve the raw KiCad path with env vars."""
     d1 = board.footprint_by_ref("D1")
     assert d1 is not None
-    model = d1.models_3d[0]
+    model = _model_data(
+        _geometry(board, object_type=PcbGeometryObject.MODEL_3D, footprint_ref="D1")[0]
+    )
     assert "${KICAD6_3DMODEL_DIR}" in model.source
     assert "LED_0603_1608Metric.wrl" in model.source
 
@@ -632,36 +816,52 @@ def test_model_rotation(board: Pcb) -> None:
     """U5 has (rotate (xyz 0 0 -90))."""
     u5 = board.footprint_by_ref("U5")
     assert u5 is not None
-    assert len(u5.models_3d) == 1
-    assert u5.models_3d[0].rotation == (0.0, 0.0, -90.0)
+    models = _geometry(board, object_type=PcbGeometryObject.MODEL_3D, footprint_ref="U5")
+    assert len(models) == 1
+    assert _model_data(models[0]).rotation == (0.0, 0.0, -90.0)
 
 
 def test_model_scale_default(board: Pcb) -> None:
     """Most models have (scale (xyz 1 1 1))."""
     d1 = board.footprint_by_ref("D1")
     assert d1 is not None
-    assert d1.models_3d[0].scale == (1.0, 1.0, 1.0)
+    model = _model_data(
+        _geometry(board, object_type=PcbGeometryObject.MODEL_3D, footprint_ref="D1")[0]
+    )
+    assert model.scale == (1.0, 1.0, 1.0)
 
 
 def test_model_offset_default(board: Pcb) -> None:
     """Most models have (offset (xyz 0 0 0))."""
     d1 = board.footprint_by_ref("D1")
     assert d1 is not None
-    assert d1.models_3d[0].offset == (0.0, 0.0, 0.0)
+    model = _model_data(
+        _geometry(board, object_type=PcbGeometryObject.MODEL_3D, footprint_ref="D1")[0]
+    )
+    assert model.offset == (0.0, 0.0, 0.0)
 
 
 def test_footprint_without_model(board: Pcb) -> None:
     """Test points have no (model ...) entry."""
     tp5 = board.footprint_by_ref("TP5")
     assert tp5 is not None
-    assert tp5.models_3d == []
+    assert _geometry(board, object_type=PcbGeometryObject.MODEL_3D, footprint_ref="TP5") == []
 
 
 def test_multiple_models_per_footprint(orangecrab_board: Pcb) -> None:
     """OrangeCrab FPGA footprint (U3) has 2 model entries."""
     u3 = orangecrab_board.footprint_by_ref("U3")
     assert u3 is not None
-    assert len(u3.models_3d) == 2
+    assert (
+        len(
+            _geometry(
+                orangecrab_board,
+                object_type=PcbGeometryObject.MODEL_3D,
+                footprint_ref="U3",
+            )
+        )
+        == 2
+    )
 
 
 def test_kicad5_at_vs_kicad6_offset(orangecrab_board: Pcb) -> None:
@@ -671,8 +871,14 @@ def test_kicad5_at_vs_kicad6_offset(orangecrab_board: Pcb) -> None:
     """
     u3 = orangecrab_board.footprint_by_ref("U3")
     assert u3 is not None
-    assert len(u3.models_3d) == 2
-    for model in u3.models_3d:
+    models = _geometry(
+        orangecrab_board,
+        object_type=PcbGeometryObject.MODEL_3D,
+        footprint_ref="U3",
+    )
+    assert len(models) == 2
+    for model_geometry in models:
+        model = _model_data(model_geometry)
         assert model.offset == (0.0, 0.0, 0.0)
         assert model.scale == (1.0, 1.0, 1.0)
 
@@ -714,25 +920,36 @@ def test_extract_value_missing() -> None:
 
 def test_all_pads_have_footprint_ref(board: Pcb) -> None:
     """Every pad should have footprint_ref matching its parent footprint."""
-    for fp in board.footprints:
-        for pad in fp.pads:
-            assert pad.footprint_ref == fp.reference, (
-                f"Pad {pad.number} on {fp.reference} has footprint_ref={pad.footprint_ref!r}"
-            )
+    footprint_refs = {fp.reference for fp in board.footprints}
+    for pad in _pads(board):
+        assert pad.footprint_ref in footprint_refs
+        assert pad.footprint_ref, f"Pad {_pad_data(pad).number} has no footprint_ref"
 
 
 def test_silkscreen_lines_have_footprint_ref(board: Pcb) -> None:
     """Silkscreen lines from footprints carry the parent's ref."""
-    for fp in board.footprints:
-        for line in fp.silkscreen_lines:
-            assert line.footprint_ref == fp.reference
+    silkscreen_lines = _geometry(
+        board,
+        object_type=PcbGeometryObject.GRAPHIC,
+        shape=PcbGeometryShape.LINE,
+        role=PcbGeometryRole.SILKSCREEN,
+        source_collection="footprint_graphics",
+    )
+    assert silkscreen_lines
+    assert all(line.footprint_ref for line in silkscreen_lines)
 
 
 def test_fab_lines_have_footprint_ref(board: Pcb) -> None:
     """Fab lines from footprints carry the parent's ref."""
-    for fp in board.footprints:
-        for line in fp.fab_lines:
-            assert line.footprint_ref == fp.reference
+    fab_lines = _geometry(
+        board,
+        object_type=PcbGeometryObject.GRAPHIC,
+        shape=PcbGeometryShape.LINE,
+        role=PcbGeometryRole.FABRICATION,
+        source_collection="footprint_graphics",
+    )
+    assert fab_lines
+    assert all(line.footprint_ref for line in fab_lines)
 
 
 # ---------------------------------------------------------------------------
@@ -765,18 +982,38 @@ def test_multiple_footprints_have_lib(board: Pcb) -> None:
 
 
 def test_graphic_text_count(board: Pcb) -> None:
-    assert len(board.graphic_texts) == 8
+    assert (
+        len(
+            _geometry(
+                board,
+                object_type=PcbGeometryObject.TEXT,
+                source_collection="graphic_texts",
+            )
+        )
+        == 8
+    )
 
 
 def test_graphic_text_content(board: Pcb) -> None:
-    texts = {gt.text for gt in board.graphic_texts}
+    texts = {
+        _text_data(text).text
+        for text in _geometry(
+            board,
+            object_type=PcbGeometryObject.TEXT,
+            source_collection="graphic_texts",
+        )
+    }
     assert "SWD Switch 2.1" in texts
     assert "DEBUGOTRON" in texts
 
 
 def test_graphic_text_layer(board: Pcb) -> None:
-    for gt in board.graphic_texts:
-        assert gt.layer != ""
+    for text in _geometry(
+        board,
+        object_type=PcbGeometryObject.TEXT,
+        source_collection="graphic_texts",
+    ):
+        assert text.primary_layer != ""
 
 
 # ---------------------------------------------------------------------------
@@ -786,7 +1023,7 @@ def test_graphic_text_layer(board: Pcb) -> None:
 
 def test_roundrect_rratio(board: Pcb) -> None:
     """swd_switch has 73 roundrect pads with rratio=0.25."""
-    rr = [p for fp in board.footprints for p in fp.pads if p.roundrect_rratio > 0]
+    rr = [_pad_data(pad) for pad in _pads(board) if _pad_data(pad).roundrect_rratio > 0]
     assert len(rr) == 73
     assert rr[0].roundrect_rratio == pytest.approx(0.25)
 
@@ -795,14 +1032,14 @@ def test_pad_pin_function(board: Pcb) -> None:
     """D1 has pads with pin_function 'K' and 'A'."""
     d1 = board.footprint_by_ref("D1")
     assert d1 is not None
-    functions = {p.pin_function for p in d1.pads}
+    functions = {_pad_data(pad).pin_function for pad in _pads(board, "D1")}
     assert "K" in functions
     assert "A" in functions
 
 
 def test_pad_pin_type(board: Pcb) -> None:
     """Pads have pin_type populated."""
-    pads_with_type = [p for fp in board.footprints for p in fp.pads if p.pin_type]
+    pads_with_type = [_pad_data(pad) for pad in _pads(board) if _pad_data(pad).pin_type]
     assert len(pads_with_type) > 0
     assert pads_with_type[0].pin_type == "passive"
 
@@ -834,16 +1071,31 @@ def test_footprint_properties_exclude_builtins(board: Pcb) -> None:
 
 
 def test_zone_count(board: Pcb) -> None:
-    assert len(board.zones) == 2
+    assert (
+        len(_geometry(board, object_type=PcbGeometryObject.ZONE, role=PcbGeometryRole.ZONE_OUTLINE))
+        == 2
+    )
 
 
 def test_zone_has_boundary(board: Pcb) -> None:
-    for zone in board.zones:
-        assert len(zone.boundary) >= 3
+    for zone in _geometry(
+        board,
+        object_type=PcbGeometryObject.ZONE,
+        role=PcbGeometryRole.ZONE_OUTLINE,
+    ):
+        assert isinstance(zone.data, PcbZoneGeometry)
+        assert len(zone.data.boundary) >= 3
 
 
 def test_zone_net_name(board: Pcb) -> None:
-    net_names = {z.net_name for z in board.zones}
+    net_names = {
+        zone.net_name
+        for zone in _geometry(
+            board,
+            object_type=PcbGeometryObject.ZONE,
+            role=PcbGeometryRole.ZONE_OUTLINE,
+        )
+    }
     assert "GND" in net_names
 
 

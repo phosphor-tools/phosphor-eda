@@ -17,23 +17,29 @@ from phosphor_eda.kicad import sexp
 from phosphor_eda.pcb import (
     LayerRole,
     Pcb,
-    PcbArc,
-    PcbCircle,
+    PcbArcGeometry,
+    PcbCircleGeometry,
     PcbFootprint,
-    PcbGraphicText,
-    PcbKeepout,
+    PcbFootprintMetadata,
+    PcbGeometry,
+    PcbGeometryMetadata,
+    PcbGeometryObject,
+    PcbGeometryRole,
+    PcbGeometryShape,
+    PcbKeepoutGeometry,
     PcbKeepoutRules,
     PcbLayer,
-    PcbLine,
-    PcbModel3D,
+    PcbLayerMetadata,
+    PcbLineGeometry,
+    PcbMetadata,
+    PcbModel3DGeometry,
     PcbNet,
-    PcbPad,
-    PcbPolygon,
-    PcbSegment,
-    PcbText,
-    PcbTraceArc,
-    PcbVia,
-    PcbZone,
+    PcbPadGeometry,
+    PcbPolygonGeometry,
+    PcbTextGeometry,
+    PcbViaGeometry,
+    PcbZoneGeometry,
+    normalize_geometry_roles,
 )
 from phosphor_eda.project import Stackup, StackupLayer
 
@@ -187,11 +193,86 @@ def _parse_layer_defs(sexpr: SExpNode) -> list[PcbLayer]:
                 name=name,
                 roles=(*_kicad_type_roles(native_type), *_kicad_name_roles(name)),
                 number=num,
-                native_type=native_type,
-                native_user_name=native_user_name,
+                metadata=PcbLayerMetadata(
+                    source_format="kicad",
+                    native_type=native_type,
+                    native_user_name=native_user_name,
+                ),
             )
         )
     return result
+
+
+_LAYER_TO_GEOMETRY_ROLES: dict[LayerRole, PcbGeometryRole] = {
+    LayerRole.COPPER: PcbGeometryRole.COPPER,
+    LayerRole.SOLDER_MASK: PcbGeometryRole.SOLDER_MASK,
+    LayerRole.SOLDER_PASTE: PcbGeometryRole.SOLDER_PASTE,
+    LayerRole.SILKSCREEN: PcbGeometryRole.SILKSCREEN,
+    LayerRole.FABRICATION: PcbGeometryRole.FABRICATION,
+    LayerRole.ASSEMBLY: PcbGeometryRole.ASSEMBLY,
+    LayerRole.COURTYARD: PcbGeometryRole.COURTYARD,
+    LayerRole.DESIGNATOR: PcbGeometryRole.DESIGNATOR,
+    LayerRole.VALUE: PcbGeometryRole.VALUE,
+    LayerRole.COMMENT: PcbGeometryRole.COMMENT,
+    LayerRole.EDGE: PcbGeometryRole.EDGE,
+    LayerRole.MECHANICAL: PcbGeometryRole.MECHANICAL,
+    LayerRole.AUXILIARY: PcbGeometryRole.AUXILIARY,
+    LayerRole.ROUTE_TOOL_PATH: PcbGeometryRole.ROUTE_TOOL_PATH,
+    LayerRole.V_CUT: PcbGeometryRole.V_CUT,
+}
+
+
+def _layer_geometry_roles(
+    layer_name: str,
+    layer_lookup: dict[str, PcbLayer],
+) -> tuple[PcbGeometryRole, ...]:
+    layer = layer_lookup.get(layer_name)
+    if layer is None:
+        return (PcbGeometryRole.UNKNOWN,)
+    return tuple(
+        geometry_role
+        for role in layer.roles
+        if (geometry_role := _LAYER_TO_GEOMETRY_ROLES.get(role)) is not None
+    )
+
+
+def _geometry_metadata(
+    *,
+    native_type: str,
+    source_collection: str,
+    native_kind: str = "",
+    native_id: str = "",
+    locked: bool = False,
+    hidden: bool = False,
+    properties: dict[str, str] | None = None,
+) -> PcbGeometryMetadata:
+    return PcbGeometryMetadata(
+        source_format="kicad",
+        native_type=native_type,
+        native_kind=native_kind,
+        native_id=native_id,
+        source_collection=source_collection,
+        locked=locked,
+        hidden=hidden,
+        properties=properties or {},
+    )
+
+
+def _item_uuid(item: SExpNode) -> str:
+    uuid_node = sexp.find(item, "uuid") or sexp.find(item, "tstamp")
+    return sexp.val(uuid_node) if uuid_node else ""
+
+
+def _item_locked(item: SExpNode) -> bool:
+    return any(isinstance(node, sexpdata.Symbol) and node.value() == "locked" for node in item)
+
+
+def _layered_geometry_roles(
+    layer_name: str,
+    layer_lookup: dict[str, PcbLayer],
+    *roles: PcbGeometryRole,
+) -> tuple[PcbGeometryRole, ...]:
+    return normalize_geometry_roles(*_layer_geometry_roles(layer_name, layer_lookup), *roles)
 
 
 # ---------------------------------------------------------------------------
@@ -251,10 +332,15 @@ def _parse_pad(
     fp_y: float,
     fp_rot: float,
     fp_ref: str,
-) -> PcbPad:
-    """Parse a (pad ...) S-expression into a PcbPad with absolute coords."""
+    layer_lookup: dict[str, PcbLayer],
+) -> PcbGeometry:
+    """Parse a (pad ...) S-expression into normalized pad geometry."""
     number = str(pad_sexpr[1])
     # pad_sexpr[2] = type (smd/thru_hole), pad_sexpr[3] = shape
+    pad_type_sym = pad_sexpr[2]
+    pad_type = (
+        pad_type_sym.value() if isinstance(pad_type_sym, sexpdata.Symbol) else str(pad_type_sym)
+    )
     shape_sym = pad_sexpr[3]
     shape = shape_sym.value() if isinstance(shape_sym, sexpdata.Symbol) else str(shape_sym)
 
@@ -305,18 +391,38 @@ def _parse_pad(
     pin_type = sexp.val(pintype_node) if pintype_node else ""
 
     abs_x, abs_y = _transform_point(local_x, local_y, fp_x, fp_y, fp_rot)
+    roles: list[PcbGeometryRole] = [
+        PcbGeometryRole.COPPER,
+        PcbGeometryRole.CONDUCTOR,
+        PcbGeometryRole.FOOTPRINT_MEMBER,
+    ]
+    if pad_type == "smd":
+        roles.append(PcbGeometryRole.SMD)
+    elif pad_type in {"thru_hole", "np_thru_hole"}:
+        roles.extend((PcbGeometryRole.THROUGH_HOLE, PcbGeometryRole.DRILL))
+        roles.append(
+            PcbGeometryRole.NON_PLATED_HOLE
+            if pad_type == "np_thru_hole"
+            else PcbGeometryRole.PLATED_HOLE
+        )
+    if shape == "custom":
+        roles.append(PcbGeometryRole.CUSTOM_PAD)
 
-    return PcbPad(
+    geometry_shape = PcbGeometryShape.UNKNOWN
+    if shape in {"rect", "roundrect"}:
+        geometry_shape = PcbGeometryShape.RECTANGLE
+    elif shape == "circle":
+        geometry_shape = PcbGeometryShape.CIRCLE
+    elif shape in {"oval", "trapezoid", "custom"}:
+        geometry_shape = PcbGeometryShape.POLYGON
+
+    data = PcbPadGeometry(
         number=number,
         x=abs_x,
         y=abs_y,
         width=width,
         height=height,
         shape=shape,
-        layers=pad_layers,
-        net_number=net_num,
-        net_name=net_name,
-        footprint_ref=fp_ref,
         rotation=pad_rot,
         drill=drill,
         drill_shape=drill_shape,
@@ -326,6 +432,27 @@ def _parse_pad(
         pin_function=pin_function,
         pin_type=pin_type,
     )
+    role_set = list(roles)
+    for layer_name in pad_layers:
+        role_set.extend(_layer_geometry_roles(layer_name, layer_lookup))
+    return PcbGeometry(
+        id=f"pad:{fp_ref}:{number}",
+        object_type=PcbGeometryObject.PAD,
+        shape=geometry_shape,
+        roles=tuple(role_set),
+        data=data,
+        layers=tuple(pad_layers),
+        net_number=net_num,
+        net_name=net_name,
+        footprint_ref=fp_ref,
+        metadata=_geometry_metadata(
+            native_type="pad",
+            native_id=_item_uuid(pad_sexpr),
+            source_collection="pads",
+            locked=_item_locked(pad_sexpr),
+            properties={"pad_type": pad_type},
+        ),
+    )
 
 
 def _parse_fp_lines(
@@ -334,11 +461,12 @@ def _parse_fp_lines(
     fp_y: float,
     fp_rot: float,
     layer_filter: set[str],
+    layer_lookup: dict[str, PcbLayer],
     fp_ref: str = "",
-) -> list[PcbLine]:
+) -> list[PcbGeometry]:
     """Parse fp_line elements matching layer_filter, transform to absolute."""
-    lines: list[PcbLine] = []
-    for item in sexp.find_all(fp_sexpr, "fp_line"):
+    lines: list[PcbGeometry] = []
+    for index, item in enumerate(sexp.find_all(fp_sexpr, "fp_line")):
         layer_node = sexp.find(item, "layer")
         if not layer_node:
             continue
@@ -363,7 +491,21 @@ def _parse_fp_lines(
         else:
             w = 0.1
         lines.append(
-            PcbLine(abs_s[0], abs_s[1], abs_e[0], abs_e[1], layer, w, footprint_ref=fp_ref)
+            PcbGeometry(
+                id=f"fp_line:{fp_ref}:{index}:{layer}",
+                object_type=PcbGeometryObject.GRAPHIC,
+                shape=PcbGeometryShape.LINE,
+                roles=_graphic_roles(layer, layer_lookup, footprint_ref=fp_ref),
+                data=PcbLineGeometry(abs_s[0], abs_s[1], abs_e[0], abs_e[1], w),
+                layers=(layer,),
+                footprint_ref=fp_ref,
+                metadata=_geometry_metadata(
+                    native_type="fp_line",
+                    native_id=_item_uuid(item),
+                    source_collection="footprint_graphics",
+                    locked=_item_locked(item),
+                ),
+            )
         )
     return lines
 
@@ -374,11 +516,12 @@ def _parse_fp_circles(
     fp_y: float,
     fp_rot: float,
     layer_filter: set[str],
+    layer_lookup: dict[str, PcbLayer],
     fp_ref: str = "",
-) -> list[PcbCircle]:
+) -> list[PcbGeometry]:
     """Parse fp_circle elements matching layer_filter, transform to absolute."""
-    circles: list[PcbCircle] = []
-    for item in sexp.find_all(fp_sexpr, "fp_circle"):
+    circles: list[PcbGeometry] = []
+    for index, item in enumerate(sexp.find_all(fp_sexpr, "fp_circle")):
         layer_node = sexp.find(item, "layer")
         if not layer_node:
             continue
@@ -405,7 +548,21 @@ def _parse_fp_circles(
         fill_node = sexp.find(item, "fill")
         filled = fill_node is not None and sexp.val(fill_node) == "solid"
         circles.append(
-            PcbCircle(abs_c[0], abs_c[1], radius, layer, w, filled, footprint_ref=fp_ref)
+            PcbGeometry(
+                id=f"fp_circle:{fp_ref}:{index}:{layer}",
+                object_type=PcbGeometryObject.GRAPHIC,
+                shape=PcbGeometryShape.CIRCLE,
+                roles=_graphic_roles(layer, layer_lookup, footprint_ref=fp_ref),
+                data=PcbCircleGeometry(abs_c[0], abs_c[1], radius, w, filled),
+                layers=(layer,),
+                footprint_ref=fp_ref,
+                metadata=_geometry_metadata(
+                    native_type="fp_circle",
+                    native_id=_item_uuid(item),
+                    source_collection="footprint_graphics",
+                    locked=_item_locked(item),
+                ),
+            )
         )
     return circles
 
@@ -416,11 +573,12 @@ def _parse_fp_rects_as_lines(
     fp_y: float,
     fp_rot: float,
     layer_filter: set[str],
+    layer_lookup: dict[str, PcbLayer],
     fp_ref: str = "",
-) -> list[PcbLine]:
-    """Parse fp_rect elements as four PcbLine segments."""
-    lines: list[PcbLine] = []
-    for item in sexp.find_all(fp_sexpr, "fp_rect"):
+) -> list[PcbGeometry]:
+    """Parse fp_rect elements as four line geometry rows."""
+    lines: list[PcbGeometry] = []
+    for index, item in enumerate(sexp.find_all(fp_sexpr, "fp_rect")):
         layer_node = sexp.find(item, "layer")
         if not layer_node:
             continue
@@ -448,14 +606,26 @@ def _parse_fp_rects_as_lines(
         for i in range(4):
             j = (i + 1) % 4
             lines.append(
-                PcbLine(
-                    abs_corners[i][0],
-                    abs_corners[i][1],
-                    abs_corners[j][0],
-                    abs_corners[j][1],
-                    layer,
-                    w,
+                PcbGeometry(
+                    id=f"fp_rect:{fp_ref}:{index}:{i}:{layer}",
+                    object_type=PcbGeometryObject.GRAPHIC,
+                    shape=PcbGeometryShape.LINE,
+                    roles=_graphic_roles(layer, layer_lookup, footprint_ref=fp_ref),
+                    data=PcbLineGeometry(
+                        abs_corners[i][0],
+                        abs_corners[i][1],
+                        abs_corners[j][0],
+                        abs_corners[j][1],
+                        w,
+                    ),
+                    layers=(layer,),
                     footprint_ref=fp_ref,
+                    metadata=_geometry_metadata(
+                        native_type="fp_rect",
+                        native_id=_item_uuid(item),
+                        source_collection="footprint_graphics",
+                        locked=_item_locked(item),
+                    ),
                 )
             )
     return lines
@@ -467,11 +637,12 @@ def _parse_fp_arcs(
     fp_y: float,
     fp_rot: float,
     layer_filter: set[str],
+    layer_lookup: dict[str, PcbLayer],
     fp_ref: str = "",
-) -> list[PcbArc]:
+) -> list[PcbGeometry]:
     """Parse fp_arc elements matching layer_filter, transform to absolute."""
-    arcs: list[PcbArc] = []
-    for item in sexp.find_all(fp_sexpr, "fp_arc"):
+    arcs: list[PcbGeometry] = []
+    for index, item in enumerate(sexp.find_all(fp_sexpr, "fp_arc")):
         layer_node = sexp.find(item, "layer")
         if not layer_node:
             continue
@@ -499,16 +670,28 @@ def _parse_fp_arcs(
         else:
             w = 0.1
         arcs.append(
-            PcbArc(
-                abs_s[0],
-                abs_s[1],
-                abs_m[0],
-                abs_m[1],
-                abs_e[0],
-                abs_e[1],
-                layer,
-                w,
+            PcbGeometry(
+                id=f"fp_arc:{fp_ref}:{index}:{layer}",
+                object_type=PcbGeometryObject.GRAPHIC,
+                shape=PcbGeometryShape.ARC,
+                roles=_graphic_roles(layer, layer_lookup, footprint_ref=fp_ref),
+                data=PcbArcGeometry(
+                    abs_s[0],
+                    abs_s[1],
+                    abs_m[0],
+                    abs_m[1],
+                    abs_e[0],
+                    abs_e[1],
+                    w,
+                ),
+                layers=(layer,),
                 footprint_ref=fp_ref,
+                metadata=_geometry_metadata(
+                    native_type="fp_arc",
+                    native_id=_item_uuid(item),
+                    source_collection="footprint_graphics",
+                    locked=_item_locked(item),
+                ),
             )
         )
     return arcs
@@ -522,21 +705,40 @@ _PASTE_LAYERS = {"F.Paste", "B.Paste"}
 _EDGE_LAYERS = {"Edge.Cuts"}
 
 
+def _graphic_roles(
+    layer: str,
+    layer_lookup: dict[str, PcbLayer],
+    *,
+    footprint_ref: str = "",
+) -> tuple[PcbGeometryRole, ...]:
+    roles = list(_layer_geometry_roles(layer, layer_lookup))
+    if layer == "Edge.Cuts":
+        roles.extend((PcbGeometryRole.BOARD_OUTLINE, PcbGeometryRole.BOARD_LEVEL))
+    elif footprint_ref:
+        roles.append(PcbGeometryRole.FOOTPRINT_MEMBER)
+    else:
+        roles.append(PcbGeometryRole.BOARD_LEVEL)
+    return normalize_geometry_roles(*roles)
+
+
 def _compute_bbox(
-    pads: list[PcbPad], courtyard_lines: list[PcbLine]
+    pads: list[PcbGeometry], courtyard_lines: list[PcbGeometry]
 ) -> tuple[float, float, float, float] | None:
     """Compute bounding box from courtyard lines, or pad extents + margin."""
     xs: list[float] = []
     ys: list[float] = []
     if courtyard_lines:
-        for ln in courtyard_lines:
-            xs.extend([ln.start_x, ln.end_x])
-            ys.extend([ln.start_y, ln.end_y])
+        for item in courtyard_lines:
+            if isinstance(item.data, PcbLineGeometry):
+                xs.extend([item.data.start_x, item.data.end_x])
+                ys.extend([item.data.start_y, item.data.end_y])
     elif pads:
         margin = 0.5
-        for p in pads:
-            xs.extend([p.x - p.width / 2 - margin, p.x + p.width / 2 + margin])
-            ys.extend([p.y - p.height / 2 - margin, p.y + p.height / 2 + margin])
+        for item in pads:
+            if isinstance(item.data, PcbPadGeometry):
+                p = item.data
+                xs.extend([p.x - p.width / 2 - margin, p.x + p.width / 2 + margin])
+                ys.extend([p.y - p.height / 2 - margin, p.y + p.height / 2 + margin])
     if not xs:
         return None
     return (min(xs), min(ys), max(xs), max(ys))
@@ -548,10 +750,11 @@ def _parse_fp_texts(
     fp_y: float,
     fp_rot: float,
     fp_ref: str,
-) -> list[PcbText]:
-    """Parse fp_text elements into PcbText with absolute coords."""
-    texts: list[PcbText] = []
-    for item in sexp.find_all(fp_sexpr, "fp_text"):
+    layer_lookup: dict[str, PcbLayer],
+) -> list[PcbGeometry]:
+    """Parse fp_text elements into normalized text geometry."""
+    texts: list[PcbGeometry] = []
+    for index, item in enumerate(sexp.find_all(fp_sexpr, "fp_text")):
         if len(item) < 3:
             continue
         kind_sym = item[1]
@@ -580,17 +783,38 @@ def _parse_fp_texts(
         abs_x, abs_y = _transform_point(local_x, local_y, fp_x, fp_y, fp_rot)
         abs_rot = fp_rot + text_rot
 
+        roles = list(
+            _layered_geometry_roles(
+                layer,
+                layer_lookup,
+                PcbGeometryRole.TEXT,
+                PcbGeometryRole.FOOTPRINT_MEMBER,
+            )
+        )
+        if kind == "reference":
+            roles.append(PcbGeometryRole.DESIGNATOR)
+        elif kind == "value":
+            roles.append(PcbGeometryRole.VALUE)
+        else:
+            roles.append(PcbGeometryRole.USER_TEXT)
+
         texts.append(
-            PcbText(
-                text=raw_text,
-                x=abs_x,
-                y=abs_y,
-                rotation=abs_rot,
-                layer=layer,
-                font_size=font_size,
-                kind=kind,
-                hidden=hidden,
+            PcbGeometry(
+                id=f"fp_text:{fp_ref}:{index}:{kind}",
+                object_type=PcbGeometryObject.TEXT,
+                shape=PcbGeometryShape.TEXT,
+                roles=tuple(roles),
+                data=PcbTextGeometry(raw_text, abs_x, abs_y, abs_rot, font_size),
+                layers=(layer,),
                 footprint_ref=fp_ref,
+                metadata=_geometry_metadata(
+                    native_type="fp_text",
+                    native_kind=kind,
+                    native_id=_item_uuid(item),
+                    source_collection="footprint_texts",
+                    hidden=hidden,
+                    locked=_item_locked(item),
+                ),
             )
         )
     return texts
@@ -618,10 +842,10 @@ def _parse_fp_properties(fp_sexpr: SExpNode) -> dict[str, str]:
     return props
 
 
-def _parse_fp_models(fp_sexpr: SExpNode) -> list[PcbModel3D]:
+def _parse_fp_models(fp_sexpr: SExpNode, fp_ref: str) -> list[PcbGeometry]:
     """Parse all (model ...) entries from a footprint s-expression."""
-    models: list[PcbModel3D] = []
-    for node in sexp.find_all(fp_sexpr, "model"):
+    models: list[PcbGeometry] = []
+    for index, node in enumerate(sexp.find_all(fp_sexpr, "model")):
         if len(node) < 2:
             continue
         raw_path = node[1]
@@ -649,11 +873,26 @@ def _parse_fp_models(fp_sexpr: SExpNode) -> list[PcbModel3D]:
             scale = (1.0, 1.0, 1.0)
 
         models.append(
-            PcbModel3D(
-                source=source,
-                offset=offset,
-                rotation=rotation,
-                scale=scale,
+            PcbGeometry(
+                id=f"model_3d:{fp_ref}:{index}",
+                object_type=PcbGeometryObject.MODEL_3D,
+                shape=PcbGeometryShape.MODEL,
+                roles=(
+                    PcbGeometryRole.COMPONENT_BODY,
+                    PcbGeometryRole.FOOTPRINT_MEMBER,
+                ),
+                data=PcbModel3DGeometry(
+                    source=source,
+                    offset=offset,
+                    rotation=rotation,
+                    scale=scale,
+                ),
+                footprint_ref=fp_ref,
+                metadata=_geometry_metadata(
+                    native_type="model",
+                    source_collection="models_3d",
+                    native_id=_item_uuid(node),
+                ),
             )
         )
     return models
@@ -661,16 +900,9 @@ def _parse_fp_models(fp_sexpr: SExpNode) -> list[PcbModel3D]:
 
 def _parse_footprint(
     fp_sexpr: SExpNode,
-) -> tuple[
-    PcbFootprint,
-    list[PcbLine],
-    list[PcbArc],
-    list[PcbPolygon],
-    list[PcbKeepout],
-    list[PcbLine],
-    list[PcbArc],
-]:
-    """Parse a footprint plus any board-level artwork authored inside it."""
+    layer_lookup: dict[str, PcbLayer],
+) -> tuple[PcbFootprint, list[PcbGeometry]]:
+    """Parse a footprint plus all placed geometry authored inside it."""
     lib_name = str(fp_sexpr[1])
 
     layer_node = sexp.find(fp_sexpr, "layer")
@@ -682,34 +914,49 @@ def _parse_footprint(
     ref = _extract_reference(fp_sexpr)
     value = _extract_value(fp_sexpr)
 
-    pads = [_parse_pad(p, fp_x, fp_y, fp_rot, ref) for p in sexp.find_all(fp_sexpr, "pad")]
+    pads = [
+        _parse_pad(p, fp_x, fp_y, fp_rot, ref, layer_lookup) for p in sexp.find_all(fp_sexpr, "pad")
+    ]
 
-    silk_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _SILK_LAYERS, fp_ref=ref)
-    court_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _COURTYARD_LAYERS, fp_ref=ref)
-    fab_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS, fp_ref=ref)
-    fab_lines.extend(
-        _parse_fp_rects_as_lines(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS, fp_ref=ref)
+    silk_lines = _parse_fp_lines(
+        fp_sexpr, fp_x, fp_y, fp_rot, _SILK_LAYERS, layer_lookup, fp_ref=ref
     )
-    fab_circles = _parse_fp_circles(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS, fp_ref=ref)
-    fab_arcs = _parse_fp_arcs(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS, fp_ref=ref)
-    edge_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _EDGE_LAYERS)
-    edge_arcs = _parse_fp_arcs(fp_sexpr, fp_x, fp_y, fp_rot, _EDGE_LAYERS)
+    court_lines = _parse_fp_lines(
+        fp_sexpr, fp_x, fp_y, fp_rot, _COURTYARD_LAYERS, layer_lookup, fp_ref=ref
+    )
+    fab_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS, layer_lookup, fp_ref=ref)
+    fab_lines.extend(
+        _parse_fp_rects_as_lines(
+            fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS, layer_lookup, fp_ref=ref
+        )
+    )
+    fab_circles = _parse_fp_circles(
+        fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS, layer_lookup, fp_ref=ref
+    )
+    fab_arcs = _parse_fp_arcs(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS, layer_lookup, fp_ref=ref)
+    edge_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _EDGE_LAYERS, layer_lookup)
+    edge_arcs = _parse_fp_arcs(fp_sexpr, fp_x, fp_y, fp_rot, _EDGE_LAYERS, layer_lookup)
     graphic_layers = _MASK_LAYERS | _PASTE_LAYERS
-    graphic_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, graphic_layers, fp_ref=ref)
-    graphic_arcs = _parse_fp_arcs(fp_sexpr, fp_x, fp_y, fp_rot, graphic_layers, fp_ref=ref)
+    graphic_lines = _parse_fp_lines(
+        fp_sexpr, fp_x, fp_y, fp_rot, graphic_layers, layer_lookup, fp_ref=ref
+    )
+    graphic_arcs = _parse_fp_arcs(
+        fp_sexpr, fp_x, fp_y, fp_rot, graphic_layers, layer_lookup, fp_ref=ref
+    )
     fp_polys = _parse_fp_polys(
         fp_sexpr,
         fp_x,
         fp_y,
         fp_rot,
         _FAB_LAYERS | _SILK_LAYERS | _MASK_LAYERS,
+        layer_lookup,
         fp_ref=ref,
     )
-    fp_keepouts = _parse_fp_keepouts(fp_sexpr, fp_x, fp_y, fp_rot, fp_ref=ref)
+    fp_keepouts = _parse_fp_keepouts(fp_sexpr, fp_x, fp_y, fp_rot, layer_lookup, fp_ref=ref)
 
-    texts = _parse_fp_texts(fp_sexpr, fp_x, fp_y, fp_rot, ref)
+    texts = _parse_fp_texts(fp_sexpr, fp_x, fp_y, fp_rot, ref, layer_lookup)
 
-    models = _parse_fp_models(fp_sexpr)
+    models = _parse_fp_models(fp_sexpr, ref)
 
     bbox = _compute_bbox(pads, court_lines)
 
@@ -724,18 +971,27 @@ def _parse_footprint(
         rotation=fp_rot,
         layer=layer,
         value=value,
-        pads=pads,
-        silkscreen_lines=silk_lines,
-        courtyard_lines=court_lines,
-        fab_lines=fab_lines,
-        fab_circles=fab_circles,
-        fab_arcs=fab_arcs,
-        texts=texts,
-        models_3d=models,
         bbox=bbox,
         properties=properties,
+        metadata=PcbFootprintMetadata(source_format="kicad", native_type="footprint"),
     )
-    return fp, edge_lines, edge_arcs, fp_polys, fp_keepouts, graphic_lines, graphic_arcs
+    geometry = [
+        *pads,
+        *silk_lines,
+        *court_lines,
+        *fab_lines,
+        *fab_circles,
+        *fab_arcs,
+        *edge_lines,
+        *edge_arcs,
+        *graphic_lines,
+        *graphic_arcs,
+        *fp_polys,
+        *fp_keepouts,
+        *texts,
+        *models,
+    ]
+    return fp, geometry
 
 
 # ---------------------------------------------------------------------------
@@ -743,7 +999,9 @@ def _parse_footprint(
 # ---------------------------------------------------------------------------
 
 
-def _parse_segment(seg_sexpr: SExpNode) -> PcbSegment:
+def _parse_segment(
+    seg_sexpr: SExpNode, layer_lookup: dict[str, PcbLayer], index: int
+) -> PcbGeometry:
     start_node = sexp.find(seg_sexpr, "start")
     end_node = sexp.find(seg_sexpr, "end")
     width_node = sexp.find(seg_sexpr, "width")
@@ -757,10 +1015,31 @@ def _parse_segment(seg_sexpr: SExpNode) -> PcbSegment:
     layer = sexp.val(layer_node)
     net_node = sexp.find(seg_sexpr, "net")
     net = int(sexp.num(net_node, 1)) if net_node else 0
-    return PcbSegment(start[0], start[1], end[0], end[1], width, layer, net)
+    return PcbGeometry(
+        id=f"segment:{layer}:{index}",
+        object_type=PcbGeometryObject.TRACK,
+        shape=PcbGeometryShape.LINE,
+        roles=_layered_geometry_roles(
+            layer,
+            layer_lookup,
+            PcbGeometryRole.CONDUCTOR,
+            PcbGeometryRole.ROUTE,
+            PcbGeometryRole.TRACE,
+            PcbGeometryRole.BOARD_LEVEL,
+        ),
+        data=PcbLineGeometry(start[0], start[1], end[0], end[1], width),
+        layers=(layer,),
+        net_number=net,
+        metadata=_geometry_metadata(
+            native_type="segment",
+            native_id=_item_uuid(seg_sexpr),
+            source_collection="segments",
+            locked=_item_locked(seg_sexpr),
+        ),
+    )
 
 
-def _parse_via(via_sexpr: SExpNode) -> PcbVia:
+def _parse_via(via_sexpr: SExpNode, _layer_lookup: dict[str, PcbLayer], index: int) -> PcbGeometry:
     at_node = sexp.find(via_sexpr, "at")
     size_node = sexp.find(via_sexpr, "size")
     drill_node = sexp.find(via_sexpr, "drill")
@@ -774,7 +1053,39 @@ def _parse_via(via_sexpr: SExpNode) -> PcbVia:
     via_layers = _layers(layers_node) if layers_node else []
     net_node = sexp.find(via_sexpr, "net")
     net = int(sexp.num(net_node, 1)) if net_node else 0
-    return PcbVia(x, y, size, drill, via_layers, net)
+    via_kind = ""
+    if len(via_sexpr) > 1 and isinstance(via_sexpr[1], sexpdata.Symbol):
+        via_kind = via_sexpr[1].value()
+    roles = [
+        PcbGeometryRole.COPPER,
+        PcbGeometryRole.CONDUCTOR,
+        PcbGeometryRole.DRILL,
+        PcbGeometryRole.BOARD_LEVEL,
+    ]
+    if via_kind == "blind":
+        roles.append(PcbGeometryRole.BLIND_VIA)
+    elif via_kind == "micro":
+        roles.append(PcbGeometryRole.MICROVIA)
+    elif via_kind == "free":
+        roles.append(PcbGeometryRole.FREE_VIA)
+    else:
+        roles.append(PcbGeometryRole.THROUGH_HOLE)
+    return PcbGeometry(
+        id=f"via:{index}",
+        object_type=PcbGeometryObject.VIA,
+        shape=PcbGeometryShape.CIRCLE,
+        roles=tuple(roles),
+        data=PcbViaGeometry(x, y, size, drill, via_kind),
+        layers=tuple(via_layers),
+        net_number=net,
+        metadata=_geometry_metadata(
+            native_type="via",
+            native_kind=via_kind,
+            native_id=_item_uuid(via_sexpr),
+            source_collection="vias",
+            locked=_item_locked(via_sexpr),
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -782,7 +1093,9 @@ def _parse_via(via_sexpr: SExpNode) -> PcbVia:
 # ---------------------------------------------------------------------------
 
 
-def _parse_gr_line_any_layer(item: SExpNode) -> PcbLine | None:
+def _parse_gr_line_any_layer(
+    item: SExpNode, layer_lookup: dict[str, PcbLayer], index: int
+) -> PcbGeometry | None:
     """Parse a top-level (gr_line ...) on any layer."""
     layer_node = sexp.find(item, "layer")
     if not layer_node:
@@ -803,10 +1116,25 @@ def _parse_gr_line_any_layer(item: SExpNode) -> PcbLine | None:
         w = _float_val(sw) if sw else 0.1
     else:
         w = 0.1
-    return PcbLine(start[0], start[1], end[0], end[1], layer, w)
+    return PcbGeometry(
+        id=f"gr_line:{layer}:{index}",
+        object_type=PcbGeometryObject.GRAPHIC,
+        shape=PcbGeometryShape.LINE,
+        roles=_graphic_roles(layer, layer_lookup),
+        data=PcbLineGeometry(start[0], start[1], end[0], end[1], w),
+        layers=(layer,),
+        metadata=_geometry_metadata(
+            native_type="gr_line",
+            native_id=_item_uuid(item),
+            source_collection="graphic_lines",
+            locked=_item_locked(item),
+        ),
+    )
 
 
-def _parse_gr_arc_any_layer(item: SExpNode) -> PcbArc | None:
+def _parse_gr_arc_any_layer(
+    item: SExpNode, layer_lookup: dict[str, PcbLayer], index: int
+) -> PcbGeometry | None:
     """Parse a top-level (gr_arc ...) on any layer."""
     layer_node = sexp.find(item, "layer")
     if not layer_node:
@@ -831,7 +1159,20 @@ def _parse_gr_arc_any_layer(item: SExpNode) -> PcbArc | None:
         start = _xy(start_node)
         mid = _xy(mid_node)
         end = _xy(end_node)
-        return PcbArc(start[0], start[1], mid[0], mid[1], end[0], end[1], layer, w)
+        return PcbGeometry(
+            id=f"gr_arc:{layer}:{index}",
+            object_type=PcbGeometryObject.GRAPHIC,
+            shape=PcbGeometryShape.ARC,
+            roles=_graphic_roles(layer, layer_lookup),
+            data=PcbArcGeometry(start[0], start[1], mid[0], mid[1], end[0], end[1], w),
+            layers=(layer,),
+            metadata=_geometry_metadata(
+                native_type="gr_arc",
+                native_id=_item_uuid(item),
+                source_collection="graphic_arcs",
+                locked=_item_locked(item),
+            ),
+        )
     else:
         # KiCad 5: start=centre, end=one endpoint, angle=sweep
         angle_node = sexp.find(item, "angle")
@@ -852,7 +1193,20 @@ def _parse_gr_arc_any_layer(item: SExpNode) -> PcbArc | None:
         cos_f, sin_f = math.cos(rad), math.sin(rad)
         fx = cx + dx * cos_f - dy * sin_f
         fy = cy + dx * sin_f + dy * cos_f
-        return PcbArc(ex, ey, mx, my, fx, fy, layer, w)
+        return PcbGeometry(
+            id=f"gr_arc:{layer}:{index}",
+            object_type=PcbGeometryObject.GRAPHIC,
+            shape=PcbGeometryShape.ARC,
+            roles=_graphic_roles(layer, layer_lookup),
+            data=PcbArcGeometry(ex, ey, mx, my, fx, fy, w),
+            layers=(layer,),
+            metadata=_geometry_metadata(
+                native_type="gr_arc",
+                native_id=_item_uuid(item),
+                source_collection="graphic_arcs",
+                locked=_item_locked(item),
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -860,8 +1214,10 @@ def _parse_gr_arc_any_layer(item: SExpNode) -> PcbArc | None:
 # ---------------------------------------------------------------------------
 
 
-def _parse_zone_polygons(zone_sexpr: SExpNode) -> list[PcbPolygon]:
-    """Extract filled_polygon entries from a zone as PcbPolygon objects."""
+def _parse_zone_polygons(
+    zone_sexpr: SExpNode, layer_lookup: dict[str, PcbLayer], zone_index: int
+) -> list[PcbGeometry]:
+    """Extract filled_polygon entries from a zone as normalized geometry."""
     net_node = sexp.find(zone_sexpr, "net")
     net_num = int(sexp.num(net_node, 1)) if net_node and len(net_node) > 1 else 0
     net_name_node = sexp.find(zone_sexpr, "net_name")
@@ -871,8 +1227,8 @@ def _parse_zone_polygons(zone_sexpr: SExpNode) -> list[PcbPolygon]:
     zone_layer_node = sexp.find(zone_sexpr, "layer")
     zone_layer = sexp.val(zone_layer_node) if zone_layer_node else ""
 
-    polygons: list[PcbPolygon] = []
-    for fp_node in sexp.find_all(zone_sexpr, "filled_polygon"):
+    polygons: list[PcbGeometry] = []
+    for index, fp_node in enumerate(sexp.find_all(zone_sexpr, "filled_polygon")):
         # KiCad 6+ has per-filled_polygon layer; KiCad 5 inherits from zone
         layer_node = sexp.find(fp_node, "layer")
         layer = sexp.val(layer_node) if layer_node else zone_layer
@@ -884,17 +1240,36 @@ def _parse_zone_polygons(zone_sexpr: SExpNode) -> list[PcbPolygon]:
             points.append((sexp.num(xy_node, 1), sexp.num(xy_node, 2)))
         if points:
             polygons.append(
-                PcbPolygon(
-                    points=points,
-                    layer=layer,
+                PcbGeometry(
+                    id=f"zone_fill:{zone_index}:{index}:{layer}",
+                    object_type=PcbGeometryObject.ZONE,
+                    shape=PcbGeometryShape.POLYGON,
+                    roles=_layered_geometry_roles(
+                        layer,
+                        layer_lookup,
+                        PcbGeometryRole.POUR,
+                        PcbGeometryRole.ZONE_FILL,
+                    ),
+                    data=PcbPolygonGeometry(points=points),
+                    layers=(layer,),
                     net_number=net_num,
                     net_name=net_name,
+                    metadata=_geometry_metadata(
+                        native_type="filled_polygon",
+                        native_id=_item_uuid(fp_node),
+                        source_collection="zone_fills",
+                    ),
                 )
             )
     return polygons
 
 
-def _parse_zone_keepout(zone_sexpr: SExpNode) -> PcbKeepout | None:
+def _parse_zone_keepout(
+    zone_sexpr: SExpNode,
+    layer_lookup: dict[str, PcbLayer],
+    *,
+    index: int,
+) -> PcbGeometry | None:
     """Parse a KiCad keepout/rule-area zone, if present."""
     keepout_node = sexp.find(zone_sexpr, "keepout")
     if not keepout_node:
@@ -902,11 +1277,39 @@ def _parse_zone_keepout(zone_sexpr: SExpNode) -> PcbKeepout | None:
     boundary = _parse_zone_polygon_points(zone_sexpr)
     if not boundary:
         return None
-    return PcbKeepout(
-        layers=_zone_layer_names(zone_sexpr),
-        boundary=boundary,
-        rules=_parse_keepout_rules(keepout_node),
-        source="kicad:zone",
+    layers = tuple(_zone_layer_names(zone_sexpr))
+    rules = _parse_keepout_rules(keepout_node)
+    roles: list[PcbGeometryRole] = [
+        PcbGeometryRole.KEEPOUT,
+        PcbGeometryRole.RULE_AREA,
+        PcbGeometryRole.BOARD_LEVEL,
+    ]
+    if rules.tracks:
+        roles.append(PcbGeometryRole.TRACK_KEEPOUT)
+    if rules.vias:
+        roles.append(PcbGeometryRole.VIA_KEEPOUT)
+    if rules.pads:
+        roles.append(PcbGeometryRole.PAD_KEEPOUT)
+    if rules.copperpour:
+        roles.append(PcbGeometryRole.COPPER_POUR_KEEPOUT)
+    if rules.footprints:
+        roles.append(PcbGeometryRole.FOOTPRINT_KEEPOUT)
+    for layer in layers:
+        roles.extend(_layer_geometry_roles(layer, layer_lookup))
+    return PcbGeometry(
+        id=f"keepout:{index}",
+        object_type=PcbGeometryObject.KEEP_OUT,
+        shape=PcbGeometryShape.POLYGON,
+        roles=tuple(roles),
+        data=PcbKeepoutGeometry(boundary=boundary, rules=rules),
+        layers=layers,
+        metadata=_geometry_metadata(
+            native_type="zone",
+            native_kind="keepout",
+            native_id=_item_uuid(zone_sexpr),
+            source_collection="keepouts",
+            locked=_item_locked(zone_sexpr),
+        ),
     )
 
 
@@ -945,8 +1348,10 @@ def _parse_zone_polygon_points(zone_sexpr: SExpNode) -> list[tuple[float, float]
     ]
 
 
-def _parse_gr_poly(item: SExpNode) -> PcbPolygon | None:
-    """Parse a (gr_poly ...) as a PcbPolygon."""
+def _parse_gr_poly(
+    item: SExpNode, layer_lookup: dict[str, PcbLayer], index: int
+) -> PcbGeometry | None:
+    """Parse a (gr_poly ...) as normalized polygon geometry."""
     layer_node = sexp.find(item, "layer")
     if not layer_node:
         return None
@@ -959,7 +1364,20 @@ def _parse_gr_poly(item: SExpNode) -> PcbPolygon | None:
         points.append((sexp.num(xy_node, 1), sexp.num(xy_node, 2)))
     if not points:
         return None
-    return PcbPolygon(points=points, layer=layer)
+    return PcbGeometry(
+        id=f"gr_poly:{layer}:{index}",
+        object_type=PcbGeometryObject.GRAPHIC,
+        shape=PcbGeometryShape.POLYGON,
+        roles=_graphic_roles(layer, layer_lookup),
+        data=PcbPolygonGeometry(points=points),
+        layers=(layer,),
+        metadata=_geometry_metadata(
+            native_type="gr_poly",
+            native_id=_item_uuid(item),
+            source_collection="polygons",
+            locked=_item_locked(item),
+        ),
+    )
 
 
 def _parse_fp_polys(
@@ -968,11 +1386,12 @@ def _parse_fp_polys(
     fp_y: float,
     fp_rot: float,
     layer_filter: set[str],
+    layer_lookup: dict[str, PcbLayer],
     fp_ref: str = "",
-) -> list[PcbPolygon]:
+) -> list[PcbGeometry]:
     """Parse fp_poly elements matching layer_filter, transform to absolute."""
-    polys: list[PcbPolygon] = []
-    for item in sexp.find_all(fp_sexpr, "fp_poly"):
+    polys: list[PcbGeometry] = []
+    for index, item in enumerate(sexp.find_all(fp_sexpr, "fp_poly")):
         layer_node = sexp.find(item, "layer")
         if not layer_node:
             continue
@@ -988,7 +1407,23 @@ def _parse_fp_polys(
             ax, ay = _transform_point(lx, ly, fp_x, fp_y, fp_rot)
             points.append((ax, ay))
         if points:
-            polys.append(PcbPolygon(points=points, layer=layer, footprint_ref=fp_ref))
+            polys.append(
+                PcbGeometry(
+                    id=f"fp_poly:{fp_ref}:{index}:{layer}",
+                    object_type=PcbGeometryObject.GRAPHIC,
+                    shape=PcbGeometryShape.POLYGON,
+                    roles=_graphic_roles(layer, layer_lookup, footprint_ref=fp_ref),
+                    data=PcbPolygonGeometry(points=points),
+                    layers=(layer,),
+                    footprint_ref=fp_ref,
+                    metadata=_geometry_metadata(
+                        native_type="fp_poly",
+                        native_id=_item_uuid(item),
+                        source_collection="footprint_graphics",
+                        locked=_item_locked(item),
+                    ),
+                )
+            )
     return polys
 
 
@@ -997,30 +1432,44 @@ def _parse_fp_keepouts(
     fp_x: float,
     fp_y: float,
     fp_rot: float,
+    layer_lookup: dict[str, PcbLayer],
     fp_ref: str,
-) -> list[PcbKeepout]:
+) -> list[PcbGeometry]:
     """Parse footprint-local keepout/rule-area zones and transform them to board space."""
-    keepouts: list[PcbKeepout] = []
-    for zone_sexpr in sexp.find_all(fp_sexpr, "zone"):
-        keepout = _parse_zone_keepout(zone_sexpr)
+    keepouts: list[PcbGeometry] = []
+    for index, zone_sexpr in enumerate(sexp.find_all(fp_sexpr, "zone")):
+        keepout = _parse_zone_keepout(zone_sexpr, layer_lookup, index=index)
         if keepout is None:
+            continue
+        data = keepout.data
+        if not isinstance(data, PcbKeepoutGeometry):
             continue
         keepouts.append(
             replace(
                 keepout,
-                boundary=[_transform_point(x, y, fp_x, fp_y, fp_rot) for x, y in keepout.boundary],
-                holes=[
-                    [_transform_point(x, y, fp_x, fp_y, fp_rot) for x, y in hole]
-                    for hole in keepout.holes
-                ],
-                source="kicad:footprint-zone",
+                id=f"fp_keepout:{fp_ref}:{index}",
+                roles=normalize_geometry_roles(*keepout.roles, PcbGeometryRole.FOOTPRINT_MEMBER),
+                data=replace(
+                    data,
+                    boundary=[_transform_point(x, y, fp_x, fp_y, fp_rot) for x, y in data.boundary],
+                    holes=[
+                        [_transform_point(x, y, fp_x, fp_y, fp_rot) for x, y in hole]
+                        for hole in data.holes
+                    ],
+                ),
                 footprint_ref=fp_ref,
+                metadata=replace(
+                    keepout.metadata,
+                    source_collection="footprint_keepouts",
+                ),
             )
         )
     return keepouts
 
 
-def _parse_trace_arc(arc_sexpr: SExpNode) -> PcbTraceArc | None:
+def _parse_trace_arc(
+    arc_sexpr: SExpNode, layer_lookup: dict[str, PcbLayer], index: int
+) -> PcbGeometry | None:
     """Parse a top-level (arc ...) copper trace arc."""
     start_node = sexp.find(arc_sexpr, "start")
     mid_node = sexp.find(arc_sexpr, "mid")
@@ -1036,7 +1485,28 @@ def _parse_trace_arc(arc_sexpr: SExpNode) -> PcbTraceArc | None:
     layer = sexp.val(layer_node) if layer_node else ""
     net_node = sexp.find(arc_sexpr, "net")
     net = int(sexp.num(net_node, 1)) if net_node and len(net_node) > 1 else 0
-    return PcbTraceArc(sx, sy, mx, my, ex, ey, w, layer, net)
+    return PcbGeometry(
+        id=f"trace_arc:{layer}:{index}",
+        object_type=PcbGeometryObject.TRACK,
+        shape=PcbGeometryShape.ARC,
+        roles=_layered_geometry_roles(
+            layer,
+            layer_lookup,
+            PcbGeometryRole.CONDUCTOR,
+            PcbGeometryRole.ROUTE,
+            PcbGeometryRole.TRACE,
+            PcbGeometryRole.BOARD_LEVEL,
+        ),
+        data=PcbArcGeometry(sx, sy, mx, my, ex, ey, w),
+        layers=(layer,),
+        net_number=net,
+        metadata=_geometry_metadata(
+            native_type="arc",
+            native_id=_item_uuid(arc_sexpr),
+            source_collection="trace_arcs",
+            locked=_item_locked(arc_sexpr),
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1044,8 +1514,10 @@ def _parse_trace_arc(arc_sexpr: SExpNode) -> PcbTraceArc | None:
 # ---------------------------------------------------------------------------
 
 
-def _parse_gr_text(item: SExpNode) -> PcbGraphicText | None:
-    """Parse a (gr_text ...) into a PcbGraphicText."""
+def _parse_gr_text(
+    item: SExpNode, layer_lookup: dict[str, PcbLayer], index: int
+) -> PcbGeometry | None:
+    """Parse a (gr_text ...) into normalized text geometry."""
     if len(item) < 2:
         return None
     raw_text = str(item[1])
@@ -1071,14 +1543,29 @@ def _parse_gr_text(item: SExpNode) -> PcbGraphicText | None:
             else str(justify_node[1])
         )
 
-    return PcbGraphicText(
-        text=raw_text,
-        x=x,
-        y=y,
-        rotation=rot,
-        layer=layer,
-        font_size=font_size,
-        justify=justify,
+    roles = list(
+        _layered_geometry_roles(
+            layer,
+            layer_lookup,
+            PcbGeometryRole.TEXT,
+            PcbGeometryRole.BOARD_LEVEL,
+        )
+    )
+    if layer == "Cmts.User":
+        roles.append(PcbGeometryRole.COMMENT)
+    return PcbGeometry(
+        id=f"gr_text:{layer}:{index}",
+        object_type=PcbGeometryObject.TEXT,
+        shape=PcbGeometryShape.TEXT,
+        roles=tuple(roles),
+        data=PcbTextGeometry(raw_text, x, y, rot, font_size, justify),
+        layers=(layer,),
+        metadata=_geometry_metadata(
+            native_type="gr_text",
+            native_id=_item_uuid(item),
+            source_collection="graphic_texts",
+            locked=_item_locked(item),
+        ),
     )
 
 
@@ -1087,8 +1574,10 @@ def _parse_gr_text(item: SExpNode) -> PcbGraphicText | None:
 # ---------------------------------------------------------------------------
 
 
-def _parse_zone_boundary(zone_sexpr: SExpNode) -> PcbZone | None:
-    """Parse a zone's boundary polygon and properties into a PcbZone."""
+def _parse_zone_boundary(
+    zone_sexpr: SExpNode, layer_lookup: dict[str, PcbLayer], index: int
+) -> PcbGeometry | None:
+    """Parse a zone's boundary polygon and properties into normalized geometry."""
     net_node = sexp.find(zone_sexpr, "net")
     net_num = int(sexp.num(net_node, 1)) if net_node and len(net_node) > 1 else 0
     net_name_node = sexp.find(zone_sexpr, "net_name")
@@ -1129,17 +1618,34 @@ def _parse_zone_boundary(zone_sexpr: SExpNode) -> PcbZone | None:
         clr_node = sexp.find(connect_node, "clearance")
         connect_clearance = _float_val(clr_node) if clr_node else 0.0
 
-    return PcbZone(
+    return PcbGeometry(
+        id=f"zone:{index}:{layer}",
+        object_type=PcbGeometryObject.ZONE,
+        shape=PcbGeometryShape.POLYGON,
+        roles=_layered_geometry_roles(
+            layer,
+            layer_lookup,
+            PcbGeometryRole.POUR,
+            PcbGeometryRole.ZONE_OUTLINE,
+        ),
+        data=PcbZoneGeometry(
+            boundary=boundary,
+            priority=priority,
+            min_thickness_mm=min_thickness,
+            thermal_gap_mm=thermal_gap,
+            thermal_bridge_width_mm=thermal_bridge,
+            connect_pads_clearance_mm=connect_clearance,
+            fill_type=fill_type,
+        ),
+        layers=(layer,),
         net_number=net_num,
         net_name=net_name,
-        layer=layer,
-        boundary=boundary,
-        priority=priority,
-        min_thickness_mm=min_thickness,
-        thermal_gap_mm=thermal_gap,
-        thermal_bridge_width_mm=thermal_bridge,
-        connect_pads_clearance_mm=connect_clearance,
-        fill_type=fill_type,
+        metadata=_geometry_metadata(
+            native_type="zone",
+            native_id=_item_uuid(zone_sexpr),
+            source_collection="zones",
+            locked=_item_locked(zone_sexpr),
+        ),
     )
 
 
@@ -1275,6 +1781,7 @@ def parse_kicad_pcb_from_sexpr(sexpr: SExpNode, *, default_name: str = "") -> Pc
     """Parse a PCB from an already-loaded S-expression list."""
     # Layer definitions
     layer_defs = _parse_layer_defs(sexpr)
+    layer_lookup = {layer.name: layer for layer in layer_defs}
 
     # Title for the board name
     title_block = sexp.find(sexpr, "title_block")
@@ -1284,109 +1791,66 @@ def parse_kicad_pcb_from_sexpr(sexpr: SExpNode, *, default_name: str = "") -> Pc
     nets = _parse_nets(sexpr)
 
     footprints: list[PcbFootprint] = []
-    edge_lines_from_fps: list[PcbLine] = []
-    edge_arcs_from_fps: list[PcbArc] = []
-    polygons_from_fps: list[PcbPolygon] = []
-    keepouts_from_fps: list[PcbKeepout] = []
-    graphic_lines_from_fps: list[PcbLine] = []
-    graphic_arcs_from_fps: list[PcbArc] = []
+    geometry: list[PcbGeometry] = []
     # KiCad 6+ uses "footprint", KiCad 5 uses "module"
     for tag in ("footprint", "module"):
         for fp_sexpr in sexp.find_all(sexpr, tag):
-            (
-                fp,
-                edge_lines,
-                edge_arcs,
-                fp_polys,
-                fp_keepouts,
-                fp_graphic_lines,
-                fp_graphic_arcs,
-            ) = _parse_footprint(fp_sexpr)
+            fp, footprint_geometry = _parse_footprint(fp_sexpr, layer_lookup)
             footprints.append(fp)
-            edge_lines_from_fps.extend(edge_lines)
-            edge_arcs_from_fps.extend(edge_arcs)
-            polygons_from_fps.extend(fp_polys)
-            keepouts_from_fps.extend(fp_keepouts)
-            graphic_lines_from_fps.extend(fp_graphic_lines)
-            graphic_arcs_from_fps.extend(fp_graphic_arcs)
+            geometry.extend(footprint_geometry)
 
-    segments = [_parse_segment(s) for s in sexp.find_all(sexpr, "segment")]
-    vias = [_parse_via(v) for v in sexp.find_all(sexpr, "via")]
+    geometry.extend(
+        _parse_segment(item, layer_lookup, index)
+        for index, item in enumerate(sexp.find_all(sexpr, "segment"))
+    )
+    geometry.extend(
+        _parse_via(item, layer_lookup, index)
+        for index, item in enumerate(sexp.find_all(sexpr, "via"))
+    )
 
     # Zones — extract filled_polygon geometry + zone boundaries
-    polygons: list[PcbPolygon] = []
-    zones: list[PcbZone] = []
-    keepouts: list[PcbKeepout] = []
-    keepouts.extend(keepouts_from_fps)
-    for zone_sexpr in sexp.find_all(sexpr, "zone"):
-        keepout = _parse_zone_keepout(zone_sexpr)
+    for zone_index, zone_sexpr in enumerate(sexp.find_all(sexpr, "zone")):
+        keepout = _parse_zone_keepout(zone_sexpr, layer_lookup, index=zone_index)
         if keepout:
-            keepouts.append(keepout)
+            geometry.append(keepout)
             continue
-        polygons.extend(_parse_zone_polygons(zone_sexpr))
-        zone = _parse_zone_boundary(zone_sexpr)
+        geometry.extend(_parse_zone_polygons(zone_sexpr, layer_lookup, zone_index))
+        zone = _parse_zone_boundary(zone_sexpr, layer_lookup, zone_index)
         if zone:
-            zones.append(zone)
+            geometry.append(zone)
     # Top-level graphic polygons
-    for item in sexp.find_all(sexpr, "gr_poly"):
-        p = _parse_gr_poly(item)
+    for index, item in enumerate(sexp.find_all(sexpr, "gr_poly")):
+        p = _parse_gr_poly(item, layer_lookup, index)
         if p:
-            polygons.append(p)
-    # Footprint polygons (fab/silk)
-    polygons.extend(polygons_from_fps)
+            geometry.append(p)
 
     # Trace arcs (curved copper traces)
-    trace_arcs: list[PcbTraceArc] = []
-    for item in sexp.find_all(sexpr, "arc"):
-        ta = _parse_trace_arc(item)
+    for index, item in enumerate(sexp.find_all(sexpr, "arc")):
+        ta = _parse_trace_arc(item, layer_lookup, index)
         if ta:
-            trace_arcs.append(ta)
+            geometry.append(ta)
 
     # Board outline: top-level gr_line/gr_arc on Edge.Cuts + fp-internal ones
-    outline_lines: list[PcbLine] = []
-    outline_arcs: list[PcbArc] = []
-    graphic_lines: list[PcbLine] = []
-    graphic_arcs: list[PcbArc] = []
-    for item in sexp.find_all(sexpr, "gr_line"):
-        ln = _parse_gr_line_any_layer(item)
+    for index, item in enumerate(sexp.find_all(sexpr, "gr_line")):
+        ln = _parse_gr_line_any_layer(item, layer_lookup, index)
         if ln:
-            if ln.layer == "Edge.Cuts":
-                outline_lines.append(ln)
-            else:
-                graphic_lines.append(ln)
-    for item in sexp.find_all(sexpr, "gr_arc"):
-        arc = _parse_gr_arc_any_layer(item)
+            geometry.append(ln)
+    for index, item in enumerate(sexp.find_all(sexpr, "gr_arc")):
+        arc = _parse_gr_arc_any_layer(item, layer_lookup, index)
         if arc:
-            if arc.layer == "Edge.Cuts":
-                outline_arcs.append(arc)
-            else:
-                graphic_arcs.append(arc)
-    outline_lines.extend(edge_lines_from_fps)
-    outline_arcs.extend(edge_arcs_from_fps)
-    graphic_lines.extend(graphic_lines_from_fps)
-    graphic_arcs.extend(graphic_arcs_from_fps)
+            geometry.append(arc)
 
     # Graphic texts (board-level, not inside footprints)
-    graphic_texts: list[PcbGraphicText] = []
-    for item in sexp.find_all(sexpr, "gr_text"):
-        gt = _parse_gr_text(item)
+    for index, item in enumerate(sexp.find_all(sexpr, "gr_text")):
+        gt = _parse_gr_text(item, layer_lookup, index)
         if gt:
-            graphic_texts.append(gt)
+            geometry.append(gt)
 
     return Pcb(
         name=name,
         nets=nets,
         footprints=footprints,
-        segments=segments,
-        vias=vias,
-        outline_lines=outline_lines,
-        outline_arcs=outline_arcs,
-        polygons=polygons,
-        trace_arcs=trace_arcs,
+        geometry=geometry,
         layers=layer_defs,
-        zones=zones,
-        keepouts=keepouts,
-        graphic_lines=graphic_lines,
-        graphic_arcs=graphic_arcs,
-        graphic_texts=graphic_texts,
+        metadata=PcbMetadata(source_format="kicad"),
     )
