@@ -114,7 +114,7 @@ def test_board_outline_from_normalized_fixture_geometry() -> None:
 
     pcb = parse_kicad_pcb(SWD_SWITCH_PCB)
 
-    geom = board_outline_polygon(pcb.board_outline_geometry())
+    geom = board_outline_polygon(pcb.board_profile_geometry())
 
     assert geom is not None
     assert isinstance(geom, Polygon)
@@ -127,7 +127,7 @@ def test_board_outline_closes_orangecrab_fractional_arc_ring() -> None:
 
     pcb = parse_kicad_pcb(ORANGECRAB_PCB)
 
-    geom = board_outline_polygon(pcb.board_outline_geometry())
+    geom = board_outline_polygon(pcb.board_profile_geometry())
 
     assert geom is not None
     assert isinstance(geom, Polygon)
@@ -140,7 +140,7 @@ def test_board_outline_closes_pi_mx8_altium_fractional_arc_ring() -> None:
 
     pcb = parse_altium_pcb(PI_MX8_PCB)
 
-    geom = board_outline_polygon(pcb.board_outline_geometry())
+    geom = board_outline_polygon(pcb.board_profile_geometry())
 
     assert geom is not None
     assert isinstance(geom, Polygon)

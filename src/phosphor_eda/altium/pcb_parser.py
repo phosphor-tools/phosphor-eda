@@ -482,9 +482,9 @@ _LAYER_TO_GEOMETRY_ROLES: dict[LayerRole, PcbGeometryRole] = {
     LayerRole.COMMENT: PcbGeometryRole.COMMENT,
     LayerRole.EDGE: PcbGeometryRole.EDGE,
     LayerRole.MECHANICAL: PcbGeometryRole.MECHANICAL,
-    LayerRole.AUXILIARY: PcbGeometryRole.AUXILIARY,
     LayerRole.ROUTE_TOOL_PATH: PcbGeometryRole.ROUTE_TOOL_PATH,
     LayerRole.V_CUT: PcbGeometryRole.V_CUT,
+    LayerRole.USER: PcbGeometryRole.USER,
 }
 
 

@@ -523,7 +523,7 @@ def _stackup_layer_as_pcb_layer(layer_type: str, side: str) -> PcbLayer:
 
 
 def _load_board(con: duckdb.DuckDBPyConnection, pcb: Pcb, stackup: Stackup | None) -> None:
-    outline = board_outline_polygon(pcb.board_outline_geometry())
+    outline = board_outline_polygon(pcb.board_profile_geometry())
     wkb_val = _wkb(outline) if outline else None
     total_thickness = stackup.total_thickness_mm if stackup else None
     copper_finish = stackup.copper_finish if stackup else None

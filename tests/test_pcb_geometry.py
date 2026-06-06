@@ -9,6 +9,7 @@ from phosphor_eda.pcb import (
     PcbLineGeometry,
     PcbPadGeometry,
     PcbPolygonGeometry,
+    PcbTextGeometry,
     normalize_geometry_roles,
 )
 
@@ -55,6 +56,42 @@ def test_pcb_geometry_helpers_query_roles_type_shape_layer_footprint_and_net() -
         data=PcbLineGeometry(0.0, 0.0, 10.0, 0.0, 0.1),
         layers=("Edge.Cuts",),
     )
+    edge_text = PcbGeometry(
+        id="edge:text",
+        object_type=PcbGeometryObject.TEXT,
+        shape=PcbGeometryShape.TEXT,
+        roles=(PcbGeometryRole.EDGE, PcbGeometryRole.TEXT, PcbGeometryRole.BOARD_LEVEL),
+        data=PcbTextGeometry("REV A", 1.0, 1.0, 0.0, 1.0),
+        layers=("Edge.Cuts",),
+    )
+    copper_text = PcbGeometry(
+        id="copper:text",
+        object_type=PcbGeometryObject.TEXT,
+        shape=PcbGeometryShape.TEXT,
+        roles=(PcbGeometryRole.COPPER, PcbGeometryRole.TEXT, PcbGeometryRole.BOARD_LEVEL),
+        data=PcbTextGeometry("ANT", 2.0, 2.0, 0.0, 1.0),
+        layers=("F.Cu",),
+    )
+    board_cutout = PcbGeometry(
+        id="board-cutout:0",
+        object_type=PcbGeometryObject.GRAPHIC,
+        shape=PcbGeometryShape.POLYGON,
+        roles=(PcbGeometryRole.EDGE, PcbGeometryRole.BOARD_CUTOUT, PcbGeometryRole.BOARD_LEVEL),
+        data=PcbPolygonGeometry([(4.0, 4.0), (5.0, 4.0), (5.0, 5.0), (4.0, 5.0)]),
+        layers=("Edge.Cuts",),
+    )
+    copper_polygon_cutout = PcbGeometry(
+        id="copper-cutout:0",
+        object_type=PcbGeometryObject.GRAPHIC,
+        shape=PcbGeometryShape.POLYGON,
+        roles=(
+            PcbGeometryRole.COPPER,
+            PcbGeometryRole.POLYGON_CUTOUT,
+            PcbGeometryRole.CONDUCTOR,
+        ),
+        data=PcbPolygonGeometry([(6.0, 6.0), (7.0, 6.0), (7.0, 7.0), (6.0, 7.0)]),
+        layers=("F.Cu",),
+    )
     pad = PcbGeometry(
         id="pad:U1:1",
         object_type=PcbGeometryObject.PAD,
@@ -80,20 +117,38 @@ def test_pcb_geometry_helpers_query_roles_type_shape_layer_footprint_and_net() -
         name="geometry",
         nets={},
         footprints=[],
-        geometry=[outline, pad, pour],
+        geometry=[outline, edge_text, copper_text, board_cutout, copper_polygon_cutout, pad, pour],
         layers=[
             PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT)),
             PcbLayer("Edge.Cuts", (LayerRole.EDGE,)),
         ],
     )
 
-    assert [item.id for item in board.geometry_by_role("copper")] == ["pad:U1:1", "zone:0"]
+    assert [item.id for item in board.geometry_by_role("copper")] == [
+        "copper:text",
+        "copper-cutout:0",
+        "pad:U1:1",
+        "zone:0",
+    ]
+    assert [item.id for item in board.geometry_by_role("edge")] == [
+        "outline:0",
+        "edge:text",
+        "board-cutout:0",
+    ]
     assert [item.id for item in board.geometry_by_object_type("pad")] == ["pad:U1:1"]
     assert [item.id for item in board.geometry_by_shape("line")] == ["outline:0"]
-    assert [item.id for item in board.geometry_on_layer("F.Cu")] == ["pad:U1:1", "zone:0"]
+    assert [item.id for item in board.geometry_on_layer("F.Cu")] == [
+        "copper:text",
+        "copper-cutout:0",
+        "pad:U1:1",
+        "zone:0",
+    ]
     assert [item.id for item in board.geometry_for_footprint("U1")] == ["pad:U1:1"]
     assert [item.id for item in board.geometry_for_net(1)] == ["pad:U1:1", "zone:0"]
-    assert [item.id for item in board.board_outline_geometry()] == ["outline:0"]
+    assert [item.id for item in board.board_profile_geometry()] == [
+        "outline:0",
+        "board-cutout:0",
+    ]
 
 
 def test_pcb_bbox_uses_outline_geometry_and_falls_back_to_pads() -> None:

@@ -283,7 +283,7 @@ class TestLayers:
 
         assert row is not None
         assert row[0] == "courtyard"
-        assert set(row[1]) >= {"auxiliary", "fabrication", "courtyard", "front"}
+        assert set(row[1]) >= {"fabrication", "courtyard", "front"}
         assert row[2] == "front"
 
     def test_stackup_dielectrics_have_normalized_roles(self, db: duckdb.DuckDBPyConnection) -> None:

@@ -22,7 +22,6 @@ from phosphor_eda.pcb import (
 from phosphor_eda.pcb_render_drills import pad_drill_geometry
 from phosphor_eda.pcb_render_geometry import (
     SYNTHETIC_BOARD_MATERIAL_ROLE,
-    SYNTHETIC_BOARD_OUTLINE_ROLE,
     SYNTHETIC_DRILL_ROLE,
     GeometryLayer,
     GeometryTags,
@@ -164,10 +163,12 @@ def via_layers(item: RenderableGeometry) -> frozenset[str]:
     return frozenset()
 
 
-def board_outline_geometry(store: PcbGeometryStore) -> BaseGeometry:
+def board_profile_geometry(store: PcbGeometryStore) -> BaseGeometry:
     """Return the board outline polygon assembled from edge-cut primitives."""
     outlines: list[BaseGeometry] = []
-    for item in store.by_display_role(SYNTHETIC_BOARD_OUTLINE_ROLE):
+    for item in store.items:
+        if not item.has_role(PcbGeometryRole.BOARD_OUTLINE):
+            continue
         geometry = _board_outline_from_item(item)
         if geometry is not None and not geometry.is_empty:
             outlines.append(geometry)
@@ -388,6 +389,9 @@ def _outline_payload(payload: object) -> list[DomainPcbGeometry] | None:
 
 
 def _board_material_geometry(payload: object) -> BaseGeometry | None:
+    outline_payload = _outline_payload(payload)
+    if outline_payload is not None:
+        return board_outline_polygon(outline_payload)
     bbox = _bbox(payload)
     if bbox is None:
         return None

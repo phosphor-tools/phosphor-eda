@@ -24,7 +24,6 @@ from phosphor_eda.pcb import (
 from phosphor_eda.pcb_render import load_render_settings_json, render_pcb_svg
 from phosphor_eda.pcb_render_geometry import (
     SYNTHETIC_BOARD_MATERIAL_ROLE,
-    SYNTHETIC_BOARD_OUTLINE_ROLE,
     SYNTHETIC_DRILL_ROLE,
     GeometrySelector,
     build_geometry_store,
@@ -51,14 +50,22 @@ def test_geometry_store_exposes_object_type_shape_roles_and_display_role() -> No
     display_roles = {item.display_role for item in store.items}
     assert {
         SYNTHETIC_BOARD_MATERIAL_ROLE,
-        SYNTHETIC_BOARD_OUTLINE_ROLE,
         SYNTHETIC_DRILL_ROLE,
         "pad",
         "via",
         "trace",
         "silkscreen",
         "designator",
+        "edge",
     }.issubset(display_roles)
+    assert "board_outline" not in display_roles
+    material = next(
+        item for item in store.items if item.display_role == SYNTHETIC_BOARD_MATERIAL_ROLE
+    )
+    assert isinstance(material.payload, tuple)
+    assert all(isinstance(payload, PcbGeometry) for payload in material.payload)
+    assert isinstance(material.source, tuple)
+    assert len(material.source) == 4
     pad = next(item for item in store.items if item.display_role == "pad")
     assert pad.object_type == PcbGeometryObject.PAD
     assert pad.shape == PcbGeometryShape.CIRCLE

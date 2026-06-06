@@ -4,7 +4,7 @@ from test_pcb_render import _board
 
 from phosphor_eda.pcb import PcbGeometryObject, PcbGeometryRole
 from phosphor_eda.pcb_render_artwork import (
-    board_outline_geometry,
+    board_profile_geometry,
     drill_geometry_for_layer,
     select_source_artwork,
     selected_copper_layers,
@@ -51,7 +51,7 @@ def test_selected_copper_layers_projects_vias_from_normalized_layer_rules() -> N
 def test_board_outline_and_drill_geometry_are_derived_from_geometry_store() -> None:
     store = build_geometry_store(_board(), side="front")
 
-    assert not board_outline_geometry(store).is_empty
+    assert not board_profile_geometry(store).is_empty
     assert not drill_geometry_for_layer(store, layer_name="F.Cu").is_empty
 
 

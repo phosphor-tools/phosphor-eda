@@ -32,7 +32,6 @@ class LayerRole(StrEnum):
     EDGE = "edge"
     MARGIN = "margin"
     MECHANICAL = "mechanical"
-    AUXILIARY = "auxiliary"
     KEEPOUT = "keepout"
     DRILL = "drill"
     DRILL_GUIDE = "drill_guide"
@@ -88,7 +87,6 @@ _ROLE_ORDER: tuple[LayerRole, ...] = (
     LayerRole.EDGE,
     LayerRole.MARGIN,
     LayerRole.MECHANICAL,
-    LayerRole.AUXILIARY,
     LayerRole.KEEPOUT,
     LayerRole.DRILL,
     LayerRole.DRILL_GUIDE,
@@ -156,7 +154,6 @@ _PRIMARY_ROLE_ORDER: tuple[LayerRole, ...] = (
     LayerRole.THREE_D_BODY,
     LayerRole.FABRICATION,
     LayerRole.MECHANICAL,
-    LayerRole.AUXILIARY,
     LayerRole.USER,
     LayerRole.DIELECTRIC,
     LayerRole.UNKNOWN,
@@ -309,7 +306,6 @@ class PcbGeometryRole(StrEnum):
     COMMENT = "comment"
     EDGE = "edge"
     MECHANICAL = "mechanical"
-    AUXILIARY = "auxiliary"
 
     BOARD_OUTLINE = "board_outline"
     BOARD_CUTOUT = "board_cutout"
@@ -366,6 +362,7 @@ class PcbGeometryRole(StrEnum):
     PAD_PRIMITIVE = "pad_primitive"
     CUSTOM_PAD_PRIMITIVE = "custom_pad_primitive"
     COMPONENT_BODY = "component_body"
+    USER = "user"
     GENERATED = "generated"
 
     UNKNOWN = "unknown"
@@ -384,7 +381,6 @@ _GEOMETRY_ROLE_ORDER: tuple[PcbGeometryRole, ...] = (
     PcbGeometryRole.COMMENT,
     PcbGeometryRole.EDGE,
     PcbGeometryRole.MECHANICAL,
-    PcbGeometryRole.AUXILIARY,
     PcbGeometryRole.BOARD_OUTLINE,
     PcbGeometryRole.BOARD_CUTOUT,
     PcbGeometryRole.POLYGON_CUTOUT,
@@ -435,6 +431,7 @@ _GEOMETRY_ROLE_ORDER: tuple[PcbGeometryRole, ...] = (
     PcbGeometryRole.PAD_PRIMITIVE,
     PcbGeometryRole.CUSTOM_PAD_PRIMITIVE,
     PcbGeometryRole.COMPONENT_BODY,
+    PcbGeometryRole.USER,
     PcbGeometryRole.GENERATED,
     PcbGeometryRole.UNKNOWN,
 )
@@ -463,7 +460,7 @@ _GEOMETRY_PRIMARY_ROLE_ORDER: tuple[PcbGeometryRole, ...] = (
     PcbGeometryRole.TEXT,
     PcbGeometryRole.COMPONENT_BODY,
     PcbGeometryRole.MECHANICAL,
-    PcbGeometryRole.AUXILIARY,
+    PcbGeometryRole.USER,
     PcbGeometryRole.GENERATED,
     PcbGeometryRole.UNKNOWN,
 )
@@ -777,12 +774,21 @@ class Pcb:
         """Return geometry connected to a net number."""
         return [item for item in self.geometry if item.net_number == net_number]
 
-    def board_outline_geometry(self) -> list[PcbGeometry]:
-        """Return geometry that defines the board outline."""
+    def board_profile_geometry(self) -> list[PcbGeometry]:
+        """Return physical board profile geometry used for bounds and clipping."""
+        profile_roles = {
+            PcbGeometryRole.BOARD_OUTLINE,
+            PcbGeometryRole.BOARD_CUTOUT,
+        }
+        profile_shapes = {
+            PcbGeometryShape.LINE,
+            PcbGeometryShape.ARC,
+            PcbGeometryShape.POLYGON,
+        }
         return [
             item
             for item in self.geometry
-            if item.has_role(PcbGeometryRole.BOARD_OUTLINE) or item.has_role(PcbGeometryRole.EDGE)
+            if item.shape in profile_shapes and profile_roles.intersection(item.roles)
         ]
 
     # -- Component helpers ----------------------------------------------------
@@ -807,10 +813,10 @@ class Pcb:
         return {n.number for n in self.nets.values() if n.name and n.name.upper() == needle}
 
     def bbox(self) -> tuple[float, float, float, float]:
-        """Board bounding box from normalized outline geometry."""
+        """Board bounding box from normalized profile geometry."""
         xs: list[float] = []
         ys: list[float] = []
-        for item in self.board_outline_geometry():
+        for item in self.board_profile_geometry():
             _extend_geometry_bounds(xs, ys, item)
         if not xs:
             for item in self.geometry_by_object_type(PcbGeometryObject.PAD):

@@ -16,7 +16,6 @@ from phosphor_eda.pcb_render_artwork import (
 )
 from phosphor_eda.pcb_render_geometry import (
     SYNTHETIC_BOARD_MATERIAL_ROLE,
-    SYNTHETIC_BOARD_OUTLINE_ROLE,
     SYNTHETIC_DRILL_ROLE,
     GeometryLayer,
 )
@@ -682,7 +681,7 @@ def _selected_board_outline_primitives(
     return tuple(
         primitive
         for item in selected_items
-        if item.display_role == SYNTHETIC_BOARD_OUTLINE_ROLE
+        if item.has_role(PcbGeometryRole.BOARD_OUTLINE)
         if (
             primitive := geometry_to_svg_primitive(
                 item,
@@ -739,7 +738,8 @@ def _board_mask_primitives(store: PcbGeometryStore) -> tuple[SvgPrimitive, ...]:
 def _board_outline_primitives(store: PcbGeometryStore) -> tuple[SvgPrimitive, ...]:
     return tuple(
         primitive
-        for item in store.by_display_role(SYNTHETIC_BOARD_OUTLINE_ROLE)
+        for item in store.items
+        if item.has_role(PcbGeometryRole.BOARD_OUTLINE)
         if (
             primitive := geometry_to_svg_primitive(
                 item,
@@ -799,7 +799,8 @@ def _board_source_layers(store: PcbGeometryStore) -> tuple[str, ...]:
     return _unique_ordered(
         item.layer.name
         for item in store.items
-        if item.display_role in {SYNTHETIC_BOARD_MATERIAL_ROLE, SYNTHETIC_BOARD_OUTLINE_ROLE}
+        if item.display_role == SYNTHETIC_BOARD_MATERIAL_ROLE
+        or item.has_role(PcbGeometryRole.BOARD_OUTLINE)
     )
 
 
@@ -807,5 +808,6 @@ def _board_source_ids(store: PcbGeometryStore) -> tuple[str, ...]:
     return tuple(
         item.id
         for item in store.items
-        if item.display_role in {SYNTHETIC_BOARD_MATERIAL_ROLE, SYNTHETIC_BOARD_OUTLINE_ROLE}
+        if item.display_role == SYNTHETIC_BOARD_MATERIAL_ROLE
+        or item.has_role(PcbGeometryRole.BOARD_OUTLINE)
     )

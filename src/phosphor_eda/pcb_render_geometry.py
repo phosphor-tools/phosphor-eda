@@ -30,7 +30,6 @@ from phosphor_eda.pcb import (
 from phosphor_eda.pcb_render_drills import pad_drill_geometry
 
 SYNTHETIC_BOARD_MATERIAL_ROLE = "board_material"
-SYNTHETIC_BOARD_OUTLINE_ROLE = "board_outline"
 SYNTHETIC_DRILL_ROLE = "drill"
 
 
@@ -77,6 +76,10 @@ class RenderableGeometry:
     points: tuple[RenderPoint, ...] = ()
     bbox: tuple[float, float, float, float] | None = None
     clipped: bool = True
+
+    def has_role(self, role: PcbGeometryRole | str) -> bool:
+        normalized = role if isinstance(role, PcbGeometryRole) else PcbGeometryRole(role)
+        return normalized in self.roles
 
 
 @dataclass(frozen=True)
@@ -138,8 +141,12 @@ def build_geometry_store(board: Pcb, *, side: str) -> PcbGeometryStore:
     items: list[RenderableGeometry] = []
 
     edge_layer = _board_edge_layer(board, layers, layer_lookup)
-    outline_geometry = board.board_outline_geometry()
-    outline_points = _outline_points_from_geometry(outline_geometry, transform)
+    profile_geometry = board.board_profile_geometry()
+    transformed_profile_geometry = tuple(
+        replace(item, data=_transform_geometry_payload(item.data, transform))
+        for item in profile_geometry
+    )
+    outline_points = _outline_points_from_geometry(profile_geometry, transform)
     items.append(
         RenderableGeometry(
             id="board_material:0",
@@ -148,29 +155,11 @@ def build_geometry_store(board: Pcb, *, side: str) -> PcbGeometryStore:
             roles=(PcbGeometryRole.GENERATED,),
             display_role=SYNTHETIC_BOARD_MATERIAL_ROLE,
             layer=edge_layer,
-            tags=GeometryTags(source_collection="board"),
-            payload=board_bbox,
-            source=board,
+            tags=GeometryTags(source_collection="board_profile"),
+            payload=transformed_profile_geometry if transformed_profile_geometry else board_bbox,
+            source=transformed_profile_geometry if transformed_profile_geometry else board,
             points=outline_points,
             bbox=board_bbox,
-        )
-    )
-    items.append(
-        RenderableGeometry(
-            id="board_outline:0",
-            object_type=PcbGeometryObject.GRAPHIC,
-            shape=PcbGeometryShape.GROUP,
-            roles=(PcbGeometryRole.EDGE, PcbGeometryRole.BOARD_OUTLINE, PcbGeometryRole.GENERATED),
-            display_role=SYNTHETIC_BOARD_OUTLINE_ROLE,
-            layer=edge_layer,
-            tags=GeometryTags(source_collection="outline"),
-            payload=tuple(
-                _transform_geometry_payload(item.data, transform) for item in outline_geometry
-            ),
-            source=tuple(outline_geometry),
-            points=outline_points,
-            bbox=board_bbox,
-            clipped=False,
         )
     )
 
@@ -200,9 +189,6 @@ def _renderable_items_for_geometry(
     footprints_by_ref: dict[str, PcbFootprint],
     transform: _RenderedViewTransform,
 ) -> list[RenderableGeometry]:
-    if geometry.has_role(PcbGeometryRole.BOARD_OUTLINE):
-        return []
-
     payload = _transform_geometry_payload(geometry.data, transform)
     footprint = footprints_by_ref.get(geometry.footprint_ref)
     source_collection = geometry.metadata.source_collection
@@ -365,27 +351,29 @@ def _geometry_display_role(geometry: DomainPcbGeometry) -> str:
             )
         return PcbGeometryRole.USER_TEXT.value
     if geometry.object_type == PcbGeometryObject.GRAPHIC:
-        if geometry.has_role(PcbGeometryRole.SOLDER_MASK):
-            return PcbGeometryRole.SOLDER_MASK.value
-        if geometry.has_role(PcbGeometryRole.SOLDER_PASTE):
-            return PcbGeometryRole.SOLDER_PASTE.value
-        if geometry.has_role(PcbGeometryRole.SILKSCREEN):
-            return PcbGeometryRole.SILKSCREEN.value
-        if geometry.has_role(PcbGeometryRole.FABRICATION):
-            return geometry.primary_role.value
-        if geometry.shape == PcbGeometryShape.POLYGON:
-            return PcbGeometryRole.MECHANICAL.value
-        if geometry.shape == PcbGeometryShape.ARC:
-            return (
-                PcbGeometryRole.COMPONENT_BODY.value
-                if geometry.footprint_ref
-                else PcbGeometryRole.MECHANICAL.value
-            )
-        return (
-            PcbGeometryRole.COMPONENT_BODY.value
-            if geometry.footprint_ref
-            else PcbGeometryRole.MECHANICAL.value
-        )
+        for role in (
+            PcbGeometryRole.BOARD_OUTLINE,
+            PcbGeometryRole.EDGE,
+            PcbGeometryRole.SOLDER_MASK,
+            PcbGeometryRole.SOLDER_PASTE,
+            PcbGeometryRole.SILKSCREEN,
+            PcbGeometryRole.POUR,
+            PcbGeometryRole.ZONE_FILL,
+            PcbGeometryRole.COPPER,
+            PcbGeometryRole.COURTYARD,
+            PcbGeometryRole.DESIGNATOR,
+            PcbGeometryRole.VALUE,
+            PcbGeometryRole.ASSEMBLY,
+            PcbGeometryRole.FABRICATION,
+            PcbGeometryRole.COMPONENT_BODY,
+            PcbGeometryRole.MECHANICAL,
+            PcbGeometryRole.USER,
+        ):
+            if geometry.has_role(role):
+                if role == PcbGeometryRole.BOARD_OUTLINE:
+                    return PcbGeometryRole.EDGE.value
+                return role.value
+        return PcbGeometryRole.UNKNOWN.value
     return geometry.display_role
 
 
@@ -647,7 +635,7 @@ def _board_edge_layer(
 
 def _board_outline_layer_names(board: Pcb) -> tuple[str, ...]:
     names: list[str] = [
-        item.primary_layer for item in board.board_outline_geometry() if item.primary_layer
+        item.primary_layer for item in board.board_profile_geometry() if item.primary_layer
     ]
     return tuple(dict.fromkeys(name for name in names if name))
 

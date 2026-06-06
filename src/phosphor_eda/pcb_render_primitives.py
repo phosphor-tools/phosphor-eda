@@ -29,9 +29,7 @@ from phosphor_eda.pcb import (
 from phosphor_eda.pcb_render_drills import pad_drill_dimensions, pad_drill_geometry
 from phosphor_eda.pcb_render_geometry import (
     SYNTHETIC_BOARD_MATERIAL_ROLE,
-    SYNTHETIC_BOARD_OUTLINE_ROLE,
     SYNTHETIC_DRILL_ROLE,
-    RenderPoint,
 )
 from phosphor_eda.pcb_render_skia import geometry_to_skia_artwork, skia_path_to_svg_d
 from phosphor_eda.shapely_geometry import normalize_geometry
@@ -39,7 +37,6 @@ from phosphor_eda.sql.geometry import (
     arc_center_from_three_points,
     arc_sweep_angle,
     arc_to_polyline,
-    board_outline_polygon,
     pad_polygon,
 )
 from phosphor_eda.text_outlines import text_outline_geometry
@@ -76,6 +73,24 @@ class LayerMask:
 @dataclass(frozen=True)
 class LayerClip:
     board: tuple[SvgPrimitive, ...] = ()
+
+
+_PROFILE_ENDPOINT_TOLERANCE_MM = 1e-5
+
+
+@dataclass(frozen=True)
+class _ProfilePathSegment:
+    start: tuple[float, float]
+    end: tuple[float, float]
+    forward: str
+    reverse: str
+
+
+@dataclass(frozen=True)
+class _OrientedProfilePathSegment:
+    start: tuple[float, float]
+    end: tuple[float, float]
+    command: str
 
 
 def geometry_to_svg_primitive(
@@ -220,8 +235,6 @@ def _pad_copper_target_layer_name(
 def _non_skia_svg_path_d(item: RenderableGeometry) -> str:
     if item.display_role == SYNTHETIC_BOARD_MATERIAL_ROLE:
         return _board_material_svg_path_d(item)
-    if item.display_role == SYNTHETIC_BOARD_OUTLINE_ROLE:
-        return _board_outline_svg_path_d(item)
     payload = item.payload if item.payload is not None else item.source
     if _is_line_renderable(item) and isinstance(payload, PcbLineGeometry):
         return _line_svg_path_d(payload)
@@ -263,41 +276,6 @@ def _board_material_svg_path_d(item: RenderableGeometry) -> str:
     )
 
 
-def _board_outline_svg_path_d(item: RenderableGeometry) -> str:
-    outline = _outline_for_item(item)
-    if outline is None:
-        if item.points:
-            return _points_to_closed_svg_path_d(item.points)
-        return ""
-
-    commands: list[str] = []
-    for outline_item in outline:
-        if isinstance(outline_item.data, PcbLineGeometry):
-            line = outline_item.data
-            commands.append(
-                " ".join(
-                    (
-                        f"M {line.start_x:.4f} {line.start_y:.4f}",
-                        f"L {line.end_x:.4f} {line.end_y:.4f}",
-                    )
-                )
-            )
-        elif isinstance(outline_item.data, PcbArcGeometry):
-            arc = outline_item.data
-            points = arc_to_polyline(
-                arc.start_x,
-                arc.start_y,
-                arc.mid_x,
-                arc.mid_y,
-                arc.end_x,
-                arc.end_y,
-                num_points=32,
-            )
-            if points:
-                commands.append(_points_to_open_svg_path_d(points))
-    return " ".join(command for command in commands if command)
-
-
 def _polygon_svg_path_d(polygon: PcbPolygonGeometry) -> str:
     if len(polygon.points) < 3:
         return ""
@@ -328,9 +306,9 @@ def _outline_for_item(item: RenderableGeometry) -> list[DomainPcbGeometry] | Non
 
 
 def _filled_outline_svg_path_d(outline: list[DomainPcbGeometry]) -> str:
-    outline_geometry = board_outline_polygon(outline)
-    if outline_geometry is not None and not outline_geometry.is_empty:
-        return " ".join(_geometry_to_svg_path_parts(outline_geometry))
+    profile_path = _profile_geometry_svg_path_d(outline)
+    if profile_path:
+        return profile_path
 
     segments: list[tuple[tuple[float, float], ...]] = []
     for item in outline:
@@ -359,6 +337,158 @@ def _filled_outline_svg_path_d(outline: list[DomainPcbGeometry]) -> str:
     return " ".join(_closed_point_pairs_to_svg_path_d(contour) for contour in contours)
 
 
+def _profile_geometry_svg_path_d(outline: list[DomainPcbGeometry]) -> str:
+    segments: list[_ProfilePathSegment] = []
+    polygon_paths: list[str] = []
+    for item in outline:
+        if isinstance(item.data, PcbLineGeometry):
+            segment = _line_profile_segment(item.data)
+            if segment is not None:
+                segments.append(segment)
+        elif isinstance(item.data, PcbArcGeometry):
+            segment = _arc_profile_segment(item.data)
+            if segment is not None:
+                segments.append(segment)
+        elif isinstance(item.data, PcbPolygonGeometry):
+            path = _polygon_svg_path_d(item.data)
+            if path:
+                polygon_paths.append(path)
+
+    paths = [path for path in _stitch_profile_segments(segments) if path]
+    paths.extend(polygon_paths)
+    return " ".join(paths)
+
+
+def _line_profile_segment(line: PcbLineGeometry) -> _ProfilePathSegment | None:
+    start = (line.start_x, line.start_y)
+    end = (line.end_x, line.end_y)
+    if _points_equal(start, end):
+        return None
+    return _ProfilePathSegment(
+        start=start,
+        end=end,
+        forward=f"L {end[0]:.4f} {end[1]:.4f}",
+        reverse=f"L {start[0]:.4f} {start[1]:.4f}",
+    )
+
+
+def _arc_profile_segment(arc: PcbArcGeometry) -> _ProfilePathSegment | None:
+    start = (arc.start_x, arc.start_y)
+    end = (arc.end_x, arc.end_y)
+    if _points_equal(start, end):
+        return None
+    forward = _arc_profile_command(arc, reverse=False)
+    reverse = _arc_profile_command(arc, reverse=True)
+    if not forward or not reverse:
+        return None
+    return _ProfilePathSegment(start=start, end=end, forward=forward, reverse=reverse)
+
+
+def _arc_profile_command(arc: PcbArcGeometry, *, reverse: bool) -> str:
+    cx, cy, radius = arc_center_from_three_points(
+        arc.start_x,
+        arc.start_y,
+        arc.mid_x,
+        arc.mid_y,
+        arc.end_x,
+        arc.end_y,
+    )
+    if not all(math.isfinite(value) for value in (cx, cy, radius)) or radius <= 0:
+        return ""
+    sweep = arc_sweep_angle(
+        arc.start_x,
+        arc.start_y,
+        arc.mid_x,
+        arc.mid_y,
+        arc.end_x,
+        arc.end_y,
+        cx,
+        cy,
+    )
+    if not math.isfinite(sweep) or math.isclose(sweep, 0.0, abs_tol=1e-9):
+        return ""
+    target = (arc.start_x, arc.start_y) if reverse else (arc.end_x, arc.end_y)
+    effective_sweep = -sweep if reverse else sweep
+    large_arc = 1 if abs(effective_sweep) > 180.0 else 0
+    sweep_flag = 1 if effective_sweep > 0 else 0
+    return f"A {radius:.4f} {radius:.4f} 0 {large_arc} {sweep_flag} {target[0]:.4f} {target[1]:.4f}"
+
+
+def _stitch_profile_segments(segments: list[_ProfilePathSegment]) -> tuple[str, ...]:
+    unused = list(segments)
+    paths: list[str] = []
+    while unused:
+        segment = unused.pop(0)
+        contour = [
+            _OrientedProfilePathSegment(
+                start=segment.start,
+                end=segment.end,
+                command=segment.forward,
+            )
+        ]
+        extended = True
+        while extended:
+            extended = False
+            start = contour[0].start
+            end = contour[-1].end
+            for index, candidate in enumerate(unused):
+                if _points_equal(end, candidate.start):
+                    contour.append(
+                        _OrientedProfilePathSegment(
+                            start=candidate.start,
+                            end=candidate.end,
+                            command=candidate.forward,
+                        )
+                    )
+                    _ = unused.pop(index)
+                    extended = True
+                    break
+                if _points_equal(end, candidate.end):
+                    contour.append(
+                        _OrientedProfilePathSegment(
+                            start=candidate.end,
+                            end=candidate.start,
+                            command=candidate.reverse,
+                        )
+                    )
+                    _ = unused.pop(index)
+                    extended = True
+                    break
+                if _points_equal(start, candidate.end):
+                    contour.insert(
+                        0,
+                        _OrientedProfilePathSegment(
+                            start=candidate.start,
+                            end=candidate.end,
+                            command=candidate.forward,
+                        ),
+                    )
+                    _ = unused.pop(index)
+                    extended = True
+                    break
+                if _points_equal(start, candidate.start):
+                    contour.insert(
+                        0,
+                        _OrientedProfilePathSegment(
+                            start=candidate.end,
+                            end=candidate.start,
+                            command=candidate.reverse,
+                        ),
+                    )
+                    _ = unused.pop(index)
+                    extended = True
+                    break
+        start = contour[0].start
+        end = contour[-1].end
+        if not _points_equal(start, end):
+            continue
+        commands = [f"M {start[0]:.4f} {start[1]:.4f}"]
+        commands.extend(item.command for item in contour)
+        commands.append("Z")
+        paths.append(" ".join(commands))
+    return tuple(paths)
+
+
 def _stitch_outline_segments(
     segments: list[tuple[tuple[float, float], ...]],
 ) -> tuple[tuple[tuple[float, float], ...], ...]:
@@ -381,34 +511,27 @@ def _stitch_outline_segments(
                     _ = unused.pop(index)
                     extended = True
                     break
-        if len(contour) >= 3 and _points_equal(contour[0], contour[-1]):
-            contour = contour[:-1]
+        if len(contour) < 3 or not _points_equal(contour[0], contour[-1]):
+            continue
+        contour = contour[:-1]
         if len(contour) >= 3:
             contours.append(tuple(contour))
     return tuple(contours)
 
 
 def _points_equal(first: tuple[float, float], second: tuple[float, float]) -> bool:
-    return math.isclose(first[0], second[0], abs_tol=1e-6) and math.isclose(
+    # Altium lines carry integer endpoints, while arcs carry integer center/radius
+    # plus float angles and are reconstructed with trig. Endpoint differences can
+    # exceed one Altium coordinate unit (2.54e-6 mm) before rendering transforms.
+    return math.isclose(
+        first[0],
+        second[0],
+        abs_tol=_PROFILE_ENDPOINT_TOLERANCE_MM,
+    ) and math.isclose(
         first[1],
         second[1],
-        abs_tol=1e-6,
+        abs_tol=_PROFILE_ENDPOINT_TOLERANCE_MM,
     )
-
-
-def _points_to_closed_svg_path_d(points: tuple[RenderPoint, ...]) -> str:
-    point_pairs = tuple((point.x, point.y) for point in points)
-    d = _points_to_open_svg_path_d(point_pairs)
-    return f"{d} Z" if d else ""
-
-
-def _points_to_open_svg_path_d(points: Iterable[tuple[float, float]]) -> str:
-    point_tuple = tuple(points)
-    if len(point_tuple) < 2:
-        return ""
-    commands = [f"M {point_tuple[0][0]:.4f} {point_tuple[0][1]:.4f}"]
-    commands.extend(f"L {x:.4f} {y:.4f}" for x, y in point_tuple[1:])
-    return " ".join(commands)
 
 
 def _line_svg_path_d(line: PcbLineGeometry) -> str:

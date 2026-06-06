@@ -122,8 +122,6 @@ def _kicad_type_roles(native_type: str) -> tuple[LayerRole, ...]:
         return (LayerRole.FRONT,)
     if normalized == "back":
         return (LayerRole.BACK,)
-    if normalized in {"auxiliary", "user"}:
-        return (LayerRole.AUXILIARY,)
     return ()
 
 
@@ -164,11 +162,11 @@ def _kicad_name_roles(name: str) -> tuple[LayerRole, ...]:
     if name == "Margin":
         return (LayerRole.MARGIN,)
     if name == "Dwgs.User":
-        return (LayerRole.AUXILIARY, LayerRole.DRAWING)
+        return (LayerRole.DRAWING,)
     if name == "Cmts.User":
-        return (LayerRole.AUXILIARY, LayerRole.COMMENT)
+        return (LayerRole.COMMENT,)
     if name in {"Eco1.User", "Eco2.User"} or name.startswith("User."):
-        return (LayerRole.AUXILIARY, LayerRole.USER)
+        return (LayerRole.USER,)
     return ()
 
 
@@ -216,9 +214,9 @@ _LAYER_TO_GEOMETRY_ROLES: dict[LayerRole, PcbGeometryRole] = {
     LayerRole.COMMENT: PcbGeometryRole.COMMENT,
     LayerRole.EDGE: PcbGeometryRole.EDGE,
     LayerRole.MECHANICAL: PcbGeometryRole.MECHANICAL,
-    LayerRole.AUXILIARY: PcbGeometryRole.AUXILIARY,
     LayerRole.ROUTE_TOOL_PATH: PcbGeometryRole.ROUTE_TOOL_PATH,
     LayerRole.V_CUT: PcbGeometryRole.V_CUT,
+    LayerRole.USER: PcbGeometryRole.USER,
 }
 
 

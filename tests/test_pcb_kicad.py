@@ -174,7 +174,6 @@ def test_fabrication_and_user_layer_roles_are_normalized(board: Pcb) -> None:
     fcrtyd = board.layer_for("F.CrtYd")
     assert fcrtyd is not None
     assert set(fcrtyd.roles) >= {
-        LayerRole.AUXILIARY,
         LayerRole.FABRICATION,
         LayerRole.COURTYARD,
         LayerRole.FRONT,
@@ -184,11 +183,11 @@ def test_fabrication_and_user_layer_roles_are_normalized(board: Pcb) -> None:
 
     ffab = board.layer_for("F.Fab")
     assert ffab is not None
-    assert set(ffab.roles) >= {LayerRole.AUXILIARY, LayerRole.FABRICATION, LayerRole.FRONT}
+    assert set(ffab.roles) >= {LayerRole.FABRICATION, LayerRole.FRONT}
 
     drawings = board.layer_for("Dwgs.User")
     assert drawings is not None
-    assert set(drawings.roles) >= {LayerRole.AUXILIARY, LayerRole.DRAWING}
+    assert set(drawings.roles) >= {LayerRole.DRAWING}
 
 
 def test_layer_for_missing(board: Pcb) -> None:
@@ -278,10 +277,10 @@ def test_via_count(board: Pcb) -> None:
 
 def test_board_outline(board: Pcb) -> None:
     outline_lines = [
-        item for item in board.board_outline_geometry() if item.shape == PcbGeometryShape.LINE
+        item for item in board.board_profile_geometry() if item.shape == PcbGeometryShape.LINE
     ]
     outline_arcs = [
-        item for item in board.board_outline_geometry() if item.shape == PcbGeometryShape.ARC
+        item for item in board.board_profile_geometry() if item.shape == PcbGeometryShape.ARC
     ]
     assert len(outline_lines) > 0
     assert len(outline_arcs) > 0
