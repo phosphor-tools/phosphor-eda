@@ -12,16 +12,16 @@ from typing import TYPE_CHECKING
 from shapely import LineString, Point, Polygon
 from shapely.affinity import rotate
 
-from phosphor_eda.pcb import PcbArcGeometry, PcbLineGeometry
+from phosphor_eda.pcb import PcbArcGeometry, PcbLineGeometry, PcbPathSegmentKind
 from phosphor_eda.shapely_geometry import normalize_geometry, robust_polygonize
 
 if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry
 
     from phosphor_eda.pcb import (
+        PcbClosedPath,
         PcbFootprint,
         PcbGeometry,
-        PcbKeepoutGeometry,
         PcbPadGeometry,
         PcbPolygonGeometry,
         PcbViaGeometry,
@@ -256,16 +256,42 @@ def polygon_geometry(poly: PcbPolygonGeometry) -> Polygon | None:
     return geometry
 
 
-def keepout_geometry(keepout: PcbKeepoutGeometry) -> Polygon | None:
-    """Convert a PcbKeepout to a Shapely Polygon, or None if degenerate."""
-    if len(keepout.boundary) < 3:
+def closed_path_geometry(path: PcbClosedPath) -> Polygon | None:
+    """Convert a closed PCB path to a Shapely Polygon, or None if degenerate."""
+    boundary = _closed_path_points(path)
+    if len(boundary) < 3:
         return None
-    holes = [hole for hole in keepout.holes if len(hole) >= 3]
-    geometry = Polygon(keepout.boundary, holes=holes or None)
+    holes = [
+        hole_points for hole in path.holes if len(hole_points := _closed_path_points(hole)) >= 3
+    ]
+    geometry = Polygon(boundary, holes=holes or None)
     normalized = normalize_geometry(geometry)
     if not normalized.is_empty and isinstance(normalized, Polygon):
         return normalized
     return geometry
+
+
+def _closed_path_points(path: PcbClosedPath) -> list[tuple[float, float]]:
+    points: list[tuple[float, float]] = []
+    for segment in path.segments:
+        if not points:
+            points.append((segment.start_x, segment.start_y))
+        if segment.kind == PcbPathSegmentKind.ARC:
+            arc_points = arc_to_polyline(
+                segment.start_x,
+                segment.start_y,
+                segment.mid_x,
+                segment.mid_y,
+                segment.end_x,
+                segment.end_y,
+                num_points=24,
+            )
+            points.extend(arc_points[1:])
+        else:
+            points.append((segment.end_x, segment.end_y))
+    if points and points[-1] == points[0]:
+        points.pop()
+    return points
 
 
 # ---------------------------------------------------------------------------

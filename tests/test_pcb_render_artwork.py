@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from test_pcb_render import _board
 
-from phosphor_eda.pcb import PcbGeometryObject, PcbGeometryRole
+from phosphor_eda.pcb import (
+    PcbClosedPath,
+    PcbGeometryObject,
+    PcbGeometryRole,
+    PcbKeepout,
+)
 from phosphor_eda.pcb_render_artwork import (
     board_profile_geometry,
     drill_geometry_for_layer,
@@ -37,6 +42,32 @@ def test_source_selection_rejects_removed_plural_object_aliases() -> None:
     rules = [LayerSelectionRule(match=LayerMatch(role="copper"), objects=("pads", "traces"))]
 
     assert select_source_artwork(store, rules, active_side="front") == ()
+
+
+def test_keepout_overlays_require_explicit_keepout_selection() -> None:
+    board = _board()
+    board.keepouts.append(
+        PcbKeepout(
+            id="keepout:1",
+            boundary=PcbClosedPath.from_points([(1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0)]),
+            layers=("F.Cu",),
+        )
+    )
+    store = build_geometry_store(board, side="front")
+
+    implicit_rules = [LayerSelectionRule(match=LayerMatch(name="F.Cu"), objects=("region",))]
+    explicit_rules = [LayerSelectionRule(match=LayerMatch(role="keepout"), objects=("keepout",))]
+
+    assert [
+        item.id
+        for item in select_source_artwork(store, implicit_rules, active_side="front")
+        if item.display_role == "keepout"
+    ] == []
+    assert [
+        item.id
+        for item in select_source_artwork(store, explicit_rules, active_side="front")
+        if item.display_role == "keepout"
+    ] == ["keepout:1"]
 
 
 def test_selected_copper_layers_projects_vias_from_normalized_layer_rules() -> None:

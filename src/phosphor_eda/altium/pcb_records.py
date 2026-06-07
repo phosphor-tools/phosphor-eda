@@ -32,23 +32,38 @@ class TrackRecord:
 
     Byte layout (33 bytes):
       [0]     layer    u8
+      [1]     flags1   u8
+      [2]     flags2   u8
       [3:5]   net      u16
+      [5:7]   polygon  u16
       [7:9]   component u16
+      [9:11]  subpoly_index u16
       [13:17] x1       i32
       [17:21] y1       i32
       [21:25] x2       i32
       [25:29] y2       i32
       [29:33] width    i32
+      [56]    keepout restrictions bitmask, when present
     """
 
     layer: int
+    flags1: int
+    flags2: int
     net: int
+    polygon: int
     component: int
+    subpoly_index: int
     start: tuple[int, int]
     end: tuple[int, int]
     width: int
+    keepout_restrictions: int = 0
 
     MIN_SIZE: ClassVar[int] = 33
+
+    @property
+    def is_keepout(self) -> bool:
+        """Return whether this track is an Altium keepout primitive."""
+        return bool(PcbPrimitiveFlags2(self.flags2) & PcbPrimitiveFlags2.KEEPOUT)
 
     @classmethod
     def from_bytes(cls, body: bytes, ctx: ParseContext) -> Self | None:
@@ -57,11 +72,16 @@ class TrackRecord:
             return None
         return cls(
             layer=body[0],
+            flags1=body[1] if len(body) > 1 else 0,
+            flags2=body[2] if len(body) > 2 else 0,
             net=u16(body, 3),
+            polygon=u16(body, 5),
             component=u16(body, 7),
+            subpoly_index=u16(body, 9) if len(body) >= 11 else 0,
             start=(i32(body, 13), i32(body, 17)),
             end=(i32(body, 21), i32(body, 25)),
             width=i32(body, 29),
+            keepout_restrictions=body[56] if len(body) >= 57 else 0,
         )
 
 
@@ -173,21 +193,32 @@ class FillRecord:
 
     Byte layout (37 bytes):
       [0]     layer  u8
+      [1]     flags1 u8
+      [2]     flags2 u8
       [3:5]   net    u16
       [13:17] x1     i32
       [17:21] y1     i32
       [21:25] x2     i32
       [25:29] y2     i32
       [29:37] rotation f64
+      [56]    keepout restrictions bitmask, when present
     """
 
     layer: int
+    flags1: int
+    flags2: int
     net: int
     pos1: tuple[int, int]
     pos2: tuple[int, int]
     rotation: float
+    keepout_restrictions: int = 0
 
     MIN_SIZE: ClassVar[int] = 37
+
+    @property
+    def is_keepout(self) -> bool:
+        """Return whether this fill is an Altium keepout primitive."""
+        return bool(PcbPrimitiveFlags2(self.flags2) & PcbPrimitiveFlags2.KEEPOUT)
 
     @classmethod
     def from_bytes(cls, body: bytes, ctx: ParseContext) -> Self | None:
@@ -196,10 +227,13 @@ class FillRecord:
             return None
         return cls(
             layer=body[0],
+            flags1=body[1] if len(body) > 1 else 0,
+            flags2=body[2] if len(body) > 2 else 0,
             net=u16(body, 3),
             pos1=(i32(body, 13), i32(body, 17)),
             pos2=(i32(body, 21), i32(body, 25)),
             rotation=f64(body, 29),
+            keepout_restrictions=body[56] if len(body) >= 57 else 0,
         )
 
 

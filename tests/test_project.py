@@ -102,6 +102,8 @@ def test_project_with_all_submodels():
             name="test-board",
             nets={0: PcbNet(number=0, name="")},
             footprints=[],
+            pours=[],
+            keepouts=[],
             geometry=[],
         ),
         stackup=Stackup(

@@ -71,6 +71,8 @@ def _make_test_board() -> Pcb:
             3: PcbNet(3, "SPI_MOSI"),
         },
         footprints=[u1, u2],
+        pours=[],
+        keepouts=[],
         geometry=[
             _pad("U1", "1", 10.0, 10.0, 1, "VCC"),
             _pad("U1", "2", 12.0, 10.0, 2, "SPI_CLK"),

@@ -8,12 +8,14 @@ import pytest
 from phosphor_eda.pcb import (
     LayerRole,
     Pcb,
+    PcbClosedPath,
     PcbFootprint,
     PcbGeometry,
     PcbGeometryMetadata,
     PcbGeometryObject,
     PcbGeometryRole,
     PcbGeometryShape,
+    PcbKeepout,
     PcbLayer,
     PcbLineGeometry,
     PcbNet,
@@ -70,6 +72,28 @@ def test_geometry_store_exposes_object_type_shape_roles_and_display_role() -> No
     assert pad.object_type == PcbGeometryObject.PAD
     assert pad.shape == PcbGeometryShape.CIRCLE
     assert PcbGeometryRole.COPPER in pad.roles
+
+
+def test_geometry_store_exposes_top_level_keepout_overlays() -> None:
+    board = _board()
+    board.keepouts.append(
+        PcbKeepout(
+            id="keepout:1",
+            boundary=PcbClosedPath.from_points([(1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0)]),
+            layers=("F.Cu",),
+        )
+    )
+
+    store = build_geometry_store(board, side="front")
+    keepout = next(item for item in store.items if item.display_role == "keepout")
+
+    assert keepout.object_type == PcbGeometryObject.REGION
+    assert keepout.layer.role == "keepout"
+    assert geometry_matches_selector(
+        keepout,
+        GeometrySelector(display_roles=frozenset({"keepout"})),
+        active_side="front",
+    )
 
 
 def test_geometry_selector_matches_normalized_fields() -> None:
@@ -130,6 +154,8 @@ def _board() -> Pcb:
         name="render-test",
         nets={1: PcbNet(1, "VCC")},
         footprints=[PcbFootprint("U1", "Package", 5.0, 5.0, 0.0, "F.Cu", value="MCU")],
+        pours=[],
+        keepouts=[],
         layers=[
             PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT, LayerRole.OUTER), number=0),
             PcbLayer("B.Cu", (LayerRole.COPPER, LayerRole.BACK, LayerRole.OUTER), number=31),

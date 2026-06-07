@@ -103,11 +103,11 @@ def test_pcb_geometry_helpers_query_roles_type_shape_layer_footprint_and_net() -
         net_name="VCC",
         footprint_ref="U1",
     )
-    pour = PcbGeometry(
-        id="zone:0",
-        object_type=PcbGeometryObject.ZONE,
+    pour_fill = PcbGeometry(
+        id="region:0",
+        object_type=PcbGeometryObject.REGION,
         shape=PcbGeometryShape.POLYGON,
-        roles=(PcbGeometryRole.COPPER, PcbGeometryRole.POUR, PcbGeometryRole.ZONE_FILL),
+        roles=(PcbGeometryRole.COPPER, PcbGeometryRole.POUR, PcbGeometryRole.POUR_FILL),
         data=PcbPolygonGeometry([(0.0, 0.0), (3.0, 0.0), (3.0, 3.0), (0.0, 3.0)]),
         layers=("F.Cu",),
         net_number=1,
@@ -117,7 +117,17 @@ def test_pcb_geometry_helpers_query_roles_type_shape_layer_footprint_and_net() -
         name="geometry",
         nets={},
         footprints=[],
-        geometry=[outline, edge_text, copper_text, board_cutout, copper_polygon_cutout, pad, pour],
+        pours=[],
+        keepouts=[],
+        geometry=[
+            outline,
+            edge_text,
+            copper_text,
+            board_cutout,
+            copper_polygon_cutout,
+            pad,
+            pour_fill,
+        ],
         layers=[
             PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT)),
             PcbLayer("Edge.Cuts", (LayerRole.EDGE,)),
@@ -128,7 +138,7 @@ def test_pcb_geometry_helpers_query_roles_type_shape_layer_footprint_and_net() -
         "copper:text",
         "copper-cutout:0",
         "pad:U1:1",
-        "zone:0",
+        "region:0",
     ]
     assert [item.id for item in board.geometry_by_role("edge")] == [
         "outline:0",
@@ -141,10 +151,10 @@ def test_pcb_geometry_helpers_query_roles_type_shape_layer_footprint_and_net() -
         "copper:text",
         "copper-cutout:0",
         "pad:U1:1",
-        "zone:0",
+        "region:0",
     ]
     assert [item.id for item in board.geometry_for_footprint("U1")] == ["pad:U1:1"]
-    assert [item.id for item in board.geometry_for_net(1)] == ["pad:U1:1", "zone:0"]
+    assert [item.id for item in board.geometry_for_net(1)] == ["pad:U1:1", "region:0"]
     assert [item.id for item in board.board_profile_geometry()] == [
         "outline:0",
         "board-cutout:0",
@@ -156,6 +166,8 @@ def test_pcb_bbox_uses_outline_geometry_and_falls_back_to_pads() -> None:
         name="outline",
         nets={},
         footprints=[],
+        pours=[],
+        keepouts=[],
         geometry=[
             PcbGeometry(
                 id="outline:0",
@@ -173,6 +185,8 @@ def test_pcb_bbox_uses_outline_geometry_and_falls_back_to_pads() -> None:
         name="pad-only",
         nets={},
         footprints=[],
+        pours=[],
+        keepouts=[],
         geometry=[
             PcbGeometry(
                 id="pad:U1:1",

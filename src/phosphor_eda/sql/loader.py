@@ -22,23 +22,21 @@ from phosphor_eda.pcb import (
     PcbGeometryObject,
     PcbGeometryRole,
     PcbGeometryShape,
-    PcbKeepoutGeometry,
     PcbLayer,
     PcbLineGeometry,
     PcbPadGeometry,
     PcbPolygonGeometry,
     PcbTextGeometry,
     PcbViaGeometry,
-    PcbZoneGeometry,
     normalize_roles,
 )
 from phosphor_eda.sql.geometry import (
     arc_center_from_three_points,
     arc_sweep_angle,
     board_outline_polygon,
+    closed_path_geometry,
     footprint_bbox_polygon,
     footprint_side,
-    keepout_geometry,
     pad_polygon,
     pad_side,
     polygon_geometry,
@@ -72,7 +70,7 @@ def load_database(project: Project) -> duckdb.DuckDBPyConnection:
         _load_segments(con, project.pcb)
         _load_vias(con, project.pcb)
         _load_polygons(con, project.pcb)
-        _load_zones(con, project.pcb)
+        _load_pours(con, project.pcb)
         _load_keepouts(con, project.pcb)
         _load_footprint_graphics(con, project.pcb)
         _load_board_graphics(con, project.pcb)
@@ -134,10 +132,6 @@ def _geometry_to_shape(item: PcbGeometry) -> BaseGeometry | None:
         return trace_arc_geometry(data)[1]
     if isinstance(data, PcbPolygonGeometry):
         return polygon_geometry(data)
-    if isinstance(data, PcbZoneGeometry):
-        return polygon_geometry(PcbPolygonGeometry(points=data.boundary))
-    if isinstance(data, PcbKeepoutGeometry):
-        return keepout_geometry(data)
     if isinstance(data, PcbCircleGeometry):
         geom = Point(data.cx, data.cy).buffer(data.radius, quad_segs=16)
         return geom if data.fill else geom.boundary.buffer(max(data.width, 0.01) / 2)
@@ -151,7 +145,7 @@ def _load_geometry(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
         geom = _geometry_to_shape(item)
         _ = con.execute(
             """INSERT INTO geometry VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))""",
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))""",
             [
                 item.id,
                 item.object_type.value,
@@ -165,6 +159,7 @@ def _load_geometry(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
                 item.net_name or _net_name(pcb, item.net_number),
                 item.net_number,
                 item.footprint_ref,
+                item.pour_id,
                 item.metadata.source_format,
                 item.metadata.native_type,
                 item.metadata.native_kind,
@@ -339,53 +334,71 @@ def _load_polygons(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
         )
 
 
-def _load_zones(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
-    for item in pcb.geometry_by_object_type(PcbGeometryObject.ZONE):
-        if not isinstance(item.data, PcbZoneGeometry):
-            continue
-        zone = item.data
-        boundary_poly = polygon_geometry(PcbPolygonGeometry(points=zone.boundary))
-        wkb_val = _wkb(boundary_poly) if boundary_poly else None
+def _load_pours(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
+    for pour in pcb.pours:
+        boundary = closed_path_geometry(pour.boundary)
         _ = con.execute(
-            "INSERT INTO zones VALUES (?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))",
+            """INSERT INTO pours VALUES
+            (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ST_GeomFromWKB(?)
+            )""",
             [
-                item.net_name or _net_name(pcb, item.net_number),
-                item.net_number,
-                item.primary_layer,
-                zone.priority,
-                zone.min_thickness_mm,
-                zone.thermal_gap_mm,
-                zone.thermal_bridge_width_mm,
-                zone.fill_type,
-                wkb_val,
+                pour.id,
+                pour.name,
+                pour.net_name or _net_name(pcb, pour.net_number),
+                pour.net_number,
+                pour.layers[0] if pour.layers else "",
+                list(pour.layers),
+                pour.priority,
+                pour.settings.fill_mode.value,
+                pour.settings.hatch_style,
+                pour.settings.grid_mm,
+                pour.settings.track_width_mm,
+                pour.settings.min_thickness_mm,
+                pour.settings.thermal_gap_mm,
+                pour.settings.thermal_bridge_width_mm,
+                pour.settings.connect_pads_clearance_mm,
+                list(pour.fill_geometry_ids),
+                list(pour.cutout_geometry_ids),
+                pour.footprint_ref,
+                pour.metadata.source_format,
+                pour.metadata.native_type,
+                pour.metadata.native_kind,
+                pour.metadata.native_id,
+                pour.metadata.native_index,
+                json.dumps(asdict(pour.metadata), separators=(",", ":"), sort_keys=True),
+                _wkb(boundary) if boundary else None,
             ],
         )
 
 
 def _load_keepouts(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
-    for item in pcb.geometry_by_object_type(PcbGeometryObject.KEEP_OUT):
-        if not isinstance(item.data, PcbKeepoutGeometry):
-            continue
-        keepout = item.data
-        geom = keepout_geometry(keepout)
-        wkb_val = _wkb(geom) if geom else None
-        layers = ",".join(item.layers)
-        for layer in item.layers:
-            _ = con.execute(
-                "INSERT INTO keepouts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))",
-                [
-                    item.footprint_ref,
-                    layer,
-                    layers,
-                    keepout.rules.tracks,
-                    keepout.rules.vias,
-                    keepout.rules.pads,
-                    keepout.rules.copperpour,
-                    keepout.rules.footprints,
-                    item.metadata.source_format,
-                    wkb_val,
-                ],
-            )
+    for keepout in pcb.keepouts:
+        boundary = closed_path_geometry(keepout.boundary)
+        _ = con.execute(
+            """INSERT INTO keepouts VALUES
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))""",
+            [
+                keepout.id,
+                keepout.name,
+                keepout.footprint_ref,
+                keepout.layers[0] if keepout.layers else "",
+                list(keepout.layers),
+                keepout.rules.tracks.value,
+                keepout.rules.vias.value,
+                keepout.rules.pads.value,
+                keepout.rules.copper_pours.value,
+                keepout.rules.footprints.value,
+                keepout.metadata.source_format,
+                keepout.metadata.native_type,
+                keepout.metadata.native_kind,
+                keepout.metadata.native_id,
+                keepout.metadata.native_index,
+                json.dumps(asdict(keepout.metadata), separators=(",", ":"), sort_keys=True),
+                _wkb(boundary) if boundary else None,
+            ],
+        )
 
 
 def _load_footprint_graphics(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:

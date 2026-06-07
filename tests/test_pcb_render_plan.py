@@ -77,4 +77,4 @@ def test_render_plan_profiler_counts_geometry_object_types() -> None:
     assert board_metric["segments"] == 1
     assert board_metric["trace_arcs"] == 0
     assert board_metric["vias"] == 1
-    assert board_metric["zones"] == 0
+    assert board_metric["pours"] == 0

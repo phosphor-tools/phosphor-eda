@@ -80,7 +80,7 @@ def build_derived_render_plan(
                 ]
             ),
             vias=len(board.geometry_by_object_type(PcbGeometryObject.VIA)),
-            zones=len(board.geometry_by_object_type(PcbGeometryObject.ZONE)),
+            pours=len(board.pours),
             layers=len(board.layers),
         )
     if profiler is None:

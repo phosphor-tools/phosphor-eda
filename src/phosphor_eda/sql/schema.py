@@ -37,6 +37,7 @@ TABLE_DDL: dict[str, str] = {
             net_name VARCHAR,
             net_number INTEGER,
             footprint_ref VARCHAR,
+            pour_id VARCHAR,
             source_format VARCHAR,
             native_type VARCHAR,
             native_kind VARCHAR,
@@ -109,31 +110,54 @@ TABLE_DDL: dict[str, str] = {
             geom GEOMETRY
         )
     """,
-    "zones": """
-        CREATE TABLE zones (
+    "pours": """
+        CREATE TABLE pours (
+            id VARCHAR,
+            name VARCHAR,
             net_name VARCHAR,
             net_number INTEGER,
-            layer VARCHAR,
+            primary_layer VARCHAR,
+            layers VARCHAR[],
             priority INTEGER,
+            fill_mode VARCHAR,
+            hatch_style VARCHAR,
+            grid_mm DOUBLE,
+            track_width_mm DOUBLE,
             min_thickness_mm DOUBLE,
             thermal_gap_mm DOUBLE,
             thermal_bridge_width_mm DOUBLE,
-            fill_type VARCHAR,
+            connect_pads_clearance_mm DOUBLE,
+            fill_geometry_ids VARCHAR[],
+            cutout_geometry_ids VARCHAR[],
+            footprint_ref VARCHAR,
+            source_format VARCHAR,
+            native_type VARCHAR,
+            native_kind VARCHAR,
+            native_id VARCHAR,
+            native_index INTEGER,
+            metadata JSON,
             boundary GEOMETRY
         )
     """,
     "keepouts": """
         CREATE TABLE keepouts (
-            reference VARCHAR,
-            layer VARCHAR,
-            layers VARCHAR,
+            id VARCHAR,
+            name VARCHAR,
+            footprint_ref VARCHAR,
+            primary_layer VARCHAR,
+            layers VARCHAR[],
             tracks VARCHAR,
             vias VARCHAR,
             pads VARCHAR,
-            copperpour VARCHAR,
+            copper_pours VARCHAR,
             footprints VARCHAR,
-            source VARCHAR,
-            geom GEOMETRY
+            source_format VARCHAR,
+            native_type VARCHAR,
+            native_kind VARCHAR,
+            native_id VARCHAR,
+            native_index INTEGER,
+            metadata JSON,
+            boundary GEOMETRY
         )
     """,
     "footprint_graphics": """

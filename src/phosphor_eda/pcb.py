@@ -218,6 +218,16 @@ class PcbGeometryMetadata(PcbMetadata):
 
 
 @dataclass
+class PcbPourMetadata(PcbMetadata):
+    native_pour_index: int | None = None
+
+
+@dataclass
+class PcbKeepoutMetadata(PcbMetadata):
+    pass
+
+
+@dataclass
 class PcbLayer:
     """A layer definition with normalized role metadata."""
 
@@ -263,11 +273,10 @@ class PcbGeometryObject(StrEnum):
     TRACK = "track"
     VIA = "via"
     PAD = "pad"
-    ZONE = "zone"
+    REGION = "region"
     GRAPHIC = "graphic"
     TEXT = "text"
     DIMENSION = "dimension"
-    KEEP_OUT = "keepout"
     MODEL_3D = "model_3d"
     COMPONENT_BODY = "component_body"
     IMAGE = "image"
@@ -318,8 +327,7 @@ class PcbGeometryRole(StrEnum):
     ROUTE = "route"
     TRACE = "trace"
     POUR = "pour"
-    ZONE_OUTLINE = "zone_outline"
-    ZONE_FILL = "zone_fill"
+    POUR_FILL = "pour_fill"
     POLYGON_OUTLINE = "polygon_outline"
     DIFF_PAIR = "diff_pair"
     FROM_TO = "from_to"
@@ -338,14 +346,6 @@ class PcbGeometryRole(StrEnum):
     TENTED = "tented"
     TENTED_FRONT = "tented_front"
     TENTED_BACK = "tented_back"
-
-    KEEPOUT = "keepout"
-    RULE_AREA = "rule_area"
-    TRACK_KEEPOUT = "track_keepout"
-    VIA_KEEPOUT = "via_keepout"
-    PAD_KEEPOUT = "pad_keepout"
-    COPPER_POUR_KEEPOUT = "copper_pour_keepout"
-    FOOTPRINT_KEEPOUT = "footprint_keepout"
 
     TEXT = "text"
     USER_TEXT = "user_text"
@@ -391,8 +391,7 @@ _GEOMETRY_ROLE_ORDER: tuple[PcbGeometryRole, ...] = (
     PcbGeometryRole.ROUTE,
     PcbGeometryRole.TRACE,
     PcbGeometryRole.POUR,
-    PcbGeometryRole.ZONE_OUTLINE,
-    PcbGeometryRole.ZONE_FILL,
+    PcbGeometryRole.POUR_FILL,
     PcbGeometryRole.POLYGON_OUTLINE,
     PcbGeometryRole.DIFF_PAIR,
     PcbGeometryRole.FROM_TO,
@@ -410,13 +409,6 @@ _GEOMETRY_ROLE_ORDER: tuple[PcbGeometryRole, ...] = (
     PcbGeometryRole.TENTED,
     PcbGeometryRole.TENTED_FRONT,
     PcbGeometryRole.TENTED_BACK,
-    PcbGeometryRole.KEEPOUT,
-    PcbGeometryRole.RULE_AREA,
-    PcbGeometryRole.TRACK_KEEPOUT,
-    PcbGeometryRole.VIA_KEEPOUT,
-    PcbGeometryRole.PAD_KEEPOUT,
-    PcbGeometryRole.COPPER_POUR_KEEPOUT,
-    PcbGeometryRole.FOOTPRINT_KEEPOUT,
     PcbGeometryRole.TEXT,
     PcbGeometryRole.USER_TEXT,
     PcbGeometryRole.BARCODE,
@@ -441,11 +433,10 @@ _GEOMETRY_PRIMARY_ROLE_ORDER: tuple[PcbGeometryRole, ...] = (
     PcbGeometryRole.BOARD_OUTLINE,
     PcbGeometryRole.EDGE,
     PcbGeometryRole.DRILL,
-    PcbGeometryRole.KEEPOUT,
     PcbGeometryRole.TRACE,
     PcbGeometryRole.ROUTE,
     PcbGeometryRole.POUR,
-    PcbGeometryRole.ZONE_FILL,
+    PcbGeometryRole.POUR_FILL,
     PcbGeometryRole.COPPER,
     PcbGeometryRole.SOLDER_MASK,
     PcbGeometryRole.SOLDER_PASTE,
@@ -478,6 +469,94 @@ def normalize_geometry_roles(*roles: PcbGeometryRole | str) -> tuple[PcbGeometry
     if not role_set:
         role_set.add(PcbGeometryRole.UNKNOWN)
     return tuple(role for role in _GEOMETRY_ROLE_ORDER if role in role_set)
+
+
+class PcbPathSegmentKind(StrEnum):
+    LINE = "line"
+    ARC = "arc"
+
+
+@dataclass(frozen=True)
+class PcbPathSegment:
+    kind: PcbPathSegmentKind
+    start_x: float
+    start_y: float
+    end_x: float
+    end_y: float
+    mid_x: float = 0.0
+    mid_y: float = 0.0
+
+
+@dataclass
+class PcbClosedPath:
+    segments: tuple[PcbPathSegment, ...]
+    holes: tuple[PcbClosedPath, ...] = ()
+
+    @classmethod
+    def from_points(
+        cls,
+        points: Iterable[tuple[float, float]],
+        *,
+        holes: Iterable[PcbClosedPath] = (),
+    ) -> PcbClosedPath:
+        """Create a closed line-segment path from polygon points."""
+        point_tuple = tuple(points)
+        if len(point_tuple) < 2:
+            return cls(segments=(), holes=tuple(holes))
+        segments: list[PcbPathSegment] = []
+        for index, (start_x, start_y) in enumerate(point_tuple):
+            end_x, end_y = point_tuple[(index + 1) % len(point_tuple)]
+            segments.append(
+                PcbPathSegment(
+                    PcbPathSegmentKind.LINE,
+                    start_x,
+                    start_y,
+                    end_x,
+                    end_y,
+                )
+            )
+        return cls(segments=tuple(segments), holes=tuple(holes))
+
+    @property
+    def points(self) -> tuple[tuple[float, float], ...]:
+        """Return segment start points for polygon-style consumers."""
+        return tuple((segment.start_x, segment.start_y) for segment in self.segments)
+
+
+class PcbPourFillMode(StrEnum):
+    SOLID = "solid"
+    HATCH = "hatch"
+    NONE = "none"
+    UNKNOWN = "unknown"
+
+
+@dataclass
+class PcbPourSettings:
+    fill_mode: PcbPourFillMode = PcbPourFillMode.UNKNOWN
+    hatch_style: str = ""
+    grid_mm: float = 0.0
+    track_width_mm: float = 0.0
+    min_thickness_mm: float = 0.0
+    thermal_gap_mm: float = 0.0
+    thermal_bridge_width_mm: float = 0.0
+    connect_pads_clearance_mm: float = 0.0
+
+
+class PcbKeepoutPermission(StrEnum):
+    ALLOWED = "allowed"
+    NOT_ALLOWED = "not_allowed"
+    UNKNOWN = "unknown"
+
+
+@dataclass
+class PcbKeepoutRules:
+    """Object classes constrained by a keepout/rule area."""
+
+    tracks: PcbKeepoutPermission = PcbKeepoutPermission.UNKNOWN
+    vias: PcbKeepoutPermission = PcbKeepoutPermission.UNKNOWN
+    pads: PcbKeepoutPermission = PcbKeepoutPermission.UNKNOWN
+    copper_pours: PcbKeepoutPermission = PcbKeepoutPermission.UNKNOWN
+    footprints: PcbKeepoutPermission = PcbKeepoutPermission.UNKNOWN
 
 
 @dataclass
@@ -564,35 +643,6 @@ class PcbViaGeometry:
 
 
 @dataclass
-class PcbZoneGeometry:
-    boundary: list[tuple[float, float]]
-    priority: int = 0
-    min_thickness_mm: float = 0.0
-    thermal_gap_mm: float = 0.0
-    thermal_bridge_width_mm: float = 0.0
-    connect_pads_clearance_mm: float = 0.0
-    fill_type: str = ""
-
-
-@dataclass
-class PcbKeepoutRules:
-    """Object classes constrained by a keepout/rule area."""
-
-    tracks: str = ""
-    vias: str = ""
-    pads: str = ""
-    copperpour: str = ""
-    footprints: str = ""
-
-
-@dataclass
-class PcbKeepoutGeometry:
-    boundary: list[tuple[float, float]]
-    rules: PcbKeepoutRules = field(default_factory=PcbKeepoutRules)
-    holes: list[list[tuple[float, float]]] = field(default_factory=list)
-
-
-@dataclass
 class PcbDimensionGeometry:
     kind: str
     value_mm: float
@@ -620,8 +670,6 @@ PcbGeometryData = (
     | PcbTextGeometry
     | PcbPadGeometry
     | PcbViaGeometry
-    | PcbZoneGeometry
-    | PcbKeepoutGeometry
     | PcbDimensionGeometry
     | PcbModel3DGeometry
 )
@@ -638,6 +686,7 @@ class PcbGeometry:
     net_number: int = 0
     net_name: str = ""
     footprint_ref: str = ""
+    pour_id: str = ""
     metadata: PcbGeometryMetadata = field(default_factory=PcbGeometryMetadata)
 
     def __post_init__(self) -> None:
@@ -698,12 +747,53 @@ class PcbNet:
 
 
 @dataclass
+class PcbPour:
+    """A copper-pour source definition and its generated geometry links."""
+
+    id: str
+    boundary: PcbClosedPath
+    layers: tuple[str, ...]
+    net_number: int = 0
+    net_name: str = ""
+    name: str = ""
+    priority: int = 0
+    settings: PcbPourSettings = field(default_factory=PcbPourSettings)
+    fill_geometry_ids: tuple[str, ...] = ()
+    cutout_geometry_ids: tuple[str, ...] = ()
+    footprint_ref: str = ""
+    metadata: PcbPourMetadata = field(default_factory=PcbPourMetadata)
+
+    def __post_init__(self) -> None:
+        self.layers = tuple(self.layers)
+        self.fill_geometry_ids = tuple(self.fill_geometry_ids)
+        self.cutout_geometry_ids = tuple(self.cutout_geometry_ids)
+
+
+@dataclass
+class PcbKeepout:
+    """A non-conductive rule area that constrains PCB object placement."""
+
+    id: str
+    boundary: PcbClosedPath
+    layers: tuple[str, ...]
+    rules: PcbKeepoutRules = field(default_factory=PcbKeepoutRules)
+    name: str = ""
+    footprint_ref: str = ""
+    metadata: PcbKeepoutMetadata = field(default_factory=PcbKeepoutMetadata)
+
+    def __post_init__(self) -> None:
+        self.layers = tuple(self.layers)
+
+
+@dataclass
 class Pcb:
     """Complete parsed PCB board."""
 
     name: str
     nets: dict[int, PcbNet]
     footprints: list[PcbFootprint]
+    pours: list[PcbPour]
+    keepouts: list[PcbKeepout]
     geometry: list[PcbGeometry]
     layers: list[PcbLayer] = field(default_factory=list)
     metadata: PcbMetadata = field(default_factory=PcbMetadata)
@@ -773,6 +863,41 @@ class Pcb:
     def geometry_for_net(self, net_number: int) -> list[PcbGeometry]:
         """Return geometry connected to a net number."""
         return [item for item in self.geometry if item.net_number == net_number]
+
+    def pour_for(self, pour_id: str) -> PcbPour | None:
+        """Look up a copper pour by normalized domain id."""
+        for pour in self.pours:
+            if pour.id == pour_id:
+                return pour
+        return None
+
+    def pours_on_layer(self, layer_name: str) -> list[PcbPour]:
+        """Return copper-pour definitions that reference a native layer."""
+        return [pour for pour in self.pours if layer_name in pour.layers]
+
+    def pours_for_net(self, net_number: int) -> list[PcbPour]:
+        """Return copper-pour definitions assigned to a net number."""
+        return [pour for pour in self.pours if pour.net_number == net_number]
+
+    def keepout_for(self, keepout_id: str) -> PcbKeepout | None:
+        """Look up a keepout/rule area by normalized domain id."""
+        for keepout in self.keepouts:
+            if keepout.id == keepout_id:
+                return keepout
+        return None
+
+    def keepouts_on_layer(self, layer_name: str) -> list[PcbKeepout]:
+        """Return keepouts that apply to a native layer."""
+        return [keepout for keepout in self.keepouts if layer_name in keepout.layers]
+
+    def keepouts_for_footprint(self, ref: str) -> list[PcbKeepout]:
+        """Return keepouts owned by a footprint reference designator."""
+        ref_upper = ref.upper()
+        return [item for item in self.keepouts if item.footprint_ref.upper() == ref_upper]
+
+    def geometry_for_pour(self, pour_id: str) -> list[PcbGeometry]:
+        """Return concrete geometry generated by or associated with a pour."""
+        return [item for item in self.geometry if item.pour_id == pour_id]
 
     def board_profile_geometry(self) -> list[PcbGeometry]:
         """Return physical board profile geometry used for bounds and clipping."""

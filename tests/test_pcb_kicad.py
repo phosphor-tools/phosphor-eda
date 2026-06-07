@@ -19,13 +19,12 @@ from phosphor_eda.pcb import (
     PcbGeometryObject,
     PcbGeometryRole,
     PcbGeometryShape,
-    PcbKeepoutGeometry,
+    PcbKeepoutPermission,
     PcbLineGeometry,
     PcbModel3DGeometry,
     PcbPadGeometry,
     PcbPolygonGeometry,
     PcbTextGeometry,
-    PcbZoneGeometry,
 )
 from phosphor_eda.project import Stackup
 
@@ -84,11 +83,6 @@ def _arc_data(item: PcbGeometry) -> PcbArcGeometry:
 
 def _polygon_data(item: PcbGeometry) -> PcbPolygonGeometry:
     assert isinstance(item.data, PcbPolygonGeometry)
-    return item.data
-
-
-def _keepout_data(item: PcbGeometry) -> PcbKeepoutGeometry:
-    assert isinstance(item.data, PcbKeepoutGeometry)
     return item.data
 
 
@@ -337,12 +331,15 @@ def test_footprint_by_ref_missing(board: Pcb) -> None:
 
 def test_polygon_count(board: Pcb) -> None:
     """swd_switch has 2 zones with multiple filled_polygon entries."""
-    assert len(_geometry(board, role=PcbGeometryRole.ZONE_FILL)) > 0
+    assert (
+        len(_geometry(board, object_type=PcbGeometryObject.REGION, role=PcbGeometryRole.POUR_FILL))
+        > 0
+    )
 
 
 def test_polygon_layers(board: Pcb) -> None:
     """Zone polygons should be on inner copper layers."""
-    layers = {item.primary_layer for item in _geometry(board, role=PcbGeometryRole.ZONE_FILL)}
+    layers = {item.primary_layer for item in _geometry(board, role=PcbGeometryRole.POUR_FILL)}
     assert "In1.Cu" in layers
     assert "In2.Cu" in layers
 
@@ -351,7 +348,7 @@ def test_polygon_net(board: Pcb) -> None:
     """Zone polygons should carry net info from their parent zone."""
     nets = {
         (item.net_number, item.net_name)
-        for item in _geometry(board, role=PcbGeometryRole.ZONE_FILL)
+        for item in _geometry(board, role=PcbGeometryRole.POUR_FILL)
     }
     assert (2, "GND") in nets
     assert (1, "VCC") in nets
@@ -359,7 +356,7 @@ def test_polygon_net(board: Pcb) -> None:
 
 def test_polygon_has_points(board: Pcb) -> None:
     """Every polygon should have a non-empty points list."""
-    for polygon in _geometry(board, role=PcbGeometryRole.ZONE_FILL):
+    for polygon in _geometry(board, role=PcbGeometryRole.POUR_FILL):
         assert len(_polygon_data(polygon).points) >= 3
 
 
@@ -367,7 +364,7 @@ def test_polygon_total_points(board: Pcb) -> None:
     """Sanity check: total filled_polygon points should be ~5726."""
     total = sum(
         len(_polygon_data(polygon).points)
-        for polygon in _geometry(board, role=PcbGeometryRole.ZONE_FILL)
+        for polygon in _geometry(board, role=PcbGeometryRole.POUR_FILL)
     )
     assert 5000 < total < 7000
 
@@ -617,23 +614,23 @@ def test_kicad_zone_keepout_is_parsed_as_keepout_not_copper_zone() -> None:
     )
     board = parse_kicad_pcb_from_sexpr(list(data[1:]), default_name="keepout")
 
-    keepouts = _geometry(board, object_type=PcbGeometryObject.KEEP_OUT)
+    keepouts = board.keepouts
     assert len(keepouts) == 1
     keepout = keepouts[0]
-    keepout_data = _keepout_data(keepout)
     assert keepout.layers == ("F.Cu", "B.Cu")
-    assert keepout_data.boundary == [
+    assert list(keepout.boundary.points) == [
         (1.0, 1.0),
         (4.0, 1.0),
         (4.0, 3.0),
         (1.0, 3.0),
     ]
-    assert keepout_data.rules.tracks == "allowed"
-    assert keepout_data.rules.vias == "not_allowed"
-    assert keepout_data.rules.pads == "not_allowed"
-    assert keepout_data.rules.copperpour == "not_allowed"
-    assert keepout_data.rules.footprints == "allowed"
-    assert _geometry(board, object_type=PcbGeometryObject.ZONE) == []
+    assert keepout.rules.tracks == PcbKeepoutPermission.ALLOWED
+    assert keepout.rules.vias == PcbKeepoutPermission.NOT_ALLOWED
+    assert keepout.rules.pads == PcbKeepoutPermission.NOT_ALLOWED
+    assert keepout.rules.copper_pours == PcbKeepoutPermission.NOT_ALLOWED
+    assert keepout.rules.footprints == PcbKeepoutPermission.ALLOWED
+    assert board.pours == []
+    assert _geometry(board, object_type=PcbGeometryObject.REGION) == []
 
 
 def test_kicad_footprint_keepout_is_parsed_with_footprint_reference() -> None:
@@ -675,20 +672,19 @@ def test_kicad_footprint_keepout_is_parsed_with_footprint_reference() -> None:
     )
     board = parse_kicad_pcb_from_sexpr(list(data[1:]), default_name="footprint-keepout")
 
-    keepouts = _geometry(board, object_type=PcbGeometryObject.KEEP_OUT)
+    keepouts = board.keepouts
     assert len(keepouts) == 1
     keepout = keepouts[0]
-    keepout_data = _keepout_data(keepout)
     assert keepout.footprint_ref == "AE1"
     assert keepout.layers == ("F.Cu",)
-    assert keepout_data.boundary == [
+    assert list(keepout.boundary.points) == [
         (10.0, 20.0),
         (12.0, 20.0),
         (12.0, 21.0),
         (10.0, 21.0),
     ]
-    assert keepout_data.rules.tracks == "not_allowed"
-    assert keepout_data.rules.copperpour == "not_allowed"
+    assert keepout.rules.tracks == PcbKeepoutPermission.NOT_ALLOWED
+    assert keepout.rules.copper_pours == PcbKeepoutPermission.NOT_ALLOWED
 
 
 # ---------------------------------------------------------------------------
@@ -705,42 +701,32 @@ def orangecrab_board() -> Pcb:
 
 def test_orangecrab_polygon_count(orangecrab_board: Pcb) -> None:
     """OrangeCrab has 40 zones — should produce many polygons."""
-    assert len(_geometry(orangecrab_board, role=PcbGeometryRole.ZONE_FILL)) > 40
+    assert len(_geometry(orangecrab_board, role=PcbGeometryRole.POUR_FILL)) > 40
 
 
 def test_orangecrab_polygon_layers(orangecrab_board: Pcb) -> None:
     """Zone polygons should span multiple copper layers."""
     layers = {
-        item.primary_layer for item in _geometry(orangecrab_board, role=PcbGeometryRole.ZONE_FILL)
+        item.primary_layer for item in _geometry(orangecrab_board, role=PcbGeometryRole.POUR_FILL)
     }
     assert "F.Cu" in layers
     assert "B.Cu" in layers
 
 
 def test_orangecrab_keepouts_are_not_loaded_as_copper_zones(orangecrab_board: Pcb) -> None:
-    keepouts = _geometry(orangecrab_board, object_type=PcbGeometryObject.KEEP_OUT)
-    zone_outlines = _geometry(
-        orangecrab_board,
-        object_type=PcbGeometryObject.ZONE,
-        role=PcbGeometryRole.ZONE_OUTLINE,
-    )
+    keepouts = orangecrab_board.keepouts
     assert any(
         "F.Cu" in keepout.layers
-        and isinstance(keepout.data, PcbKeepoutGeometry)
-        and keepout.data.rules.tracks == "allowed"
-        and keepout.data.rules.copperpour == "not_allowed"
+        and keepout.rules.tracks == PcbKeepoutPermission.ALLOWED
+        and keepout.rules.copper_pours == PcbKeepoutPermission.NOT_ALLOWED
         for keepout in keepouts
     )
 
-    keepout_boundaries = {tuple(_keepout_data(keepout).boundary) for keepout in keepouts}
-    zone_boundaries = {
-        tuple(zone.data.boundary)
-        for zone in zone_outlines
-        if isinstance(zone.data, PcbZoneGeometry)
-    }
+    keepout_boundaries = {tuple(keepout.boundary.points) for keepout in keepouts}
+    pour_boundaries = {tuple(pour.boundary.points) for pour in orangecrab_board.pours}
 
     assert keepout_boundaries
-    assert keepout_boundaries.isdisjoint(zone_boundaries)
+    assert keepout_boundaries.isdisjoint(pour_boundaries)
 
 
 def test_orangecrab_pad_layers_are_plain_strings(orangecrab_board: Pcb) -> None:
@@ -1070,31 +1056,16 @@ def test_footprint_properties_exclude_builtins(board: Pcb) -> None:
 
 
 def test_zone_count(board: Pcb) -> None:
-    assert (
-        len(_geometry(board, object_type=PcbGeometryObject.ZONE, role=PcbGeometryRole.ZONE_OUTLINE))
-        == 2
-    )
+    assert len(board.pours) == 2
 
 
 def test_zone_has_boundary(board: Pcb) -> None:
-    for zone in _geometry(
-        board,
-        object_type=PcbGeometryObject.ZONE,
-        role=PcbGeometryRole.ZONE_OUTLINE,
-    ):
-        assert isinstance(zone.data, PcbZoneGeometry)
-        assert len(zone.data.boundary) >= 3
+    for pour in board.pours:
+        assert len(pour.boundary.segments) >= 3
 
 
 def test_zone_net_name(board: Pcb) -> None:
-    net_names = {
-        zone.net_name
-        for zone in _geometry(
-            board,
-            object_type=PcbGeometryObject.ZONE,
-            role=PcbGeometryRole.ZONE_OUTLINE,
-        )
-    }
+    net_names = {pour.net_name for pour in board.pours}
     assert "GND" in net_names
 
 

@@ -10,19 +10,19 @@ from phosphor_eda.pcb import (
     Pcb,
     PcbArcGeometry,
     PcbCircleGeometry,
+    PcbClosedPath,
     PcbDimensionGeometry,
     PcbFootprint,
     PcbGeometryObject,
     PcbGeometryRole,
     PcbGeometryShape,
-    PcbKeepoutGeometry,
+    PcbKeepout,
     PcbLayer,
     PcbLineGeometry,
     PcbPadGeometry,
     PcbPolygonGeometry,
     PcbTextGeometry,
     PcbViaGeometry,
-    PcbZoneGeometry,
 )
 from phosphor_eda.pcb import (
     PcbGeometry as DomainPcbGeometry,
@@ -63,7 +63,7 @@ class GeometryTags:
 
 
 @dataclass(frozen=True)
-class RenderableGeometry:
+class RenderableItem:
     id: str
     object_type: PcbGeometryObject
     shape: PcbGeometryShape
@@ -84,20 +84,18 @@ class RenderableGeometry:
 
 @dataclass(frozen=True)
 class PcbGeometryStore:
-    items: tuple[RenderableGeometry, ...]
+    items: tuple[RenderableItem, ...]
 
-    def by_id(self, geometry_id: str) -> RenderableGeometry | None:
+    def by_id(self, geometry_id: str) -> RenderableItem | None:
         for item in self.items:
             if item.id == geometry_id:
                 return item
         return None
 
-    def by_display_role(self, display_role: str) -> tuple[RenderableGeometry, ...]:
+    def by_display_role(self, display_role: str) -> tuple[RenderableItem, ...]:
         return tuple(item for item in self.items if item.display_role == display_role)
 
-    def by_object_type(
-        self, object_type: PcbGeometryObject | str
-    ) -> tuple[RenderableGeometry, ...]:
+    def by_object_type(self, object_type: PcbGeometryObject | str) -> tuple[RenderableItem, ...]:
         normalized = PcbGeometryObject(object_type)
         return tuple(item for item in self.items if item.object_type == normalized)
 
@@ -138,7 +136,7 @@ def build_geometry_store(board: Pcb, *, side: str) -> PcbGeometryStore:
     transform = _rendered_view_transform(side=side, board_bbox=board_bbox)
     layer_lookup = {layer.name: layer for layer in board.layers}
     layers = _geometry_layers(board)
-    items: list[RenderableGeometry] = []
+    items: list[RenderableItem] = []
 
     edge_layer = _board_edge_layer(board, layers, layer_lookup)
     profile_geometry = board.board_profile_geometry()
@@ -148,7 +146,7 @@ def build_geometry_store(board: Pcb, *, side: str) -> PcbGeometryStore:
     )
     outline_points = _outline_points_from_geometry(profile_geometry, transform)
     items.append(
-        RenderableGeometry(
+        RenderableItem(
             id="board_material:0",
             object_type=PcbGeometryObject.GROUP,
             shape=PcbGeometryShape.POLYGON,
@@ -176,8 +174,54 @@ def build_geometry_store(board: Pcb, *, side: str) -> PcbGeometryStore:
                 transform,
             )
         )
+    for index, keepout in enumerate(board.keepouts):
+        items.append(_renderable_item_for_keepout(keepout, index, layers, layer_lookup, transform))
 
     return PcbGeometryStore(items=tuple(items))
+
+
+def _renderable_item_for_keepout(
+    keepout: PcbKeepout,
+    index: int,
+    layers: dict[str, GeometryLayer],
+    layer_lookup: dict[str, PcbLayer],
+    transform: _RenderedViewTransform,
+) -> RenderableItem:
+    layer_name = keepout.layers[0] if keepout.layers else ""
+    layer = layers.get(layer_name, _layer_for_name(layer_name, layer_lookup))
+    layer = replace(layer, role="keepout")
+    payload = _closed_path_polygon(keepout.boundary, transform)
+    source_index = (
+        keepout.metadata.native_index if keepout.metadata.native_index is not None else index
+    )
+    return RenderableItem(
+        id=keepout.id,
+        object_type=PcbGeometryObject.REGION,
+        shape=PcbGeometryShape.POLYGON,
+        roles=(PcbGeometryRole.UNKNOWN,),
+        display_role="keepout",
+        layer=layer,
+        tags=GeometryTags(
+            source_collection="keepouts",
+            source_index=source_index,
+            component_ref=keepout.footprint_ref,
+            component_prefix=_component_prefix(keepout.footprint_ref),
+        ),
+        payload=payload,
+        source=keepout,
+        points=tuple(RenderPoint(x, y) for x, y in payload.points),
+        bbox=_geometry_bbox(payload),
+    )
+
+
+def _closed_path_polygon(
+    path: PcbClosedPath,
+    transform: _RenderedViewTransform,
+) -> PcbPolygonGeometry:
+    return PcbPolygonGeometry(
+        points=[(transform.x(x), y) for x, y in path.points],
+        holes=[[(transform.x(x), y) for x, y in hole.points] for hole in path.holes],
+    )
 
 
 def _renderable_items_for_geometry(
@@ -188,7 +232,7 @@ def _renderable_items_for_geometry(
     layer_lookup: dict[str, PcbLayer],
     footprints_by_ref: dict[str, PcbFootprint],
     transform: _RenderedViewTransform,
-) -> list[RenderableGeometry]:
+) -> list[RenderableItem]:
     payload = _transform_geometry_payload(geometry.data, transform)
     footprint = footprints_by_ref.get(geometry.footprint_ref)
     source_collection = geometry.metadata.source_collection
@@ -204,7 +248,7 @@ def _renderable_items_for_geometry(
 
     if geometry.object_type == PcbGeometryObject.VIA and isinstance(payload, PcbViaGeometry):
         return [
-            RenderableGeometry(
+            RenderableItem(
                 id=geometry.id,
                 object_type=geometry.object_type,
                 shape=geometry.shape,
@@ -224,11 +268,8 @@ def _renderable_items_for_geometry(
         return []
     layer_name = geometry.primary_layer
     layer = layers.get(layer_name, _layer_for_name(layer_name, layer_lookup))
-    if geometry.object_type == PcbGeometryObject.KEEP_OUT:
-        layer = replace(layer, role="keepout")
-
     return [
-        RenderableGeometry(
+        RenderableItem(
             id=geometry.id,
             object_type=geometry.object_type,
             shape=geometry.shape,
@@ -282,12 +323,12 @@ def _renderable_pad_items(
     layers: dict[str, GeometryLayer],
     layer_lookup: dict[str, PcbLayer],
     transform: _RenderedViewTransform,
-) -> list[RenderableGeometry]:
-    items: list[RenderableGeometry] = []
+) -> list[RenderableItem]:
+    items: list[RenderableItem] = []
     pad_layer_names = _pad_copper_layers(geometry.layers, layer_lookup)
     for layer_name in pad_layer_names:
         items.append(
-            RenderableGeometry(
+            RenderableItem(
                 id=_pad_geometry_id(
                     geometry.footprint_ref,
                     pad.number,
@@ -309,7 +350,7 @@ def _renderable_pad_items(
         )
     if pad.drill > 0:
         items.append(
-            RenderableGeometry(
+            RenderableItem(
                 id=f"drill:{geometry.footprint_ref}:{pad.number}:{tags.source_index}",
                 object_type=PcbGeometryObject.PAD,
                 shape=PcbGeometryShape.CIRCLE,
@@ -331,11 +372,11 @@ def _renderable_pad_items(
 
 def _geometry_display_role(geometry: DomainPcbGeometry) -> str:
     if geometry.object_type == PcbGeometryObject.TRACK:
+        if geometry.has_role(PcbGeometryRole.POUR_FILL):
+            return PcbGeometryRole.POUR_FILL.value
         return PcbGeometryRole.TRACE.value
-    if geometry.object_type == PcbGeometryObject.ZONE:
+    if geometry.object_type == PcbGeometryObject.REGION:
         return geometry.primary_role.value
-    if geometry.object_type == PcbGeometryObject.KEEP_OUT:
-        return PcbGeometryRole.KEEPOUT.value
     if geometry.object_type == PcbGeometryObject.DIMENSION:
         return PcbGeometryRole.DIMENSION.value
     if geometry.object_type == PcbGeometryObject.TEXT:
@@ -358,7 +399,7 @@ def _geometry_display_role(geometry: DomainPcbGeometry) -> str:
             PcbGeometryRole.SOLDER_PASTE,
             PcbGeometryRole.SILKSCREEN,
             PcbGeometryRole.POUR,
-            PcbGeometryRole.ZONE_FILL,
+            PcbGeometryRole.POUR_FILL,
             PcbGeometryRole.COPPER,
             PcbGeometryRole.COURTYARD,
             PcbGeometryRole.DESIGNATOR,
@@ -378,7 +419,7 @@ def _geometry_display_role(geometry: DomainPcbGeometry) -> str:
 
 
 def geometry_matches_selector(
-    geometry: RenderableGeometry,
+    geometry: RenderableItem,
     selector: GeometrySelector,
     *,
     active_side: str,
@@ -441,7 +482,7 @@ def _pad_mask_aperture_layers(
 
 
 def _append_pad_mask_apertures_for_geometry(
-    items: list[RenderableGeometry],
+    items: list[RenderableItem],
     geometry: DomainPcbGeometry,
     pad: PcbPadGeometry,
     tags: GeometryTags,
@@ -461,7 +502,7 @@ def _append_pad_mask_apertures_for_geometry(
         )
         layer = layers.get(mask_layer_name, _layer_for_name(mask_layer_name, layer_lookup))
         items.append(
-            RenderableGeometry(
+            RenderableItem(
                 id=(
                     "pad_mask_aperture:"
                     f"{geometry.footprint_ref}:{pad.number}:{tags.source_index}:{mask_layer_name}"
@@ -508,14 +549,6 @@ def _transform_geometry_payload(data: object, transform: _RenderedViewTransform)
             points=[(transform.x(x), y) for x, y in data.points],
             holes=[[(transform.x(x), y) for x, y in hole] for hole in data.holes],
         )
-    if isinstance(data, PcbKeepoutGeometry):
-        return replace(
-            data,
-            boundary=[(transform.x(x), y) for x, y in data.boundary],
-            holes=[[(transform.x(x), y) for x, y in hole] for hole in data.holes],
-        )
-    if isinstance(data, PcbZoneGeometry):
-        return replace(data, boundary=[(transform.x(x), y) for x, y in data.boundary])
     if isinstance(data, PcbTextGeometry):
         return replace(data, x=transform.x(data.x), rotation=180.0 - data.rotation)
     if isinstance(data, PcbDimensionGeometry):
@@ -537,10 +570,6 @@ def _geometry_points(data: object, transform: _RenderedViewTransform) -> tuple[R
         )
     if isinstance(data, PcbPolygonGeometry):
         return tuple(RenderPoint(transform.x(x), y) for x, y in data.points)
-    if isinstance(data, PcbKeepoutGeometry):
-        return tuple(RenderPoint(transform.x(x), y) for x, y in data.boundary)
-    if isinstance(data, PcbZoneGeometry):
-        return tuple(RenderPoint(transform.x(x), y) for x, y in data.boundary)
     if isinstance(data, PcbCircleGeometry):
         return (transform.point(data.cx, data.cy),)
     if isinstance(data, PcbTextGeometry):
@@ -562,10 +591,6 @@ def _geometry_bbox(data: object) -> tuple[float, float, float, float] | None:
         )
     if isinstance(data, PcbPolygonGeometry):
         return _points_bbox(data.points)
-    if isinstance(data, PcbKeepoutGeometry):
-        return _points_bbox(data.boundary)
-    if isinstance(data, PcbZoneGeometry):
-        return _points_bbox(data.boundary)
     if isinstance(data, PcbCircleGeometry):
         return _circle_bbox(data.cx, data.cy, data.radius)
     if isinstance(data, PcbPadGeometry):

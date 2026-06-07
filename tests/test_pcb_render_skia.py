@@ -7,7 +7,7 @@ from phosphor_eda.pcb import (
     PcbGeometryObject,
     PcbGeometryRole,
     PcbGeometryShape,
-    PcbZoneGeometry,
+    PcbPolygonGeometry,
 )
 from phosphor_eda.pcb_render_geometry import build_geometry_store
 from phosphor_eda.pcb_render_skia import geometry_to_skia_artwork, skia_path_to_svg_d
@@ -24,28 +24,28 @@ def test_skia_converts_pad_trace_via_and_mask_aperture_renderables() -> None:
         assert skia_path_to_svg_d(artwork.path)
 
 
-def test_skia_converts_zone_geometry_from_normalized_object_type() -> None:
+def test_skia_converts_region_geometry_from_normalized_object_type() -> None:
     board = _board()
     board.geometry.append(
         PcbGeometry(
-            id="zone:1",
-            object_type=PcbGeometryObject.ZONE,
+            id="region:1",
+            object_type=PcbGeometryObject.REGION,
             shape=PcbGeometryShape.POLYGON,
             roles=(
                 PcbGeometryRole.COPPER,
                 PcbGeometryRole.POUR,
-                PcbGeometryRole.ZONE_FILL,
+                PcbGeometryRole.POUR_FILL,
                 PcbGeometryRole.BOARD_LEVEL,
             ),
-            data=PcbZoneGeometry([(1.0, 1.0), (4.0, 1.0), (4.0, 4.0), (1.0, 4.0)]),
+            data=PcbPolygonGeometry([(1.0, 1.0), (4.0, 1.0), (4.0, 4.0), (1.0, 4.0)]),
             layers=("F.Cu",),
             net_number=1,
         )
     )
     store = build_geometry_store(board, side="front")
-    zone = next(item for item in store.items if item.object_type == PcbGeometryObject.ZONE)
+    region = next(item for item in store.items if item.object_type == PcbGeometryObject.REGION)
 
-    artwork = geometry_to_skia_artwork(zone, target_layer_name="F.Cu")
+    artwork = geometry_to_skia_artwork(region, target_layer_name="F.Cu")
 
     assert artwork is not None
     assert skia_path_to_svg_d(artwork.path)

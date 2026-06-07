@@ -15,13 +15,11 @@ from phosphor_eda.pcb import (
     PcbGeometryObject,
     PcbGeometryRole,
     PcbGeometryShape,
-    PcbKeepoutGeometry,
     PcbLineGeometry,
     PcbPadGeometry,
     PcbPolygonGeometry,
     PcbTextGeometry,
     PcbViaGeometry,
-    PcbZoneGeometry,
 )
 from phosphor_eda.pcb import (
     PcbGeometry as DomainPcbGeometry,
@@ -46,7 +44,7 @@ if TYPE_CHECKING:
 
     from shapely.coords import CoordinateSequence
 
-    from phosphor_eda.pcb_render_geometry import GeometryTags, RenderableGeometry
+    from phosphor_eda.pcb_render_geometry import GeometryTags, RenderableItem
 
 
 def _empty_data() -> dict[str, str]:
@@ -94,7 +92,7 @@ class _OrientedProfilePathSegment:
 
 
 def geometry_to_svg_primitive(
-    item: RenderableGeometry,
+    item: RenderableItem,
     *,
     target_layer_name: str,
 ) -> SvgPrimitive | None:
@@ -112,7 +110,7 @@ def geometry_to_svg_primitive(
     )
 
 
-def drill_to_svg_primitive(item: RenderableGeometry) -> SvgPrimitive | None:
+def drill_to_svg_primitive(item: RenderableItem) -> SvgPrimitive | None:
     """Convert one drill-capable source item into a drill-hole mask primitive."""
     payload = item.payload if item.payload is not None else item.source
     if item.display_role == SYNTHETIC_DRILL_ROLE and isinstance(payload, PcbPadGeometry):
@@ -132,7 +130,7 @@ def drill_to_svg_primitive(item: RenderableGeometry) -> SvgPrimitive | None:
     )
 
 
-def visible_drill_to_svg_primitive(item: RenderableGeometry) -> SvgPrimitive | None:
+def visible_drill_to_svg_primitive(item: RenderableItem) -> SvgPrimitive | None:
     """Convert one drill source item into an EDA-style visible drill symbol."""
     payload = item.payload if item.payload is not None else item.source
     if item.display_role != SYNTHETIC_DRILL_ROLE or not isinstance(payload, PcbPadGeometry):
@@ -150,7 +148,7 @@ def visible_drill_to_svg_primitive(item: RenderableGeometry) -> SvgPrimitive | N
 
 
 def pad_solder_mask_opening_primitive(
-    item: RenderableGeometry,
+    item: RenderableItem,
     *,
     side: str,
     target_layer_name: str,
@@ -232,7 +230,7 @@ def _pad_copper_target_layer_name(
     return None
 
 
-def _non_skia_svg_path_d(item: RenderableGeometry) -> str:
+def _non_skia_svg_path_d(item: RenderableItem) -> str:
     if item.display_role == SYNTHETIC_BOARD_MATERIAL_ROLE:
         return _board_material_svg_path_d(item)
     payload = item.payload if item.payload is not None else item.source
@@ -244,10 +242,6 @@ def _non_skia_svg_path_d(item: RenderableGeometry) -> str:
         return _circle_svg_path_d(payload)
     if isinstance(payload, PcbPolygonGeometry):
         return _polygon_svg_path_d(payload)
-    if isinstance(payload, PcbKeepoutGeometry):
-        return _keepout_svg_path_d(payload)
-    if isinstance(payload, PcbZoneGeometry):
-        return _polygon_svg_path_d(PcbPolygonGeometry(points=payload.boundary))
     if isinstance(payload, BaseGeometry):
         return " ".join(_geometry_to_svg_path_parts(payload))
     if isinstance(payload, PcbTextGeometry):
@@ -255,7 +249,7 @@ def _non_skia_svg_path_d(item: RenderableGeometry) -> str:
     return ""
 
 
-def _board_material_svg_path_d(item: RenderableGeometry) -> str:
+def _board_material_svg_path_d(item: RenderableItem) -> str:
     outline = _outline_for_item(item)
     if outline is not None:
         d = _filled_outline_svg_path_d(outline)
@@ -286,16 +280,7 @@ def _polygon_svg_path_d(polygon: PcbPolygonGeometry) -> str:
     return " ".join(_geometry_to_svg_path_parts(geometry))
 
 
-def _keepout_svg_path_d(keepout: PcbKeepoutGeometry) -> str:
-    if len(keepout.boundary) < 3:
-        return ""
-    geometry = normalize_geometry(Polygon(keepout.boundary, holes=keepout.holes or None))
-    if geometry.is_empty:
-        return ""
-    return " ".join(_geometry_to_svg_path_parts(geometry))
-
-
-def _outline_for_item(item: RenderableGeometry) -> list[DomainPcbGeometry] | None:
+def _outline_for_item(item: RenderableItem) -> list[DomainPcbGeometry] | None:
     payload = item.payload if item.payload is not None else item.source
     outline = _outline_payload(payload)
     if outline is not None:
@@ -771,15 +756,15 @@ _GRAPHIC_RENDER_ROLES = frozenset(
 )
 
 
-def _is_line_renderable(item: RenderableGeometry) -> bool:
+def _is_line_renderable(item: RenderableItem) -> bool:
     return item.shape == PcbGeometryShape.LINE and item.display_role in _GRAPHIC_RENDER_ROLES
 
 
-def _is_arc_renderable(item: RenderableGeometry) -> bool:
+def _is_arc_renderable(item: RenderableItem) -> bool:
     return item.shape == PcbGeometryShape.ARC and item.display_role in _GRAPHIC_RENDER_ROLES
 
 
-def _is_circle_renderable(item: RenderableGeometry) -> bool:
+def _is_circle_renderable(item: RenderableItem) -> bool:
     return item.shape == PcbGeometryShape.CIRCLE and item.display_role in _GRAPHIC_RENDER_ROLES
 
 

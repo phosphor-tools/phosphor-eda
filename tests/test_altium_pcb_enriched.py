@@ -22,7 +22,7 @@ from phosphor_eda.pcb import (
     PcbGeometryObject,
     PcbGeometryRole,
     PcbGeometryShape,
-    PcbKeepoutGeometry,
+    PcbKeepoutPermission,
     PcbLineGeometry,
     PcbPolygonGeometry,
 )
@@ -194,23 +194,18 @@ def test_altium_keepout_arcs_are_not_visible_trace_arcs(pcb: Pcb) -> None:
 def test_altium_keepout_arcs_are_preserved_as_queryable_keepouts(pcb: Pcb) -> None:
     keepout_rings = [
         item
-        for item in pcb.geometry
-        if item.object_type == PcbGeometryObject.KEEP_OUT
-        and isinstance(item.data, PcbKeepoutGeometry)
-        and set(item.layers) <= {"Top Layer", "Bottom Layer"}
-        and item.data.rules.tracks == "not_allowed"
-        and item.data.rules.vias == "not_allowed"
-        and item.data.rules.pads == "not_allowed"
-        and item.data.rules.copperpour == "not_allowed"
+        for item in pcb.keepouts
+        if set(item.layers) <= {"Top Layer", "Bottom Layer"}
+        and item.rules.tracks == PcbKeepoutPermission.NOT_ALLOWED
+        and item.rules.vias == PcbKeepoutPermission.NOT_ALLOWED
+        and item.rules.pads == PcbKeepoutPermission.NOT_ALLOWED
+        and item.rules.copper_pours == PcbKeepoutPermission.NOT_ALLOWED
     ]
 
     assert len(keepout_rings) >= 8
     assert any("Top Layer" in item.layers for item in keepout_rings)
     assert any("Bottom Layer" in item.layers for item in keepout_rings)
-    assert all(
-        isinstance(item.data, PcbKeepoutGeometry) and len(item.data.boundary) >= 16
-        for item in keepout_rings
-    )
+    assert all(len(item.boundary.segments) >= 16 for item in keepout_rings)
 
 
 def test_altium_board_level_solder_mask_lines_and_arcs_are_preserved(pcb: Pcb) -> None:
@@ -403,11 +398,36 @@ def test_polygon_cutout_regions_are_not_emitted_as_copper(pcb) -> None:
     assert cutout_area == []
 
 
+def test_altium_polygon_pours_are_intent_not_renderable_geometry(pcb: Pcb) -> None:
+    assert pcb.pours
+    assert not any(item.id.startswith("polygon_pour:") for item in pcb.geometry)
+    assert any(pour.id.startswith("polygon_pour:") for pour in pcb.pours)
+
+
+def test_altium_pour_fill_children_are_linked_to_parent_pours(pcb: Pcb) -> None:
+    pour_fill = [
+        item for item in pcb.geometry if item.has_role(PcbGeometryRole.POUR_FILL) and item.pour_id
+    ]
+
+    assert pour_fill
+    assert not any(item.has_role(PcbGeometryRole.TRACE) for item in pour_fill)
+    assert all(pcb.pour_for(item.pour_id) is not None for item in pour_fill)
+    assert any(pour.fill_geometry_ids for pour in pcb.pours)
+
+
+def test_pimx8_problematic_polygon_boundary_is_not_renderable_copper(pcb: Pcb) -> None:
+    assert pcb.pour_for("polygon_pour:29:6") is not None
+    assert not any(item.id == "polygon_pour:29:6" for item in pcb.geometry)
+    arc = next(item for item in pcb.geometry if item.id == "arc:1:46")
+    assert arc.pour_id == ""
+    assert arc.has_role(PcbGeometryRole.TRACE)
+
+
 def _polygon_geometry(pcb: Pcb) -> list[PcbGeometry]:
     return [
         item
         for item in pcb.geometry
-        if item.object_type in {PcbGeometryObject.GRAPHIC, PcbGeometryObject.ZONE}
+        if item.object_type in {PcbGeometryObject.GRAPHIC, PcbGeometryObject.REGION}
         and isinstance(item.data, PcbPolygonGeometry)
         and not item.has_role(PcbGeometryRole.POLYGON_CUTOUT)
     ]

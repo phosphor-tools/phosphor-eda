@@ -32,7 +32,7 @@ from phosphor_eda.pcb_render_tokens import VisualRole, resolve_layer_style
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
-    from phosphor_eda.pcb_render_geometry import PcbGeometryStore, RenderableGeometry
+    from phosphor_eda.pcb_render_geometry import PcbGeometryStore, RenderableItem
     from phosphor_eda.pcb_render_profile import RenderProfiler
     from phosphor_eda.pcb_render_settings import HighlightSpec, LayerSelectionRule, RenderSettings
 
@@ -53,7 +53,7 @@ class HighlightGroup:
 
 @dataclass(frozen=True)
 class _PrimitiveLayerItem:
-    source: RenderableGeometry
+    source: RenderableItem
     layer: GeometryLayer
 
 
@@ -389,11 +389,11 @@ class _RealisticLayerInput:
 
 def _primitive_layer_items(
     store: PcbGeometryStore,
-    selected_items: Iterable[RenderableGeometry],
+    selected_items: Iterable[RenderableItem],
     rules: Iterable[LayerSelectionRule],
     *,
     active_side: str,
-    via_items: Iterable[RenderableGeometry] | None = None,
+    via_items: Iterable[RenderableItem] | None = None,
     profiler: RenderProfiler | None = None,
 ) -> tuple[_PrimitiveLayerItem, ...]:
     selected_non_vias = tuple(
@@ -437,7 +437,7 @@ def _selected_highlight_items(
     store: PcbGeometryStore,
     settings: RenderSettings,
     highlight: HighlightSpec,
-) -> tuple[RenderableGeometry, ...]:
+) -> tuple[RenderableItem, ...]:
     selected_items = _filter_excluded_components(
         select_source_artwork(store, settings.source.layers, active_side=settings.side),
         settings.source.exclude_components,
@@ -453,7 +453,7 @@ def _selected_highlight_vias(
     store: PcbGeometryStore,
     settings: RenderSettings,
     highlight: HighlightSpec,
-) -> tuple[RenderableGeometry, ...]:
+) -> tuple[RenderableItem, ...]:
     selected_copper_layer_items = selected_copper_layers(
         store,
         settings.source.layers,
@@ -469,7 +469,7 @@ def _selected_highlight_vias(
     )
 
 
-def _matches_highlight(item: RenderableGeometry, highlight: HighlightSpec) -> bool:
+def _matches_highlight(item: RenderableItem, highlight: HighlightSpec) -> bool:
     if highlight.net:
         return item.tags.net_name.casefold() == highlight.net.casefold()
     if highlight.component:
@@ -484,7 +484,7 @@ def _matches_highlight(item: RenderableGeometry, highlight: HighlightSpec) -> bo
 
 
 def _via_intersects_selected_layers(
-    item: RenderableGeometry,
+    item: RenderableItem,
     selected_layers: Iterable[GeometryLayer],
 ) -> bool:
     item_via_layers = via_layers(item)
@@ -502,9 +502,9 @@ def _highlight_target(highlight: HighlightSpec) -> str:
 
 
 def _filter_excluded_components(
-    items: Iterable[RenderableGeometry],
+    items: Iterable[RenderableItem],
     excluded_prefixes: tuple[str, ...],
-) -> tuple[RenderableGeometry, ...]:
+) -> tuple[RenderableItem, ...]:
     if not excluded_prefixes:
         return tuple(items)
     return tuple(
@@ -599,10 +599,10 @@ def _primitive_layer_item_sort_key(item: _PrimitiveLayerItem) -> tuple[int, str]
     return (_primitive_order(item.source), item.source.id)
 
 
-def _primitive_order(item: RenderableGeometry) -> int:
+def _primitive_order(item: RenderableItem) -> int:
     if item.object_type == PcbGeometryObject.TRACK:
         return 0
-    if item.object_type == PcbGeometryObject.ZONE:
+    if item.object_type == PcbGeometryObject.REGION:
         return 1
     if item.shape == PcbGeometryShape.POLYGON:
         return 1
@@ -676,7 +676,7 @@ def _mask_for_group(
 
 
 def _selected_board_outline_primitives(
-    selected_items: Iterable[RenderableGeometry],
+    selected_items: Iterable[RenderableItem],
 ) -> tuple[SvgPrimitive, ...]:
     return tuple(
         primitive

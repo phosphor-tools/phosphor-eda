@@ -227,6 +227,8 @@ def _profile_board(geometry: list[PcbGeometry]) -> Pcb:
         name="profile-test",
         nets={},
         footprints=[],
+        pours=[],
+        keepouts=[],
         geometry=geometry,
         layers=[PcbLayer("Edge.Cuts", (LayerRole.EDGE,))],
     )

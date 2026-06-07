@@ -18,14 +18,13 @@ from phosphor_eda.pcb import (
     PcbPadGeometry,
     PcbPolygonGeometry,
     PcbViaGeometry,
-    PcbZoneGeometry,
 )
 from phosphor_eda.sql.geometry import arc_to_polyline
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from phosphor_eda.pcb_render_geometry import GeometryTags, RenderableGeometry
+    from phosphor_eda.pcb_render_geometry import GeometryTags, RenderableItem
 
 
 SKIA_CONIC_TO_QUAD_TOLERANCE = 0.02
@@ -136,7 +135,7 @@ class _SvgPathPen:
 
 
 def geometry_to_skia_artwork(
-    item: RenderableGeometry,
+    item: RenderableItem,
     *,
     target_layer_name: str,
 ) -> SkiaArtwork | None:
@@ -149,8 +148,6 @@ def geometry_to_skia_artwork(
         path = _trace_path(payload)
     elif _is_track_arc(item) and isinstance(payload, PcbArcGeometry):
         path = _trace_arc_path(payload)
-    elif item.object_type == PcbGeometryObject.ZONE and isinstance(payload, PcbZoneGeometry):
-        path = _zone_path(payload)
     elif item.object_type == PcbGeometryObject.VIA and isinstance(payload, PcbViaGeometry):
         path = _via_path(payload, target_layer_name)
     elif _is_polygon_renderable(item) and isinstance(payload, PcbPolygonGeometry):
@@ -186,19 +183,19 @@ _PAD_DISPLAY_ROLES = frozenset(
 )
 
 
-def _is_pad_like(item: RenderableGeometry) -> bool:
+def _is_pad_like(item: RenderableItem) -> bool:
     return item.object_type == PcbGeometryObject.PAD and item.display_role in _PAD_DISPLAY_ROLES
 
 
-def _is_track_line(item: RenderableGeometry) -> bool:
+def _is_track_line(item: RenderableItem) -> bool:
     return item.object_type == PcbGeometryObject.TRACK and item.shape == PcbGeometryShape.LINE
 
 
-def _is_track_arc(item: RenderableGeometry) -> bool:
+def _is_track_arc(item: RenderableItem) -> bool:
     return item.object_type == PcbGeometryObject.TRACK and item.shape == PcbGeometryShape.ARC
 
 
-def _is_polygon_renderable(item: RenderableGeometry) -> bool:
+def _is_polygon_renderable(item: RenderableItem) -> bool:
     return item.shape == PcbGeometryShape.POLYGON
 
 
@@ -269,12 +266,6 @@ def _trace_arc_path(trace_arc: PcbArcGeometry) -> _Path | None:
         num_points=_TRACE_ARC_SEGMENTS,
     )
     return _buffered_polyline_path(points, trace_arc.width)
-
-
-def _zone_path(zone: PcbZoneGeometry) -> _Path | None:
-    if len(zone.boundary) < 3:
-        return None
-    return _polygon_path(zone.boundary)
 
 
 def _circle_path(cx: float, cy: float, radius: float) -> _Path | None:

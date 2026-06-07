@@ -160,9 +160,9 @@ class TestPolygons:
         assert _count(db, "SELECT count(*) FROM polygons") == 6
 
 
-class TestZones:
+class TestPours:
     def test_count(self, db: duckdb.DuckDBPyConnection) -> None:
-        assert _count(db, "SELECT count(*) FROM zones") == 2
+        assert _count(db, "SELECT count(*) FROM pours") == 2
 
 
 class TestKeepouts:
@@ -180,6 +180,8 @@ def test_board_graphics_are_loaded_as_queryable_geometry() -> None:
         name="board-graphics",
         nets={},
         footprints=[],
+        pours=[],
+        keepouts=[],
         geometry=[
             PcbGeometry(
                 id="edge-1",
@@ -358,9 +360,9 @@ def test_kicad_keepouts_are_queryable_in_sql() -> None:
         assert _count(con, "SELECT count(*) FROM keepouts") > 0
         row = con.execute(
             """
-            SELECT layers, layer, tracks, vias, copperpour, geom
+            SELECT layers, primary_layer, tracks, vias, copper_pours, boundary
             FROM keepouts
-            WHERE copperpour = 'not_allowed'
+            WHERE copper_pours = 'not_allowed'
             LIMIT 1
             """
         ).fetchone()

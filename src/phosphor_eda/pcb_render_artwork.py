@@ -25,7 +25,7 @@ from phosphor_eda.pcb_render_geometry import (
     SYNTHETIC_DRILL_ROLE,
     GeometryLayer,
     GeometryTags,
-    RenderableGeometry,
+    RenderableItem,
 )
 from phosphor_eda.pcb_render_primitives import (
     geometry_to_svg_primitive,
@@ -70,10 +70,10 @@ def select_source_artwork(
     rules: Iterable[LayerSelectionRule],
     *,
     active_side: str = "",
-) -> tuple[RenderableGeometry, ...]:
+) -> tuple[RenderableItem, ...]:
     """Select raw renderable geometry using source-layer rules."""
     active_rules = tuple(rule for rule in rules if rule.visible)
-    selected: list[RenderableGeometry] = []
+    selected: list[RenderableItem] = []
 
     for item in store.items:
         if any(_matches_rule(item, rule, active_side=active_side) for rule in active_rules):
@@ -131,7 +131,7 @@ def rule_selects_layer(
     rule: LayerSelectionRule,
     layer: GeometryLayer,
     *,
-    item: RenderableGeometry,
+    item: RenderableItem,
     active_side: str,
 ) -> bool:
     """Return whether a source-layer rule selects an object on a geometry layer."""
@@ -148,6 +148,8 @@ def rule_selects_layer(
 
 
 def _layer_has_role(layer: GeometryLayer, role: str) -> bool:
+    if layer.role == role:
+        return True
     if layer.source is not None:
         return layer.source.has_role(role)
     try:
@@ -156,7 +158,7 @@ def _layer_has_role(layer: GeometryLayer, role: str) -> bool:
         return False
 
 
-def via_layers(item: RenderableGeometry) -> frozenset[str]:
+def via_layers(item: RenderableItem) -> frozenset[str]:
     """Return the copper-layer span of a via renderable item."""
     if isinstance(item.source, DomainPcbGeometry):
         return frozenset(str(layer) for layer in item.source.layers)
@@ -245,31 +247,25 @@ def side_mask_layer_name(store: PcbGeometryStore, side: str) -> str:
 
 
 def _matches_rule(
-    item: RenderableGeometry,
+    item: RenderableItem,
     rule: LayerSelectionRule,
     *,
     active_side: str,
 ) -> bool:
     if item.display_role == SYNTHETIC_BOARD_MATERIAL_ROLE:
         return False
-    if item.object_type == PcbGeometryObject.KEEP_OUT and not _rule_selects_keepouts(rule):
+    if item.display_role == "keepout" and not _rule_targets_keepout(rule):
         return False
     return rule_selects_layer(rule, item.layer, item=item, active_side=active_side)
 
 
-def _rule_selects_keepouts(rule: LayerSelectionRule) -> bool:
-    return rule.match.role == "keepout" or (
-        bool(rule.objects) and _matches_object_filter(_keepout_selection_probe(), rule.objects)
-    )
-
-
-def _matches_object_filter(item: RenderableGeometry, objects: tuple[str, ...]) -> bool:
+def _matches_object_filter(item: RenderableItem, objects: tuple[str, ...]) -> bool:
     if not objects:
         return True
     return any(_matches_object_class(item, object_class) for object_class in objects)
 
 
-def _matches_object_class(item: RenderableGeometry, object_class: str) -> bool:
+def _matches_object_class(item: RenderableItem, object_class: str) -> bool:
     normalized = object_class.strip().lower().replace("-", "_")
     if normalized.startswith("shape:"):
         try:
@@ -289,21 +285,20 @@ def _matches_object_class(item: RenderableGeometry, object_class: str) -> bool:
         return False
 
 
-def _via_selection_probe() -> RenderableGeometry:
+def _rule_targets_keepout(rule: LayerSelectionRule) -> bool:
+    if rule.match.role == "keepout":
+        return True
+    return any(
+        object_class.strip().lower().replace("-", "_") == "keepout" for object_class in rule.objects
+    )
+
+
+def _via_selection_probe() -> RenderableItem:
     return _selection_probe(
         object_type=PcbGeometryObject.VIA,
         shape=PcbGeometryShape.CIRCLE,
         roles=(PcbGeometryRole.COPPER, PcbGeometryRole.CONDUCTOR, PcbGeometryRole.DRILL),
         display_role=PcbGeometryObject.VIA.value,
-    )
-
-
-def _keepout_selection_probe() -> RenderableGeometry:
-    return _selection_probe(
-        object_type=PcbGeometryObject.KEEP_OUT,
-        shape=PcbGeometryShape.UNKNOWN,
-        roles=(PcbGeometryRole.KEEPOUT,),
-        display_role=PcbGeometryRole.KEEPOUT.value,
     )
 
 
@@ -313,8 +308,8 @@ def _selection_probe(
     shape: PcbGeometryShape,
     roles: tuple[PcbGeometryRole, ...],
     display_role: str,
-) -> RenderableGeometry:
-    return RenderableGeometry(
+) -> RenderableItem:
+    return RenderableItem(
         id="selection-probe",
         object_type=object_type,
         shape=shape,
@@ -326,7 +321,7 @@ def _selection_probe(
     )
 
 
-def _item_payload(item: RenderableGeometry) -> object:
+def _item_payload(item: RenderableItem) -> object:
     return item.payload if item.payload is not None else item.source
 
 
@@ -365,7 +360,7 @@ def _inner_layer_index(name: str) -> int:
     return int(digits)
 
 
-def _board_outline_from_item(item: RenderableGeometry) -> BaseGeometry | None:
+def _board_outline_from_item(item: RenderableItem) -> BaseGeometry | None:
     payload = _item_payload(item)
     if isinstance(payload, BaseGeometry):
         return payload
