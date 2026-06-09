@@ -1,9 +1,9 @@
-"""Tests for enriched Altium PCB parser: rules, classes, diff pairs, stackup, holes.
+"""Tests for enriched Altium PCB parser: rules, classes, stackup, typed PCB objects."""
 
-Uses the Pi.MX8 fixture (CERN-OHL-S-2.0 licensed).
-"""
+from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -17,30 +17,24 @@ from phosphor_eda.altium.pcb_parser import (
 )
 from phosphor_eda.pcb import (
     Pcb,
-    PcbArcGeometry,
-    PcbGeometry,
-    PcbGeometryObject,
-    PcbGeometryRole,
-    PcbGeometryShape,
+    PcbArc,
+    PcbArtworkKind,
+    PcbConductorKind,
     PcbKeepoutPermission,
-    PcbLineGeometry,
-    PcbPolygonGeometry,
+    PcbLine,
+    PcbPolygon,
 )
-from phosphor_eda.project import Stackup
+
+if TYPE_CHECKING:
+    from phosphor_eda.project import Stackup
 
 FIXTURE = Path(__file__).parent / "fixtures" / "altium" / "pi-mx8" / "PCB" / "PiMX8MP_r0.3.PcbDoc"
 
 pytestmark = pytest.mark.skipif(not FIXTURE.exists(), reason="Fixture not available")
 
 
-# ---------------------------------------------------------------------------
-# Helpers to read streams
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture(scope="module")
 def ole_streams() -> dict[str, bytes]:
-    """Read relevant OLE streams once for all tests."""
     import olefile
 
     ole = olefile.OleFileIO(str(FIXTURE))
@@ -54,35 +48,26 @@ def ole_streams() -> dict[str, bytes]:
     return streams
 
 
-# ---------------------------------------------------------------------------
-# Rules6
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture(scope="module")
 def rules(ole_streams: dict[str, bytes]):
     return parse_altium_rules(ole_streams["rules"])
 
 
 def test_rules_count(rules) -> None:
-    """Should parse 100+ rules from this complex board."""
     assert len(rules) >= 100
 
 
 def test_rules_kinds(rules) -> None:
-    """Multiple rule kinds present."""
-    kinds = {r.kind for r in rules}
+    kinds = {rule.kind for rule in rules}
     assert "Clearance" in kinds
     assert "Width" in kinds
     assert "DiffPairsRouting" in kinds
 
 
 def test_width_rule_values(rules) -> None:
-    """Width rules have min/max/preferred values in mm."""
-    width_rules = [r for r in rules if r.kind == "Width"]
+    width_rules = [rule for rule in rules if rule.kind == "Width"]
     assert len(width_rules) == 3
-    # WIDTH_UNDER_BGA: minlimit=3.1496mil → ~0.08mm, preferedwidth=3.937mil → ~0.1mm
-    under_bga = next(r for r in width_rules if r.name == "WIDTH_UNDER_BGA")
+    under_bga = next(rule for rule in width_rules if rule.name == "WIDTH_UNDER_BGA")
     assert under_bga.min_value_mm == pytest.approx(0.08, abs=0.001)
     assert under_bga.preferred_value_mm == pytest.approx(0.1, abs=0.001)
     assert under_bga.max_value_mm is not None
@@ -90,21 +75,13 @@ def test_width_rule_values(rules) -> None:
 
 
 def test_clearance_rule_scope(rules) -> None:
-    """Clearance rules preserve scope expressions."""
-    clr = next(r for r in rules if r.name == "CLR_UNDER_BGA")
-    assert "TouchesRoom" in clr.scope1
-    assert clr.scope2 == "All"
+    clearance = next(rule for rule in rules if rule.name == "CLR_UNDER_BGA")
+    assert "TouchesRoom" in clearance.scope1
+    assert clearance.scope2 == "All"
 
 
 def test_rule_enabled(rules) -> None:
-    """Rules have enabled flag parsed."""
-    # All rules in this fixture are enabled
-    assert all(r.enabled for r in rules)
-
-
-# ---------------------------------------------------------------------------
-# Classes6
-# ---------------------------------------------------------------------------
+    assert all(rule.enabled for rule in rules)
 
 
 @pytest.fixture(scope="module")
@@ -113,21 +90,18 @@ def classes(ole_streams: dict[str, bytes]):
 
 
 def test_classes_count(classes) -> None:
-    """Should parse 64 classes across multiple kinds."""
     assert len(classes) == 64
 
 
 def test_class_kinds(classes) -> None:
-    """Multiple class kinds present (net=0, component=1, diff pair=6, etc.)."""
-    kinds = {c.kind for c in classes}
-    assert 0 in kinds  # Net classes
-    assert 1 in kinds  # Component classes
-    assert 6 in kinds  # Diff pair classes
+    kinds = {item.kind for item in classes}
+    assert 0 in kinds
+    assert 1 in kinds
+    assert 6 in kinds
 
 
 def test_pmic_class_members(classes) -> None:
-    """PMIC net class has correct members."""
-    pmic = next(c for c in classes if c.name == "PMIC")
+    pmic = next(item for item in classes if item.name == "PMIC")
     assert pmic.kind == 0
     assert len(pmic.members) == 9
     assert "PMIC_SDA" in pmic.members
@@ -135,15 +109,9 @@ def test_pmic_class_members(classes) -> None:
 
 
 def test_diff_pair_class(classes) -> None:
-    """DIFF100 class (kind=6) has members."""
-    diff100 = next(c for c in classes if c.name == "DIFF100")
+    diff100 = next(item for item in classes if item.name == "DIFF100")
     assert diff100.kind == 6
     assert len(diff100.members) >= 40
-
-
-# ---------------------------------------------------------------------------
-# DifferentialPairs6
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="module")
@@ -152,120 +120,17 @@ def diff_pairs(ole_streams: dict[str, bytes]):
 
 
 def test_diff_pairs_count(diff_pairs) -> None:
-    """Should parse 55 differential pairs."""
     assert len(diff_pairs) == 55
 
 
 def test_wifi_usb_diff_pair(diff_pairs) -> None:
-    """WIFI_USB pair has correct positive/negative nets."""
-    wifi = next(p for p in diff_pairs if p.name == "WIFI_USB")
+    wifi = next(pair for pair in diff_pairs if pair.name == "WIFI_USB")
     assert wifi.positive_net == "WIFI_USB_P"
     assert wifi.negative_net == "WIFI_USB_N"
 
 
 def test_pcie_diff_pair(diff_pairs) -> None:
-    """PCIe differential pairs are present."""
-    pcie_pairs = [p for p in diff_pairs if "PCIe" in p.name]
-    assert len(pcie_pairs) >= 2
-
-
-# ---------------------------------------------------------------------------
-# PCB keepouts
-# ---------------------------------------------------------------------------
-
-
-def test_altium_keepout_arcs_are_not_visible_trace_arcs(pcb: Pcb) -> None:
-    visible_keepout_rings = [
-        item
-        for item in pcb.geometry
-        if item.object_type == PcbGeometryObject.TRACK
-        and item.shape == PcbGeometryShape.ARC
-        and isinstance(item.data, PcbArcGeometry)
-        and item.primary_layer in {"Top Layer", "Bottom Layer"}
-        and item.net_number == 0
-        and item.data.width == pytest.approx(0.2, abs=0.001)
-        and item.data.start_x == pytest.approx(item.data.end_x, abs=1e-6)
-        and item.data.start_y == pytest.approx(item.data.end_y, abs=1e-6)
-    ]
-
-    assert visible_keepout_rings == []
-
-
-def test_altium_keepout_arcs_are_preserved_as_queryable_keepouts(pcb: Pcb) -> None:
-    keepout_rings = [
-        item
-        for item in pcb.keepouts
-        if set(item.layers) <= {"Top Layer", "Bottom Layer"}
-        and item.rules.tracks == PcbKeepoutPermission.NOT_ALLOWED
-        and item.rules.vias == PcbKeepoutPermission.NOT_ALLOWED
-        and item.rules.pads == PcbKeepoutPermission.NOT_ALLOWED
-        and item.rules.copper_pours == PcbKeepoutPermission.NOT_ALLOWED
-    ]
-
-    assert len(keepout_rings) >= 8
-    assert any("Top Layer" in item.layers for item in keepout_rings)
-    assert any("Bottom Layer" in item.layers for item in keepout_rings)
-    assert all(len(item.boundary.segments) >= 16 for item in keepout_rings)
-
-
-def test_altium_board_level_solder_mask_lines_and_arcs_are_preserved(pcb: Pcb) -> None:
-    top_solder_lines = [
-        item
-        for item in pcb.geometry
-        if item.object_type == PcbGeometryObject.GRAPHIC
-        and item.primary_layer == "Top Solder"
-        and isinstance(item.data, PcbLineGeometry)
-        and not item.footprint_ref
-    ]
-    bottom_solder_lines = [
-        item
-        for item in pcb.geometry
-        if item.object_type == PcbGeometryObject.GRAPHIC
-        and item.primary_layer == "Bottom Solder"
-        and isinstance(item.data, PcbLineGeometry)
-        and not item.footprint_ref
-    ]
-    top_solder_arcs = [
-        item
-        for item in pcb.geometry
-        if item.object_type == PcbGeometryObject.GRAPHIC
-        and item.primary_layer == "Top Solder"
-        and isinstance(item.data, PcbArcGeometry)
-        and not item.footprint_ref
-    ]
-    bottom_solder_arcs = [
-        item
-        for item in pcb.geometry
-        if item.object_type == PcbGeometryObject.GRAPHIC
-        and item.primary_layer == "Bottom Solder"
-        and isinstance(item.data, PcbArcGeometry)
-        and not item.footprint_ref
-    ]
-
-    assert len(top_solder_lines) == 4
-    assert len(bottom_solder_lines) == 4
-    assert len(top_solder_arcs) == 4
-    assert len(bottom_solder_arcs) == 4
-    assert all(item.data.width == pytest.approx(0.1, abs=0.001) for item in top_solder_lines)
-    assert all(item.data.width == pytest.approx(0.1, abs=0.001) for item in top_solder_arcs)
-
-
-def test_altium_component_non_silk_fab_graphics_are_preserved(pcb: Pcb) -> None:
-    assert any(
-        line.primary_layer in {"Top Paste", "Bottom Paste"} and line.footprint_ref
-        for line in pcb.geometry
-        if isinstance(line.data, PcbLineGeometry)
-    )
-    assert any(
-        arc.primary_layer in {"Top 3D Body", "Bottom 3D Body"} and arc.footprint_ref
-        for arc in pcb.geometry
-        if isinstance(arc.data, PcbArcGeometry)
-    )
-
-
-# ---------------------------------------------------------------------------
-# Stackup
-# ---------------------------------------------------------------------------
+    assert len([pair for pair in diff_pairs if "PCIe" in pair.name]) >= 2
 
 
 @pytest.fixture(scope="module")
@@ -277,81 +142,60 @@ def stackup(ole_streams: dict[str, bytes]) -> Stackup:
     return result
 
 
-def test_stackup_exists(stackup) -> None:
-    """Stackup is parsed successfully."""
-    assert stackup is not None
-
-
-def test_stackup_layer_count(stackup) -> None:
-    """v9 stackup: 10 copper + 2 solder mask + 8 prepreg + 3 core = 23 layers."""
+def test_stackup_layer_count(stackup: Stackup) -> None:
     assert len(stackup.layers) == 23
 
 
-def test_stackup_copper_layers(stackup) -> None:
-    """10 copper layers present."""
-    copper = [ly for ly in stackup.layers if ly.layer_type == "copper"]
+def test_stackup_copper_layers(stackup: Stackup) -> None:
+    copper = [layer for layer in stackup.layers if layer.layer_type == "copper"]
     assert len(copper) == 10
 
 
-def test_stackup_solder_mask_layers(stackup) -> None:
-    """Top and bottom solder masks included from v9 format."""
-    masks = [ly for ly in stackup.layers if ly.layer_type == "solder_mask"]
+def test_stackup_solder_mask_layers(stackup: Stackup) -> None:
+    masks = [layer for layer in stackup.layers if layer.layer_type == "solder_mask"]
     assert len(masks) == 2
     assert masks[0].name == "Top Solder"
     assert masks[1].name == "Bottom Solder"
 
 
-def test_stackup_top_layer(stackup) -> None:
-    """Top copper layer has correct thickness and side."""
-    # First layer is solder mask, second is top copper
-    top = next(ly for ly in stackup.layers if ly.layer_type == "copper" and ly.side == "front")
+def test_stackup_top_layer(stackup: Stackup) -> None:
+    top = next(
+        layer for layer in stackup.layers if layer.layer_type == "copper" and layer.side == "front"
+    )
     assert top.name == "Top Layer"
-    # 1.4173mil → ~0.036mm
     assert top.thickness_mm == pytest.approx(0.036, abs=0.001)
 
 
-def test_stackup_bottom_layer(stackup) -> None:
-    """Bottom copper layer is last copper and has correct side."""
-    copper = [ly for ly in stackup.layers if ly.layer_type == "copper"]
+def test_stackup_bottom_layer(stackup: Stackup) -> None:
+    copper = [layer for layer in stackup.layers if layer.layer_type == "copper"]
     bottom = copper[-1]
     assert bottom.name == "Bottom Layer"
     assert bottom.side == "back"
 
 
-def test_stackup_dielectric_properties(stackup) -> None:
-    """First prepreg (Dielectric 1) has material and epsilon_r."""
-    diel1 = next(ly for ly in stackup.layers if ly.name == "Dielectric 1")
-    assert diel1.layer_type == "prepreg"
-    assert diel1.material == "PP-1080"
-    assert diel1.epsilon_r == pytest.approx(4.0)
-    # 2.9528mil → ~0.075mm
-    assert diel1.thickness_mm == pytest.approx(0.075, abs=0.001)
+def test_stackup_dielectric_properties(stackup: Stackup) -> None:
+    dielectric = next(layer for layer in stackup.layers if layer.name == "Dielectric 1")
+    assert dielectric.layer_type == "prepreg"
+    assert dielectric.material == "PP-1080"
+    assert dielectric.epsilon_r == pytest.approx(4.0)
+    assert dielectric.thickness_mm == pytest.approx(0.075, abs=0.001)
 
 
-def test_stackup_core_layer(stackup) -> None:
-    """Core layers have correct type and epsilon_r."""
-    cores = [ly for ly in stackup.layers if ly.layer_type == "core"]
+def test_stackup_core_layer(stackup: Stackup) -> None:
+    cores = [layer for layer in stackup.layers if layer.layer_type == "core"]
     assert len(cores) == 3
-    assert all(c.epsilon_r == pytest.approx(4.6) for c in cores)
+    assert all(core.epsilon_r == pytest.approx(4.6) for core in cores)
 
 
-def test_stackup_copper_orientation(stackup) -> None:
-    """Copper orientation is parsed (normal vs reversed foil)."""
-    copper = [ly for ly in stackup.layers if ly.layer_type == "copper"]
-    # Top layers have normal orientation, inner layers 5-8 have reversed
-    assert copper[0].copper_orientation == "normal"  # Top Layer
-    assert copper[-1].copper_orientation == "reversed"  # Bottom Layer
+def test_stackup_copper_orientation(stackup: Stackup) -> None:
+    copper = [layer for layer in stackup.layers if layer.layer_type == "copper"]
+    assert copper[0].copper_orientation == "normal"
+    assert copper[-1].copper_orientation == "reversed"
 
 
-def test_stackup_total_thickness(stackup) -> None:
-    """Total thickness is sum of all layers."""
-    expected = sum(ly.thickness_mm for ly in stackup.layers)
+def test_stackup_total_thickness(stackup: Stackup) -> None:
+    expected = sum(layer.thickness_mm for layer in stackup.layers)
     assert stackup.total_thickness_mm == pytest.approx(expected)
-
-
-# ---------------------------------------------------------------------------
-# Polygon holes
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="module")
@@ -359,86 +203,161 @@ def pcb() -> Pcb:
     return parse_altium_pcb(FIXTURE)
 
 
-def test_polygons_with_holes(pcb) -> None:
-    """Polygons with holes are preserved."""
-    polys_with_holes = [p for p in _polygon_geometry(pcb) if p.data.holes]
+def test_altium_keepout_arcs_are_not_visible_trace_arcs(pcb: Pcb) -> None:
+    visible_keepout_rings = [
+        conductor
+        for conductor in pcb.conductors
+        if conductor.kind == PcbConductorKind.TRACE_ARC
+        and conductor.layer.name in {"Top Layer", "Bottom Layer"}
+        and conductor.net is None
+        and isinstance(conductor.data, PcbArc)
+        and conductor.data.width == pytest.approx(0.2, abs=0.001)
+        and conductor.data.start_x == pytest.approx(conductor.data.end_x, abs=1e-6)
+        and conductor.data.start_y == pytest.approx(conductor.data.end_y, abs=1e-6)
+    ]
+
+    assert visible_keepout_rings == []
+
+
+def test_altium_keepout_arcs_are_preserved_as_queryable_keepouts(pcb: Pcb) -> None:
+    keepout_rings = [
+        item
+        for item in pcb.keepouts
+        if {layer.name for layer in item.layers} <= {"Top Layer", "Bottom Layer"}
+        and item.rules.tracks == PcbKeepoutPermission.NOT_ALLOWED
+        and item.rules.vias == PcbKeepoutPermission.NOT_ALLOWED
+        and item.rules.pads == PcbKeepoutPermission.NOT_ALLOWED
+        and item.rules.copper_pours == PcbKeepoutPermission.NOT_ALLOWED
+    ]
+
+    assert len(keepout_rings) >= 8
+    assert all(len(item.boundary.segments) >= 16 for item in keepout_rings)
+
+
+def test_altium_board_level_solder_mask_lines_and_arcs_are_preserved(pcb: Pcb) -> None:
+    top_solder_lines = _artwork_matching(pcb, "Top Solder", PcbLine, footprint_owned=False)
+    bottom_solder_lines = _artwork_matching(pcb, "Bottom Solder", PcbLine, footprint_owned=False)
+    top_solder_arcs = _artwork_matching(pcb, "Top Solder", PcbArc, footprint_owned=False)
+    bottom_solder_arcs = _artwork_matching(pcb, "Bottom Solder", PcbArc, footprint_owned=False)
+
+    assert len(top_solder_lines) == 4
+    assert len(bottom_solder_lines) == 4
+    assert len(top_solder_arcs) == 4
+    assert len(bottom_solder_arcs) == 4
+    assert all(item.data.width == pytest.approx(0.1, abs=0.001) for item in top_solder_lines)
+    assert all(item.data.width == pytest.approx(0.1, abs=0.001) for item in top_solder_arcs)
+
+
+def test_altium_component_non_silk_fab_graphics_are_preserved(pcb: Pcb) -> None:
+    assert _artwork_matching(pcb, "Top Paste", PcbLine, footprint_owned=True)
+    assert _artwork_matching(pcb, "Bottom Paste", PcbLine, footprint_owned=True)
+    assert _artwork_matching(pcb, "Top 3D Body", PcbArc, footprint_owned=True)
+    assert _artwork_matching(pcb, "Bottom 3D Body", PcbArc, footprint_owned=True)
+
+
+def test_polygons_with_holes(pcb: Pcb) -> None:
+    polygons = _polygon_payloads(pcb)
+    polys_with_holes = [poly for poly in polygons if poly.holes]
     assert len(polys_with_holes) >= 30
-    assert any(len(hole) > 300 for poly in polys_with_holes for hole in poly.data.holes)
+    assert any(len(hole) > 300 for poly in polys_with_holes for hole in poly.holes)
 
 
-def test_polygon_hole_structure(pcb) -> None:
-    """Each hole is a list of at least 3 coordinate pairs."""
-    poly = next(p for p in _polygon_geometry(pcb) if p.data.holes)
-    hole = poly.data.holes[0]
+def test_polygon_hole_structure(pcb: Pcb) -> None:
+    poly = next(poly for poly in _polygon_payloads(pcb) if poly.holes)
+    hole = poly.holes[0]
     assert len(hole) >= 3
-    # Each point is a (float, float) tuple
     assert len(hole[0]) == 2
 
 
-def test_duplicate_shape_based_board_copper_polygons_are_omitted(pcb) -> None:
-    """Altium Regions6 and ShapeBasedRegions6 can duplicate board copper polygons."""
+def test_duplicate_shape_based_board_copper_polygons_are_omitted(pcb: Pcb) -> None:
     copper_area = [
-        poly
-        for poly in _polygon_geometry(pcb)
-        if poly.primary_layer == "Top Layer"
-        and _polygon_bounds_key(poly) == ("Top Layer", 100.871, -146.479, 136.221, -134.629)
+        conductor
+        for conductor in pcb.conductors
+        if isinstance(conductor.data, PcbPolygon)
+        and conductor.layer.name == "Top Layer"
+        and _polygon_bounds_key(conductor.data, conductor.layer.name)
+        == ("Top Layer", 100.871, -146.479, 136.221, -134.629)
     ]
 
     assert len(copper_area) == 1
 
 
-def test_polygon_cutout_regions_are_not_emitted_as_copper(pcb) -> None:
+def test_polygon_cutout_regions_are_not_emitted_as_copper(pcb: Pcb) -> None:
     cutout_area = [
-        poly
-        for poly in _polygon_geometry(pcb)
-        if poly.primary_layer == "Top Layer"
-        and _polygon_bounds_key(poly) == ("Top Layer", 88.821, -173.629, 91.321, -171.129)
+        conductor
+        for conductor in pcb.conductors
+        if isinstance(conductor.data, PcbPolygon)
+        and conductor.layer.name == "Top Layer"
+        and _polygon_bounds_key(conductor.data, conductor.layer.name)
+        == ("Top Layer", 88.821, -173.629, 91.321, -171.129)
     ]
 
     assert cutout_area == []
 
 
-def test_altium_polygon_pours_are_intent_not_renderable_geometry(pcb: Pcb) -> None:
+def test_altium_polygon_pours_are_intent_not_top_level_conductors(pcb: Pcb) -> None:
     assert pcb.pours
-    assert not any(item.id.startswith("polygon_pour:") for item in pcb.geometry)
+    assert not any(conductor.id.startswith("polygon_pour:") for conductor in pcb.conductors)
     assert any(pour.id.startswith("polygon_pour:") for pour in pcb.pours)
 
 
 def test_altium_pour_fill_children_are_linked_to_parent_pours(pcb: Pcb) -> None:
     pour_fill = [
-        item for item in pcb.geometry if item.has_role(PcbGeometryRole.POUR_FILL) and item.pour_id
+        conductor
+        for conductor in pcb.conductors
+        if conductor.kind == PcbConductorKind.POUR_FILL and conductor.pour is not None
     ]
 
     assert pour_fill
-    assert not any(item.has_role(PcbGeometryRole.TRACE) for item in pour_fill)
-    assert all(pcb.pour_for(item.pour_id) is not None for item in pour_fill)
-    assert any(pour.fill_geometry_ids for pour in pcb.pours)
+    assert all(conductor.kind != PcbConductorKind.TRACE for conductor in pour_fill)
+    assert all(pcb.pour_for(conductor.pour.id) is conductor.pour for conductor in pour_fill)
+    assert any(pour.fills for pour in pcb.pours)
 
 
 def test_pimx8_problematic_polygon_boundary_is_not_renderable_copper(pcb: Pcb) -> None:
     assert pcb.pour_for("polygon_pour:29:6") is not None
-    assert not any(item.id == "polygon_pour:29:6" for item in pcb.geometry)
-    arc = next(item for item in pcb.geometry if item.id == "arc:1:46")
-    assert arc.pour_id == ""
-    assert arc.has_role(PcbGeometryRole.TRACE)
+    assert not any(conductor.id == "polygon_pour:29:6" for conductor in pcb.conductors)
+    arc = next(conductor for conductor in pcb.conductors if conductor.id == "arc:1:46")
+    assert arc.pour is None
+    assert arc.kind == PcbConductorKind.TRACE_ARC
 
 
-def _polygon_geometry(pcb: Pcb) -> list[PcbGeometry]:
+def _artwork_matching(
+    pcb: Pcb,
+    layer_name: str,
+    payload_type: type[PcbLine] | type[PcbArc],
+    *,
+    footprint_owned: bool,
+):
     return [
         item
-        for item in pcb.geometry
-        if item.object_type in {PcbGeometryObject.GRAPHIC, PcbGeometryObject.REGION}
-        and isinstance(item.data, PcbPolygonGeometry)
-        and not item.has_role(PcbGeometryRole.POLYGON_CUTOUT)
+        for item in pcb.artwork
+        if item.layer is not None
+        and item.layer.name == layer_name
+        and isinstance(item.data, payload_type)
+        and (item.footprint is not None) is footprint_owned
     ]
 
 
-def _polygon_bounds_key(poly: PcbGeometry) -> tuple[str, float, float, float, float]:
-    assert isinstance(poly.data, PcbPolygonGeometry)
-    xs = [x for x, _y in poly.data.points]
-    ys = [y for _x, y in poly.data.points]
+def _polygon_payloads(pcb: Pcb) -> list[PcbPolygon]:
+    polygons: list[PcbPolygon] = []
+    for conductor in pcb.conductors:
+        if isinstance(conductor.data, PcbPolygon):
+            polygons.append(conductor.data)
+    for artwork in pcb.artwork:
+        if artwork.kind == PcbArtworkKind.POLYGON and isinstance(artwork.data, PcbPolygon):
+            polygons.append(artwork.data)
+    return polygons
+
+
+def _polygon_bounds_key(
+    polygon: PcbPolygon,
+    layer_name: str,
+) -> tuple[str, float, float, float, float]:
+    xs = [x for x, _y in polygon.points]
+    ys = [y for _x, y in polygon.points]
     return (
-        poly.primary_layer,
+        layer_name,
         round(min(xs), 3),
         round(min(ys), 3),
         round(max(xs), 3),

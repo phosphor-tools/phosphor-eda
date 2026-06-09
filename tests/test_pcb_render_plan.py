@@ -30,14 +30,15 @@ class _Profiler:
         return None
 
 
-def test_render_plan_builds_from_normalized_geometry() -> None:
+def test_render_plan_builds_from_typed_inventory() -> None:
     settings = RenderSettings(
         render_mode="eda",
         source=SourceSelection(
             layers=[
                 LayerSelectionRule(match=LayerMatch(role="copper")),
                 LayerSelectionRule(
-                    match=LayerMatch(role="silkscreen"), objects=("graphic", "text")
+                    match=LayerMatch(role="silkscreen"),
+                    purposes=("silkscreen", "designator"),
                 ),
                 LayerSelectionRule(match=LayerMatch(role="edge")),
             ]
@@ -57,7 +58,7 @@ def test_render_plan_builds_from_normalized_geometry() -> None:
     assert {layer.role.function for layer in plan.base_layers} >= {"copper", "silkscreen", "edge"}
 
 
-def test_render_plan_profiler_counts_geometry_object_types() -> None:
+def test_render_plan_profiler_counts_typed_collections() -> None:
     profiler = _Profiler()
     settings = RenderSettings(
         render_mode="eda",
@@ -78,3 +79,7 @@ def test_render_plan_profiler_counts_geometry_object_types() -> None:
     assert board_metric["trace_arcs"] == 0
     assert board_metric["vias"] == 1
     assert board_metric["pours"] == 0
+    inventory_metric = next(
+        values for name, values in profiler.metrics if name == "inventory.items"
+    )
+    assert inventory_metric["count"] > 0

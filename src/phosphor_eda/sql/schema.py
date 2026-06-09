@@ -1,7 +1,4 @@
-"""DDL definitions for the DuckDB SQL schema.
-
-Table and view definitions match the schema in docs/design/pcb-query-commands.md.
-"""
+"""DDL definitions for the DuckDB SQL schema."""
 
 from __future__ import annotations
 
@@ -23,32 +20,9 @@ TABLE_DDL: dict[str, str] = {
             geom GEOMETRY
         )
     """,
-    "geometry": """
-        CREATE TABLE geometry (
-            id VARCHAR,
-            object_type VARCHAR,
-            shape VARCHAR,
-            display_role VARCHAR,
-            primary_role VARCHAR,
-            roles VARCHAR[],
-            primary_layer VARCHAR,
-            layers VARCHAR[],
-            side VARCHAR,
-            net_name VARCHAR,
-            net_number INTEGER,
-            footprint_ref VARCHAR,
-            pour_id VARCHAR,
-            source_format VARCHAR,
-            native_type VARCHAR,
-            native_kind VARCHAR,
-            native_id VARCHAR,
-            native_index INTEGER,
-            metadata JSON,
-            geom GEOMETRY
-        )
-    """,
     "pads": """
         CREATE TABLE pads (
+            id VARCHAR,
             reference VARCHAR,
             pad_number VARCHAR,
             net_name VARCHAR,
@@ -58,9 +32,12 @@ TABLE_DDL: dict[str, str] = {
             width DOUBLE,
             height DOUBLE,
             shape VARCHAR,
+            pad_type VARCHAR,
+            drill_id VARCHAR,
             drill DOUBLE,
             side VARCHAR,
-            layer VARCHAR,
+            primary_layer VARCHAR,
+            layers VARCHAR[],
             pin_function VARCHAR,
             pin_type VARCHAR,
             mask_aperture_width DOUBLE,
@@ -69,8 +46,43 @@ TABLE_DDL: dict[str, str] = {
             geom GEOMETRY
         )
     """,
-    "segments": """
-        CREATE TABLE segments (
+    "vias": """
+        CREATE TABLE vias (
+            id VARCHAR,
+            net_name VARCHAR,
+            net_number INTEGER,
+            x DOUBLE,
+            y DOUBLE,
+            diameter_mm DOUBLE,
+            drill_id VARCHAR,
+            via_type VARCHAR,
+            start_layer VARCHAR,
+            end_layer VARCHAR,
+            layers VARCHAR[],
+            geom GEOMETRY
+        )
+    """,
+    "drills": """
+        CREATE TABLE drills (
+            id VARCHAR,
+            owner_kind VARCHAR,
+            owner_id VARCHAR,
+            plating VARCHAR,
+            shape VARCHAR,
+            x DOUBLE,
+            y DOUBLE,
+            diameter_mm DOUBLE,
+            width_mm DOUBLE,
+            height_mm DOUBLE,
+            rotation DOUBLE,
+            layers VARCHAR[],
+            geom GEOMETRY
+        )
+    """,
+    "conductors": """
+        CREATE TABLE conductors (
+            id VARCHAR,
+            kind VARCHAR,
             net_name VARCHAR,
             net_number INTEGER,
             layer VARCHAR,
@@ -84,29 +96,33 @@ TABLE_DDL: dict[str, str] = {
             arc_center_y DOUBLE,
             arc_angle DOUBLE,
             length_mm DOUBLE,
+            footprint_ref VARCHAR,
+            pour_id VARCHAR,
             centerline GEOMETRY,
             geom GEOMETRY
         )
     """,
-    "vias": """
-        CREATE TABLE vias (
-            net_name VARCHAR,
-            net_number INTEGER,
+    "artwork": """
+        CREATE TABLE artwork (
+            id VARCHAR,
+            purpose VARCHAR,
+            content_kind VARCHAR,
+            footprint_ref VARCHAR,
+            layer VARCHAR,
+            text VARCHAR,
             x DOUBLE,
             y DOUBLE,
-            diameter_mm DOUBLE,
-            drill_mm DOUBLE,
-            start_layer VARCHAR,
-            end_layer VARCHAR,
-            geom GEOMETRY,
-            drill_geom GEOMETRY
+            rotation DOUBLE,
+            font_size DOUBLE,
+            geom GEOMETRY
         )
     """,
-    "polygons": """
-        CREATE TABLE polygons (
-            net_name VARCHAR,
-            net_number INTEGER,
+    "board_profile": """
+        CREATE TABLE board_profile (
+            id VARCHAR,
+            kind VARCHAR,
             layer VARCHAR,
+            is_cutout BOOLEAN,
             geom GEOMETRY
         )
     """,
@@ -127,8 +143,7 @@ TABLE_DDL: dict[str, str] = {
             thermal_gap_mm DOUBLE,
             thermal_bridge_width_mm DOUBLE,
             connect_pads_clearance_mm DOUBLE,
-            fill_geometry_ids VARCHAR[],
-            cutout_geometry_ids VARCHAR[],
+            fill_conductor_ids VARCHAR[],
             footprint_ref VARCHAR,
             source_format VARCHAR,
             native_type VARCHAR,
@@ -160,50 +175,10 @@ TABLE_DDL: dict[str, str] = {
             boundary GEOMETRY
         )
     """,
-    "footprint_graphics": """
-        CREATE TABLE footprint_graphics (
-            reference VARCHAR,
-            layer VARCHAR,
-            kind VARCHAR,
-            geom GEOMETRY
-        )
-    """,
-    "board_graphics": """
-        CREATE TABLE board_graphics (
-            reference VARCHAR,
-            layer VARCHAR,
-            kind VARCHAR,
-            geom GEOMETRY
-        )
-    """,
-    "graphic_texts": """
-        CREATE TABLE graphic_texts (
-            text VARCHAR,
-            x DOUBLE,
-            y DOUBLE,
-            rotation DOUBLE,
-            layer VARCHAR,
-            font_size DOUBLE,
-            justify VARCHAR
-        )
-    """,
-    "dimensions": """
-        CREATE TABLE dimensions (
-            kind VARCHAR,
-            value_mm DOUBLE,
-            layer VARCHAR,
-            start_x DOUBLE,
-            start_y DOUBLE,
-            end_x DOUBLE,
-            end_y DOUBLE,
-            text VARCHAR
-        )
-    """,
     "layers": """
         CREATE TABLE layers (
             position INTEGER,
             name VARCHAR,
-            primary_role VARCHAR,
             roles VARCHAR[],
             side VARCHAR,
             number INTEGER,
@@ -316,7 +291,8 @@ VIEW_DDL: dict[str, str] = {
             layer,
             SUM(length_mm) AS trace_length_mm,
             COUNT(*) AS segment_count
-        FROM segments
+        FROM conductors
+        WHERE kind IN ('trace', 'trace_arc')
         GROUP BY net_name, layer
     """,
     "net_summary": """
@@ -328,9 +304,11 @@ VIEW_DDL: dict[str, str] = {
             n.net_class,
             n.diff_pair,
             COUNT(DISTINCT p.reference || '.' || p.pad_number) AS pcb_pad_count,
-            COUNT(DISTINCT v.rowid) AS pcb_via_count,
+            COUNT(DISTINCT v.id) AS pcb_via_count,
             COALESCE((
-                SELECT SUM(s.length_mm) FROM segments s WHERE s.net_name = n.name
+                SELECT SUM(c.length_mm)
+                FROM conductors c
+                WHERE c.net_name = n.name AND c.kind IN ('trace', 'trace_arc')
             ), 0) AS trace_length_mm
         FROM nets n
         LEFT JOIN pads p ON p.net_name = n.name
@@ -339,28 +317,21 @@ VIEW_DDL: dict[str, str] = {
     """,
     "width_violations": """
         CREATE VIEW width_violations AS
-        SELECT s.net_name, s.layer, s.width_mm AS actual_width,
+        SELECT c.net_name, c.layer, c.width_mm AS actual_width,
                nc.trace_width_mm AS target_width,
-               s.width_mm - nc.trace_width_mm AS deviation_mm
-        FROM segments s
-        JOIN net_class_members ncm ON ncm.net_name = s.net_name
+               c.width_mm - nc.trace_width_mm AS deviation_mm
+        FROM conductors c
+        JOIN net_class_members ncm ON ncm.net_name = c.net_name
         JOIN net_classes nc ON nc.name = ncm.net_class
-        WHERE ABS(s.width_mm - nc.trace_width_mm) > 1e-6
+        WHERE c.width_mm IS NOT NULL
+          AND ABS(c.width_mm - nc.trace_width_mm) > 1e-6
     """,
     "drill_histogram": """
         CREATE VIEW drill_histogram AS
-        SELECT drill_mm, count, source
-        FROM (
-            SELECT drill_mm, COUNT(*) AS count, 'via' AS source
-            FROM vias
-            GROUP BY drill_mm
-            UNION ALL
-            SELECT drill AS drill_mm, COUNT(*) AS count, 'pad' AS source
-            FROM pads
-            WHERE drill > 0
-            GROUP BY drill
-        )
-        ORDER BY drill_mm
+        SELECT diameter_mm AS drill_mm, COUNT(*) AS count, owner_kind AS source
+        FROM drills
+        GROUP BY diameter_mm, owner_kind
+        ORDER BY diameter_mm
     """,
 }
 
@@ -374,17 +345,15 @@ def create_tables(con: duckdb.DuckDBPyConnection) -> None:
 
 
 def create_views(con: duckdb.DuckDBPyConnection) -> None:
-    """Create all views (must be called after tables are populated)."""
+    """Create all views after tables are populated."""
     for ddl in VIEW_DDL.values():
         con.execute(ddl)
 
 
 def schema_text() -> str:
-    """Return formatted DDL for all tables and views (for --schema output)."""
-    lines: list[str] = []
-    lines.append("-- Tables\n")
+    """Return formatted DDL for all tables and views."""
+    lines: list[str] = ["-- Tables\n"]
     for name, ddl in TABLE_DDL.items():
-        # Clean up indentation for display
         cleaned = "\n".join(line.strip() for line in ddl.strip().splitlines())
         lines.append(f"-- {name}")
         lines.append(cleaned)

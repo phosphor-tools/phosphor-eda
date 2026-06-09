@@ -17,7 +17,7 @@ from phosphor_eda.fonts import INTER_REGULAR
 if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry
 
-    from phosphor_eda.pcb import PcbTextGeometry
+    from phosphor_eda.pcb import PcbText
 
 _FONT = TTFont(INTER_REGULAR)
 _GLYPH_SET = _FONT.getGlyphSet()
@@ -140,7 +140,7 @@ class _OutlinePen(BasePen):
             self._current.append(point)
 
 
-def text_outline_geometry(text: PcbTextGeometry) -> BaseGeometry:
+def text_outline_geometry(text: PcbText) -> BaseGeometry:
     """Return filled glyph outlines for a PCB text primitive in board units."""
     spec = _text_spec(text)
     if not spec.text or spec.font_size <= 0:
@@ -175,7 +175,7 @@ def text_outline_geometry(text: PcbTextGeometry) -> BaseGeometry:
     return geometry
 
 
-def _text_spec(text: PcbTextGeometry) -> _TextSpec:
+def _text_spec(text: PcbText) -> _TextSpec:
     return _TextSpec(
         text=text.text,
         x=text.x,

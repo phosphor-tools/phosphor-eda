@@ -7,15 +7,16 @@ import pytest
 from shapely import Polygon
 
 from phosphor_eda.pcb import (
-    PcbArcGeometry,
-    PcbGeometry,
-    PcbGeometryObject,
-    PcbGeometryRole,
-    PcbGeometryShape,
-    PcbLineGeometry,
-    PcbPadGeometry,
-    PcbPolygonGeometry,
-    PcbViaGeometry,
+    PcbArc,
+    PcbArtworkKind,
+    PcbBoardProfile,
+    PcbBoardProfileElement,
+    PcbDrill,
+    PcbLine,
+    PcbPad,
+    PcbPadType,
+    PcbPolygon,
+    PcbVia,
 )
 from phosphor_eda.sql.geometry import (
     arc_center_from_three_points,
@@ -36,7 +37,7 @@ PI_MX8_PCB = FIXTURES / "altium" / "pi-mx8" / "PCB" / "PiMX8MP_r0.3.PcbDoc"
 
 
 def test_pad_circle_is_circular() -> None:
-    pad = PcbPadGeometry("1", 0.0, 0.0, 2.0, 2.0, "circle")
+    pad = _pad("circle", width=2.0, height=2.0)
 
     geom = pad_polygon(pad)
 
@@ -44,7 +45,7 @@ def test_pad_circle_is_circular() -> None:
 
 
 def test_pad_rect_rotated_swaps_bounds() -> None:
-    pad = PcbPadGeometry("1", 0.0, 0.0, 2.0, 1.0, "rect", rotation=90.0)
+    pad = _pad("rect", width=2.0, height=1.0, rotation=90.0)
 
     geom = pad_polygon(pad)
     min_x, min_y, max_x, max_y = geom.bounds
@@ -54,7 +55,7 @@ def test_pad_rect_rotated_swaps_bounds() -> None:
 
 
 def test_segment_corridor_width_and_centerline_length() -> None:
-    seg = PcbLineGeometry(0.0, 0.0, 3.0, 4.0, 0.3)
+    seg = PcbLine(0.0, 0.0, 3.0, 4.0, 0.3)
 
     centerline, corridor = segment_geometry(seg)
 
@@ -66,7 +67,7 @@ def test_segment_corridor_width_and_centerline_length() -> None:
 def test_arc_geometry_has_expected_center_and_width() -> None:
     cx, cy, radius = arc_center_from_three_points(0.0, 0.0, 1.0, 1.0, 2.0, 0.0)
     angle = arc_sweep_angle(0.0, 0.0, 1.0, 1.0, 2.0, 0.0, cx, cy)
-    arc = PcbArcGeometry(0.0, 0.0, 1.0, 1.0, 2.0, 0.0, 0.2)
+    arc = PcbArc(0.0, 0.0, 1.0, 1.0, 2.0, 0.0, 0.2)
 
     centerline, corridor = trace_arc_geometry(arc)
 
@@ -84,7 +85,8 @@ def test_arc_polyline_endpoints() -> None:
 
 
 def test_via_geometry_radii() -> None:
-    via = PcbViaGeometry(5.0, 5.0, 0.8, 0.4)
+    drill = PcbDrill("drill:via", 5.0, 5.0, 0.4)
+    via = PcbVia("via:1", 5.0, 5.0, 0.8, (), drill)
 
     copper, drill = via_geometry(via)
 
@@ -94,7 +96,7 @@ def test_via_geometry_radii() -> None:
 
 
 def test_polygon_with_holes() -> None:
-    poly = PcbPolygonGeometry(
+    poly = PcbPolygon(
         points=[(0, 0), (10, 0), (10, 10), (0, 10)],
         holes=[[(2, 2), (4, 2), (4, 4), (2, 4)]],
     )
@@ -106,7 +108,7 @@ def test_polygon_with_holes() -> None:
 
 
 def test_polygon_degenerate_returns_none() -> None:
-    assert polygon_geometry(PcbPolygonGeometry(points=[(0, 0), (1, 0)])) is None
+    assert polygon_geometry(PcbPolygon(points=[(0, 0), (1, 0)])) is None
 
 
 def test_board_outline_from_normalized_fixture_geometry() -> None:
@@ -114,7 +116,8 @@ def test_board_outline_from_normalized_fixture_geometry() -> None:
 
     pcb = parse_kicad_pcb(SWD_SWITCH_PCB)
 
-    geom = board_outline_polygon(pcb.board_profile_geometry())
+    assert pcb.board_profile is not None
+    geom = board_outline_polygon(pcb.board_profile)
 
     assert geom is not None
     assert isinstance(geom, Polygon)
@@ -127,7 +130,8 @@ def test_board_outline_closes_orangecrab_fractional_arc_ring() -> None:
 
     pcb = parse_kicad_pcb(ORANGECRAB_PCB)
 
-    geom = board_outline_polygon(pcb.board_profile_geometry())
+    assert pcb.board_profile is not None
+    geom = board_outline_polygon(pcb.board_profile)
 
     assert geom is not None
     assert isinstance(geom, Polygon)
@@ -140,7 +144,8 @@ def test_board_outline_closes_pi_mx8_altium_fractional_arc_ring() -> None:
 
     pcb = parse_altium_pcb(PI_MX8_PCB)
 
-    geom = board_outline_polygon(pcb.board_profile_geometry())
+    assert pcb.board_profile is not None
+    geom = board_outline_polygon(pcb.board_profile)
 
     assert geom is not None
     assert isinstance(geom, Polygon)
@@ -149,17 +154,40 @@ def test_board_outline_closes_pi_mx8_altium_fractional_arc_ring() -> None:
 
 
 def test_board_outline_polygon_accepts_line_and_arc_geometry_rows() -> None:
-    outline = [
-        _outline_line("l1", 0.0, 0.0, 2.0, 0.0),
-        _outline_line("l2", 2.0, 0.0, 2.0, 2.0),
-        _outline_line("l3", 2.0, 2.0, 0.0, 2.0),
-        _outline_line("l4", 0.0, 2.0, 0.0, 0.0),
-    ]
+    outline = PcbBoardProfile(
+        elements=(
+            _outline_line("l1", 0.0, 0.0, 2.0, 0.0),
+            _outline_line("l2", 2.0, 0.0, 2.0, 2.0),
+            _outline_line("l3", 2.0, 2.0, 0.0, 2.0),
+            _outline_line("l4", 0.0, 2.0, 0.0, 0.0),
+        )
+    )
 
     geom = board_outline_polygon(outline)
 
     assert geom is not None
     assert geom.area == pytest.approx(4.0)
+
+
+def _pad(
+    shape: str,
+    *,
+    width: float,
+    height: float,
+    rotation: float = 0.0,
+) -> PcbPad:
+    return PcbPad(
+        id="pad:1",
+        number="1",
+        x=0.0,
+        y=0.0,
+        width=width,
+        height=height,
+        shape=shape,
+        pad_type=PcbPadType.SMD,
+        layers=(),
+        rotation=rotation,
+    )
 
 
 def _outline_line(
@@ -168,12 +196,10 @@ def _outline_line(
     start_y: float,
     end_x: float,
     end_y: float,
-) -> PcbGeometry:
-    return PcbGeometry(
+) -> PcbBoardProfileElement:
+    return PcbBoardProfileElement(
         id=id_,
-        object_type=PcbGeometryObject.GRAPHIC,
-        shape=PcbGeometryShape.LINE,
-        roles=(PcbGeometryRole.EDGE, PcbGeometryRole.BOARD_OUTLINE),
-        data=PcbLineGeometry(start_x, start_y, end_x, end_y, 0.1),
-        layers=("Edge.Cuts",),
+        kind=PcbArtworkKind.LINE,
+        layer=None,
+        data=PcbLine(start_x, start_y, end_x, end_y, 0.1),
     )

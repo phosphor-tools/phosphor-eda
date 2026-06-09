@@ -21,30 +21,19 @@ def test_layer_side_is_derived_from_roles() -> None:
     assert PcbLayer("Edge.Cuts", (LayerRole.EDGE,)).side == ""
 
 
-def test_primary_role_uses_display_priority() -> None:
-    assert (
+def test_layers_do_not_expose_primary_role() -> None:
+    assert not hasattr(
         PcbLayer(
             "F.CrtYd",
             (LayerRole.FABRICATION, LayerRole.COURTYARD, LayerRole.FRONT),
-        ).primary_role
-        == LayerRole.COURTYARD
-    )
-    assert PcbLayer("Board Shape", (LayerRole.MECHANICAL, LayerRole.EDGE)).primary_role == (
-        LayerRole.EDGE
-    )
-    assert PcbLayer("In1.Cu", (LayerRole.COPPER, LayerRole.SIGNAL)).primary_role == (
-        LayerRole.COPPER
+        ),
+        "primary_role",
     )
 
 
 def test_pcb_role_helpers_match_multi_role_layers() -> None:
     board = Pcb(
         name="roles",
-        nets={},
-        footprints=[],
-        pours=[],
-        keepouts=[],
-        geometry=[],
         layers=[
             PcbLayer("F.Fab", (LayerRole.FABRICATION, LayerRole.FRONT)),
             PcbLayer(
@@ -53,6 +42,15 @@ def test_pcb_role_helpers_match_multi_role_layers() -> None:
             ),
             PcbLayer("In1.Cu", (LayerRole.COPPER, LayerRole.INNER, LayerRole.SIGNAL)),
         ],
+        nets={},
+        footprints=[],
+        pads=[],
+        vias=[],
+        drills=[],
+        conductors=[],
+        artwork=[],
+        pours=[],
+        keepouts=[],
     )
 
     assert {layer.name for layer in board.layers_by_role("fabrication")} == {

@@ -6,7 +6,7 @@
       { "match": { "role": "solder_mask", "side": "active" } },
       {
         "match": { "role": "silkscreen", "side": "active" },
-        "objects": ["graphic", "text"]
+        "purposes": ["silkscreen", "designator", "value", "user_text"]
       }
     ]
   },

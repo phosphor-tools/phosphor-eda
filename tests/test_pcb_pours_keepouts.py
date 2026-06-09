@@ -3,18 +3,15 @@ import pytest
 from phosphor_eda.pcb import (
     Pcb,
     PcbClosedPath,
-    PcbGeometry,
-    PcbGeometryObject,
-    PcbGeometryRole,
-    PcbGeometryShape,
+    PcbConductor,
+    PcbConductorKind,
     PcbKeepout,
     PcbKeepoutPermission,
     PcbKeepoutRules,
     PcbLayer,
-    PcbLineGeometry,
     PcbPathSegment,
     PcbPathSegmentKind,
-    PcbPolygonGeometry,
+    PcbPolygon,
     PcbPour,
 )
 
@@ -31,78 +28,52 @@ def test_closed_path_from_points_creates_closed_line_segments() -> None:
     )
 
 
-def test_pour_keepout_and_pour_geometry_helpers() -> None:
+def test_pour_keepout_and_conductor_helpers() -> None:
+    layer = PcbLayer("F.Cu", ("copper", "front"))
     pour = PcbPour(
         id="pour:1",
         boundary=PcbClosedPath.from_points([(0.0, 0.0), (4.0, 0.0), (4.0, 4.0)]),
-        layers=("F.Cu",),
-        net_number=1,
-        net_name="GND",
-        fill_geometry_ids=("region:1",),
+        layers=(layer,),
     )
     keepout = PcbKeepout(
         id="keepout:1",
         boundary=PcbClosedPath.from_points([(1.0, 1.0), (2.0, 1.0), (2.0, 2.0)]),
-        layers=("F.Cu",),
+        layers=(layer,),
         rules=PcbKeepoutRules(
             tracks=PcbKeepoutPermission.NOT_ALLOWED,
             vias=PcbKeepoutPermission.NOT_ALLOWED,
         ),
-        footprint_ref="U1",
+        footprint=None,
     )
-    pour_fill = PcbGeometry(
+    pour_fill = PcbConductor(
         id="region:1",
-        object_type=PcbGeometryObject.REGION,
-        shape=PcbGeometryShape.POLYGON,
-        roles=(
-            PcbGeometryRole.COPPER,
-            PcbGeometryRole.CONDUCTOR,
-            PcbGeometryRole.POUR,
-            PcbGeometryRole.POUR_FILL,
-        ),
-        data=PcbPolygonGeometry([(0.0, 0.0), (4.0, 0.0), (4.0, 4.0)]),
-        layers=("F.Cu",),
-        net_number=1,
-        net_name="GND",
-        pour_id="pour:1",
+        kind=PcbConductorKind.POUR_FILL,
+        layer=layer,
+        data=PcbPolygon([(0.0, 0.0), (4.0, 0.0), (4.0, 4.0)]),
+        pour=pour,
     )
-    unrelated = PcbGeometry(
-        id="track:1",
-        object_type=PcbGeometryObject.TRACK,
-        shape=PcbGeometryShape.LINE,
-        roles=(PcbGeometryRole.COPPER, PcbGeometryRole.CONDUCTOR, PcbGeometryRole.TRACE),
-        data=PcbLineGeometry(0.0, 0.0, 1.0, 0.0, 0.1),
-        layers=("F.Cu",),
-        net_number=1,
-        net_name="GND",
-    )
+    pour.fills = (pour_fill,)
     board = Pcb(
         name="area-model",
+        layers=[layer],
         nets={},
         footprints=[],
+        pads=[],
+        vias=[],
+        drills=[],
+        conductors=[pour_fill],
+        artwork=[],
         pours=[pour],
         keepouts=[keepout],
-        geometry=[pour_fill, unrelated],
-        layers=[PcbLayer("F.Cu", ("copper", "front"))],
     )
 
     assert board.pour_for("pour:1") is pour
-    assert board.pours_on_layer("F.Cu") == [pour]
-    assert board.pours_for_net(1) == [pour]
+    assert board.pours_on_layer(layer) == [pour]
     assert board.keepout_for("keepout:1") is keepout
-    assert board.keepouts_on_layer("F.Cu") == [keepout]
-    assert board.keepouts_for_footprint("u1") == [keepout]
-    assert board.geometry_for_pour("pour:1") == [pour_fill]
+    assert board.keepouts_on_layer(layer) == [keepout]
+    assert board.conductors_for_pour(pour) == [pour_fill]
 
 
 def test_removed_zone_and_geometry_keepout_api_is_not_available() -> None:
     with pytest.raises(AttributeError):
-        _ = getattr(PcbGeometryObject, "ZO" + "NE")
-    with pytest.raises(AttributeError):
-        _ = getattr(PcbGeometryObject, "KEEP" + "_OUT")
-    with pytest.raises(AttributeError):
-        _ = getattr(PcbGeometryRole, "ZONE" + "_OUTLINE")
-    with pytest.raises(AttributeError):
-        _ = getattr(PcbGeometryRole, "ZONE" + "_FILL")
-    with pytest.raises(AttributeError):
-        _ = getattr(PcbGeometryRole, "KEEP" + "OUT")
+        _ = PcbConductorKind.ROUTE

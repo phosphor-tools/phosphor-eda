@@ -12,19 +12,19 @@ from typing import TYPE_CHECKING
 from shapely import LineString, Point, Polygon
 from shapely.affinity import rotate
 
-from phosphor_eda.pcb import PcbArcGeometry, PcbLineGeometry, PcbPathSegmentKind
+from phosphor_eda.pcb import PcbArc, PcbCircle, PcbLine, PcbPathSegmentKind
 from phosphor_eda.shapely_geometry import normalize_geometry, robust_polygonize
 
 if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry
 
     from phosphor_eda.pcb import (
+        PcbBoardProfile,
         PcbClosedPath,
         PcbFootprint,
-        PcbGeometry,
-        PcbPadGeometry,
-        PcbPolygonGeometry,
-        PcbViaGeometry,
+        PcbPad,
+        PcbPolygon,
+        PcbVia,
     )
 
 # Layer names indicating front copper (KiCad and Altium conventions)
@@ -45,7 +45,7 @@ def _box(min_x: float, min_y: float, max_x: float, max_y: float) -> Polygon:
 # ---------------------------------------------------------------------------
 
 
-def pad_polygon(pad: PcbPadGeometry) -> BaseGeometry:
+def pad_polygon(pad: PcbPad) -> BaseGeometry:
     """Construct the actual copper polygon for a pad in board coordinates."""
     cx, cy = pad.x, pad.y
     w, h = pad.width, pad.height
@@ -95,7 +95,7 @@ def pad_polygon(pad: PcbPadGeometry) -> BaseGeometry:
 # ---------------------------------------------------------------------------
 
 
-def segment_geometry(seg: PcbLineGeometry) -> tuple[LineString, Polygon]:
+def segment_geometry(seg: PcbLine) -> tuple[LineString, Polygon]:
     """Return (centerline, copper corridor) for a straight trace segment."""
     centerline = LineString([(seg.start_x, seg.start_y), (seg.end_x, seg.end_y)])
     corridor = centerline.buffer(seg.width / 2, cap_style="flat")
@@ -219,7 +219,7 @@ def arc_to_polyline(
     return points
 
 
-def trace_arc_geometry(arc: PcbArcGeometry) -> tuple[LineString, Polygon]:
+def trace_arc_geometry(arc: PcbArc) -> tuple[LineString, Polygon]:
     """Return (centerline, copper corridor) for a curved trace arc."""
     points = arc_to_polyline(arc.start_x, arc.start_y, arc.mid_x, arc.mid_y, arc.end_x, arc.end_y)
     centerline = LineString(points)
@@ -232,10 +232,10 @@ def trace_arc_geometry(arc: PcbArcGeometry) -> tuple[LineString, Polygon]:
 # ---------------------------------------------------------------------------
 
 
-def via_geometry(via: PcbViaGeometry) -> tuple[Polygon, Polygon]:
+def via_geometry(via: PcbVia) -> tuple[Polygon, Polygon]:
     """Return (copper annular ring, drill hole) as circle polygons."""
-    copper = Point(via.x, via.y).buffer(via.size / 2, quad_segs=VIA_DRILL_QUAD_SEGS)
-    drill = Point(via.x, via.y).buffer(via.drill / 2, quad_segs=VIA_DRILL_QUAD_SEGS)
+    copper = Point(via.x, via.y).buffer(via.diameter / 2, quad_segs=VIA_DRILL_QUAD_SEGS)
+    drill = Point(via.x, via.y).buffer(via.drill.diameter / 2, quad_segs=VIA_DRILL_QUAD_SEGS)
     return copper, drill
 
 
@@ -244,7 +244,7 @@ def via_geometry(via: PcbViaGeometry) -> tuple[Polygon, Polygon]:
 # ---------------------------------------------------------------------------
 
 
-def polygon_geometry(poly: PcbPolygonGeometry) -> Polygon | None:
+def polygon_geometry(poly: PcbPolygon) -> Polygon | None:
     """Convert polygon geometry to a Shapely Polygon, or None if degenerate."""
     if len(poly.points) < 3:
         return None
@@ -299,7 +299,7 @@ def _closed_path_points(path: PcbClosedPath) -> list[tuple[float, float]]:
 # ---------------------------------------------------------------------------
 
 
-def board_outline_polygon(outline: list[PcbGeometry]) -> Polygon | None:
+def board_outline_polygon(profile: PcbBoardProfile) -> Polygon | None:
     """Assemble board outline from edge-cut lines and arcs into a polygon.
 
     Linearizes arcs, collects all segments, and uses shapely.ops.polygonize
@@ -307,12 +307,12 @@ def board_outline_polygon(outline: list[PcbGeometry]) -> Polygon | None:
     """
     segments: list[LineString] = []
 
-    for item in outline:
-        if isinstance(item.data, PcbLineGeometry):
+    for item in profile.elements:
+        if isinstance(item.data, PcbLine):
             ln = item.data
             segments.append(LineString([(ln.start_x, ln.start_y), (ln.end_x, ln.end_y)]))
 
-        elif isinstance(item.data, PcbArcGeometry):
+        elif isinstance(item.data, PcbArc):
             arc = item.data
             points = arc_to_polyline(
                 arc.start_x,
@@ -328,6 +328,11 @@ def board_outline_polygon(outline: list[PcbGeometry]) -> Polygon | None:
                 points[0] = (arc.start_x, arc.start_y)
                 points[-1] = (arc.end_x, arc.end_y)
                 segments.append(LineString(points))
+
+        elif isinstance(item.data, PcbCircle):
+            circle = item.data
+            ring = Point(circle.cx, circle.cy).buffer(circle.radius, quad_segs=32)
+            segments.append(LineString(ring.exterior.coords))
 
     if not segments:
         return None
@@ -364,6 +369,6 @@ def pad_side(layers: tuple[str, ...]) -> str:
 
 def footprint_side(fp: PcbFootprint) -> str:
     """Determine which board side a footprint is on."""
-    if fp.layer in _BACK_LAYERS:
+    if fp.layer.name in _BACK_LAYERS or fp.layer.side == "back":
         return "back"
     return "front"

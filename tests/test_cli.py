@@ -359,7 +359,8 @@ def test_cli_render_supports_highlight_pad() -> None:
     assert result.exit_code == 0, result.output
     assert 'class="highlight-overlay"' in result.output
     assert 'data-highlight-target="pad:TP3.1"' in result.output
-    assert 'data-source-id="pad:TP3:1:' in result.output
+    assert 'data-source-id="pad:' in result.output
+    assert ":TP3:1:copper:" in result.output
     assert 'data-source-ids="' not in result.output
 
 
@@ -435,7 +436,10 @@ def test_cli_render_prjpcb_with_multiple_existing_pcbdocs_reports_clear_error(
 
 
 def test_cli_render_settings_inline_custom_css_is_injected(tmp_path: Path) -> None:
-    settings = {"custom_css": ".board-fill { fill: rgb(1, 2, 3); }"}
+    settings = {
+        "extends": "phosphor:review",
+        "custom_css": ".board-fill { fill: rgb(1, 2, 3); }",
+    }
     settings_file = tmp_path / "settings.json"
     settings_file.write_text(json.dumps(settings))
     out_file = tmp_path / "out.svg"
@@ -504,13 +508,14 @@ def test_cli_render_profile_outputs_json_to_stderr(tmp_path: Path) -> None:
     profile = json.loads(result.stderr.split("Wrote", maxsplit=1)[1].split("\n", maxsplit=1)[1])
     event_names = [event["name"] for event in profile["events"]]
     assert "cli.parse_board" in event_names
-    assert "plan.build_geometry_store" in event_names
+    assert "plan.build_inventory" in event_names
     assert "render.serialize" in event_names
     assert "svg.output" in event_names
 
 
 def test_cli_render_settings_font_size_sets_annotation_size(tmp_path: Path) -> None:
     settings = {
+        "extends": "phosphor:review",
         "fontSizePx": 24,
         "annotations": {
             "pointers": [{"target": "TP3", "label": "SWD"}],
@@ -557,6 +562,7 @@ def test_cli_render_settings_accepts_packaged_v2_settings(tmp_path: Path) -> Non
 
 def test_cli_font_size_overrides_render_settings(tmp_path: Path) -> None:
     settings = {
+        "extends": "phosphor:review",
         "fontSizePx": 12,
         "annotations": {
             "pointers": [{"target": "TP3", "label": "SWD"}],

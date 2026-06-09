@@ -5,15 +5,17 @@ import pytest
 from phosphor_eda.pcb import (
     LayerRole,
     Pcb,
+    PcbArtwork,
+    PcbArtworkKind,
+    PcbArtworkPurpose,
+    PcbBoardProfile,
+    PcbBoardProfileElement,
     PcbFootprint,
-    PcbGeometry,
-    PcbGeometryObject,
-    PcbGeometryRole,
-    PcbGeometryShape,
     PcbLayer,
-    PcbLineGeometry,
+    PcbLine,
     PcbNet,
-    PcbPadGeometry,
+    PcbPad,
+    PcbPadType,
 )
 from phosphor_eda.pcb_annotations import (
     ANNOTATION_FONT_PX,
@@ -42,13 +44,21 @@ from phosphor_eda.pcb_annotations import (
 
 def _make_test_board() -> Pcb:
     """Board with two footprints (U1, U2) and a shared net for target resolution tests."""
+    front_cu = PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT), number=0)
+    front_fab = PcbLayer("F.Fab", (LayerRole.FABRICATION, LayerRole.FRONT), number=36)
+    edge = PcbLayer("Edge.Cuts", (LayerRole.EDGE,), number=44)
+    nets = {
+        1: PcbNet(1, "VCC"),
+        2: PcbNet(2, "SPI_CLK"),
+        3: PcbNet(3, "SPI_MOSI"),
+    }
     u1 = PcbFootprint(
         reference="U1",
         footprint_lib="Package_SO:SOIC-8",
         x=11.0,
         y=10.0,
         rotation=0.0,
-        layer="F.Cu",
+        layer=front_cu,
         value="MCU",
         bbox=(9.0, 9.0, 13.0, 11.0),
     )
@@ -58,97 +68,98 @@ def _make_test_board() -> Pcb:
         x=31.0,
         y=10.0,
         rotation=0.0,
-        layer="F.Cu",
+        layer=front_cu,
         value="ADC",
         bbox=(29.0, 9.0, 33.0, 11.0),
     )
     return Pcb(
         name="test",
-        nets={
-            0: PcbNet(0, ""),
-            1: PcbNet(1, "VCC"),
-            2: PcbNet(2, "SPI_CLK"),
-            3: PcbNet(3, "SPI_MOSI"),
-        },
+        layers=[front_cu, front_fab, edge],
+        nets=nets,
         footprints=[u1, u2],
+        pads=[
+            _pad(u1, "1", 10.0, 10.0, nets[1], front_cu),
+            _pad(u1, "2", 12.0, 10.0, nets[2], front_cu),
+            _pad(u2, "1", 30.0, 10.0, nets[2], front_cu),
+            _pad(u2, "2", 32.0, 10.0, nets[3], front_cu),
+        ],
+        vias=[],
+        drills=[],
+        conductors=[],
+        artwork=[
+            *_box_lines(u1, 9.0, 9.0, 13.0, 11.0, front_fab),
+            *_box_lines(u2, 29.0, 9.0, 33.0, 11.0, front_fab),
+        ],
         pours=[],
         keepouts=[],
-        geometry=[
-            _pad("U1", "1", 10.0, 10.0, 1, "VCC"),
-            _pad("U1", "2", 12.0, 10.0, 2, "SPI_CLK"),
-            _pad("U2", "1", 30.0, 10.0, 2, "SPI_CLK"),
-            _pad("U2", "2", 32.0, 10.0, 3, "SPI_MOSI"),
-            *_box_lines("U1", 9.0, 9.0, 13.0, 11.0),
-            *_box_lines("U2", 29.0, 9.0, 33.0, 11.0),
-            *_outline_lines(),
-        ],
-        layers=[
-            PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT), number=0),
-            PcbLayer("F.Fab", (LayerRole.FABRICATION, LayerRole.FRONT), number=36),
-            PcbLayer("Edge.Cuts", (LayerRole.EDGE,), number=44),
-        ],
+        board_profile=PcbBoardProfile(elements=tuple(_outline_lines(edge))),
     )
 
 
-def _pad(ref: str, number: str, x: float, y: float, net_number: int, net_name: str) -> PcbGeometry:
-    return PcbGeometry(
-        id=f"pad:{ref}:{number}",
-        object_type=PcbGeometryObject.PAD,
-        shape=PcbGeometryShape.RECTANGLE,
-        roles=(
-            PcbGeometryRole.COPPER,
-            PcbGeometryRole.CONDUCTOR,
-            PcbGeometryRole.SMD,
-            PcbGeometryRole.FOOTPRINT_MEMBER,
-        ),
-        data=PcbPadGeometry(number, x, y, 1.0, 1.0, "rect"),
-        layers=("F.Cu",),
-        net_number=net_number,
-        net_name=net_name,
-        footprint_ref=ref,
+def _pad(
+    footprint: PcbFootprint,
+    number: str,
+    x: float,
+    y: float,
+    net: PcbNet,
+    layer: PcbLayer,
+) -> PcbPad:
+    return PcbPad(
+        id=f"pad:{footprint.reference}:{number}",
+        number=number,
+        x=x,
+        y=y,
+        width=1.0,
+        height=1.0,
+        shape="rect",
+        pad_type=PcbPadType.SMD,
+        layers=(layer,),
+        net=net,
+        footprint=footprint,
     )
 
 
-def _box_lines(ref: str, x1: float, y1: float, x2: float, y2: float) -> list[PcbGeometry]:
+def _box_lines(
+    footprint: PcbFootprint,
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    layer: PcbLayer,
+) -> list[PcbArtwork]:
     return [
-        _line(f"fab:{ref}:0", x1, y1, x2, y1, "F.Fab", ref),
-        _line(f"fab:{ref}:1", x2, y1, x2, y2, "F.Fab", ref),
-        _line(f"fab:{ref}:2", x2, y2, x1, y2, "F.Fab", ref),
-        _line(f"fab:{ref}:3", x1, y2, x1, y1, "F.Fab", ref),
+        _artwork_line(f"fab:{footprint.reference}:0", x1, y1, x2, y1, layer, footprint),
+        _artwork_line(f"fab:{footprint.reference}:1", x2, y1, x2, y2, layer, footprint),
+        _artwork_line(f"fab:{footprint.reference}:2", x2, y2, x1, y2, layer, footprint),
+        _artwork_line(f"fab:{footprint.reference}:3", x1, y2, x1, y1, layer, footprint),
     ]
 
 
-def _outline_lines() -> list[PcbGeometry]:
+def _outline_lines(layer: PcbLayer) -> list[PcbBoardProfileElement]:
     return [
-        _line("edge:0", 0, 0, 40, 0, "Edge.Cuts", ""),
-        _line("edge:1", 40, 0, 40, 20, "Edge.Cuts", ""),
-        _line("edge:2", 40, 20, 0, 20, "Edge.Cuts", ""),
-        _line("edge:3", 0, 20, 0, 0, "Edge.Cuts", ""),
+        PcbBoardProfileElement("edge:0", PcbArtworkKind.LINE, layer, PcbLine(0, 0, 40, 0, 0.1)),
+        PcbBoardProfileElement("edge:1", PcbArtworkKind.LINE, layer, PcbLine(40, 0, 40, 20, 0.1)),
+        PcbBoardProfileElement("edge:2", PcbArtworkKind.LINE, layer, PcbLine(40, 20, 0, 20, 0.1)),
+        PcbBoardProfileElement("edge:3", PcbArtworkKind.LINE, layer, PcbLine(0, 20, 0, 0, 0.1)),
     ]
 
 
-def _line(
+def _artwork_line(
     id_: str,
     start_x: float,
     start_y: float,
     end_x: float,
     end_y: float,
-    layer: str,
-    footprint_ref: str,
-) -> PcbGeometry:
-    roles = [PcbGeometryRole.BOARD_LEVEL]
-    if layer == "Edge.Cuts":
-        roles.extend((PcbGeometryRole.EDGE, PcbGeometryRole.BOARD_OUTLINE))
-    else:
-        roles.extend((PcbGeometryRole.FABRICATION, PcbGeometryRole.FOOTPRINT_MEMBER))
-    return PcbGeometry(
+    layer: PcbLayer,
+    footprint: PcbFootprint,
+) -> PcbArtwork:
+    return PcbArtwork(
         id=id_,
-        object_type=PcbGeometryObject.GRAPHIC,
-        shape=PcbGeometryShape.LINE,
-        roles=tuple(roles),
-        data=PcbLineGeometry(start_x, start_y, end_x, end_y, 0.1),
-        layers=(layer,),
-        footprint_ref=footprint_ref,
+        kind=PcbArtworkKind.LINE,
+        purpose=PcbArtworkPurpose.FABRICATION,
+        layer=layer,
+        data=PcbLine(start_x, start_y, end_x, end_y, 0.1),
+        footprint=footprint,
     )
 
 

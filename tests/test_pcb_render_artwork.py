@@ -2,94 +2,85 @@ from __future__ import annotations
 
 from test_pcb_render import _board
 
-from phosphor_eda.pcb import (
-    PcbClosedPath,
-    PcbGeometryObject,
-    PcbGeometryRole,
-    PcbKeepout,
-)
+from phosphor_eda.pcb import PcbClosedPath, PcbKeepout
 from phosphor_eda.pcb_render_artwork import (
-    board_profile_geometry,
-    drill_geometry_for_layer,
+    board_profile_shape,
+    drill_shape_for_layer,
     select_source_artwork,
     selected_copper_layers,
     solder_mask_opening_primitives,
 )
-from phosphor_eda.pcb_render_geometry import build_geometry_store
+from phosphor_eda.pcb_render_inventory import InventoryItemKind, InventoryPurpose, build_inventory
 from phosphor_eda.pcb_render_settings import LayerMatch, LayerSelectionRule
 
 
-def test_source_selection_matches_object_type_and_geometry_roles() -> None:
-    store = build_geometry_store(_board(), side="front")
+def test_source_selection_matches_typed_purposes_and_content_kinds() -> None:
+    inventory = build_inventory(_board(), side="front")
     rules = [
         LayerSelectionRule(
             match=LayerMatch(role="silkscreen", side="front"),
-            objects=("graphic", "text"),
+            purposes=("silkscreen", "designator"),
+            content_kinds=("line", "text"),
         )
     ]
 
-    selected = select_source_artwork(store, rules, active_side="front")
+    selected = select_source_artwork(inventory, rules, active_side="front")
 
-    assert {item.object_type for item in selected} == {
-        PcbGeometryObject.GRAPHIC,
-        PcbGeometryObject.TEXT,
+    assert {item.item_kind for item in selected} == {InventoryItemKind.ARTWORK}
+    assert {item.purpose for item in selected} == {
+        InventoryPurpose.SILKSCREEN,
+        InventoryPurpose.DESIGNATOR,
     }
-    assert all(PcbGeometryRole.SILKSCREEN in item.roles for item in selected)
-
-
-def test_source_selection_rejects_removed_plural_object_aliases() -> None:
-    store = build_geometry_store(_board(), side="front")
-    rules = [LayerSelectionRule(match=LayerMatch(role="copper"), objects=("pads", "traces"))]
-
-    assert select_source_artwork(store, rules, active_side="front") == ()
 
 
 def test_keepout_overlays_require_explicit_keepout_selection() -> None:
     board = _board()
+    copper = board.layer_for("F.Cu")
+    assert copper is not None
     board.keepouts.append(
         PcbKeepout(
             id="keepout:1",
             boundary=PcbClosedPath.from_points([(1.0, 1.0), (3.0, 1.0), (3.0, 3.0), (1.0, 3.0)]),
-            layers=("F.Cu",),
+            layers=(copper,),
         )
     )
-    store = build_geometry_store(board, side="front")
+    inventory = build_inventory(board, side="front")
 
-    implicit_rules = [LayerSelectionRule(match=LayerMatch(name="F.Cu"), objects=("region",))]
-    explicit_rules = [LayerSelectionRule(match=LayerMatch(role="keepout"), objects=("keepout",))]
+    implicit_rules = [LayerSelectionRule(match=LayerMatch(name="F.Cu"), item_kinds=("conductor",))]
+    explicit_rules = [LayerSelectionRule(item_kinds=("keepout",), purposes=("keepout",))]
 
     assert [
         item.id
-        for item in select_source_artwork(store, implicit_rules, active_side="front")
-        if item.display_role == "keepout"
+        for item in select_source_artwork(inventory, implicit_rules, active_side="front")
+        if item.item_kind == InventoryItemKind.KEEPOUT
     ] == []
     assert [
-        item.id
-        for item in select_source_artwork(store, explicit_rules, active_side="front")
-        if item.display_role == "keepout"
+        item.source.id
+        for item in select_source_artwork(inventory, explicit_rules, active_side="front")
+        if item.item_kind == InventoryItemKind.KEEPOUT
     ] == ["keepout:1"]
 
 
-def test_selected_copper_layers_projects_vias_from_normalized_layer_rules() -> None:
-    store = build_geometry_store(_board(), side="front")
-    rules = [LayerSelectionRule(match=LayerMatch(role="copper"), objects=("via",))]
+def test_selected_copper_layers_projects_vias_from_concrete_layer_refs() -> None:
+    inventory = build_inventory(_board(), side="front")
+    rules = [LayerSelectionRule(match=LayerMatch(role="copper"), item_kinds=("via",))]
 
-    layers = selected_copper_layers(store, rules, active_side="front")
+    layers = selected_copper_layers(inventory, rules, active_side="front")
 
     assert {layer.name for layer in layers} == {"F.Cu", "B.Cu"}
 
 
-def test_board_outline_and_drill_geometry_are_derived_from_geometry_store() -> None:
-    store = build_geometry_store(_board(), side="front")
+def test_board_outline_and_drill_geometry_are_derived_from_inventory() -> None:
+    inventory = build_inventory(_board(), side="front")
 
-    assert not board_profile_geometry(store).is_empty
-    assert not drill_geometry_for_layer(store, layer_name="F.Cu").is_empty
+    assert not board_profile_shape(inventory).is_empty
+    assert not drill_shape_for_layer(inventory, layer_name="F.Cu").is_empty
 
 
-def test_solder_mask_openings_use_normalized_solder_mask_role() -> None:
-    store = build_geometry_store(_board(), side="front")
+def test_solder_mask_openings_use_typed_pad_mask_items() -> None:
+    inventory = build_inventory(_board(), side="front")
 
-    primitives = solder_mask_opening_primitives(store, side="front")
+    primitives = solder_mask_opening_primitives(inventory, side="front")
 
     assert primitives
-    assert {primitive.kind for primitive in primitives} == {"solder_mask"}
+    assert {primitive.data["purpose"] for primitive in primitives} == {"solder_mask"}

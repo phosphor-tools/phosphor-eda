@@ -1,50 +1,49 @@
-"""SVG primitive models and conversion helpers for PCB rendering."""
+"""SVG primitive conversion for typed PCB renderer inventory."""
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
-from shapely import GeometryCollection, LineString, MultiLineString, MultiPolygon, Polygon
+from shapely import GeometryCollection, LineString, MultiLineString, MultiPolygon, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from phosphor_eda.pcb import (
-    PcbArcGeometry,
-    PcbCircleGeometry,
-    PcbGeometryObject,
-    PcbGeometryRole,
-    PcbGeometryShape,
-    PcbLineGeometry,
-    PcbPadGeometry,
-    PcbPolygonGeometry,
-    PcbTextGeometry,
-    PcbViaGeometry,
+    PcbArc,
+    PcbArtworkKind,
+    PcbBoardProfile,
+    PcbCircle,
+    PcbClosedPath,
+    PcbConductorKind,
+    PcbDimension,
+    PcbDrill,
+    PcbLine,
+    PcbModel3D,
+    PcbPad,
+    PcbPolygon,
+    PcbText,
+    PcbVia,
 )
-from phosphor_eda.pcb import (
-    PcbGeometry as DomainPcbGeometry,
-)
-from phosphor_eda.pcb_render_drills import pad_drill_dimensions, pad_drill_geometry
-from phosphor_eda.pcb_render_geometry import (
-    SYNTHETIC_BOARD_MATERIAL_ROLE,
-    SYNTHETIC_DRILL_ROLE,
-)
-from phosphor_eda.pcb_render_skia import geometry_to_skia_artwork, skia_path_to_svg_d
+from phosphor_eda.pcb_render_drills import drill_geometry
+from phosphor_eda.pcb_render_inventory import InventoryItem, InventoryItemKind, InventoryPurpose
 from phosphor_eda.shapely_geometry import normalize_geometry
 from phosphor_eda.sql.geometry import (
     arc_center_from_three_points,
     arc_sweep_angle,
     arc_to_polyline,
+    board_outline_polygon,
+    closed_path_geometry,
     pad_polygon,
 )
 from phosphor_eda.text_outlines import text_outline_geometry
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Mapping
 
     from shapely.coords import CoordinateSequence
 
-    from phosphor_eda.pcb_render_geometry import GeometryTags, RenderableItem
+    from phosphor_eda.pcb_render_inventory import InventoryTags
 
 
 def _empty_data() -> dict[str, str]:
@@ -57,8 +56,9 @@ class SvgPrimitive:
     source_id: str
     source_layer: str
     kind: str
-    tags: GeometryTags
+    tags: InventoryTags
     data: Mapping[str, str] = field(default_factory=_empty_data)
+    style: Mapping[str, str] = field(default_factory=_empty_data)
 
 
 @dataclass(frozen=True)
@@ -73,303 +73,197 @@ class LayerClip:
     board: tuple[SvgPrimitive, ...] = ()
 
 
-_PROFILE_ENDPOINT_TOLERANCE_MM = 1e-5
-
-
-@dataclass(frozen=True)
-class _ProfilePathSegment:
-    start: tuple[float, float]
-    end: tuple[float, float]
-    forward: str
-    reverse: str
-
-
-@dataclass(frozen=True)
-class _OrientedProfilePathSegment:
-    start: tuple[float, float]
-    end: tuple[float, float]
-    command: str
-
-
-def geometry_to_svg_primitive(
-    item: RenderableItem,
+def inventory_item_to_svg_primitive(
+    item: InventoryItem,
     *,
-    target_layer_name: str,
+    target_layer_name: str = "",
 ) -> SvgPrimitive | None:
-    """Convert one renderable PCB geometry item into one SVG path primitive."""
-    artwork = geometry_to_skia_artwork(item, target_layer_name=target_layer_name)
-    d = skia_path_to_svg_d(artwork.path) if artwork is not None else _non_skia_svg_path_d(item)
+    """Convert one typed inventory item into SVG path data."""
+    d = _path_d_for_item(item)
     if not d:
         return None
+    source_layer = target_layer_name or ("" if item.layer is None else item.layer.name)
+    data = {
+        "purpose": item.purpose.value,
+        "item-kind": item.item_kind.value,
+    }
+    if item.content_kind is not None:
+        data["content-kind"] = item.content_kind.value
     return SvgPrimitive(
         d=d,
         source_id=item.id,
-        source_layer=target_layer_name,
-        kind=item.display_role,
+        source_layer=source_layer,
+        kind=item.item_kind.value,
         tags=item.tags,
+        data=data,
     )
 
 
-def drill_to_svg_primitive(item: RenderableItem) -> SvgPrimitive | None:
-    """Convert one drill-capable source item into a drill-hole mask primitive."""
-    payload = item.payload if item.payload is not None else item.source
-    if item.display_role == SYNTHETIC_DRILL_ROLE and isinstance(payload, PcbPadGeometry):
-        d = _pad_drill_path_d(payload)
-    elif item.object_type == PcbGeometryObject.VIA and isinstance(payload, PcbViaGeometry):
-        d = _circle_path_d(payload.x, payload.y, payload.drill / 2.0)
-    else:
+def drill_to_svg_primitive(item: InventoryItem) -> SvgPrimitive | None:
+    """Convert a drill inventory item into a subtractive mask primitive."""
+    if item.item_kind != InventoryItemKind.DRILL or not isinstance(item.source, PcbDrill):
         return None
+    geometry = drill_geometry(item.source)
+    if geometry is None:
+        return None
+    d = geometry_to_svg_path_d(geometry)
     if not d:
         return None
     return SvgPrimitive(
         d=d,
         source_id=item.id,
         source_layer="drills",
-        kind=SYNTHETIC_DRILL_ROLE,
+        kind=InventoryItemKind.DRILL.value,
         tags=item.tags,
+        data={"purpose": InventoryPurpose.DRILL.value, "item-kind": InventoryItemKind.DRILL.value},
     )
 
 
-def visible_drill_to_svg_primitive(item: RenderableItem) -> SvgPrimitive | None:
-    """Convert one drill source item into an EDA-style visible drill symbol."""
-    payload = item.payload if item.payload is not None else item.source
-    if item.display_role != SYNTHETIC_DRILL_ROLE or not isinstance(payload, PcbPadGeometry):
+def visible_drill_to_svg_primitive(item: InventoryItem) -> SvgPrimitive | None:
+    """Convert a drill inventory item into a visible EDA primitive."""
+    return drill_to_svg_primitive(item)
+
+
+def pad_solder_mask_opening_primitive(item: InventoryItem, *, side: str) -> SvgPrimitive | None:
+    """Create an implicit solder-mask opening from a pad."""
+    if item.item_kind != InventoryItemKind.PAD or not isinstance(item.source, PcbPad):
         return None
-    d = _pad_drill_symbol_path_d(payload)
+    pad = item.source
+    if item.layer is not None and item.layer.side not in {"", side}:
+        return None
+    width = pad.mask_aperture_width
+    height = pad.mask_aperture_height
+    if width is None or height is None:
+        expansion = pad.mask_expansion or 0.0
+        width = pad.width + 2.0 * expansion
+        height = pad.height + 2.0 * expansion
+    if width <= 0.0 or height <= 0.0:
+        return None
+    mask_pad = replace(pad, width=width, height=height)
+    d = geometry_to_svg_path_d(pad_polygon(mask_pad))
     if not d:
         return None
+    source_layer = f"{side}.mask" if side else "mask"
     return SvgPrimitive(
         d=d,
-        source_id=item.id,
-        source_layer="drills",
-        kind=SYNTHETIC_DRILL_ROLE,
+        source_id=pad.id,
+        source_layer=source_layer,
+        kind=InventoryPurpose.SOLDER_MASK.value,
         tags=item.tags,
+        data={
+            "purpose": InventoryPurpose.SOLDER_MASK.value,
+            "item-kind": InventoryItemKind.PAD.value,
+        },
     )
 
 
-def pad_solder_mask_opening_primitive(
-    item: RenderableItem,
-    *,
-    side: str,
-    target_layer_name: str,
-) -> SvgPrimitive | None:
-    """Convert a side-visible copper pad into a solder-mask opening primitive."""
-    payload = item.payload if item.payload is not None else item.source
-    if item.object_type != PcbGeometryObject.PAD or not isinstance(payload, PcbPadGeometry):
-        return None
-    if payload.mask_aperture_width is not None and payload.mask_aperture_height is not None:
-        return None
-    copper_layer_name = _pad_copper_target_layer_name(payload, item.layer.name, side)
-    if copper_layer_name is None:
-        return None
-
-    expansion = payload.mask_expansion if payload.mask_expansion is not None else 0.0
-    expanded = replace(
-        payload,
-        width=payload.width + 2 * expansion,
-        height=payload.height + 2 * expansion,
-        mid_width=None if payload.mid_width is None else payload.mid_width + 2 * expansion,
-        mid_height=None if payload.mid_height is None else payload.mid_height + 2 * expansion,
-        bot_width=None if payload.bot_width is None else payload.bot_width + 2 * expansion,
-        bot_height=None if payload.bot_height is None else payload.bot_height + 2 * expansion,
-    )
-    if expanded.width <= 0.0 or expanded.height <= 0.0:
-        return None
-
-    opening_geometry = _pad_solder_mask_opening_geometry(expanded, expansion)
-    temp_item = replace(
-        item,
-        roles=(*item.roles, PcbGeometryRole.SOLDER_MASK),
-        display_role=PcbGeometryRole.SOLDER_MASK.value,
-        payload=opening_geometry,
-        source=opening_geometry,
-    )
-    primitive = geometry_to_svg_primitive(temp_item, target_layer_name=copper_layer_name)
-    if primitive is None:
-        return None
-    return SvgPrimitive(
-        d=primitive.d,
-        source_id=item.id,
-        source_layer=target_layer_name,
-        kind=PcbGeometryRole.SOLDER_MASK.value,
-        tags=item.tags,
-        data={"source-copper-layer": copper_layer_name},
-    )
+def _path_d_for_item(item: InventoryItem) -> str:
+    if item.purpose == InventoryPurpose.BOARD_MATERIAL:
+        return _board_material_path_d(item)
+    if item.item_kind == InventoryItemKind.BOARD_PROFILE:
+        return _board_profile_item_path_d(item)
+    if item.item_kind == InventoryItemKind.PAD and isinstance(item.source, PcbPad):
+        return geometry_to_svg_path_d(pad_polygon(item.source))
+    if item.item_kind == InventoryItemKind.VIA and isinstance(item.source, PcbVia):
+        return _circle_path_d(item.source.x, item.source.y, item.source.diameter / 2.0)
+    if item.item_kind == InventoryItemKind.DRILL and isinstance(item.source, PcbDrill):
+        geometry = drill_geometry(item.source)
+        return "" if geometry is None else geometry_to_svg_path_d(geometry)
+    if item.item_kind == InventoryItemKind.KEEPOUT and isinstance(item.payload, PcbClosedPath):
+        geometry = closed_path_geometry(item.payload)
+        return "" if geometry is None else geometry_to_svg_path_d(geometry)
+    return shape_to_svg_path_d(item.payload, filled=item.purpose != InventoryPurpose.BOARD_PROFILE)
 
 
-def _pad_solder_mask_opening_geometry(pad: PcbPadGeometry, expansion: float) -> BaseGeometry:
-    opening = pad_polygon(pad)
-    drill = pad_drill_geometry(pad)
-    if drill is None or drill.is_empty:
-        return opening
-    if expansion > 0.0:
-        drill = drill.buffer(expansion)
-    return normalize_geometry(opening.union(drill))
-
-
-def _pad_copper_target_layer_name(
-    _pad: PcbPadGeometry, fallback_layer_name: str, side: str
-) -> str | None:
-    layer_names = {fallback_layer_name}
-    if side == "front":
-        for layer_name in ("F.Cu", "Top Layer", "Top"):
-            if layer_name in layer_names:
-                return layer_name
-        if "*.Cu" in layer_names:
-            return "F.Cu"
-        if fallback_layer_name in {"F.Cu", "Top Layer", "Top"}:
-            return fallback_layer_name
-    if side == "back":
-        for layer_name in ("B.Cu", "Bottom Layer", "Bottom"):
-            if layer_name in layer_names:
-                return layer_name
-        if "*.Cu" in layer_names:
-            return "B.Cu"
-        if fallback_layer_name in {"B.Cu", "Bottom Layer", "Bottom"}:
-            return fallback_layer_name
-    return None
-
-
-def _non_skia_svg_path_d(item: RenderableItem) -> str:
-    if item.display_role == SYNTHETIC_BOARD_MATERIAL_ROLE:
-        return _board_material_svg_path_d(item)
-    payload = item.payload if item.payload is not None else item.source
-    if _is_line_renderable(item) and isinstance(payload, PcbLineGeometry):
-        return _line_svg_path_d(payload)
-    if _is_arc_renderable(item) and isinstance(payload, PcbArcGeometry):
-        return _arc_svg_path_d(payload)
-    if _is_circle_renderable(item) and isinstance(payload, PcbCircleGeometry):
-        return _circle_svg_path_d(payload)
-    if isinstance(payload, PcbPolygonGeometry):
-        return _polygon_svg_path_d(payload)
+def shape_to_svg_path_d(payload: object, *, filled: bool = True) -> str:
+    """Convert a PCB primitive payload to SVG path data."""
+    if isinstance(payload, PcbLine):
+        if filled:
+            return _stroke_geometry_path_d(payload)
+        return _line_path_d(payload)
+    if isinstance(payload, PcbArc):
+        if filled:
+            return _stroke_geometry_path_d(payload)
+        return _arc_path_d(payload)
+    if isinstance(payload, PcbCircle):
+        if payload.fill or filled:
+            return _circle_path_d(payload.cx, payload.cy, payload.radius)
+        outer = _circle_path_d(payload.cx, payload.cy, payload.radius)
+        inner_radius = max(payload.radius - payload.width, 0.0)
+        inner = _circle_path_d(payload.cx, payload.cy, inner_radius)
+        return f"{outer} {inner}"
+    if isinstance(payload, PcbPolygon):
+        return geometry_to_svg_path_d(polygon_geometry(payload))
+    if isinstance(payload, PcbText):
+        return geometry_to_svg_path_d(text_outline_geometry(payload))
+    if isinstance(payload, PcbDimension):
+        return _line_path_d(
+            PcbLine(payload.start_x, payload.start_y, payload.end_x, payload.end_y, 0.0)
+        )
+    if isinstance(payload, PcbModel3D):
+        return ""
+    if isinstance(payload, PcbClosedPath):
+        geometry = closed_path_geometry(payload)
+        return "" if geometry is None else geometry_to_svg_path_d(geometry)
     if isinstance(payload, BaseGeometry):
-        return " ".join(_geometry_to_svg_path_parts(payload))
-    if isinstance(payload, PcbTextGeometry):
-        return " ".join(_geometry_to_svg_path_parts(text_outline_geometry(payload)))
+        return geometry_to_svg_path_d(payload)
     return ""
 
 
-def _board_material_svg_path_d(item: RenderableItem) -> str:
-    outline = _outline_for_item(item)
-    if outline is not None:
-        d = _filled_outline_svg_path_d(outline)
-        if d:
-            return d
+def polygon_geometry(poly: PcbPolygon) -> BaseGeometry:
+    if len(poly.points) < 3:
+        return GeometryCollection()
+    holes = [hole for hole in poly.holes if len(hole) >= 3]
+    return normalize_geometry(Polygon(poly.points, holes=holes or None))
+
+
+def _stroke_geometry_path_d(payload: PcbLine | PcbArc) -> str:
+    width = max(payload.width, 0.0)
+    if width <= 0.0:
+        return _line_path_d(payload) if isinstance(payload, PcbLine) else _arc_path_d(payload)
+    if isinstance(payload, PcbLine):
+        line = LineString(((payload.start_x, payload.start_y), (payload.end_x, payload.end_y)))
+    else:
+        line = LineString(
+            arc_to_polyline(
+                payload.start_x,
+                payload.start_y,
+                payload.mid_x,
+                payload.mid_y,
+                payload.end_x,
+                payload.end_y,
+                num_points=32,
+            )
+        )
+    return geometry_to_svg_path_d(line.buffer(width / 2.0, cap_style="round"))
+
+
+def _board_material_path_d(item: InventoryItem) -> str:
+    if isinstance(item.source, PcbBoardProfile):
+        polygon = board_outline_polygon(item.source)
+        if polygon is not None:
+            return geometry_to_svg_path_d(polygon)
     if item.bbox is not None:
         min_x, min_y, max_x, max_y = item.bbox
         return _closed_point_pairs_to_svg_path_d(
             ((min_x, min_y), (max_x, min_y), (max_x, max_y), (min_x, max_y))
         )
-    payload = item.payload if item.payload is not None else item.source
-    bbox = _bbox_payload(payload)
-    if bbox is None:
-        return ""
-    min_x, min_y, max_x, max_y = bbox
-    return _closed_point_pairs_to_svg_path_d(
-        ((min_x, min_y), (max_x, min_y), (max_x, max_y), (min_x, max_y))
-    )
+    return ""
 
 
-def _polygon_svg_path_d(polygon: PcbPolygonGeometry) -> str:
-    if len(polygon.points) < 3:
-        return ""
-    holes = [hole for hole in polygon.holes if len(hole) >= 3]
-    geometry = normalize_geometry(Polygon(polygon.points, holes=holes or None))
-    if geometry.is_empty:
-        return ""
-    return " ".join(_geometry_to_svg_path_parts(geometry))
+def _board_profile_item_path_d(item: InventoryItem) -> str:
+    if item.content_kind == PcbArtworkKind.LINE and isinstance(item.payload, PcbLine):
+        return _line_path_d(item.payload)
+    if item.content_kind == PcbArtworkKind.ARC and isinstance(item.payload, PcbArc):
+        return _arc_path_d(item.payload)
+    return shape_to_svg_path_d(item.payload, filled=False)
 
 
-def _outline_for_item(item: RenderableItem) -> list[DomainPcbGeometry] | None:
-    payload = item.payload if item.payload is not None else item.source
-    outline = _outline_payload(payload)
-    if outline is not None:
-        return outline
-    if isinstance(item.source, tuple):
-        return _outline_payload(cast("tuple[object, ...]", item.source))
-    return None
+def _line_path_d(line: PcbLine) -> str:
+    return f"M {line.start_x:.4f} {line.start_y:.4f} L {line.end_x:.4f} {line.end_y:.4f}"
 
 
-def _filled_outline_svg_path_d(outline: list[DomainPcbGeometry]) -> str:
-    profile_path = _profile_geometry_svg_path_d(outline)
-    if profile_path:
-        return profile_path
-
-    segments: list[tuple[tuple[float, float], ...]] = []
-    for item in outline:
-        if isinstance(item.data, PcbLineGeometry):
-            line = item.data
-            segment = ((line.start_x, line.start_y), (line.end_x, line.end_y))
-            if not _points_equal(segment[0], segment[1]):
-                segments.append(segment)
-        elif isinstance(item.data, PcbArcGeometry):
-            arc = item.data
-            points = tuple(
-                arc_to_polyline(
-                    arc.start_x,
-                    arc.start_y,
-                    arc.mid_x,
-                    arc.mid_y,
-                    arc.end_x,
-                    arc.end_y,
-                    num_points=32,
-                )
-            )
-            if len(points) >= 2:
-                segments.append(points)
-
-    contours = _stitch_outline_segments(segments)
-    return " ".join(_closed_point_pairs_to_svg_path_d(contour) for contour in contours)
-
-
-def _profile_geometry_svg_path_d(outline: list[DomainPcbGeometry]) -> str:
-    segments: list[_ProfilePathSegment] = []
-    polygon_paths: list[str] = []
-    for item in outline:
-        if isinstance(item.data, PcbLineGeometry):
-            segment = _line_profile_segment(item.data)
-            if segment is not None:
-                segments.append(segment)
-        elif isinstance(item.data, PcbArcGeometry):
-            segment = _arc_profile_segment(item.data)
-            if segment is not None:
-                segments.append(segment)
-        elif isinstance(item.data, PcbPolygonGeometry):
-            path = _polygon_svg_path_d(item.data)
-            if path:
-                polygon_paths.append(path)
-
-    paths = [path for path in _stitch_profile_segments(segments) if path]
-    paths.extend(polygon_paths)
-    return " ".join(paths)
-
-
-def _line_profile_segment(line: PcbLineGeometry) -> _ProfilePathSegment | None:
-    start = (line.start_x, line.start_y)
-    end = (line.end_x, line.end_y)
-    if _points_equal(start, end):
-        return None
-    return _ProfilePathSegment(
-        start=start,
-        end=end,
-        forward=f"L {end[0]:.4f} {end[1]:.4f}",
-        reverse=f"L {start[0]:.4f} {start[1]:.4f}",
-    )
-
-
-def _arc_profile_segment(arc: PcbArcGeometry) -> _ProfilePathSegment | None:
-    start = (arc.start_x, arc.start_y)
-    end = (arc.end_x, arc.end_y)
-    if _points_equal(start, end):
-        return None
-    forward = _arc_profile_command(arc, reverse=False)
-    reverse = _arc_profile_command(arc, reverse=True)
-    if not forward or not reverse:
-        return None
-    return _ProfilePathSegment(start=start, end=end, forward=forward, reverse=reverse)
-
-
-def _arc_profile_command(arc: PcbArcGeometry, *, reverse: bool) -> str:
+def _arc_path_d(arc: PcbArc) -> str:
     cx, cy, radius = arc_center_from_three_points(
         arc.start_x,
         arc.start_y,
@@ -379,7 +273,7 @@ def _arc_profile_command(arc: PcbArcGeometry, *, reverse: bool) -> str:
         arc.end_y,
     )
     if not all(math.isfinite(value) for value in (cx, cy, radius)) or radius <= 0:
-        return ""
+        return _line_path_d(PcbLine(arc.start_x, arc.start_y, arc.end_x, arc.end_y, arc.width))
     sweep = arc_sweep_angle(
         arc.start_x,
         arc.start_y,
@@ -390,467 +284,101 @@ def _arc_profile_command(arc: PcbArcGeometry, *, reverse: bool) -> str:
         cx,
         cy,
     )
-    if not math.isfinite(sweep) or math.isclose(sweep, 0.0, abs_tol=1e-9):
-        return ""
-    target = (arc.start_x, arc.start_y) if reverse else (arc.end_x, arc.end_y)
-    effective_sweep = -sweep if reverse else sweep
-    large_arc = 1 if abs(effective_sweep) > 180.0 else 0
-    sweep_flag = 1 if effective_sweep > 0 else 0
-    return f"A {radius:.4f} {radius:.4f} 0 {large_arc} {sweep_flag} {target[0]:.4f} {target[1]:.4f}"
-
-
-def _stitch_profile_segments(segments: list[_ProfilePathSegment]) -> tuple[str, ...]:
-    unused = list(segments)
-    paths: list[str] = []
-    while unused:
-        segment = unused.pop(0)
-        contour = [
-            _OrientedProfilePathSegment(
-                start=segment.start,
-                end=segment.end,
-                command=segment.forward,
-            )
-        ]
-        extended = True
-        while extended:
-            extended = False
-            start = contour[0].start
-            end = contour[-1].end
-            for index, candidate in enumerate(unused):
-                if _points_equal(end, candidate.start):
-                    contour.append(
-                        _OrientedProfilePathSegment(
-                            start=candidate.start,
-                            end=candidate.end,
-                            command=candidate.forward,
-                        )
-                    )
-                    _ = unused.pop(index)
-                    extended = True
-                    break
-                if _points_equal(end, candidate.end):
-                    contour.append(
-                        _OrientedProfilePathSegment(
-                            start=candidate.end,
-                            end=candidate.start,
-                            command=candidate.reverse,
-                        )
-                    )
-                    _ = unused.pop(index)
-                    extended = True
-                    break
-                if _points_equal(start, candidate.end):
-                    contour.insert(
-                        0,
-                        _OrientedProfilePathSegment(
-                            start=candidate.start,
-                            end=candidate.end,
-                            command=candidate.forward,
-                        ),
-                    )
-                    _ = unused.pop(index)
-                    extended = True
-                    break
-                if _points_equal(start, candidate.start):
-                    contour.insert(
-                        0,
-                        _OrientedProfilePathSegment(
-                            start=candidate.end,
-                            end=candidate.start,
-                            command=candidate.reverse,
-                        ),
-                    )
-                    _ = unused.pop(index)
-                    extended = True
-                    break
-        start = contour[0].start
-        end = contour[-1].end
-        if not _points_equal(start, end):
-            continue
-        commands = [f"M {start[0]:.4f} {start[1]:.4f}"]
-        commands.extend(item.command for item in contour)
-        commands.append("Z")
-        paths.append(" ".join(commands))
-    return tuple(paths)
-
-
-def _stitch_outline_segments(
-    segments: list[tuple[tuple[float, float], ...]],
-) -> tuple[tuple[tuple[float, float], ...], ...]:
-    unused = [list(segment) for segment in segments if len(segment) >= 2]
-    contours: list[tuple[tuple[float, float], ...]] = []
-    while unused:
-        contour = unused.pop(0)
-        extended = True
-        while extended:
-            extended = False
-            end = contour[-1]
-            for index, segment in enumerate(unused):
-                if _points_equal(end, segment[0]):
-                    contour.extend(segment[1:])
-                    _ = unused.pop(index)
-                    extended = True
-                    break
-                if _points_equal(end, segment[-1]):
-                    contour.extend(reversed(segment[:-1]))
-                    _ = unused.pop(index)
-                    extended = True
-                    break
-        if len(contour) < 3 or not _points_equal(contour[0], contour[-1]):
-            continue
-        contour = contour[:-1]
-        if len(contour) >= 3:
-            contours.append(tuple(contour))
-    return tuple(contours)
-
-
-def _points_equal(first: tuple[float, float], second: tuple[float, float]) -> bool:
-    # Altium lines carry integer endpoints, while arcs carry integer center/radius
-    # plus float angles and are reconstructed with trig. Endpoint differences can
-    # exceed one Altium coordinate unit (2.54e-6 mm) before rendering transforms.
-    return math.isclose(
-        first[0],
-        second[0],
-        abs_tol=_PROFILE_ENDPOINT_TOLERANCE_MM,
-    ) and math.isclose(
-        first[1],
-        second[1],
-        abs_tol=_PROFILE_ENDPOINT_TOLERANCE_MM,
-    )
-
-
-def _line_svg_path_d(line: PcbLineGeometry) -> str:
-    return _stroked_polyline_path_d(
-        ((line.start_x, line.start_y), (line.end_x, line.end_y)),
-        line.width,
-    )
-
-
-def _arc_svg_path_d(arc: PcbArcGeometry) -> str:
-    arc_path = _stroked_arc_svg_path_d(arc)
-    if arc_path:
-        return arc_path
-    return _stroked_polyline_path_d(
-        arc_to_polyline(
-            arc.start_x,
-            arc.start_y,
-            arc.mid_x,
-            arc.mid_y,
-            arc.end_x,
-            arc.end_y,
-            num_points=32,
-        ),
-        arc.width,
-    )
-
-
-def _stroked_arc_svg_path_d(arc: PcbArcGeometry) -> str:
-    if arc.width <= 0:
-        return ""
-    cx, cy, radius = arc_center_from_three_points(
-        arc.start_x,
-        arc.start_y,
-        arc.mid_x,
-        arc.mid_y,
-        arc.end_x,
-        arc.end_y,
-    )
-    if not all(math.isfinite(value) for value in (cx, cy, radius)) or radius <= 0:
-        return ""
-
-    half_width = arc.width / 2.0
-    outer_radius = radius + half_width
-    inner_radius = radius - half_width
-    if inner_radius <= 0:
-        return ""
-
-    sweep = arc_sweep_angle(
-        arc.start_x,
-        arc.start_y,
-        arc.mid_x,
-        arc.mid_y,
-        arc.end_x,
-        arc.end_y,
-        cx,
-        cy,
-    )
-    if not math.isfinite(sweep) or math.isclose(sweep, 0.0, abs_tol=1e-9):
-        return ""
-
-    start_angle = math.atan2(arc.start_y - cy, arc.start_x - cx)
-    end_angle = math.atan2(arc.end_y - cy, arc.end_x - cx)
-    outer_start = _arc_point(cx, cy, outer_radius, start_angle)
-    outer_end = _arc_point(cx, cy, outer_radius, end_angle)
-    inner_end = _arc_point(cx, cy, inner_radius, end_angle)
-    inner_start = _arc_point(cx, cy, inner_radius, start_angle)
     large_arc = 1 if abs(sweep) > 180.0 else 0
-    sweep_flag = 1 if sweep > 0 else 0
-    inner_sweep_flag = 0 if sweep > 0 else 1
-
-    return " ".join(
-        (
-            f"M {outer_start[0]:.4f} {outer_start[1]:.4f}",
-            f"A {outer_radius:.4f} {outer_radius:.4f} 0 {large_arc} {sweep_flag} "
-            f"{outer_end[0]:.4f} {outer_end[1]:.4f}",
-            f"L {inner_end[0]:.4f} {inner_end[1]:.4f}",
-            f"A {inner_radius:.4f} {inner_radius:.4f} 0 {large_arc} {inner_sweep_flag} "
-            f"{inner_start[0]:.4f} {inner_start[1]:.4f}",
-            "Z",
-        )
+    sweep_flag = 1 if sweep > 0.0 else 0
+    return (
+        f"M {arc.start_x:.4f} {arc.start_y:.4f} "
+        f"A {radius:.4f} {radius:.4f} 0 {large_arc} {sweep_flag} "
+        f"{arc.end_x:.4f} {arc.end_y:.4f}"
     )
-
-
-def _arc_point(cx: float, cy: float, radius: float, angle: float) -> tuple[float, float]:
-    return cx + radius * math.cos(angle), cy + radius * math.sin(angle)
-
-
-def _circle_svg_path_d(circle: PcbCircleGeometry) -> str:
-    if circle.radius <= 0:
-        return ""
-    outer = _circle_path_d(circle.cx, circle.cy, circle.radius)
-    if circle.fill:
-        return outer
-    inner_radius = circle.radius - circle.width
-    if inner_radius <= 0:
-        return outer
-    return f"{outer} {_circle_path_d(circle.cx, circle.cy, inner_radius)}"
 
 
 def _circle_path_d(cx: float, cy: float, radius: float) -> str:
-    kappa = 0.5522847498307936
-    control = radius * kappa
-    curves = (
-        (
-            cx + radius,
-            cy + control,
-            cx + control,
-            cy + radius,
-            cx,
-            cy + radius,
-        ),
-        (
-            cx - control,
-            cy + radius,
-            cx - radius,
-            cy + control,
-            cx - radius,
-            cy,
-        ),
-        (
-            cx - radius,
-            cy - control,
-            cx - control,
-            cy - radius,
-            cx,
-            cy - radius,
-        ),
-        (
-            cx + control,
-            cy - radius,
-            cx + radius,
-            cy - control,
-            cx + radius,
-            cy,
-        ),
+    if radius <= 0.0:
+        return ""
+    return (
+        f"M {cx + radius:.4f} {cy:.4f} "
+        f"A {radius:.4f} {radius:.4f} 0 1 0 {cx - radius:.4f} {cy:.4f} "
+        f"A {radius:.4f} {radius:.4f} 0 1 0 {cx + radius:.4f} {cy:.4f} Z"
     )
-    curve_commands = tuple(
-        f"C {x1:.4f} {y1:.4f} {x2:.4f} {y2:.4f} {x3:.4f} {y3:.4f}"
-        for x1, y1, x2, y2, x3, y3 in curves
-    )
-    return " ".join((f"M {cx + radius:.4f} {cy:.4f}", *curve_commands, "Z"))
-
-
-def _pad_drill_path_d(pad: PcbPadGeometry) -> str:
-    geometry = pad_drill_geometry(pad)
-    if geometry is None or geometry.is_empty:
-        return ""
-    return " ".join(_geometry_to_svg_path_parts(geometry))
-
-
-def _pad_drill_symbol_path_d(pad: PcbPadGeometry) -> str:
-    outline = _pad_drill_path_d(pad)
-    if not outline:
-        return ""
-    width, height = pad_drill_dimensions(pad)
-    mark_radius = min(width, height) * 0.175
-    cross = (
-        f"M {pad.x - mark_radius:.4f} {pad.y:.4f} L {pad.x + mark_radius:.4f} {pad.y:.4f} "
-        f"M {pad.x:.4f} {pad.y - mark_radius:.4f} L {pad.x:.4f} {pad.y + mark_radius:.4f}"
-    )
-    return f"{outline} {cross}"
-
-
-def _stroked_polyline_path_d(points: Iterable[tuple[float, float]], width: float) -> str:
-    point_tuple = tuple(points)
-    if width <= 0 or len(point_tuple) < 2:
-        return ""
-    half_width = width / 2
-    left: list[tuple[float, float]] = []
-    right: list[tuple[float, float]] = []
-    for start, end in zip(point_tuple, point_tuple[1:], strict=False):
-        dx = end[0] - start[0]
-        dy = end[1] - start[1]
-        length = math.hypot(dx, dy)
-        if length <= 0:
-            continue
-        nx = -dy / length * half_width
-        ny = dx / length * half_width
-        if not left:
-            left.append((start[0] + nx, start[1] + ny))
-            right.append((start[0] - nx, start[1] - ny))
-        left.append((end[0] + nx, end[1] + ny))
-        right.append((end[0] - nx, end[1] - ny))
-    if len(left) < 2 or len(right) < 2:
-        return ""
-    return _closed_point_pairs_to_svg_path_d((*left, *reversed(right)))
 
 
 def _closed_point_pairs_to_svg_path_d(points: tuple[tuple[float, float], ...]) -> str:
     if len(points) < 3:
         return ""
-    commands = [f"M {points[0][0]:.4f} {points[0][1]:.4f}"]
+    first = points[0]
+    commands = [f"M {first[0]:.4f} {first[1]:.4f}"]
     commands.extend(f"L {x:.4f} {y:.4f}" for x, y in points[1:])
     commands.append("Z")
     return " ".join(commands)
 
 
-def _outline_payload(payload: object) -> list[DomainPcbGeometry] | None:
-    if not isinstance(payload, tuple):
-        return None
-    payload_tuple = cast("tuple[object, ...]", payload)
-    outline: list[DomainPcbGeometry] = []
-    for item in payload_tuple:
-        if not isinstance(item, DomainPcbGeometry):
-            return None
-        outline.append(item)
-    return outline
-
-
-def _bbox_payload(payload: object) -> tuple[float, float, float, float] | None:
-    if not isinstance(payload, tuple):
-        return None
-    payload_values = cast("tuple[object, ...]", payload)
-    if len(payload_values) != 4:
-        return None
-    values: list[float] = []
-    for value in payload_values:
-        if not isinstance(value, int | float):
-            return None
-        values.append(float(value))
-    return values[0], values[1], values[2], values[3]
-
-
-_GRAPHIC_RENDER_ROLES = frozenset(
-    {
-        PcbGeometryRole.SILKSCREEN.value,
-        PcbGeometryRole.FABRICATION.value,
-        PcbGeometryRole.COMPONENT_BODY.value,
-        PcbGeometryRole.SOLDER_MASK.value,
-        PcbGeometryRole.SOLDER_PASTE.value,
-        PcbGeometryRole.MECHANICAL.value,
-        PcbGeometryRole.EDGE.value,
-        PcbGeometryRole.COURTYARD.value,
-        PcbGeometryRole.DESIGNATOR.value,
-        PcbGeometryRole.VALUE.value,
-    }
-)
-
-
-def _is_line_renderable(item: RenderableItem) -> bool:
-    return item.shape == PcbGeometryShape.LINE and item.display_role in _GRAPHIC_RENDER_ROLES
-
-
-def _is_arc_renderable(item: RenderableItem) -> bool:
-    return item.shape == PcbGeometryShape.ARC and item.display_role in _GRAPHIC_RENDER_ROLES
-
-
-def _is_circle_renderable(item: RenderableItem) -> bool:
-    return item.shape == PcbGeometryShape.CIRCLE and item.display_role in _GRAPHIC_RENDER_ROLES
-
-
-def svg_primitives_from_geometry(
-    geometry: BaseGeometry,
-    *,
-    source_ids: Iterable[str],
-    source_layers: Iterable[str],
-    kind: str,
-    tags: GeometryTags,
-    data: Mapping[str, str] | None = None,
-) -> tuple[SvgPrimitive, ...]:
-    """Convert geometry into SVG primitives for render-mode transition code."""
-    source_id = ",".join(source_ids)
-    source_layer = ",".join(source_layers)
-    primitive_data: Mapping[str, str] = {} if data is None else data
-    return tuple(
-        SvgPrimitive(
-            d=d,
-            source_id=source_id,
-            source_layer=source_layer,
-            kind=kind,
-            tags=tags,
-            data=primitive_data,
-        )
-        for d in _geometry_to_svg_path_parts(geometry)
-        if d
-    )
-
-
-def _geometry_to_svg_path_parts(geometry: BaseGeometry) -> tuple[str, ...]:
+def geometry_to_svg_path_d(geometry: BaseGeometry) -> str:
+    """Serialize supported Shapely geometry to SVG path data."""
     if geometry.is_empty:
-        return ()
+        return ""
     if isinstance(geometry, Polygon):
-        return (_polygon_to_svg_path_d(geometry),)
+        return _polygon_to_svg_path_d(geometry)
     if isinstance(geometry, MultiPolygon):
-        return tuple(
-            path_d
-            for polygon in geometry.geoms
-            for path_d in (_polygon_to_svg_path_d(polygon),)
-            if path_d
-        )
+        return " ".join(_polygon_to_svg_path_d(polygon) for polygon in geometry.geoms)
     if isinstance(geometry, LineString):
-        return (_line_string_to_svg_path_d(geometry),)
+        return _line_string_to_svg_path_d(geometry)
     if isinstance(geometry, MultiLineString):
-        return tuple(
-            path_d
-            for line in geometry.geoms
-            for path_d in (_line_string_to_svg_path_d(line),)
-            if path_d
-        )
+        return " ".join(_line_string_to_svg_path_d(line) for line in geometry.geoms)
     if isinstance(geometry, GeometryCollection):
-        collection = cast("GeometryCollection[BaseGeometry]", geometry)
-        return tuple(
-            path_d
-            for part in collection.geoms
-            for path_d in _geometry_to_svg_path_parts(part)
-            if path_d
-        )
-    return ()
+        return ""
+    if isinstance(geometry, Point):
+        return _circle_path_d(float(geometry.x), float(geometry.y), 0.05)
+    return ""
 
 
 def _polygon_to_svg_path_d(polygon: Polygon) -> str:
-    rings = [_ring_to_svg_path_d(polygon.exterior.coords)]
-    rings.extend(_ring_to_svg_path_d(interior.coords) for interior in polygon.interiors)
-    return " ".join(ring for ring in rings if ring)
+    parts = [_ring_to_svg_path_d(polygon.exterior.coords)]
+    parts.extend(_ring_to_svg_path_d(interior.coords) for interior in polygon.interiors)
+    return " ".join(part for part in parts if part)
 
 
 def _ring_to_svg_path_d(coords: CoordinateSequence) -> str:
-    points = [(float(x), float(y)) for x, y in coords]
-    if len(points) < 2:
+    points = [(float(x), float(y)) for x, y, *_ in coords]
+    if len(points) < 3:
         return ""
     if points[0] == points[-1]:
         points = points[:-1]
-    if len(points) < 2:
-        return ""
-    commands = [f"M {points[0][0]:.4f} {points[0][1]:.4f}"]
-    commands.extend(f"L {x:.4f} {y:.4f}" for x, y in points[1:])
-    commands.append("Z")
-    return " ".join(commands)
+    return _closed_point_pairs_to_svg_path_d(tuple(points))
 
 
 def _line_string_to_svg_path_d(line: LineString) -> str:
-    points = [(float(x), float(y)) for x, y in line.coords]
-    if len(points) < 2:
+    coords = [(float(x), float(y)) for x, y, *_ in line.coords]
+    if len(coords) < 2:
         return ""
-    commands = [f"M {points[0][0]:.4f} {points[0][1]:.4f}"]
-    commands.extend(f"L {x:.4f} {y:.4f}" for x, y in points[1:])
+    commands = [f"M {coords[0][0]:.4f} {coords[0][1]:.4f}"]
+    commands.extend(f"L {x:.4f} {y:.4f}" for x, y in coords[1:])
     return " ".join(commands)
+
+
+def side_mask_layer_name(side: str) -> str:
+    return "F.Mask" if side == "front" else "B.Mask"
+
+
+def layer_function_for_item(item: InventoryItem) -> str:
+    if item.purpose == InventoryPurpose.BOARD_PROFILE:
+        return "edge"
+    if item.purpose == InventoryPurpose.BOARD_MATERIAL:
+        return "substrate"
+    if item.purpose == InventoryPurpose.DRILL:
+        return "drill"
+    if item.purpose == InventoryPurpose.KEEPOUT:
+        return "keepout"
+    if item.purpose in {
+        InventoryPurpose.DESIGNATOR,
+        InventoryPurpose.VALUE,
+        InventoryPurpose.USER_TEXT,
+    }:
+        return "silkscreen"
+    if item.content_kind == PcbConductorKind.POUR_FILL:
+        return "copper"
+    return item.purpose.value
+
+
+def source_layer_name(item: InventoryItem) -> str:
+    return "" if item.layer is None else item.layer.name

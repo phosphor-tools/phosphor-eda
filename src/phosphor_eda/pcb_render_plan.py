@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
-from phosphor_eda.pcb import PcbGeometryObject, PcbGeometryShape
-from phosphor_eda.pcb_render_geometry import build_geometry_store
+from phosphor_eda.pcb import PcbConductorKind
+from phosphor_eda.pcb_render_inventory import build_inventory
 from phosphor_eda.pcb_render_modes import (
     HighlightGroup,
     build_eda_layers,
@@ -71,53 +71,55 @@ def build_derived_render_plan(
         profiler.metric(
             "board.input",
             footprints=len(board.footprints),
-            segments=len(board.geometry_by_object_type(PcbGeometryObject.TRACK)),
-            trace_arcs=len(
+            segments=len(
                 [
                     item
-                    for item in board.geometry_by_object_type(PcbGeometryObject.TRACK)
-                    if item.shape == PcbGeometryShape.ARC
+                    for item in board.conductors
+                    if item.kind in {PcbConductorKind.TRACE, PcbConductorKind.TRACE_ARC}
                 ]
             ),
-            vias=len(board.geometry_by_object_type(PcbGeometryObject.VIA)),
+            trace_arcs=len(
+                [item for item in board.conductors if item.kind == PcbConductorKind.TRACE_ARC]
+            ),
+            vias=len(board.vias),
             pours=len(board.pours),
             layers=len(board.layers),
         )
     if profiler is None:
-        store = build_geometry_store(board, side=side)
+        inventory = build_inventory(board, side=side)
     else:
-        with profiler.span("plan.build_geometry_store"):
-            store = build_geometry_store(board, side=side)
-        profiler.metric("geometry_store.items", count=len(store.items))
+        with profiler.span("plan.build_inventory"):
+            inventory = build_inventory(board, side=side)
+        profiler.metric("inventory.items", count=len(inventory.items))
     mode_settings = replace(settings, side=side)
     if mode_settings.render_mode == "realistic":
         if profiler is None:
-            base_layers = build_realistic_layers(store, mode_settings, warn=warnings.append)
+            base_layers = build_realistic_layers(inventory, mode_settings, warn=warnings.append)
         else:
             with profiler.span("plan.build_realistic_layers"):
                 base_layers = build_realistic_layers(
-                    store,
+                    inventory,
                     mode_settings,
                     warn=warnings.append,
                     profiler=profiler,
                 )
     else:
         if profiler is None:
-            base_layers = build_eda_layers(store, mode_settings, warn=warnings.append)
+            base_layers = build_eda_layers(inventory, mode_settings, warn=warnings.append)
         else:
             with profiler.span("plan.build_eda_layers"):
                 base_layers = build_eda_layers(
-                    store,
+                    inventory,
                     mode_settings,
                     warn=warnings.append,
                     profiler=profiler,
                 )
     if profiler is None:
-        highlight_groups = build_highlight_layers(store, mode_settings, warn=warnings.append)
+        highlight_groups = build_highlight_layers(inventory, mode_settings, warn=warnings.append)
     else:
         with profiler.span("plan.build_highlight_layers"):
             highlight_groups = build_highlight_layers(
-                store,
+                inventory,
                 mode_settings,
                 warn=warnings.append,
                 profiler=profiler,

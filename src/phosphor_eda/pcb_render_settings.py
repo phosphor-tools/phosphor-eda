@@ -10,11 +10,22 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Literal, TypeGuard, cast
 
-from phosphor_eda.pcb import LayerRole
+from phosphor_eda.pcb import LayerRole, PcbArtworkKind, PcbConductorKind
+from phosphor_eda.pcb_render_inventory import InventoryItemKind, InventoryPurpose
 
 RENDER_MODES = ("eda", "realistic")
 SOURCE_LAYER_ROLES = tuple(role.value for role in LayerRole)
 SOURCE_LAYER_SIDES = ("front", "back", "inner", "active", "")
+SOURCE_ITEM_KINDS = tuple(kind.value for kind in InventoryItemKind)
+SOURCE_PURPOSES = tuple(purpose.value for purpose in InventoryPurpose)
+SOURCE_CONTENT_KINDS = tuple(
+    dict.fromkeys(
+        (
+            *(kind.value for kind in PcbArtworkKind),
+            *(kind.value for kind in PcbConductorKind),
+        )
+    )
+)
 
 _BUNDLED_SETTINGS_PACKAGE = "phosphor_eda.render_settings"
 _SETTINGS_EXTENDS_KEY = "extends"
@@ -50,7 +61,9 @@ class LayerMatch:
 class LayerSelectionRule:
     match: LayerMatch = field(default_factory=LayerMatch)
     visible: bool = True
-    objects: tuple[str, ...] = ()
+    item_kinds: tuple[str, ...] = ()
+    purposes: tuple[str, ...] = ()
+    content_kinds: tuple[str, ...] = ()
 
 
 @dataclass
@@ -173,9 +186,17 @@ def render_settings_schema() -> dict[str, object]:
                                         "hide an inherited source layer."
                                     ),
                                 },
-                                "objects": {
+                                "itemKinds": {
                                     "type": "array",
-                                    "items": {"type": "string", "minLength": 1},
+                                    "items": {"type": "string", "enum": list(SOURCE_ITEM_KINDS)},
+                                },
+                                "purposes": {
+                                    "type": "array",
+                                    "items": {"type": "string", "enum": list(SOURCE_PURPOSES)},
+                                },
+                                "contentKinds": {
+                                    "type": "array",
+                                    "items": {"type": "string", "enum": list(SOURCE_CONTENT_KINDS)},
                                 },
                             },
                         },
@@ -410,7 +431,29 @@ def _parse_layer_selection_rule(raw_layer: object, index: int) -> LayerSelection
         rule.visible = visible
 
     if "objects" in raw_layer:
-        rule.objects = _parse_string_tuple(raw_layer["objects"], f"source.layers[{index}].objects")
+        msg = (
+            f"source.layers[{index}].objects is no longer supported; "
+            "use itemKinds, purposes, or contentKinds"
+        )
+        raise ValueError(msg)
+    if "itemKinds" in raw_layer:
+        rule.item_kinds = _parse_string_tuple(
+            raw_layer["itemKinds"],
+            f"source.layers[{index}].itemKinds",
+            allowed=SOURCE_ITEM_KINDS,
+        )
+    if "purposes" in raw_layer:
+        rule.purposes = _parse_string_tuple(
+            raw_layer["purposes"],
+            f"source.layers[{index}].purposes",
+            allowed=SOURCE_PURPOSES,
+        )
+    if "contentKinds" in raw_layer:
+        rule.content_kinds = _parse_string_tuple(
+            raw_layer["contentKinds"],
+            f"source.layers[{index}].contentKinds",
+            allowed=SOURCE_CONTENT_KINDS,
+        )
 
     return rule
 
@@ -450,7 +493,12 @@ def _parse_layer_match(raw_match: dict[str, object], index: int) -> LayerMatch:
     return match
 
 
-def _parse_string_tuple(value: object, path: str) -> tuple[str, ...]:
+def _parse_string_tuple(
+    value: object,
+    path: str,
+    *,
+    allowed: tuple[str, ...] | None = None,
+) -> tuple[str, ...]:
     if not is_json_list(value):
         msg = f"{path} must be an array"
         raise ValueError(msg)
@@ -458,6 +506,9 @@ def _parse_string_tuple(value: object, path: str) -> tuple[str, ...]:
     for index, item in enumerate(value):
         if not isinstance(item, str) or not item:
             msg = f"{path}[{index}] must be a non-empty string"
+            raise ValueError(msg)
+        if allowed is not None and item not in allowed:
+            msg = f"{path}[{index}] must be one of {', '.join(allowed)}, got {item!r}"
             raise ValueError(msg)
         parsed.append(item)
     return tuple(parsed)

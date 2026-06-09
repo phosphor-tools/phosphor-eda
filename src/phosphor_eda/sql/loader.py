@@ -1,81 +1,78 @@
-"""Load a Project into an in-memory DuckDB database.
-
-Orchestrates geometry construction and table population. Each table
-has a private loader function that handles the domain model → SQL mapping.
-"""
+"""Load a Project into an in-memory DuckDB database."""
 
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
 import duckdb
-from shapely import Point
+from shapely import LineString, Point
+from shapely.affinity import rotate
 
 from phosphor_eda.pcb import (
     LayerRole,
-    PcbArcGeometry,
-    PcbCircleGeometry,
-    PcbDimensionGeometry,
-    PcbGeometry,
-    PcbGeometryObject,
-    PcbGeometryRole,
-    PcbGeometryShape,
+    PcbArc,
+    PcbArtwork,
+    PcbCircle,
+    PcbClosedPath,
+    PcbDimension,
+    PcbDrill,
+    PcbDrillShape,
     PcbLayer,
-    PcbLineGeometry,
-    PcbPadGeometry,
-    PcbPolygonGeometry,
-    PcbTextGeometry,
-    PcbViaGeometry,
+    PcbLine,
+    PcbMetadata,
+    PcbModel3D,
+    PcbPad,
+    PcbPolygon,
+    PcbText,
+    PcbVia,
     normalize_roles,
 )
 from phosphor_eda.sql.geometry import (
     arc_center_from_three_points,
     arc_sweep_angle,
+    arc_to_polyline,
     board_outline_polygon,
     closed_path_geometry,
     footprint_bbox_polygon,
     footprint_side,
     pad_polygon,
-    pad_side,
     polygon_geometry,
     segment_geometry,
     trace_arc_geometry,
     via_geometry,
 )
 from phosphor_eda.sql.schema import create_tables, create_views
+from phosphor_eda.text_outlines import text_outline_geometry
 
 if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry
 
-    from phosphor_eda.pcb import Pcb
+    from phosphor_eda.pcb import Pcb, PcbNet
     from phosphor_eda.project import Project, Stackup
     from phosphor_eda.schematic import Schematic
 
-# Net name patterns that indicate power nets
 _POWER_PREFIXES = ("VCC", "VDD", "GND", "VSS", "VBUS", "V3P3", "V1P8", "V5P0")
 _POWER_CHARS = ("+", "-")
 
 
 def load_database(project: Project) -> duckdb.DuckDBPyConnection:
-    """Create an in-memory DuckDB with spatial extension and load all project data."""
+    """Create an in-memory DuckDB with spatial extension and load project data."""
     con = duckdb.connect(":memory:")
     create_tables(con)
 
     if project.pcb:
-        _load_geometry(con, project.pcb)
         _load_footprints(con, project.pcb)
         _load_pads(con, project.pcb)
-        _load_segments(con, project.pcb)
         _load_vias(con, project.pcb)
-        _load_polygons(con, project.pcb)
+        _load_drills(con, project.pcb)
+        _load_conductors(con, project.pcb)
+        _load_artwork(con, project.pcb)
+        _load_board_profile(con, project.pcb)
         _load_pours(con, project.pcb)
         _load_keepouts(con, project.pcb)
-        _load_footprint_graphics(con, project.pcb)
-        _load_board_graphics(con, project.pcb)
-        _load_graphic_texts(con, project.pcb)
-        _load_dimensions(con, project.pcb)
         _load_layers(con, project.pcb, project.stackup)
         _load_board(con, project.pcb, project.stackup)
 
@@ -95,91 +92,126 @@ def load_database(project: Project) -> duckdb.DuckDBPyConnection:
     return con
 
 
-def _wkb(geom: BaseGeometry) -> bytes:
-    """Serialize a Shapely geometry to WKB."""
-    return geom.wkb
+def _wkb(geom: BaseGeometry | None) -> bytes | None:
+    return None if geom is None or geom.is_empty else geom.wkb
 
 
-def _net_name(pcb: Pcb, net_number: int) -> str:
-    """Resolve net number to name, empty string for unconnected."""
-    net = pcb.nets.get(net_number)
-    return net.name if net else ""
+def _metadata_json(metadata: PcbMetadata) -> str:
+    return json.dumps(asdict(metadata), separators=(",", ":"), sort_keys=True)
 
 
-def _geometry_side(pcb: Pcb, item: PcbGeometry) -> str:
-    sides = {layer.side for name in item.layers if (layer := pcb.layer_for(name)) is not None}
-    sides.discard("")
-    if len(sides) == 1:
-        return next(iter(sides))
+def _net_fields(net: PcbNet | None) -> tuple[str | None, int | None]:
+    if net is None:
+        return None, None
+    return net.name, net.number
+
+
+def _layer_names(layers: tuple[PcbLayer, ...]) -> list[str]:
+    return [layer.name for layer in layers]
+
+
+def _primary_layer(layers: tuple[PcbLayer, ...]) -> str:
+    return layers[0].name if layers else ""
+
+
+def _pad_side(pad: PcbPad) -> str:
+    sides = {layer.side for layer in pad.layers if layer.side}
     if len(sides) > 1:
         return "through"
-    return ""
+    return next(iter(sides), "")
 
 
-def _geometry_metadata_json(item: PcbGeometry) -> str:
-    return json.dumps(asdict(item.metadata), separators=(",", ":"), sort_keys=True)
-
-
-def _geometry_to_shape(item: PcbGeometry) -> BaseGeometry | None:
-    data = item.data
-    if isinstance(data, PcbPadGeometry):
-        return pad_polygon(data)
-    if isinstance(data, PcbViaGeometry):
-        return via_geometry(data)[0]
-    if isinstance(data, PcbLineGeometry):
-        return segment_geometry(data)[1]
-    if isinstance(data, PcbArcGeometry):
-        return trace_arc_geometry(data)[1]
-    if isinstance(data, PcbPolygonGeometry):
-        return polygon_geometry(data)
-    if isinstance(data, PcbCircleGeometry):
-        geom = Point(data.cx, data.cy).buffer(data.radius, quad_segs=16)
-        return geom if data.fill else geom.boundary.buffer(max(data.width, 0.01) / 2)
-    if isinstance(data, PcbTextGeometry | PcbDimensionGeometry):
+def _shape_geometry(payload: object) -> BaseGeometry | None:
+    if isinstance(payload, PcbLine):
+        return (
+            segment_geometry(payload)[1]
+            if payload.width > 0.0
+            else LineString(((payload.start_x, payload.start_y), (payload.end_x, payload.end_y)))
+        )
+    if isinstance(payload, PcbArc):
+        return (
+            trace_arc_geometry(payload)[1]
+            if payload.width > 0.0
+            else LineString(
+                arc_to_polyline(
+                    payload.start_x,
+                    payload.start_y,
+                    payload.mid_x,
+                    payload.mid_y,
+                    payload.end_x,
+                    payload.end_y,
+                )
+            )
+        )
+    if isinstance(payload, PcbPolygon):
+        return polygon_geometry(payload)
+    if isinstance(payload, PcbCircle):
+        outer = Point(payload.cx, payload.cy).buffer(payload.radius, quad_segs=16)
+        if payload.fill:
+            return outer
+        return outer.boundary.buffer(max(payload.width, 0.01) / 2.0)
+    if isinstance(payload, PcbText):
+        return text_outline_geometry(payload)
+    if isinstance(payload, PcbDimension):
+        return LineString(((payload.start_x, payload.start_y), (payload.end_x, payload.end_y)))
+    if isinstance(payload, PcbModel3D):
         return None
+    if isinstance(payload, PcbClosedPath):
+        return closed_path_geometry(payload)
     return None
 
 
-def _load_geometry(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
-    for item in pcb.geometry:
-        geom = _geometry_to_shape(item)
-        _ = con.execute(
-            """INSERT INTO geometry VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))""",
-            [
-                item.id,
-                item.object_type.value,
-                item.shape.value,
-                item.display_role,
-                item.primary_role.value,
-                list(item.role_values),
-                item.primary_layer,
-                list(item.layers),
-                _geometry_side(pcb, item),
-                item.net_name or _net_name(pcb, item.net_number),
-                item.net_number,
-                item.footprint_ref,
-                item.pour_id,
-                item.metadata.source_format,
-                item.metadata.native_type,
-                item.metadata.native_kind,
-                item.metadata.native_id,
-                item.metadata.native_index,
-                _geometry_metadata_json(item),
-                _wkb(geom) if geom else None,
-            ],
+def _profile_shape_geometry(payload: object) -> BaseGeometry | None:
+    if isinstance(payload, PcbLine):
+        return LineString(((payload.start_x, payload.start_y), (payload.end_x, payload.end_y)))
+    if isinstance(payload, PcbArc):
+        return LineString(
+            arc_to_polyline(
+                payload.start_x,
+                payload.start_y,
+                payload.mid_x,
+                payload.mid_y,
+                payload.end_x,
+                payload.end_y,
+                num_points=32,
+            )
         )
+    return _shape_geometry(payload)
 
 
-# ---------------------------------------------------------------------------
-# PCB table loaders
-# ---------------------------------------------------------------------------
+def _drill_geometry(drill: PcbDrill) -> BaseGeometry | None:
+    width = drill.width if drill.width > 0.0 else drill.diameter
+    height = drill.height if drill.height > 0.0 else drill.diameter
+    if width <= 0.0 or height <= 0.0:
+        return None
+    if drill.shape != PcbDrillShape.SLOT or math.isclose(width, height):
+        return Point(drill.x, drill.y).buffer(width / 2.0, quad_segs=8)
+    radius = min(width, height) / 2.0
+    if width > height:
+        half_span = (width - height) / 2.0
+        line = LineString(((drill.x - half_span, drill.y), (drill.x + half_span, drill.y)))
+    else:
+        half_span = (height - width) / 2.0
+        line = LineString(((drill.x, drill.y - half_span), (drill.x, drill.y + half_span)))
+    geometry = line.buffer(radius, quad_segs=8)
+    if not math.isclose(drill.rotation % 360.0, 0.0):
+        geometry = rotate(geometry, drill.rotation, origin=(drill.x, drill.y))
+    return geometry
+
+
+def _drill_owner(drill: PcbDrill) -> tuple[str, str]:
+    owner = drill.owner
+    if isinstance(owner, PcbPad):
+        return "pad", owner.id
+    if isinstance(owner, PcbVia):
+        return "via", owner.id
+    if isinstance(owner, PcbArtwork):
+        return "artwork", owner.id
+    return "mechanical", ""
 
 
 def _load_footprints(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
     for fp in pcb.footprints:
-        geom = footprint_bbox_polygon(fp)
-        wkb_val = _wkb(geom) if geom else None
         _ = con.execute(
             "INSERT INTO footprints VALUES (?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))",
             [
@@ -190,166 +222,230 @@ def _load_footprints(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
                 fp.rotation,
                 footprint_side(fp),
                 fp.value,
-                wkb_val,
+                _wkb(footprint_bbox_polygon(fp)),
             ],
         )
 
 
 def _load_pads(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
-    for item in pcb.geometry_by_object_type(PcbGeometryObject.PAD):
-        if not isinstance(item.data, PcbPadGeometry):
-            continue
-        pad = item.data
-        geom = pad_polygon(pad)
+    _ = pcb
+    for pad in pcb.pads:
+        net_name, net_number = _net_fields(pad.net)
         _ = con.execute(
             """INSERT INTO pads VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))""",
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))""",
             [
-                item.footprint_ref,
+                pad.id,
+                None if pad.footprint is None else pad.footprint.reference,
                 pad.number,
-                item.net_name or _net_name(pcb, item.net_number),
-                item.net_number,
+                net_name,
+                net_number,
                 pad.x,
                 pad.y,
                 pad.width,
                 pad.height,
                 pad.shape,
-                pad.drill,
-                pad_side(item.layers),
-                _first_copper_layer(item.layers),
+                pad.pad_type.value,
+                None if pad.drill is None else pad.drill.id,
+                None if pad.drill is None else pad.drill.diameter,
+                _pad_side(pad),
+                _primary_layer(pad.layers),
+                _layer_names(pad.layers),
                 pad.pin_function,
                 pad.pin_type,
                 pad.mask_aperture_width,
                 pad.mask_aperture_height,
                 pad.mask_aperture_source or None,
-                _wkb(geom),
-            ],
-        )
-
-
-def _first_copper_layer(layers: tuple[str, ...]) -> str:
-    """Pick the first copper layer name from a pad's layer list."""
-    normalized_layers = [str(layer) for layer in layers]
-    for ly in normalized_layers:
-        if "Cu" in ly or "Layer" in ly or "Top" in ly or "Bottom" in ly:
-            return ly
-    return normalized_layers[0] if normalized_layers else ""
-
-
-def _load_segments(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
-    for item in pcb.geometry_by_object_type(PcbGeometryObject.TRACK):
-        if isinstance(item.data, PcbLineGeometry):
-            segment = item.data
-            centerline, corridor = segment_geometry(segment)
-            is_arc = False
-            cx = cy = angle = None
-        elif isinstance(item.data, PcbArcGeometry):
-            segment = item.data
-            centerline, corridor = trace_arc_geometry(segment)
-            cx, cy, _radius = arc_center_from_three_points(
-                segment.start_x,
-                segment.start_y,
-                segment.mid_x,
-                segment.mid_y,
-                segment.end_x,
-                segment.end_y,
-            )
-            angle = arc_sweep_angle(
-                segment.start_x,
-                segment.start_y,
-                segment.mid_x,
-                segment.mid_y,
-                segment.end_x,
-                segment.end_y,
-                cx,
-                cy,
-            )
-            is_arc = True
-        else:
-            continue
-        _ = con.execute(
-            """INSERT INTO segments VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?), ST_GeomFromWKB(?))""",
-            [
-                item.net_name or _net_name(pcb, item.net_number),
-                item.net_number,
-                item.primary_layer,
-                segment.width,
-                segment.start_x,
-                segment.start_y,
-                segment.end_x,
-                segment.end_y,
-                is_arc,
-                cx,
-                cy,
-                angle,
-                centerline.length,
-                _wkb(centerline),
-                _wkb(corridor),
+                _wkb(pad_polygon(pad)),
             ],
         )
 
 
 def _load_vias(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
-    for item in pcb.geometry_by_object_type(PcbGeometryObject.VIA):
-        if not isinstance(item.data, PcbViaGeometry):
-            continue
-        via = item.data
-        copper, drill = via_geometry(via)
-        start_layer = item.layers[0] if item.layers else ""
-        end_layer = item.layers[-1] if len(item.layers) > 1 else start_layer
+    for via in pcb.vias:
+        net_name, net_number = _net_fields(via.net)
+        start_layer = via.layers[0].name if via.layers else ""
+        end_layer = via.layers[-1].name if len(via.layers) > 1 else start_layer
         _ = con.execute(
             """INSERT INTO vias VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?), ST_GeomFromWKB(?))""",
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))""",
             [
-                item.net_name or _net_name(pcb, item.net_number),
-                item.net_number,
+                via.id,
+                net_name,
+                net_number,
                 via.x,
                 via.y,
-                via.size,
-                via.drill,
+                via.diameter,
+                via.drill.id,
+                via.via_type.value,
                 start_layer,
                 end_layer,
-                _wkb(copper),
-                _wkb(drill),
+                _layer_names(via.layers),
+                _wkb(via_geometry(via)[0]),
             ],
         )
 
 
-def _load_polygons(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
-    for item in pcb.geometry_by_shape(PcbGeometryShape.POLYGON):
-        if not isinstance(item.data, PcbPolygonGeometry):
-            continue
-        geom = polygon_geometry(item.data)
-        if geom is None:
-            continue
+def _load_drills(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
+    for drill in pcb.drills:
+        owner_kind, owner_id = _drill_owner(drill)
         _ = con.execute(
-            "INSERT INTO polygons VALUES (?, ?, ?, ST_GeomFromWKB(?))",
+            """INSERT INTO drills VALUES
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))""",
             [
-                item.net_name or _net_name(pcb, item.net_number),
-                item.net_number,
-                item.primary_layer,
+                drill.id,
+                owner_kind,
+                owner_id,
+                drill.plating.value,
+                drill.shape.value,
+                drill.x,
+                drill.y,
+                drill.diameter,
+                drill.width,
+                drill.height,
+                drill.rotation,
+                _layer_names(drill.layers),
+                _wkb(_drill_geometry(drill)),
+            ],
+        )
+
+
+def _load_conductors(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
+    for conductor in pcb.conductors:
+        net_name, net_number = _net_fields(conductor.net)
+        centerline: BaseGeometry | None = None
+        geom: BaseGeometry | None = None
+        width = None
+        start_x = start_y = end_x = end_y = None
+        is_arc = False
+        arc_center_x = arc_center_y = arc_angle = None
+        length = None
+        data = conductor.data
+        if isinstance(data, PcbLine):
+            centerline, geom = segment_geometry(data)
+            width = data.width
+            start_x, start_y = data.start_x, data.start_y
+            end_x, end_y = data.end_x, data.end_y
+            length = centerline.length
+        elif isinstance(data, PcbArc):
+            centerline, geom = trace_arc_geometry(data)
+            width = data.width
+            start_x, start_y = data.start_x, data.start_y
+            end_x, end_y = data.end_x, data.end_y
+            arc_center_x, arc_center_y, _radius = arc_center_from_three_points(
+                data.start_x,
+                data.start_y,
+                data.mid_x,
+                data.mid_y,
+                data.end_x,
+                data.end_y,
+            )
+            arc_angle = arc_sweep_angle(
+                data.start_x,
+                data.start_y,
+                data.mid_x,
+                data.mid_y,
+                data.end_x,
+                data.end_y,
+                arc_center_x,
+                arc_center_y,
+            )
+            is_arc = True
+            length = centerline.length
+        else:
+            geom = polygon_geometry(data)
+            length = 0.0
+        _ = con.execute(
+            """INSERT INTO conductors VALUES
+            (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ST_GeomFromWKB(?), ST_GeomFromWKB(?)
+            )""",
+            [
+                conductor.id,
+                conductor.kind.value,
+                net_name,
+                net_number,
+                conductor.layer.name,
+                width,
+                start_x,
+                start_y,
+                end_x,
+                end_y,
+                is_arc,
+                arc_center_x,
+                arc_center_y,
+                arc_angle,
+                length,
+                None if conductor.footprint is None else conductor.footprint.reference,
+                None if conductor.pour is None else conductor.pour.id,
+                _wkb(centerline),
                 _wkb(geom),
+            ],
+        )
+
+
+def _load_artwork(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
+    for artwork in pcb.artwork:
+        text = x = y = rotation = font_size = None
+        if isinstance(artwork.data, PcbText):
+            text = artwork.data.text
+            x = artwork.data.x
+            y = artwork.data.y
+            rotation = artwork.data.rotation
+            font_size = artwork.data.font_size
+        _ = con.execute(
+            """INSERT INTO artwork VALUES
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))""",
+            [
+                artwork.id,
+                artwork.purpose.value,
+                artwork.kind.value,
+                None if artwork.footprint is None else artwork.footprint.reference,
+                None if artwork.layer is None else artwork.layer.name,
+                text,
+                x,
+                y,
+                rotation,
+                font_size,
+                _wkb(_shape_geometry(artwork.data)),
+            ],
+        )
+
+
+def _load_board_profile(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
+    if pcb.board_profile is None:
+        return
+    for element in pcb.board_profile.elements:
+        _ = con.execute(
+            "INSERT INTO board_profile VALUES (?, ?, ?, ?, ST_GeomFromWKB(?))",
+            [
+                element.id,
+                element.kind.value,
+                None if element.layer is None else element.layer.name,
+                element.is_cutout,
+                _wkb(_profile_shape_geometry(element.data)),
             ],
         )
 
 
 def _load_pours(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
     for pour in pcb.pours:
+        net_name, net_number = _net_fields(pour.net)
         boundary = closed_path_geometry(pour.boundary)
         _ = con.execute(
             """INSERT INTO pours VALUES
             (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 ST_GeomFromWKB(?)
             )""",
             [
                 pour.id,
                 pour.name,
-                pour.net_name or _net_name(pcb, pour.net_number),
-                pour.net_number,
-                pour.layers[0] if pour.layers else "",
-                list(pour.layers),
+                net_name,
+                net_number,
+                _primary_layer(pour.layers),
+                _layer_names(pour.layers),
                 pour.priority,
                 pour.settings.fill_mode.value,
                 pour.settings.hatch_style,
@@ -359,16 +455,15 @@ def _load_pours(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
                 pour.settings.thermal_gap_mm,
                 pour.settings.thermal_bridge_width_mm,
                 pour.settings.connect_pads_clearance_mm,
-                list(pour.fill_geometry_ids),
-                list(pour.cutout_geometry_ids),
-                pour.footprint_ref,
+                [fill.id for fill in pour.fills],
+                None if pour.footprint is None else pour.footprint.reference,
                 pour.metadata.source_format,
                 pour.metadata.native_type,
                 pour.metadata.native_kind,
                 pour.metadata.native_id,
                 pour.metadata.native_index,
-                json.dumps(asdict(pour.metadata), separators=(",", ":"), sort_keys=True),
-                _wkb(boundary) if boundary else None,
+                _metadata_json(pour.metadata),
+                _wkb(boundary),
             ],
         )
 
@@ -382,9 +477,9 @@ def _load_keepouts(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
             [
                 keepout.id,
                 keepout.name,
-                keepout.footprint_ref,
-                keepout.layers[0] if keepout.layers else "",
-                list(keepout.layers),
+                None if keepout.footprint is None else keepout.footprint.reference,
+                _primary_layer(keepout.layers),
+                _layer_names(keepout.layers),
                 keepout.rules.tracks.value,
                 keepout.rules.vias.value,
                 keepout.rules.pads.value,
@@ -395,117 +490,47 @@ def _load_keepouts(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
                 keepout.metadata.native_kind,
                 keepout.metadata.native_id,
                 keepout.metadata.native_index,
-                json.dumps(asdict(keepout.metadata), separators=(",", ":"), sort_keys=True),
-                _wkb(boundary) if boundary else None,
-            ],
-        )
-
-
-def _load_footprint_graphics(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
-    for item in pcb.geometry_by_object_type(PcbGeometryObject.GRAPHIC):
-        if not item.footprint_ref:
-            continue
-        geom = _geometry_to_shape(item)
-        if geom is None:
-            continue
-        _ = con.execute(
-            "INSERT INTO footprint_graphics VALUES (?, ?, ?, ST_GeomFromWKB(?))",
-            [item.footprint_ref, item.primary_layer, item.display_role, _wkb(geom)],
-        )
-
-
-def _load_board_graphics(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
-    for item in pcb.geometry_by_object_type(PcbGeometryObject.GRAPHIC):
-        if item.footprint_ref:
-            continue
-        if item.has_role(PcbGeometryRole.BOARD_OUTLINE):
-            continue
-        geom = _geometry_to_shape(item)
-        if geom is None:
-            continue
-        _ = con.execute(
-            "INSERT INTO board_graphics VALUES (?, ?, ?, ST_GeomFromWKB(?))",
-            ["", item.primary_layer, item.shape.value, _wkb(geom)],
-        )
-
-
-def _load_graphic_texts(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
-    for item in pcb.geometry_by_object_type(PcbGeometryObject.TEXT):
-        if item.footprint_ref:
-            continue
-        if not isinstance(item.data, PcbTextGeometry):
-            continue
-        gt = item.data
-        _ = con.execute(
-            "INSERT INTO graphic_texts VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [gt.text, gt.x, gt.y, gt.rotation, item.primary_layer, gt.font_size, gt.justify],
-        )
-
-
-def _load_dimensions(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
-    for item in pcb.geometry_by_object_type(PcbGeometryObject.DIMENSION):
-        if not isinstance(item.data, PcbDimensionGeometry):
-            continue
-        dim = item.data
-        _ = con.execute(
-            "INSERT INTO dimensions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                dim.kind,
-                dim.value_mm,
-                item.primary_layer,
-                dim.start_x,
-                dim.start_y,
-                dim.end_x,
-                dim.end_y,
-                dim.text,
+                _metadata_json(keepout.metadata),
+                _wkb(boundary),
             ],
         )
 
 
 def _load_layers(con: duckdb.DuckDBPyConnection, pcb: Pcb, stackup: Stackup | None) -> None:
-    # Build stackup position map (name → position index)
     stackup_map: dict[str, int] = {}
     if stackup:
-        for i, layer in enumerate(stackup.layers, start=1):
-            stackup_map[layer.name] = i
-
-    # Insert stackup layers first (these have physical properties)
-    if stackup:
-        for i, sl in enumerate(stackup.layers, start=1):
-            # Find matching PCB layer for normalized role/side info
-            pcb_layer = pcb.layer_for(sl.name)
-            layer_info = pcb_layer or _stackup_layer_as_pcb_layer(sl.layer_type, sl.side)
+        for index, layer in enumerate(stackup.layers, start=1):
+            stackup_map[layer.name] = index
+            pcb_layer = pcb.layer_for(layer.name)
+            layer_info = pcb_layer or _stackup_layer_as_pcb_layer(layer.layer_type, layer.side)
             _ = con.execute(
-                "INSERT INTO layers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO layers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
-                    i,
-                    sl.name,
-                    layer_info.primary_role.value,
+                    index,
+                    layer.name,
                     list(layer_info.role_values),
                     layer_info.side,
-                    pcb_layer.number if pcb_layer else None,
-                    sl.thickness_mm if sl.thickness_mm else None,
-                    sl.material or None,
-                    sl.epsilon_r if sl.epsilon_r else None,
-                    sl.loss_tangent if sl.loss_tangent else None,
-                    sl.layer_type,
-                    sl.copper_orientation or None,
+                    None if pcb_layer is None else pcb_layer.number,
+                    layer.thickness_mm if layer.thickness_mm else None,
+                    layer.material or None,
+                    layer.epsilon_r if layer.epsilon_r else None,
+                    layer.loss_tangent if layer.loss_tangent else None,
+                    layer.layer_type,
+                    layer.copper_orientation or None,
                 ],
             )
 
-    # Insert non-stackup PCB layers (silkscreen, mask, etc.)
-    for pl in pcb.layers:
-        if pl.name in stackup_map:
-            continue  # Already inserted from stackup
+    for layer in pcb.layers:
+        if layer.name in stackup_map:
+            continue
         _ = con.execute(
-            "INSERT INTO layers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO layers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [
                 None,
-                pl.name,
-                pl.primary_role.value,
-                list(pl.role_values),
-                pl.side,
-                pl.number,
+                layer.name,
+                list(layer.role_values),
+                layer.side,
+                layer.number,
                 None,
                 None,
                 None,
@@ -536,45 +561,35 @@ def _stackup_layer_as_pcb_layer(layer_type: str, side: str) -> PcbLayer:
 
 
 def _load_board(con: duckdb.DuckDBPyConnection, pcb: Pcb, stackup: Stackup | None) -> None:
-    outline = board_outline_polygon(pcb.board_profile_geometry())
-    wkb_val = _wkb(outline) if outline else None
+    outline = board_outline_polygon(pcb.board_profile) if pcb.board_profile is not None else None
     total_thickness = stackup.total_thickness_mm if stackup else None
     copper_finish = stackup.copper_finish if stackup else None
-    # Count copper layers from stackup
     layer_count = 0
     if stackup:
-        layer_count = sum(1 for ly in stackup.layers if ly.layer_type == "copper")
+        layer_count = sum(1 for layer in stackup.layers if layer.layer_type == "copper")
     _ = con.execute(
         "INSERT INTO board VALUES (?, ?, ?, ?, ?, ST_GeomFromWKB(?))",
-        [pcb.name, total_thickness, copper_finish, None, layer_count, wkb_val],
+        [pcb.name, total_thickness, copper_finish, None, layer_count, _wkb(outline)],
     )
 
 
-# ---------------------------------------------------------------------------
-# Design rules & net classes
-# ---------------------------------------------------------------------------
-
-
 def _load_net_classes(con: duckdb.DuckDBPyConnection, project: Project) -> None:
-    for nc in project.net_classes:
+    for net_class in project.net_classes:
         _ = con.execute(
             "INSERT INTO net_classes VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             [
-                nc.name,
-                nc.kind,
-                nc.trace_width_mm if nc.trace_width_mm else None,
-                nc.clearance_mm if nc.clearance_mm else None,
-                nc.via_diameter_mm if nc.via_diameter_mm else None,
-                nc.via_drill_mm if nc.via_drill_mm else None,
-                nc.diff_pair_width_mm if nc.diff_pair_width_mm else None,
-                nc.diff_pair_gap_mm if nc.diff_pair_gap_mm else None,
+                net_class.name,
+                net_class.kind,
+                net_class.trace_width_mm if net_class.trace_width_mm else None,
+                net_class.clearance_mm if net_class.clearance_mm else None,
+                net_class.via_diameter_mm if net_class.via_diameter_mm else None,
+                net_class.via_drill_mm if net_class.via_drill_mm else None,
+                net_class.diff_pair_width_mm if net_class.diff_pair_width_mm else None,
+                net_class.diff_pair_gap_mm if net_class.diff_pair_gap_mm else None,
             ],
         )
-        for member in nc.members:
-            _ = con.execute(
-                "INSERT INTO net_class_members VALUES (?, ?)",
-                [member, nc.name],
-            )
+        for member in net_class.members:
+            _ = con.execute("INSERT INTO net_class_members VALUES (?, ?)", [member, net_class.name])
 
 
 def _load_design_rules(con: duckdb.DuckDBPyConnection, project: Project) -> None:
@@ -596,38 +611,32 @@ def _load_design_rules(con: duckdb.DuckDBPyConnection, project: Project) -> None
         )
 
 
-# ---------------------------------------------------------------------------
-# Schematic table loaders
-# ---------------------------------------------------------------------------
-
-
 def _load_components(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
-    for comp in schematic.components:
-        page_name = comp.pages[0].name if comp.pages else ""
+    for component in schematic.components:
+        page_name = component.pages[0].name if component.pages else ""
         _ = con.execute(
             "INSERT INTO components VALUES (?, ?, ?, ?)",
-            [comp.reference, comp.part, comp.description, page_name],
+            [component.reference, component.part, component.description, page_name],
         )
 
 
 def _load_component_metadata(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
-    for comp in schematic.components:
-        for key, value in comp.metadata.items():
+    for component in schematic.components:
+        for key, value in component.metadata.items():
             _ = con.execute(
-                "INSERT INTO component_metadata VALUES (?, ?, ?)",
-                [comp.reference, key, value],
+                "INSERT INTO component_metadata VALUES (?, ?, ?)", [component.reference, key, value]
             )
 
 
 def _load_pins(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
-    for comp in schematic.components:
-        for pin in comp.pins:
+    for component in schematic.components:
+        for pin in component.pins:
             net_name = pin.net.name if pin.net else ""
             electrical = pin.metadata.get("electrical", "")
             _ = con.execute(
                 "INSERT INTO pins VALUES (?, ?, ?, ?, ?, ?)",
                 [
-                    comp.reference,
+                    component.reference,
                     pin.designator,
                     pin.name,
                     net_name,
@@ -638,42 +647,36 @@ def _load_pins(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
 
 
 def _load_nets(con: duckdb.DuckDBPyConnection, schematic: Schematic, project: Project) -> None:
-    # Build lookup maps for net class membership and diff pairs
     net_to_class: dict[str, str] = {}
-    for nc in project.net_classes:
-        for member in nc.members:
-            net_to_class[member] = nc.name
+    for net_class in project.net_classes:
+        for member in net_class.members:
+            net_to_class[member] = net_class.name
 
     net_to_diff_pair: dict[str, tuple[str, str]] = {}
-    for dp in project.diff_pairs:
-        net_to_diff_pair[dp.positive_net] = (dp.name, "+")
-        net_to_diff_pair[dp.negative_net] = (dp.name, "-")
+    for diff_pair in project.diff_pairs:
+        net_to_diff_pair[diff_pair.positive_net] = (diff_pair.name, "+")
+        net_to_diff_pair[diff_pair.negative_net] = (diff_pair.name, "-")
 
     for net in schematic.nets:
-        is_power = _is_power_net(net.name)
-        net_class = net_to_class.get(net.name)
-        dp_info = net_to_diff_pair.get(net.name)
-        diff_pair = dp_info[0] if dp_info else None
-        diff_pair_polarity = dp_info[1] if dp_info else None
+        diff_pair_info = net_to_diff_pair.get(net.name)
         aliases = ",".join(sorted(net.aliases)) if net.aliases else None
         _ = con.execute(
             "INSERT INTO nets VALUES (?, ?, ?, ?, ?, ?, ?)",
             [
                 net.name,
                 len(net.pins),
-                is_power,
-                net_class,
-                diff_pair,
-                diff_pair_polarity,
+                _is_power_net(net.name),
+                net_to_class.get(net.name),
+                None if diff_pair_info is None else diff_pair_info[0],
+                None if diff_pair_info is None else diff_pair_info[1],
                 aliases,
             ],
         )
 
 
 def _is_power_net(name: str) -> bool:
-    """Heuristic: detect power/ground nets from name."""
     upper = name.upper()
-    if any(upper.startswith(p) for p in _POWER_PREFIXES):
+    if any(upper.startswith(prefix) for prefix in _POWER_PREFIXES):
         return True
     return bool(name and name[0] in _POWER_CHARS)
 
@@ -681,8 +684,7 @@ def _is_power_net(name: str) -> bool:
 def _load_pages(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
     for page in schematic.pages:
         _ = con.execute(
-            "INSERT INTO pages VALUES (?, ?, ?)",
-            [page.name, len(page.components), len(page.nets)],
+            "INSERT INTO pages VALUES (?, ?, ?)", [page.name, len(page.components), len(page.nets)]
         )
 
 

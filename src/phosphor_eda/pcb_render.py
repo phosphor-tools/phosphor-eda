@@ -57,7 +57,7 @@ if TYPE_CHECKING:
         ResolvedPointer,
     )
     from phosphor_eda.pcb_render_artwork import DerivedLayer
-    from phosphor_eda.pcb_render_geometry import GeometryTags
+    from phosphor_eda.pcb_render_inventory import InventoryTags
     from phosphor_eda.pcb_render_primitives import LayerClip, LayerMask, SvgPrimitive
     from phosphor_eda.pcb_render_profile import RenderProfiler
     from phosphor_eda.pcb_render_tokens import ResolvedStyle, VisualRole
@@ -462,6 +462,7 @@ def _derived_layer_path_attrs(
     primitive: SvgPrimitive,
 ) -> dict[str, str]:
     attrs = _resolved_path_style_svg_attrs(style)
+    attrs.update(primitive.style)
     attrs["fill-rule"] = "evenodd"
     attrs.update(_primitive_metadata_attrs(primitive))
     return attrs
@@ -493,7 +494,7 @@ def _primitive_metadata_attrs(primitive: SvgPrimitive) -> dict[str, str]:
     return attrs
 
 
-def _primitive_tag_attrs(tags: GeometryTags) -> dict[str, str]:
+def _primitive_tag_attrs(tags: InventoryTags) -> dict[str, str]:
     attrs: dict[str, str] = {}
     if tags.source_collection:
         attrs["data-source-collection"] = tags.source_collection
