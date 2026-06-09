@@ -286,7 +286,9 @@ class PcbBuilder:
         """Return a validated strict PCB domain object."""
         if 0 in self.nets:
             self._fail("net 0 is forbidden; use net=None for unconnected objects")
-        if require_board_profile and self.board_profile is None:
+        if require_board_profile and (
+            self.board_profile is None or not self.board_profile.elements
+        ):
             self._fail("board profile is required")
         for pad in self.pads:
             if pad.drill is not None:

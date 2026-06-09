@@ -61,11 +61,49 @@ def test_realistic_layers_use_board_material_copper_and_silkscreen() -> None:
     layer_ids = {layer.id for layer in layers}
     assert {
         "realistic:substrate",
+        "realistic:solderMask",
         "realistic:coveredCopper",
+        "realistic:exposedSubstrate",
         "realistic:exposedCopper",
         "realistic:silkscreen",
-        "realistic:boardOutline",
     }.issubset(layer_ids)
+    assert "realistic:boardOutline" not in layer_ids
+    layers_by_id = {layer.id: layer for layer in layers}
+    assert layers_by_id["realistic:solderMask"].mask is not None
+    assert layers_by_id["realistic:solderMask"].mask.openings
+    assert layers_by_id["realistic:exposedCopper"].mask is not None
+    assert layers_by_id["realistic:exposedCopper"].mask.board
+    assert layers_by_id["realistic:silkscreen"].mask is not None
+    assert layers_by_id["realistic:silkscreen"].mask.openings
+
+
+def test_eda_layers_use_board_drill_and_solder_mask_cutouts() -> None:
+    inventory = build_inventory(_board(), side="front")
+    settings = RenderSettings(
+        render_mode="eda",
+        side="front",
+        source=SourceSelection(
+            layers=[
+                LayerSelectionRule(match=LayerMatch(role="copper", side="front")),
+                LayerSelectionRule(
+                    match=LayerMatch(role="silkscreen", side="front"),
+                    purposes=("silkscreen", "designator"),
+                ),
+            ]
+        ),
+    )
+
+    layers = build_eda_layers(inventory, settings, warn=lambda _message: None)
+
+    copper = next(layer for layer in layers if layer.role.function == "copper")
+    silkscreen = next(layer for layer in layers if layer.role.function == "silkscreen")
+    assert copper.mask is not None
+    assert copper.mask.board
+    assert copper.mask.drills
+    assert silkscreen.mask is not None
+    assert silkscreen.mask.board
+    assert silkscreen.mask.drills
+    assert silkscreen.mask.openings
 
 
 def test_realistic_board_material_uses_profile_path_for_orangecrab() -> None:

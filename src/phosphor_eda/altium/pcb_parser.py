@@ -930,10 +930,8 @@ def _parse_tracks(
         if track is None:
             continue
 
-        layer = _layer_name(track.layer, layer_map)
-        if not layer:
-            continue
         layer_ref = _layer_ref(track.layer, layer_map, source=f"track {index}")
+        layer = layer_ref.name
 
         x1 = _int_to_mm(track.start[0])
         y1 = -_int_to_mm(track.start[1])
@@ -1040,10 +1038,14 @@ def _parse_vias(
         if via is None:
             continue
 
-        layers = [_layer_name(via.start_layer, layer_map), _layer_name(via.end_layer, layer_map)]
-        layers = [ly for ly in layers if ly]
-        if not layers:
-            continue
+        layer_refs = [
+            _layer_ref(via.start_layer, layer_map, source=f"via {index} start"),
+            _layer_ref(via.end_layer, layer_map, source=f"via {index} end"),
+        ]
+        layers: list[str] = []
+        for layer_ref in layer_refs:
+            if layer_ref.name not in layers:
+                layers.append(layer_ref.name)
 
         roles = [
             _ParsedRole.COPPER,
@@ -1105,10 +1107,8 @@ def _parse_arcs(
         if arc is None:
             continue
 
-        layer = _layer_name(arc.layer, layer_map)
-        if not layer:
-            continue
         layer_ref = _layer_ref(arc.layer, layer_map, source=f"arc {index}")
+        layer = layer_ref.name
 
         cx = _int_to_mm(arc.center[0])
         cy_orig = _int_to_mm(arc.center[1])
@@ -1424,7 +1424,12 @@ def _parse_pads(
             shape = "roundrect"
 
         # Determine layers (multi-layer pad = layer 74 = through-hole)
-        layers = [_layer_name(pad.layer, layer_map)] if pad.layer in _COPPER_LAYERS else ["*.Cu"]
+        if pad.layer == 74:
+            layers = [
+                layer.name for layer in layer_map.values() if layer.has_role(LayerRole.COPPER)
+            ]
+        else:
+            layers = [_layer_ref(pad.layer, layer_map, source=f"pad {index}").name]
 
         net_num = _net_number(pad.net)
         net_obj = None if net_num == 0 else nets.get(net_num)
@@ -1648,9 +1653,7 @@ def _parse_texts(
         if text_rec is None:
             continue
 
-        layer = _layer_name(text_rec.layer, layer_map)
-        if not layer:
-            continue
+        layer = _layer_ref(text_rec.layer, layer_map, source=f"text {index}").name
 
         roles = list(_layer_geometry_roles(text_rec.layer, layer_map))
         roles.append(_ParsedRole.TEXT)
@@ -1712,10 +1715,8 @@ def _parse_fills(
         fill = FillRecord.from_bytes(body, ctx)
         if fill is None:
             continue
-        layer = _layer_name(fill.layer, layer_map)
-        if not layer:
-            continue
         layer_ref = _layer_ref(fill.layer, layer_map, source=f"fill {index}")
+        layer = layer_ref.name
 
         x1 = _int_to_mm(fill.pos1[0])
         y1 = -_int_to_mm(fill.pos1[1])
@@ -1924,9 +1925,7 @@ def _parse_regions(
             _V7_NAME_TO_NUM[v7_layer] if v7_layer and v7_layer in _V7_NAME_TO_NUM else region.layer
         )
 
-        layer = _layer_name(resolved_num, layer_map)
-        if not layer:
-            continue
+        layer = _layer_ref(resolved_num, layer_map, source=f"region {index}").name
         region_kind = _region_kind(region.properties)
 
         points = [(_int_to_mm(int(vx)), -_int_to_mm(int(vy))) for vx, vy in region.vertices]
@@ -2024,9 +2023,7 @@ def _parse_shape_based_regions(
             _V7_NAME_TO_NUM[v7_layer] if v7_layer and v7_layer in _V7_NAME_TO_NUM else region.layer
         )
 
-        layer = _layer_name(resolved_num, layer_map)
-        if not layer:
-            continue
+        layer = _layer_ref(resolved_num, layer_map, source=f"shape region {index}").name
         region_kind = _region_kind(region.properties)
 
         # Linearize arc edges, then convert to mm with Y negated

@@ -33,6 +33,14 @@ def test_source_selection_matches_typed_purposes_and_content_kinds() -> None:
     }
 
 
+def test_empty_source_selection_selects_nothing() -> None:
+    inventory = build_inventory(_board(), side="front")
+
+    selected = select_source_artwork(inventory, [], active_side="front")
+
+    assert selected == ()
+
+
 def test_keepout_overlays_require_explicit_keepout_selection() -> None:
     board = _board()
     copper = board.layer_for("F.Cu")

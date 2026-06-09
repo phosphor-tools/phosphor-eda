@@ -22,8 +22,10 @@ from phosphor_eda.pcb import (
     PcbText,
 )
 from phosphor_eda.project import Stackup
+from phosphor_eda.sql.geometry import pad_polygon
 
 FIXTURE = Path(__file__).parent / "fixtures" / "swd_switch.kicad_pcb"
+ORANGECRAB_FIXTURE = Path(__file__).parent / "fixtures" / "orangecrab.kicad_pcb"
 JETSON_ORIN_FIXTURE = (
     Path(__file__).parent / "fixtures" / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pcb"
 )
@@ -93,6 +95,20 @@ def test_pads_resolve_nets_layers_and_drills(board: Pcb) -> None:
     assert drilled_pad.drill is not None
     assert drilled_pad.drill in board.drills
     assert drilled_pad.drill.owner is drilled_pad
+
+
+def test_kicad_custom_pad_primitives_are_modeled() -> None:
+    board = parse_kicad_pcb(ORANGECRAB_FIXTURE)
+    custom_pads = [pad for pad in board.pads if pad.shape == "custom"]
+
+    assert custom_pads
+    assert any(pad.custom_shapes for pad in custom_pads)
+    custom_pad = next(pad for pad in custom_pads if pad.custom_shapes)
+    geometry = pad_polygon(custom_pad)
+    min_x, min_y, max_x, max_y = geometry.bounds
+    bbox_area = (max_x - min_x) * (max_y - min_y)
+
+    assert geometry.area < bbox_area
 
 
 def test_kicad_layer_selectors_resolve_to_concrete_layer_references(board: Pcb) -> None:

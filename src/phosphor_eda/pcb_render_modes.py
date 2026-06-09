@@ -6,7 +6,11 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from phosphor_eda.pcb_render_artwork import DerivedLayer, select_source_artwork
+from phosphor_eda.pcb_render_artwork import (
+    DerivedLayer,
+    select_source_artwork,
+    solder_mask_opening_primitives,
+)
 from phosphor_eda.pcb_render_inventory import (
     InventoryItem,
     InventoryItemKind,
@@ -22,7 +26,7 @@ from phosphor_eda.pcb_render_primitives import (
     layer_function_for_item,
     source_layer_name,
 )
-from phosphor_eda.pcb_render_tokens import ResolvedStyle, VisualRole, resolve_layer_style
+from phosphor_eda.pcb_render_tokens import VisualRole, resolve_layer_style
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -79,12 +83,16 @@ def build_eda_layers(
     )
     if profiler is not None:
         profiler.metric("eda.selected_items", count=len(selected))
+    board_mask = _board_layer_mask(inventory)
+    silkscreen_masks = _silkscreen_layer_masks(inventory, settings.side)
     return _group_inventory_layers(
         inventory,
         selected,
         settings,
         namespace="eda",
         warn=warn,
+        board_mask=board_mask,
+        silkscreen_masks=silkscreen_masks,
         profiler=profiler,
     )
 
@@ -102,15 +110,9 @@ def build_realistic_layers(
         select_source_artwork(inventory, settings.source.layers, active_side=side),
         settings.source.exclude_components,
     )
-    board_primitives = tuple(
-        primitive
-        for item in inventory.items
-        if item.purpose == InventoryPurpose.BOARD_MATERIAL
-        if (primitive := inventory_item_to_svg_primitive(item)) is not None
-    )
-    drill_primitives = _primitives_for_items(
-        tuple(item for item in inventory.items if item.item_kind == InventoryItemKind.DRILL)
-    )
+    board_primitives = _board_primitives(inventory)
+    drill_primitives = _drill_primitives(inventory)
+    mask_openings = solder_mask_opening_primitives(inventory, side=side)
     board_clip = LayerClip(board=board_primitives) if board_primitives else None
     copper_items = tuple(
         item
@@ -131,9 +133,16 @@ def build_realistic_layers(
         }
         and (item.layer is None or item.layer.side in {"", side})
     )
-    outline_items = tuple(
-        item for item in inventory.items if item.purpose == InventoryPurpose.BOARD_PROFILE
+    board_items = tuple(
+        item for item in inventory.items if item.purpose == InventoryPurpose.BOARD_MATERIAL
     )
+    board_mask = LayerMask(board=board_primitives, drills=drill_primitives)
+    solder_mask = LayerMask(
+        board=board_primitives,
+        drills=drill_primitives,
+        openings=mask_openings,
+    )
+    opening_mask = LayerMask(board=mask_openings, drills=drill_primitives)
     layers: list[DerivedLayer] = []
     layers.extend(
         _realistic_layer(
@@ -141,12 +150,22 @@ def build_realistic_layers(
             settings,
             function="substrate",
             primitives=board_primitives,
-            source_items=tuple(
-                item for item in inventory.items if item.purpose == InventoryPurpose.BOARD_MATERIAL
-            ),
+            source_items=board_items,
             warn=warn,
             clip=board_clip,
-            mask=LayerMask(board=board_primitives, drills=drill_primitives),
+            mask=board_mask,
+        )
+    )
+    layers.extend(
+        _realistic_layer(
+            inventory,
+            settings,
+            function="solderMask",
+            primitives=board_primitives,
+            source_items=board_items,
+            warn=warn,
+            clip=board_clip,
+            mask=solder_mask,
         )
     )
     copper_primitives = _primitives_for_items(copper_items)
@@ -159,7 +178,19 @@ def build_realistic_layers(
             source_items=copper_items,
             warn=warn,
             clip=board_clip,
-            mask=LayerMask(board=board_primitives, drills=drill_primitives),
+            mask=solder_mask,
+        )
+    )
+    layers.extend(
+        _realistic_layer(
+            inventory,
+            settings,
+            function="exposedSubstrate",
+            primitives=board_primitives,
+            source_items=board_items,
+            warn=warn,
+            clip=board_clip,
+            mask=opening_mask,
         )
     )
     layers.extend(
@@ -171,7 +202,7 @@ def build_realistic_layers(
             source_items=copper_items,
             warn=warn,
             clip=board_clip,
-            mask=LayerMask(board=board_primitives, drills=drill_primitives),
+            mask=opening_mask,
         )
     )
     silkscreen_primitives = _primitives_for_items(silkscreen_items)
@@ -184,20 +215,7 @@ def build_realistic_layers(
             source_items=silkscreen_items,
             warn=warn,
             clip=board_clip,
-            mask=LayerMask(board=board_primitives, drills=drill_primitives),
-        )
-    )
-    outline_primitives = _primitives_for_items(outline_items)
-    layers.extend(
-        _realistic_layer(
-            inventory,
-            settings,
-            function="boardOutline",
-            primitives=outline_primitives,
-            source_items=outline_items,
-            warn=warn,
-            clip=None,
-            mask=None,
+            mask=solder_mask,
         )
     )
     if profiler is not None:
@@ -240,6 +258,8 @@ def _group_inventory_layers(
     namespace: str,
     warn: Callable[[str], None],
     highlight_color: str = "",
+    board_mask: LayerMask | None = None,
+    silkscreen_masks: dict[str, LayerMask] | None = None,
     profiler: RenderProfiler | None = None,
 ) -> tuple[DerivedLayer, ...]:
     groups: dict[_LayerGroupKey, list[InventoryItem]] = defaultdict(list)
@@ -277,6 +297,11 @@ def _group_inventory_layers(
                 source_layers=_unique_ordered(source_layer_name(item) for item in items),
                 source_ids=_unique_ordered(item.id for item in items),
                 style=style,
+                mask=_mask_for_group(
+                    key,
+                    board_mask=board_mask,
+                    silkscreen_masks=silkscreen_masks or {},
+                ),
                 data={"source-layer": key.source_layer_name} if key.source_layer_name else {},
             )
         )
@@ -299,11 +324,7 @@ def _realistic_layer(
     if not primitives:
         return ()
     role = VisualRole(namespace="realistic", function=function)
-    style = (
-        ResolvedStyle(fill="none", stroke="#202020", stroke_width_mm=0.12)
-        if function == "boardOutline"
-        else resolve_layer_style(settings.tokens, role, dimmed=False, warn=warn)
-    )
+    style = resolve_layer_style(settings.tokens, role, dimmed=False, warn=warn)
     _ = inventory
     return (
         DerivedLayer(
@@ -330,6 +351,64 @@ def _primitives_for_items(items: tuple[InventoryItem, ...]) -> tuple[SvgPrimitiv
         if primitive is not None:
             primitives.append(primitive)
     return tuple(primitives)
+
+
+def _board_primitives(inventory: PcbRenderInventory) -> tuple[SvgPrimitive, ...]:
+    return tuple(
+        primitive
+        for item in inventory.items
+        if item.purpose == InventoryPurpose.BOARD_MATERIAL
+        if (primitive := inventory_item_to_svg_primitive(item)) is not None
+    )
+
+
+def _drill_primitives(inventory: PcbRenderInventory) -> tuple[SvgPrimitive, ...]:
+    return _primitives_for_items(
+        tuple(item for item in inventory.items if item.item_kind == InventoryItemKind.DRILL)
+    )
+
+
+def _board_layer_mask(inventory: PcbRenderInventory) -> LayerMask | None:
+    board = _board_primitives(inventory)
+    if not board:
+        return None
+    return LayerMask(board=board, drills=_drill_primitives(inventory))
+
+
+def _silkscreen_layer_masks(
+    inventory: PcbRenderInventory,
+    active_side: str,
+) -> dict[str, LayerMask]:
+    board = _board_primitives(inventory)
+    if not board:
+        return {}
+    drills = _drill_primitives(inventory)
+    sides = {layer.side for layer in (item.layer for item in inventory.items) if layer is not None}
+    sides.update(side for side in ("front", "back", active_side) if side)
+    return {
+        side: LayerMask(
+            board=board,
+            drills=drills,
+            openings=solder_mask_opening_primitives(inventory, side=side),
+        )
+        for side in sides
+        if side
+    }
+
+
+def _mask_for_group(
+    key: _LayerGroupKey,
+    *,
+    board_mask: LayerMask | None,
+    silkscreen_masks: dict[str, LayerMask],
+) -> LayerMask | None:
+    if board_mask is None:
+        return None
+    if key.function in {"edge", "drill"}:
+        return None
+    if key.function in {"silkscreen", "designator", "value", "user_text"}:
+        return silkscreen_masks.get(key.side) or board_mask
+    return board_mask
 
 
 def _group_key(item: InventoryItem) -> _LayerGroupKey:

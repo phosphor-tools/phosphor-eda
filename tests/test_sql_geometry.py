@@ -169,6 +169,49 @@ def test_board_outline_polygon_accepts_line_and_arc_geometry_rows() -> None:
     assert geom.area == pytest.approx(4.0)
 
 
+def test_board_outline_polygon_accepts_profile_polygon_elements() -> None:
+    outline = PcbBoardProfile(
+        elements=(
+            PcbBoardProfileElement(
+                id="outline:poly",
+                kind=PcbArtworkKind.POLYGON,
+                layer=None,
+                data=PcbPolygon(points=[(0.0, 0.0), (5.0, 0.0), (5.0, 4.0), (0.0, 4.0)]),
+            ),
+        )
+    )
+
+    geom = board_outline_polygon(outline)
+
+    assert geom is not None
+    assert geom.area == pytest.approx(20.0)
+
+
+def test_board_outline_polygon_subtracts_profile_cutouts() -> None:
+    outline = PcbBoardProfile(
+        elements=(
+            PcbBoardProfileElement(
+                id="outline:poly",
+                kind=PcbArtworkKind.POLYGON,
+                layer=None,
+                data=PcbPolygon(points=[(0.0, 0.0), (5.0, 0.0), (5.0, 4.0), (0.0, 4.0)]),
+            ),
+            PcbBoardProfileElement(
+                id="cutout:poly",
+                kind=PcbArtworkKind.POLYGON,
+                layer=None,
+                data=PcbPolygon(points=[(1.0, 1.0), (2.0, 1.0), (2.0, 2.0), (1.0, 2.0)]),
+                is_cutout=True,
+            ),
+        )
+    )
+
+    geom = board_outline_polygon(outline)
+
+    assert geom is not None
+    assert geom.area == pytest.approx(19.0)
+
+
 def _pad(
     shape: str,
     *,

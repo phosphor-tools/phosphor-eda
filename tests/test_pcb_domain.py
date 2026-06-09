@@ -165,6 +165,15 @@ def test_pcb_builder_rejects_unresolved_and_selector_references() -> None:
         builder.resolve_footprint("U404", source="graphic")
 
 
+def test_pcb_builder_rejects_empty_required_board_profile() -> None:
+    builder = PcbBuilder("empty-profile")
+    builder.add_layer(PcbLayer("Edge.Cuts", (LayerRole.EDGE,)))
+    builder.set_board_profile(PcbBoardProfile(elements=()))
+
+    with pytest.raises(PcbBuildError, match="board profile is required"):
+        builder.build(require_board_profile=True)
+
+
 def test_builder_accepts_unconnected_and_mechanical_drills() -> None:
     builder = PcbBuilder("mechanical")
     top = builder.add_layer(PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT)))

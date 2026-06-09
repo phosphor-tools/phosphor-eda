@@ -159,10 +159,7 @@ def build_inventory(board: Pcb, *, side: str = "") -> PcbRenderInventory:
             )
 
     for index, pad in enumerate(board.pads):
-        for layer in pad.layers:
-            purpose = _purpose_for_pad_layer(layer)
-            if purpose is None:
-                continue
+        for purpose, layer in _pad_inventory_layers(board, pad):
             items.append(
                 InventoryItem(
                     id=_layered_id(pad.id, layer, purpose),
@@ -186,6 +183,20 @@ def build_inventory(board: Pcb, *, side: str = "") -> PcbRenderInventory:
                     id=_layered_id(via.id, layer, InventoryPurpose.COPPER),
                     item_kind=InventoryItemKind.VIA,
                     purpose=InventoryPurpose.COPPER,
+                    content_kind=None,
+                    layer=layer,
+                    source=via,
+                    payload=via,
+                    tags=_tags_for_via(via, index),
+                    points=((via.x, via.y),),
+                )
+            )
+        for layer in _via_solder_mask_layers(board, via):
+            items.append(
+                InventoryItem(
+                    id=_layered_id(via.id, layer, InventoryPurpose.SOLDER_MASK),
+                    item_kind=InventoryItemKind.VIA,
+                    purpose=InventoryPurpose.SOLDER_MASK,
                     content_kind=None,
                     layer=layer,
                     source=via,
@@ -270,7 +281,7 @@ def select_inventory_items(
     """Select inventory items using typed source-layer rules."""
     active_rules = tuple(rule for rule in rules if rule.visible)
     if not active_rules:
-        return tuple(inventory.items)
+        return ()
     return tuple(
         item
         for item in inventory.items
@@ -326,6 +337,68 @@ def _purpose_for_pad_layer(layer: PcbLayer) -> InventoryPurpose | None:
     if layer.has_role(LayerRole.SOLDER_PASTE):
         return InventoryPurpose.SOLDER_PASTE
     return None
+
+
+def _pad_inventory_layers(board: Pcb, pad: PcbPad) -> tuple[tuple[InventoryPurpose, PcbLayer], ...]:
+    pairs: list[tuple[InventoryPurpose, PcbLayer]] = []
+    seen: set[tuple[InventoryPurpose, int]] = set()
+    for layer in pad.layers:
+        purpose = _purpose_for_pad_layer(layer)
+        if purpose is None:
+            continue
+        key = (purpose, id(layer))
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append((purpose, layer))
+    if _pad_has_solder_mask_intent(pad):
+        for layer in _solder_mask_layers_for_sides(board, _pad_solder_mask_sides(pad)):
+            key = (InventoryPurpose.SOLDER_MASK, id(layer))
+            if key in seen:
+                continue
+            seen.add(key)
+            pairs.append((InventoryPurpose.SOLDER_MASK, layer))
+    return tuple(pairs)
+
+
+def _pad_has_solder_mask_intent(pad: PcbPad) -> bool:
+    return (
+        pad.mask_aperture_width is not None
+        or pad.mask_aperture_height is not None
+        or pad.mask_expansion is not None
+        or pad.drill is not None
+    )
+
+
+def _pad_solder_mask_sides(pad: PcbPad) -> set[str]:
+    copper_sides = {
+        layer.side for layer in pad.layers if layer.has_role(LayerRole.COPPER) and layer.side
+    }
+    if pad.drill is not None or pad.pad_type == "through_hole" or len(copper_sides) != 1:
+        return {"front", "back"}
+    return copper_sides
+
+
+def _via_solder_mask_layers(board: Pcb, via: PcbVia) -> tuple[PcbLayer, ...]:
+    sides: set[str] = set()
+    copper_sides = {
+        layer.side for layer in via.layers if layer.has_role(LayerRole.COPPER) and layer.side
+    }
+    if "front" in copper_sides and not via.tented_front:
+        sides.add("front")
+    if "back" in copper_sides and not via.tented_back:
+        sides.add("back")
+    return _solder_mask_layers_for_sides(board, sides)
+
+
+def _solder_mask_layers_for_sides(board: Pcb, sides: set[str]) -> tuple[PcbLayer, ...]:
+    if not sides:
+        return ()
+    return tuple(
+        layer
+        for layer in board.layers
+        if layer.has_role(LayerRole.SOLDER_MASK) and layer.side in sides
+    )
 
 
 def _purpose_for_artwork(purpose: PcbArtworkPurpose) -> InventoryPurpose:

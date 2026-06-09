@@ -489,10 +489,12 @@ class PcbPad:
     mask_aperture_width: float | None = None
     mask_aperture_height: float | None = None
     mask_aperture_source: str = ""
+    custom_shapes: tuple[PcbLine | PcbArc | PcbCircle | PcbPolygon, ...] = ()
     metadata: PcbObjectMetadata = field(default_factory=PcbObjectMetadata)
 
     def __post_init__(self) -> None:
         self.layers = tuple(self.layers)
+        self.custom_shapes = tuple(self.custom_shapes)
         if self.drill is not None:
             self.drill.owner = self
 

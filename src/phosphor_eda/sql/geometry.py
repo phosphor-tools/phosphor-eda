@@ -9,10 +9,11 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
-from shapely import LineString, Point, Polygon
+from shapely import GeometryCollection, LineString, MultiPolygon, Point, Polygon
 from shapely.affinity import rotate
+from shapely.ops import unary_union
 
-from phosphor_eda.pcb import PcbArc, PcbCircle, PcbLine, PcbPathSegmentKind
+from phosphor_eda.pcb import PcbArc, PcbCircle, PcbLine, PcbPathSegmentKind, PcbPolygon
 from phosphor_eda.shapely_geometry import normalize_geometry, robust_polygonize
 
 if TYPE_CHECKING:
@@ -23,7 +24,6 @@ if TYPE_CHECKING:
         PcbClosedPath,
         PcbFootprint,
         PcbPad,
-        PcbPolygon,
         PcbVia,
     )
 
@@ -49,6 +49,16 @@ def pad_polygon(pad: PcbPad) -> BaseGeometry:
     """Construct the actual copper polygon for a pad in board coordinates."""
     cx, cy = pad.x, pad.y
     w, h = pad.width, pad.height
+
+    if pad.shape == "custom" and pad.custom_shapes:
+        geometries = [
+            geometry
+            for shape in pad.custom_shapes
+            if not (geometry := _custom_pad_shape_geometry(shape)).is_empty
+        ]
+        return (
+            GeometryCollection() if not geometries else normalize_geometry(unary_union(geometries))
+        )
 
     if pad.shape == "circle":
         return Point(cx, cy).buffer(w / 2, quad_segs=PAD_CURVE_QUAD_SEGS)
@@ -88,6 +98,41 @@ def pad_polygon(pad: PcbPad) -> BaseGeometry:
     if pad.rotation != 0.0:
         rect = rotate(rect, pad.rotation, origin=(cx, cy))
     return rect
+
+
+def _custom_pad_shape_geometry(
+    shape: PcbLine | PcbArc | PcbCircle | PcbPolygon,
+) -> BaseGeometry:
+    if isinstance(shape, PcbLine):
+        if shape.width <= 0.0:
+            return GeometryCollection()
+        return LineString([(shape.start_x, shape.start_y), (shape.end_x, shape.end_y)]).buffer(
+            shape.width / 2.0, cap_style="round"
+        )
+    if isinstance(shape, PcbArc):
+        if shape.width <= 0.0:
+            return GeometryCollection()
+        return LineString(
+            arc_to_polyline(
+                shape.start_x,
+                shape.start_y,
+                shape.mid_x,
+                shape.mid_y,
+                shape.end_x,
+                shape.end_y,
+                num_points=32,
+            )
+        ).buffer(shape.width / 2.0, cap_style="round")
+    if isinstance(shape, PcbCircle):
+        outer = Point(shape.cx, shape.cy).buffer(shape.radius, quad_segs=PAD_CURVE_QUAD_SEGS)
+        if shape.fill or shape.width <= 0.0:
+            return outer
+        inner_radius = max(shape.radius - shape.width, 0.0)
+        if inner_radius <= 0.0:
+            return outer
+        return outer.difference(Point(shape.cx, shape.cy).buffer(inner_radius))
+    polygon = polygon_geometry(shape)
+    return GeometryCollection() if polygon is None else polygon
 
 
 # ---------------------------------------------------------------------------
@@ -305,12 +350,16 @@ def board_outline_polygon(profile: PcbBoardProfile) -> Polygon | None:
     Linearizes arcs, collects all segments, and uses shapely.ops.polygonize
     to form a closed polygon. Returns None if the outline cannot be closed.
     """
-    segments: list[LineString] = []
+    outline_segments: list[LineString] = []
+    cutout_segments: list[LineString] = []
+    solids: list[Polygon] = []
+    cutouts: list[Polygon] = []
 
     for item in profile.elements:
         if isinstance(item.data, PcbLine):
             ln = item.data
-            segments.append(LineString([(ln.start_x, ln.start_y), (ln.end_x, ln.end_y)]))
+            target = cutout_segments if item.is_cutout else outline_segments
+            target.append(LineString([(ln.start_x, ln.start_y), (ln.end_x, ln.end_y)]))
 
         elif isinstance(item.data, PcbArc):
             arc = item.data
@@ -327,17 +376,46 @@ def board_outline_polygon(profile: PcbBoardProfile) -> Polygon | None:
                 # Snap endpoints to the exact arc start/end to avoid precision gaps
                 points[0] = (arc.start_x, arc.start_y)
                 points[-1] = (arc.end_x, arc.end_y)
-                segments.append(LineString(points))
+                target = cutout_segments if item.is_cutout else outline_segments
+                target.append(LineString(points))
 
         elif isinstance(item.data, PcbCircle):
             circle = item.data
             ring = Point(circle.cx, circle.cy).buffer(circle.radius, quad_segs=32)
-            segments.append(LineString(ring.exterior.coords))
+            if item.is_cutout:
+                cutouts.append(ring)
+            else:
+                solids.append(ring)
 
-    if not segments:
+        else:
+            polygon = polygon_geometry(item.data)
+            if polygon is None:
+                continue
+            if item.is_cutout:
+                cutouts.append(polygon)
+            else:
+                solids.append(polygon)
+
+    if outline_segments:
+        outline_polygon = robust_polygonize(outline_segments)
+        if outline_polygon is not None:
+            solids.append(outline_polygon)
+    if cutout_segments:
+        cutout_polygon = robust_polygonize(cutout_segments)
+        if cutout_polygon is not None:
+            cutouts.append(cutout_polygon)
+    if not solids:
         return None
 
-    return robust_polygonize(segments)
+    material = unary_union(solids)
+    if cutouts:
+        material = material.difference(unary_union(cutouts))
+    normalized = normalize_geometry(material)
+    if isinstance(normalized, Polygon):
+        return normalized
+    if isinstance(normalized, MultiPolygon) and normalized.geoms:
+        return max(normalized.geoms, key=lambda polygon: polygon.area)
+    return None
 
 
 # ---------------------------------------------------------------------------

@@ -406,6 +406,7 @@ def _parse_pad(
     at_node = sexp.find(pad_sexpr, "at")
     local_x, local_y, pad_rotation = _at(at_node) if at_node else (0.0, 0.0, 0.0)
     abs_x, abs_y = _transform_point(local_x, local_y, fp_x, fp_y, fp_rot)
+    pad_board_rotation = _transform_rotation(pad_rotation, fp_rot)
     size_node = sexp.find(pad_sexpr, "size")
     width = sexp.num(size_node, 1) if size_node else 0.0
     height = sexp.num(size_node, 2) if size_node and len(size_node) > 2 else width
@@ -443,10 +444,16 @@ def _parse_pad(
             net=_resolve_net_node(builder, pad_sexpr, source=source),
             footprint=footprint,
             drill=drill,
-            rotation=_transform_rotation(pad_rotation, fp_rot),
+            rotation=pad_board_rotation,
             roundrect_rratio=_float_val(rratio_node) if rratio_node else 0.0,
             pin_function=sexp.val(pin_function_node) if pin_function_node else "",
             pin_type=sexp.val(pin_type_node) if pin_type_node else "",
+            custom_shapes=_parse_pad_custom_shapes(
+                pad_sexpr,
+                transform=(abs_x, abs_y, pad_board_rotation),
+            )
+            if shape == "custom"
+            else (),
             metadata=_object_metadata(
                 native_type="pad",
                 source_collection="pads",
@@ -459,6 +466,25 @@ def _parse_pad(
         ),
         source=source,
     )
+
+
+def _parse_pad_custom_shapes(
+    pad_sexpr: SExpNode,
+    *,
+    transform: tuple[float, float, float],
+) -> tuple[PcbLine | PcbArc | PcbCircle | PcbPolygon, ...]:
+    primitives_node = sexp.find(pad_sexpr, "primitives")
+    if not primitives_node:
+        return ()
+    shapes: list[PcbLine | PcbArc | PcbCircle | PcbPolygon] = []
+    for item in primitives_node[1:]:
+        tag = sexp.tag(item)
+        if tag is None or not isinstance(item, list):
+            continue
+        payload = _graphic_payload(item, tag=tag, transform=transform)
+        if isinstance(payload, (PcbLine, PcbArc, PcbCircle, PcbPolygon)):
+            shapes.append(payload)
+    return tuple(shapes)
 
 
 def _parse_pad_drill(

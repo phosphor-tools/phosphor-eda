@@ -131,16 +131,7 @@ def pad_solder_mask_opening_primitive(item: InventoryItem, *, side: str) -> SvgP
     pad = item.source
     if item.layer is not None and item.layer.side not in {"", side}:
         return None
-    width = pad.mask_aperture_width
-    height = pad.mask_aperture_height
-    if width is None or height is None:
-        expansion = pad.mask_expansion or 0.0
-        width = pad.width + 2.0 * expansion
-        height = pad.height + 2.0 * expansion
-    if width <= 0.0 or height <= 0.0:
-        return None
-    mask_pad = replace(pad, width=width, height=height)
-    d = geometry_to_svg_path_d(pad_polygon(mask_pad))
+    d = _pad_solder_mask_opening_path_d(pad)
     if not d:
         return None
     source_layer = f"{side}.mask" if side else "mask"
@@ -163,6 +154,8 @@ def _path_d_for_item(item: InventoryItem) -> str:
     if item.item_kind == InventoryItemKind.BOARD_PROFILE:
         return _board_profile_item_path_d(item)
     if item.item_kind == InventoryItemKind.PAD and isinstance(item.source, PcbPad):
+        if item.purpose == InventoryPurpose.SOLDER_MASK:
+            return _pad_solder_mask_opening_path_d(item.source)
         return geometry_to_svg_path_d(pad_polygon(item.source))
     if item.item_kind == InventoryItemKind.VIA and isinstance(item.source, PcbVia):
         return _circle_path_d(item.source.x, item.source.y, item.source.diameter / 2.0)
@@ -173,6 +166,19 @@ def _path_d_for_item(item: InventoryItem) -> str:
         geometry = closed_path_geometry(item.payload)
         return "" if geometry is None else geometry_to_svg_path_d(geometry)
     return shape_to_svg_path_d(item.payload, filled=item.purpose != InventoryPurpose.BOARD_PROFILE)
+
+
+def _pad_solder_mask_opening_path_d(pad: PcbPad) -> str:
+    width = pad.mask_aperture_width
+    height = pad.mask_aperture_height
+    if width is None or height is None:
+        expansion = pad.mask_expansion or 0.0
+        width = pad.width + 2.0 * expansion
+        height = pad.height + 2.0 * expansion
+    if width <= 0.0 or height <= 0.0:
+        return ""
+    mask_pad = replace(pad, width=width, height=height)
+    return geometry_to_svg_path_d(pad_polygon(mask_pad))
 
 
 def shape_to_svg_path_d(payload: object, *, filled: bool = True) -> str:
