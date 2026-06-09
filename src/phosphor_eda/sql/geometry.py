@@ -74,7 +74,7 @@ def pad_polygon(pad: PcbPad) -> BaseGeometry:
             line = LineString([(cx, cy - half), (cx, cy + half)])
             geom = line.buffer(w / 2, quad_segs=PAD_CURVE_QUAD_SEGS)
         if pad.rotation != 0.0:
-            geom = rotate(geom, pad.rotation, origin=(cx, cy))
+            geom = rotate(geom, -pad.rotation, origin=(cx, cy))
         return geom
 
     if pad.shape == "roundrect":
@@ -90,13 +90,13 @@ def pad_polygon(pad: PcbPad) -> BaseGeometry:
         )
         geom = inner.buffer(corner_radius, quad_segs=PAD_ROUNDRECT_QUAD_SEGS)
         if pad.rotation != 0.0:
-            geom = rotate(geom, pad.rotation, origin=(cx, cy))
+            geom = rotate(geom, -pad.rotation, origin=(cx, cy))
         return geom
 
     # Default: rectangle (also handles "rect" and "custom" as bounding box)
     rect = _box(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
     if pad.rotation != 0.0:
-        rect = rotate(rect, pad.rotation, origin=(cx, cy))
+        rect = rotate(rect, -pad.rotation, origin=(cx, cy))
     return rect
 
 

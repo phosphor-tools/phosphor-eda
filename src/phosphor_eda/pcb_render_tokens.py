@@ -67,6 +67,7 @@ _EDA_EDGE_COLOR = "#202020"
 _EDA_DRILL_COLOR = "#202020"
 _EDA_KEEPOUT_COLOR = "#cc2e7f"
 _EDA_MECHANICAL_COLOR = "#777777"
+_EDA_TEXT_COLOR = "#777777"
 _DIMMED_DEFAULT_OPACITY = 0.25
 _EDA_STYLE_FALLBACK_FUNCTIONS = {
     "assembly": ("fabrication", "mechanical"),
@@ -259,6 +260,8 @@ def _resolve_eda_default_value(
         return _resolve_eda_drill_default(role, prop)
     if role.function == "keepout":
         return _resolve_eda_keepout_default(prop)
+    if role.function in {"designator", "value", "user_text"}:
+        return _resolve_eda_text_default(prop)
     if role.function in {"mechanical", "unknown"}:
         return _resolve_eda_mechanical_default(prop)
     return None
@@ -323,6 +326,16 @@ def _resolve_eda_keepout_default(prop: str) -> object | None:
         return _EDA_KEEPOUT_COLOR
     if prop == "strokeWidthMm":
         return 0.08
+    if prop == "opacity":
+        return 0.8
+    return None
+
+
+def _resolve_eda_text_default(prop: str) -> object | None:
+    if prop == "fill":
+        return _EDA_TEXT_COLOR
+    if prop == "stroke":
+        return "none"
     if prop == "opacity":
         return 0.8
     return None

@@ -208,6 +208,18 @@ def test_eda_drill_defaults_to_outline_style() -> None:
     )
 
 
+@pytest.mark.parametrize("function", ["designator", "value", "user_text"])
+def test_eda_part_text_functions_default_to_neutral_fill(function: str) -> None:
+    style = resolve_layer_style(
+        {},
+        VisualRole(namespace="eda", function=function),
+        dimmed=False,
+        warn=lambda _message: None,
+    )
+
+    assert style == ResolvedStyle(fill="#777777", stroke="none", opacity=0.8)
+
+
 def test_explicit_highlight_color_overrides_fill_but_retains_other_tokens() -> None:
     style = resolve_layer_style(
         {

@@ -2,13 +2,17 @@
   "renderMode": "eda",
   "source": {
     "layers": [
-      { "match": { "role": "copper" } },
+      {
+        "match": { "role": "copper" },
+        "itemKinds": ["pad", "via", "conductor"],
+        "purposes": ["copper"]
+      },
       {
         "match": { "role": "silkscreen" },
         "purposes": ["silkscreen", "designator", "value", "user_text"]
       },
-      { "match": { "role": "edge" } },
-      { "match": { "role": "drill" } }
+      { "match": { "role": "edge" }, "itemKinds": ["board_profile"] },
+      { "match": { "role": "drill" }, "itemKinds": ["drill"] }
     ]
   },
   "tokens": {

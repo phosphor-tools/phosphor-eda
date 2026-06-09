@@ -111,6 +111,40 @@ def test_kicad_custom_pad_primitives_are_modeled() -> None:
     assert geometry.area < bbox_area
 
 
+def test_kicad_pad_rotation_uses_board_coordinate_orientation() -> None:
+    parsed = sexpdata.loads(
+        """
+        (kicad_pcb
+          (layers
+            (0 "F.Cu" signal)
+            (29 "F.Mask" user)
+            (44 "Edge.Cuts" user)
+          )
+          (footprint "Test:Part"
+            (layer "F.Cu")
+            (at 10 10)
+            (property "Reference" "U1")
+            (pad "1" smd rect (at 0 0 45) (size 2 1) (layers "F.Cu" "F.Mask"))
+          )
+          (gr_line (start 0 0) (end 1 0) (layer "Edge.Cuts") (width 0.1))
+        )
+        """
+    )
+    board = parse_kicad_pcb_from_sexpr(list(parsed[1:]), default_name="rotated-pad")
+    pad = board.pads[0]
+
+    coords = list(pad_polygon(pad).exterior.coords)
+    edges = [
+        (end[0] - start[0], end[1] - start[1])
+        for start, end in zip(coords, coords[1:], strict=False)
+    ]
+    long_edges = [(dx, dy) for dx, dy in edges if (dx * dx + dy * dy) ** 0.5 > 1.5]
+    normalized = [(-dx, -dy) if dx < 0 else (dx, dy) for dx, dy in long_edges]
+
+    assert normalized
+    assert all(dy < 0 for _dx, dy in normalized)
+
+
 def test_kicad_layer_selectors_resolve_to_concrete_layer_references(board: Pcb) -> None:
     through_hole = next(
         pad for pad in board.pads if pad.drill is not None and pad.footprint is not None

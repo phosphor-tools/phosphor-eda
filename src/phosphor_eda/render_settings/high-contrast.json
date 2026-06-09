@@ -2,13 +2,21 @@
   "renderMode": "eda",
   "source": {
     "layers": [
-      { "match": { "role": "copper" } },
+      {
+        "match": { "role": "copper" },
+        "itemKinds": ["pad", "via", "conductor"],
+        "purposes": ["copper"]
+      },
       {
         "match": { "role": "silkscreen", "side": "active" },
         "purposes": ["silkscreen", "designator", "value", "user_text"]
       },
-      { "match": { "role": "mechanical" }, "itemKinds": ["artwork"] },
-      { "match": { "role": "edge" } }
+      {
+        "match": { "role": "mechanical" },
+        "itemKinds": ["artwork"],
+        "purposes": ["mechanical", "component_body", "dimension", "user", "unknown"]
+      },
+      { "match": { "role": "edge" }, "itemKinds": ["board_profile"] }
     ]
   },
   "tokens": {

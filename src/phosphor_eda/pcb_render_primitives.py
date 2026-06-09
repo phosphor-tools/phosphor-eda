@@ -10,6 +10,7 @@ from shapely import GeometryCollection, LineString, MultiLineString, MultiPolygo
 from shapely.geometry.base import BaseGeometry
 
 from phosphor_eda.pcb import (
+    LayerRole,
     PcbArc,
     PcbArtworkKind,
     PcbBoardProfile,
@@ -380,7 +381,9 @@ def layer_function_for_item(item: InventoryItem) -> str:
         InventoryPurpose.VALUE,
         InventoryPurpose.USER_TEXT,
     }:
-        return "silkscreen"
+        if item.layer is not None and item.layer.has_role(LayerRole.SILKSCREEN):
+            return "silkscreen"
+        return item.purpose.value
     if item.content_kind == PcbConductorKind.POUR_FILL:
         return "copper"
     return item.purpose.value

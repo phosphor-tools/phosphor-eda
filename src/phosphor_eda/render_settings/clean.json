@@ -2,7 +2,11 @@
   "renderMode": "realistic",
   "source": {
     "layers": [
-      { "match": { "role": "copper" } },
+      {
+        "match": { "role": "copper" },
+        "itemKinds": ["pad", "via", "conductor"],
+        "purposes": ["copper"]
+      },
       { "match": { "role": "solder_mask", "side": "active" } },
       {
         "match": { "role": "silkscreen", "side": "active" },

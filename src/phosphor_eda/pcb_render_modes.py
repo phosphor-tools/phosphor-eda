@@ -6,6 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from phosphor_eda.pcb import LayerRole
 from phosphor_eda.pcb_render_artwork import (
     DerivedLayer,
     select_source_artwork,
@@ -124,13 +125,7 @@ def build_realistic_layers(
     silkscreen_items = tuple(
         item
         for item in selected
-        if item.purpose
-        in {
-            InventoryPurpose.SILKSCREEN,
-            InventoryPurpose.DESIGNATOR,
-            InventoryPurpose.VALUE,
-            InventoryPurpose.USER_TEXT,
-        }
+        if _is_silkscreen_projection_item(item)
         and (item.layer is None or item.layer.side in {"", side})
     )
     board_items = tuple(
@@ -360,6 +355,18 @@ def _board_primitives(inventory: PcbRenderInventory) -> tuple[SvgPrimitive, ...]
         if item.purpose == InventoryPurpose.BOARD_MATERIAL
         if (primitive := inventory_item_to_svg_primitive(item)) is not None
     )
+
+
+def _is_silkscreen_projection_item(item: InventoryItem) -> bool:
+    if item.purpose == InventoryPurpose.SILKSCREEN:
+        return True
+    if item.purpose not in {
+        InventoryPurpose.DESIGNATOR,
+        InventoryPurpose.VALUE,
+        InventoryPurpose.USER_TEXT,
+    }:
+        return False
+    return item.layer is not None and item.layer.has_role(LayerRole.SILKSCREEN)
 
 
 def _drill_primitives(inventory: PcbRenderInventory) -> tuple[SvgPrimitive, ...]:
