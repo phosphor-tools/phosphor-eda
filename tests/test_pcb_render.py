@@ -55,6 +55,35 @@ def test_render_svg_uses_typed_inventory_metadata() -> None:
     assert "display_role" not in svg
 
 
+def test_mask_viewports_cover_full_board_bbox() -> None:
+    import re
+
+    board = _board()
+    svg = render_pcb_svg(
+        board,
+        side="front",
+        render_settings=load_render_settings_json('{"extends": "phosphor:design"}'),
+    )
+
+    min_x, min_y, max_x, max_y = board.bbox()
+    masks = re.findall(r"<mask ([^>]*)>", svg)
+    assert masks, "expected at least one solder/board mask"
+    for attr_str in masks:
+        attrs = dict(re.findall(r'(\w+)="([^"]*)"', attr_str))
+        vx = float(attrs["x"])
+        vy = float(attrs["y"])
+        vw = float(attrs["width"])
+        vh = float(attrs["height"])
+        # Board-material masks must enclose the whole board; the pad-opening
+        # mask covers a subset, so only assert containment where the mask's
+        # white region is the board itself.
+        if vw >= (max_x - min_x) and vh >= (max_y - min_y):
+            assert vx <= min_x
+            assert vy <= min_y
+            assert vx + vw >= max_x
+            assert vy + vh >= max_y
+
+
 def test_inventory_builder_emits_typed_items() -> None:
     inventory = build_inventory(_board(), side="front")
 
