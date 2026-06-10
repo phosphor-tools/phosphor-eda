@@ -21,6 +21,13 @@ from typing import TYPE_CHECKING
 import olefile
 
 from phosphor_eda.altium._helpers import u32
+from phosphor_eda.altium.enums import (
+    AltiumLayer,
+    PadShape,
+    PadShapeAlt,
+    PcbRecordType,
+    RegionKind,
+)
 from phosphor_eda.altium.errors import AltiumPcbParseError
 from phosphor_eda.altium.pcb_records import (
     COMPONENT_NONE,
@@ -98,7 +105,7 @@ _POLYGON_NONE = 0xFFFF
 # Altium Board6/Data carries layer names and mechanical kinds. Numeric layer
 # ranges are used only to decode file-format semantics after the source has
 # provided a concrete layer identity.
-_ALTIUM_LAYER_NUMBERS = tuple(range(1, 75))
+_ALTIUM_LAYER_NUMBERS = tuple(range(AltiumLayer.TOP_LAYER, AltiumLayer.MULTI_LAYER + 1))
 
 _MECHKIND_ROLES: dict[str, tuple[LayerRole, ...]] = {
     "assemblytop": (
@@ -203,8 +210,8 @@ _MECHKIND_ROLES: dict[str, tuple[LayerRole, ...]] = {
     "boardshape": (LayerRole.MECHANICAL, LayerRole.BOARD_SHAPE, LayerRole.EDGE),
 }
 
-# Copper layer numbers for filtering.
-_COPPER_LAYERS = frozenset(range(1, 33))
+# Copper layer numbers for filtering (top, mid 1-30, bottom).
+_COPPER_LAYERS = frozenset(range(AltiumLayer.TOP_LAYER, AltiumLayer.BOTTOM_LAYER + 1))
 
 # V7 layer name → Altium layer number.  Used to resolve the V7_LAYER property
 # that overrides the byte-level layer number in region records.
@@ -233,18 +240,19 @@ _V9_STACK_LAYER_ID_TO_NUM: dict[int, int] = {
     16973835: 38,
 }
 
-# Pad shape byte → domain string.
-_PAD_SHAPES: dict[int, str] = {
-    1: "circle",
-    2: "rect",
-    3: "rect",  # octagonal — treat as rect
+# Pad shape byte → domain string (octagonal is treated as rect).
+_PAD_SHAPES: dict[PadShape, str] = {
+    PadShape.CIRCLE: "circle",
+    PadShape.RECT: "rect",
+    PadShape.OCTAGONAL: "rect",
 }
 
-# Pad shape_alt values (sub6) that override the base shape.
-_PAD_SHAPE_ALT_ROUNDRECT = 9
 
-# Altium region kind values.  Kind 1 is a polygon-pour cutout, not copper.
-_REGION_KIND_POLYGON_CUTOUT = 1
+def _pad_shape(value: int) -> PadShape:
+    try:
+        return PadShape(value)
+    except ValueError:
+        return PadShape.UNKNOWN
 
 _PAD_TEMPLATE_MASK_RE = re.compile(
     r"^r(?P<pad_w>\d+)_(?P<pad_h>\d+)hn(?P<drill>\d+)r(?P<rounding>\d+)"
@@ -493,35 +501,35 @@ def _build_layer_map(
 
 
 def _altium_number_roles(num: int) -> tuple[LayerRole, ...]:
-    if num == 1:
+    if num == AltiumLayer.TOP_LAYER:
         return (LayerRole.COPPER, LayerRole.FRONT, LayerRole.OUTER, LayerRole.SIGNAL)
-    if 2 <= num <= 31:
+    if AltiumLayer.MID_LAYER_1 <= num <= AltiumLayer.MID_LAYER_30:
         return (LayerRole.COPPER, LayerRole.INNER, LayerRole.SIGNAL)
-    if num == 32:
+    if num == AltiumLayer.BOTTOM_LAYER:
         return (LayerRole.COPPER, LayerRole.BACK, LayerRole.OUTER, LayerRole.SIGNAL)
-    if num == 33:
+    if num == AltiumLayer.TOP_OVERLAY:
         return (LayerRole.SILKSCREEN, LayerRole.FRONT)
-    if num == 34:
+    if num == AltiumLayer.BOTTOM_OVERLAY:
         return (LayerRole.SILKSCREEN, LayerRole.BACK)
-    if num == 35:
+    if num == AltiumLayer.TOP_PASTE:
         return (LayerRole.SOLDER_PASTE, LayerRole.FRONT)
-    if num == 36:
+    if num == AltiumLayer.BOTTOM_PASTE:
         return (LayerRole.SOLDER_PASTE, LayerRole.BACK)
-    if num == 37:
+    if num == AltiumLayer.TOP_SOLDER:
         return (LayerRole.SOLDER_MASK, LayerRole.FRONT)
-    if num == 38:
+    if num == AltiumLayer.BOTTOM_SOLDER:
         return (LayerRole.SOLDER_MASK, LayerRole.BACK)
-    if 39 <= num <= 54:
+    if AltiumLayer.INTERNAL_PLANE_1 <= num <= AltiumLayer.INTERNAL_PLANE_16:
         return (LayerRole.COPPER, LayerRole.INNER, LayerRole.PLANE, LayerRole.INTERNAL_PLANE)
-    if num == 55:
+    if num == AltiumLayer.DRILL_GUIDE:
         return (LayerRole.DRILL, LayerRole.DRILL_GUIDE)
-    if num == 56:
+    if num == AltiumLayer.KEEP_OUT_LAYER:
         return (LayerRole.KEEPOUT,)
-    if 57 <= num <= 72:
+    if AltiumLayer.MECHANICAL_1 <= num <= AltiumLayer.MECHANICAL_16:
         return (LayerRole.MECHANICAL,)
-    if num == 73:
+    if num == AltiumLayer.DRILL_DRAWING:
         return (LayerRole.DRILL, LayerRole.DRILL_DRAWING)
-    if num == 74:
+    if num == AltiumLayer.MULTI_LAYER:
         return (LayerRole.MULTI_LAYER,)
     return (LayerRole.UNKNOWN,)
 
@@ -531,7 +539,7 @@ def _altium_mechkind_roles(kind: str) -> tuple[LayerRole, ...]:
 
 
 def _altium_name_roles(num: int, name: str, native_kind: str) -> tuple[LayerRole, ...]:
-    if native_kind or not (57 <= num <= 72):
+    if native_kind or not (AltiumLayer.MECHANICAL_1 <= num <= AltiumLayer.MECHANICAL_16):
         return ()
     normalized = name.strip().lower().replace("-", " ").replace("_", " ")
     roles: list[LayerRole] = []
@@ -937,7 +945,7 @@ def _parse_tracks(
     resolved_pour_id_map = pour_id_map or {}
 
     for index, (rec_type, body) in enumerate(records):
-        if rec_type != 4:
+        if rec_type != PcbRecordType.TRACK:
             continue
         track = TrackRecord.from_bytes(body, ctx)
         if track is None:
@@ -1026,7 +1034,7 @@ def _parse_vias(
     vias: list[_ParsedPrimitive] = []
 
     for index, (rec_type, body) in enumerate(records):
-        if rec_type != 3:
+        if rec_type != PcbRecordType.VIA:
             continue
         via = ViaRecord.from_bytes(body, ctx)
         if via is None:
@@ -1042,7 +1050,10 @@ def _parse_vias(
                 layers.append(layer_ref.name)
 
         roles = [_ParsedRole.CONDUCTOR]
-        through_hole = via.start_layer == 1 and via.end_layer == 32
+        through_hole = (
+            via.start_layer == AltiumLayer.TOP_LAYER
+            and via.end_layer == AltiumLayer.BOTTOM_LAYER
+        )
         if not through_hole:
             if via.start_layer == via.end_layer:
                 roles.append(_ParsedRole.FREE_VIA)
@@ -1094,7 +1105,7 @@ def _parse_arcs(
     resolved_pour_id_map = pour_id_map or {}
 
     for index, (rec_type, body) in enumerate(records):
-        if rec_type != 1:
+        if rec_type != PcbRecordType.ARC:
             continue
         arc = ArcRecord.from_bytes(body, ctx)
         if arc is None:
@@ -1390,12 +1401,12 @@ def _parse_pads(
             continue
 
         # Determine shape string
-        shape = _PAD_SHAPES.get(pad.shape, "rect")
-        if pad.shape_alt == _PAD_SHAPE_ALT_ROUNDRECT:
+        shape = _PAD_SHAPES.get(_pad_shape(pad.shape), "rect")
+        if pad.shape_alt == PadShapeAlt.ROUNDRECT:
             shape = "roundrect"
 
         # Determine layers (multi-layer pad = layer 74 = through-hole)
-        if pad.layer == 74:
+        if pad.layer == AltiumLayer.MULTI_LAYER:
             layers = [
                 layer.name for layer in layer_map.values() if layer.has_role(LayerRole.COPPER)
             ]
@@ -1410,7 +1421,7 @@ def _parse_pads(
         net_name = net_obj.name if net_obj is not None else ""
 
         roles = [_ParsedRole.CONDUCTOR]
-        if pad.layer not in _COPPER_LAYERS and pad.layer != 74:
+        if pad.layer not in _COPPER_LAYERS and pad.layer != AltiumLayer.MULTI_LAYER:
             roles.extend(_layer_geometry_roles(pad.layer, layer_map))
         if pad.hole_size > 0:
             roles.append(_ParsedRole.PLATED_HOLE)
@@ -1674,7 +1685,7 @@ def _parse_fills(
     keepouts: list[PcbKeepout] = []
 
     for index, (rec_type, body) in enumerate(records):
-        if rec_type != 6:
+        if rec_type != PcbRecordType.FILL:
             continue
         fill = FillRecord.from_bytes(body, ctx)
         if fill is None:
@@ -1872,7 +1883,7 @@ def _parse_regions(
     polygons: list[_ParsedPrimitive] = []
 
     for index, (rec_type, body) in enumerate(records):
-        if rec_type != 11:
+        if rec_type != PcbRecordType.REGION:
             continue
         region = RegionRecord.from_bytes(body, ctx)
         if region is None:
@@ -1916,7 +1927,7 @@ def _parse_regions(
         net_name = net_obj.name if net_obj else ""
 
         roles = list(_layer_geometry_roles(resolved_num, layer_map))
-        if region_kind == _REGION_KIND_POLYGON_CUTOUT:
+        if region_kind == RegionKind.POLYGON_CUTOUT:
             roles.append(_ParsedRole.POLYGON_CUTOUT)
         elif resolved_num in _COPPER_LAYERS:
             roles.append(_ParsedRole.CONDUCTOR)
@@ -1970,7 +1981,7 @@ def _parse_shape_based_regions(
     polygons: list[_ParsedPrimitive] = []
 
     for index, (rec_type, body) in enumerate(records):
-        if rec_type != 11:
+        if rec_type != PcbRecordType.REGION:
             continue
         region = ShapeBasedRegionRecord.from_bytes(body, ctx)
         if region is None:
@@ -2014,7 +2025,7 @@ def _parse_shape_based_regions(
         net_name = net_obj.name if net_obj else ""
 
         roles = list(_layer_geometry_roles(resolved_num, layer_map))
-        if region_kind == _REGION_KIND_POLYGON_CUTOUT:
+        if region_kind == RegionKind.POLYGON_CUTOUT:
             roles.append(_ParsedRole.POLYGON_CUTOUT)
         elif resolved_num in _COPPER_LAYERS:
             roles.append(_ParsedRole.CONDUCTOR)
@@ -2113,10 +2124,12 @@ def _parse_board_outline(
     # Prefer a layer with EDGE function (from MECHKIND=BoardShape), then
     # fall back to Mechanical 1 (57), then Keep-Out (74).
     edge_layers = [
-        num for num, lyr in layer_map.items() if lyr.has_role(LayerRole.EDGE) and num >= 57
+        num
+        for num, lyr in layer_map.items()
+        if lyr.has_role(LayerRole.EDGE) and num >= AltiumLayer.MECHANICAL_1
     ]
-    candidates = edge_layers or [57]
-    candidates.append(74)
+    candidates = edge_layers or [int(AltiumLayer.MECHANICAL_1)]
+    candidates.append(int(AltiumLayer.MULTI_LAYER))
     # Deduplicate while preserving order
     seen: set[int] = set()
     target_layers: list[int] = []
@@ -2136,7 +2149,7 @@ def _parse_board_outline(
         for index, (rec_type, body) in enumerate(
             _read_binary_records(tracks_data, ctx, source="Tracks6/Data (board outline)")
         ):
-            if rec_type != 4:
+            if rec_type != PcbRecordType.TRACK:
                 continue
             track = TrackRecord.from_bytes(body, ctx)
             if track is None or track.layer != target_layer:
@@ -2174,7 +2187,7 @@ def _parse_board_outline(
         for index, (rec_type, body) in enumerate(
             _read_binary_records(arcs_data, ctx, source="Arcs6/Data (board outline)")
         ):
-            if rec_type != 1:
+            if rec_type != PcbRecordType.ARC:
                 continue
             arc = ArcRecord.from_bytes(body, ctx)
             if arc is None or arc.layer != target_layer:

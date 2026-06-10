@@ -56,48 +56,6 @@ if TYPE_CHECKING:
 
     from phosphor_eda.schematic import Page
 
-# Pin electrical type names (Altium Electrical field values)
-_PIN_ELECTRICAL_NAMES = {
-    0: "input",
-    1: "IO",
-    2: "output",
-    3: "open-collector",
-    4: "passive",
-    5: "hi-Z",
-    6: "open-emitter",
-    7: "power",
-}
-
-# IO type names for ports and sheet entries
-_IO_TYPE_NAMES = {
-    0: "unspecified",
-    1: "output",
-    2: "input",
-    3: "bidirectional",
-}
-
-# Altium standard sheet sizes (SheetStyle → name)
-_SHEET_STYLE_NAMES = {
-    0: "A4",
-    1: "A3",
-    2: "A2",
-    3: "A1",
-    4: "A0",
-    5: "A",
-    6: "B",
-    7: "C",
-    8: "D",
-    9: "E",
-    10: "Letter",
-    11: "Legal",
-    12: "Tabloid",
-    13: "OrCAD-A",
-    14: "OrCAD-B",
-    15: "OrCAD-C",
-    16: "OrCAD-D",
-    17: "OrCAD-E",
-}
-
 
 # ---------------------------------------------------------------------------
 # Port connection-point helper
