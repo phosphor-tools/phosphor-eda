@@ -333,18 +333,6 @@ class _ParsedPadPayload:
     shape: str
     rotation: float = 0.0
     drill: float = 0.0
-    drill_shape: str = "circle"
-    drill_width: float = 0.0
-    drill_height: float = 0.0
-    roundrect_rratio: float = 0.0
-    pin_function: str = ""
-    pin_type: str = ""
-    mid_width: float | None = None
-    mid_height: float | None = None
-    bot_width: float | None = None
-    bot_height: float | None = None
-    mid_shape: str = ""
-    bot_shape: str = ""
     mask_aperture_width: float | None = None
     mask_aperture_height: float | None = None
     mask_aperture_source: str = ""
@@ -2400,18 +2388,12 @@ def _add_parsed_pad(
                 x=pad.x,
                 y=pad.y,
                 diameter=pad.drill,
-                shape=(
-                    PcbDrillShape.SLOT
-                    if pad.drill_shape not in {"", "circle", "round"}
-                    else PcbDrillShape.ROUND
-                ),
+                shape=PcbDrillShape.ROUND,
                 plating=(
                     PcbDrillPlating.PLATED
                     if primitive.has_role(_ParsedRole.PLATED_HOLE)
                     else PcbDrillPlating.UNKNOWN
                 ),
-                width=pad.drill_width,
-                height=pad.drill_height,
                 rotation=pad.rotation,
                 layers=layers,
                 metadata=primitive.metadata,
@@ -2433,15 +2415,6 @@ def _add_parsed_pad(
             footprint=_footprint_for_primitive(primitive, footprints),
             drill=drill,
             rotation=pad.rotation,
-            roundrect_rratio=pad.roundrect_rratio,
-            pin_function=pad.pin_function,
-            pin_type=pad.pin_type,
-            mid_width=pad.mid_width,
-            mid_height=pad.mid_height,
-            bot_width=pad.bot_width,
-            bot_height=pad.bot_height,
-            mid_shape=pad.mid_shape,
-            bot_shape=pad.bot_shape,
             mask_aperture_width=pad.mask_aperture_width,
             mask_aperture_height=pad.mask_aperture_height,
             mask_aperture_source=pad.mask_aperture_source,
