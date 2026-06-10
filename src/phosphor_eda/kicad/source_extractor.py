@@ -45,6 +45,7 @@ def extract_sheet_sources(
     loaded: LoadedSheet,
     lib_pins: LibPins,
     lib_descs: dict[str, str],
+    loaded_scopes: set[ScopeId],
 ) -> _ExtractedSheet:
     scope_id = loaded.instance.scope_id
     data = loaded.data
@@ -120,6 +121,10 @@ def extract_sheet_sources(
             local_net_id=root_to_net_id[wire_graph.find(candidate.location)],
         )
         for candidate in candidates.sheet_pins
+        if candidate.child_scope_id in loaded_scopes
+    ]
+    sheet_symbols = [
+        symbol for symbol in candidates.sheet_symbols if symbol.child_scope_id in loaded_scopes
     ]
     pin_occurrences = [
         KiCadPinOccurrence(
@@ -166,7 +171,7 @@ def extract_sheet_sources(
         global_labels=global_labels,
         hierarchical_labels=hierarchical_labels,
         power_symbols=power_symbols,
-        sheet_symbols=candidates.sheet_symbols,
+        sheet_symbols=sheet_symbols,
         sheet_pins=sheet_pins,
     )
 
