@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from importlib.resources import files
 from pathlib import Path
 from typing import Literal, TypeGuard, cast
@@ -38,6 +38,9 @@ _NATIVE_LAYER_TOKEN_RE = re.compile(
 type RenderMode = Literal["eda", "realistic"]
 type TokenValue = str | int | float | bool
 type TokenMap = dict[str, TokenValue]
+
+# Upper bound on user-supplied custom CSS (repo rule: every string bounded).
+MAX_CUSTOM_CSS_LENGTH = 100_000
 
 
 @dataclass
@@ -93,6 +96,69 @@ class RenderSettings:
     custom_css: str = ""
 
 
+DEFAULT_SIDE = "front"
+DEFAULT_WIDTH = 800
+DEFAULT_FONT_SIZE = 10.0
+
+
+@dataclass(frozen=True)
+class CliOverrides:
+    """Explicitly-set CLI render flags layered over a base settings object.
+
+    Each field is ``None`` when the flag was left at its default, so the
+    base (settings-file / bundled) value wins. ``highlights`` are always
+    merged additively, so an empty tuple is a no-op.
+    """
+
+    side: str | None = None
+    width: int | None = None
+    font_size: float | None = None
+    custom_css: str | None = None
+    highlights: tuple[HighlightSpec, ...] = ()
+
+
+def resolve_effective_settings(
+    base: RenderSettings,
+    overrides: CliOverrides,
+) -> RenderSettings:
+    """Fold CLI overrides into *base* and fill defaults for unset values.
+
+    The result is a fully-resolved ``RenderSettings``: ``side``, ``width``,
+    and ``font_size`` are concrete (never empty/zero), CLI highlights are
+    merged with the base highlights, and ``custom_css`` is composed
+    base-then-CLI.
+    """
+    side = overrides.side or base.side or DEFAULT_SIDE
+    width = overrides.width or base.width or DEFAULT_WIDTH
+    font_size = overrides.font_size or base.font_size or DEFAULT_FONT_SIZE
+
+    highlights = list(base.highlights)
+    for highlight in overrides.highlights:
+        if highlight not in highlights:
+            highlights.append(highlight)
+
+    css_parts = [css for css in (base.custom_css, overrides.custom_css) if css]
+    custom_css = "\n".join(css_parts)
+
+    return replace(
+        base,
+        side=side,
+        width=width,
+        font_size=font_size,
+        highlights=highlights,
+        custom_css=custom_css,
+    )
+
+
+def parse_highlight_target(target: str) -> HighlightSpec:
+    """Parse a CLI ``--highlight-pad`` value into a ``HighlightSpec``.
+
+    Accepts a ``<component>.<pad>`` pad target. Raises ``ValueError`` on a
+    malformed value.
+    """
+    return _parse_highlight({"pad": target}, 0)
+
+
 def is_json_dict(v: object) -> TypeGuard[dict[str, object]]:
     """Narrow an object to ``dict[str, object]``."""
     return isinstance(v, dict)
@@ -116,6 +182,18 @@ def load_render_settings_json(text: str) -> RenderSettings:
     extends require a settings file path, so they are rejected for JSON text.
     """
     data = _load_render_settings_text_data(text, source=None, stack=[])
+    return parse_render_settings(data)
+
+
+def load_bundled_render_settings(name: str) -> RenderSettings:
+    """Load a bundled ``phosphor:<name>`` render settings profile.
+
+    Raises ``ValueError`` for an unknown or malformed bundled name.
+    """
+    if not _PHOSPHOR_SETTINGS_RE.fullmatch(name):
+        msg = f"Invalid phosphor render settings name: {name!r}"
+        raise ValueError(msg)
+    data = _load_parent_render_settings(f"phosphor:{name}", source=None, stack=[])
     return parse_render_settings(data)
 
 
@@ -378,12 +456,21 @@ def parse_render_settings(data: dict[str, object]) -> RenderSettings:
         if not is_json_dict(ann):
             msg = "annotations must be an object"
             raise ValueError(msg)
+        # Validate the annotation block at parse time so a bad settings file
+        # fails at load rather than during rendering. Lazy import: annotations
+        # pulls in ortools (CP-SAT solver), too heavy for every CLI invocation.
+        from phosphor_eda.render.annotations import parse_annotations
+
+        _ = parse_annotations(ann)
         settings.annotations = ann
 
     if "custom_css" in data:
         css = data["custom_css"]
         if not isinstance(css, str):
             msg = "custom_css must be a string"
+            raise ValueError(msg)
+        if len(css) > MAX_CUSTOM_CSS_LENGTH:
+            msg = f"custom_css must be at most {MAX_CUSTOM_CSS_LENGTH} characters"
             raise ValueError(msg)
         settings.custom_css = css
 

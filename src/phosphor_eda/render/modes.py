@@ -121,7 +121,8 @@ def build_realistic_layers(
     profiler: RenderProfiler | None = None,
 ) -> tuple[DerivedLayer, ...]:
     """Build front/back realistic visual layers."""
-    side = settings.side or "front"
+    side = settings.side
+    assert side, "render settings must have a resolved side"
     selected = _filter_excluded_components(
         select_inventory_items(inventory, settings.source.layers, active_side=side),
         settings.source.exclude_components,
@@ -488,10 +489,9 @@ def _filter_excluded_components(
 ) -> tuple[InventoryItem, ...]:
     if not excluded_prefixes:
         return items
-    normalized = tuple(prefix.upper() for prefix in excluded_prefixes)
-    return tuple(
-        item for item in items if not item.tags.component_prefix.upper().startswith(normalized)
-    )
+    # Exact prefix match: excluding "R" must not also hide "RV".
+    normalized = {prefix.upper() for prefix in excluded_prefixes}
+    return tuple(item for item in items if item.tags.component_prefix.upper() not in normalized)
 
 
 def _matches_highlight(item: InventoryItem, highlight: HighlightSpec) -> bool:

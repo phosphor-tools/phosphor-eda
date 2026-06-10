@@ -11,20 +11,24 @@ from __future__ import annotations
 
 import json
 import re
-from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from xml.sax.saxutils import escape as xml_escape
 
 from phosphor_eda.geometry.text_metrics import BASELINE_CENTER_OFFSET, INTER_REGULAR_BASE64
 from phosphor_eda.render.plan import (
+    AnnotationConnectorStyle,
+    AnnotationLabelStyle,
+    AnnotationStyle,
     DerivedRenderPlan,
     build_derived_render_plan,
 )
+from phosphor_eda.render.profiler import profile_span
 from phosphor_eda.render.settings import (
     HighlightSpec,
     RenderSettings,
     is_json_dict,
+    load_bundled_render_settings,
     load_render_settings_file,
     load_render_settings_json,
     parse_render_settings,
@@ -36,6 +40,7 @@ __all__ = [
     "RenderResult",
     "RenderSettings",
     "is_json_dict",
+    "load_bundled_render_settings",
     "load_render_settings_file",
     "load_render_settings_json",
     "parse_render_settings",
@@ -59,8 +64,6 @@ class RenderResult:
 
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from phosphor_eda.domain.pcb import (
         Pcb,
     )
@@ -542,33 +545,6 @@ def _resolved_path_style_svg_attrs(style: ResolvedStyle | None) -> dict[str, str
     return {"style": "; ".join(declarations)} if declarations else {}
 
 
-def _settings_for_plan(
-    render_settings: RenderSettings,
-    *,
-    highlight_nets: list[str] | None,
-    highlight_components: list[str] | None,
-    highlight_specs: list[HighlightSpec] | None,
-    custom_css: str,
-) -> RenderSettings:
-    highlights = list(render_settings.highlights)
-    for net in highlight_nets or []:
-        highlight = HighlightSpec(net=net)
-        if highlight not in highlights:
-            highlights.append(highlight)
-    for component in highlight_components or []:
-        highlight = HighlightSpec(component=component)
-        if highlight not in highlights:
-            highlights.append(highlight)
-    for highlight in highlight_specs or []:
-        if highlight not in highlights:
-            highlights.append(highlight)
-    return replace(
-        render_settings,
-        highlights=highlights,
-        custom_css=custom_css or render_settings.custom_css,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Annotation rendering
 # ---------------------------------------------------------------------------
@@ -612,7 +588,7 @@ def _contrast_text_color(bg_color: str) -> str:
 def _annotation_css(
     font_size: float,
     *,
-    annotation_style: dict[str, object] | None = None,
+    annotation_style: AnnotationStyle,
 ) -> str:
     """CSS for pure-SVG annotation elements.
 
@@ -622,35 +598,35 @@ def _annotation_css(
     onto the SVG viewBox, so all sizes here are in display pixels.
     """
     ff = _ANNOTATION_FONT_FAMILY
-    label_style = _annotation_part_style(annotation_style, "label")
-    connector_style = _annotation_part_style(annotation_style, "connector")
+    label_style = annotation_style.label
+    connector_style = annotation_style.connector
     label_rules = [
         f"font-family: {ff}",
-        f"font-weight: {_css_style_value(label_style.get('font_weight'), '500')}",
+        f"font-weight: {label_style.font_weight or '500'}",
         f"font-size: {font_size:.1f}px",
     ]
-    label_fill = label_style.get("fill")
-    if isinstance(label_fill, str):
-        label_rules.append(f"fill: {label_fill}")
-    text_halo = label_style.get("text_halo")
-    if isinstance(text_halo, str):
-        label_rules.append(f"stroke: {text_halo}")
-        halo_width = _css_px_value(label_style.get("text_halo_width_px"))
-        if halo_width:
-            label_rules.append(f"stroke-width: {halo_width}")
+    if label_style.fill is not None:
+        label_rules.append(f"fill: {label_style.fill}")
+    if label_style.text_halo is not None:
+        label_rules.append(f"stroke: {label_style.text_halo}")
+        if label_style.text_halo_width_px is not None:
+            label_rules.append(f"stroke-width: {label_style.text_halo_width_px:.1f}px")
         label_rules.append("stroke-linejoin: round")
         label_rules.append("paint-order: stroke fill")
     pill_rules = ["stroke: none"]
-    if label_style.get("pill_visible") is False:
+    if label_style.pill_visible is False:
         pill_rules.append("display: none")
     connector_rules = ["fill: none", "stroke-linejoin: round"]
-    connector_stroke = connector_style.get("stroke")
-    if isinstance(connector_stroke, str):
-        connector_rules.append(f"stroke: {connector_stroke}")
-    connector_width = _css_px_value(connector_style.get("stroke_width_px"))
-    connector_rules.append(f"stroke-width: {connector_width or '2'}")
+    if connector_style.stroke is not None:
+        connector_rules.append(f"stroke: {connector_style.stroke}")
+    connector_width = (
+        f"{connector_style.stroke_width_px:.1f}px"
+        if connector_style.stroke_width_px is not None
+        else "2"
+    )
+    connector_rules.append(f"stroke-width: {connector_width}")
     dot_rules: list[str] = []
-    if connector_style.get("dot_visible") is False:
+    if connector_style.dot_visible is False:
         dot_rules.append("display: none")
     return f"""\
 @font-face {{ font-family: "InterEmbed"; font-weight: 400;
@@ -670,36 +646,12 @@ def _annotation_css(
   font-weight: 500; font-size: {font_size:.1f}px; }}"""
 
 
-def _annotation_part_style(
-    annotation_style: dict[str, object] | None,
-    part: str,
-) -> dict[str, object]:
-    if annotation_style is None:
-        return {}
-    style = annotation_style.get(part)
-    if not is_json_dict(style):
-        return {}
-    return dict(style)
-
-
-def _css_px_value(value: object) -> str:
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return f"{float(value):.1f}px"
-    return value if isinstance(value, str) else ""
-
-
-def _css_style_value(value: object, default: str) -> str:
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return f"{float(value):g}"
-    return value if isinstance(value, str) else default
-
-
 def _render_annotations(
     svg: _Svg,
     annotations: ResolvedAnnotations,
     font_size: float,
     *,
-    annotation_style: dict[str, object] | None = None,
+    annotation_style: AnnotationStyle,
 ) -> None:
     """Emit all annotation elements as pure SVG.
 
@@ -712,8 +664,8 @@ def _render_annotations(
         attrs={"class": "annotations"},
         transform=f"scale({s:.6f})",
     )
-    connector_style = _annotation_part_style(annotation_style, "connector")
-    label_style = _annotation_part_style(annotation_style, "label")
+    connector_style = annotation_style.connector
+    label_style = annotation_style.label
     for box in annotations.boxes:
         _render_box(svg, box, font_size, connector_style=connector_style, label_style=label_style)
     for pointer in annotations.pointers:
@@ -753,14 +705,13 @@ def _render_connector(
     color: str,
     *,
     dot: bool = True,
-    connector_style: dict[str, object] | None = None,
+    connector_style: AnnotationConnectorStyle,
 ) -> None:
     """Render an orthogonal connector path with an optional dot at the end."""
     if len(path) < 2:
         return
     d = _connector_path_d(path)
-    stroke = connector_style.get("stroke") if connector_style is not None else None
-    stroke_color = stroke if isinstance(stroke, str) else color
+    stroke_color = connector_style.stroke if connector_style.stroke is not None else color
     svg.path(d, attrs={"class": "annotation-connector", "style": f"stroke: {stroke_color}"})
     if dot:
         tx, ty = path[-1]
@@ -788,9 +739,10 @@ def _render_pill_label(
     text: str,
     font_size: float,
     color: str,
+    *,
+    label_style: AnnotationLabelStyle,
     text_anchor: str = "middle",
     css_class: str = "annotation-pill",
-    label_style: dict[str, object] | None = None,
 ) -> None:
     """Render a pill-shaped label with solid color fill and contrast text."""
     rx = height / 2
@@ -814,8 +766,7 @@ def _render_pill_label(
 
     for i, line in enumerate(lines):
         ty = start_y + i * line_height
-        fill = label_style.get("fill") if label_style is not None else None
-        fill_attr = fill if isinstance(fill, str) else text_color
+        fill_attr = label_style.fill if label_style.fill is not None else text_color
         svg.raw(
             "".join(
                 (
@@ -832,8 +783,8 @@ def _render_box(
     box: ResolvedBox,
     font_size: float,
     *,
-    connector_style: dict[str, object],
-    label_style: dict[str, object],
+    connector_style: AnnotationConnectorStyle,
+    label_style: AnnotationLabelStyle,
 ) -> None:
     """Render a solid box with semi-transparent fill and a margin label."""
     r, g, b = _parse_rgb(box.color)
@@ -872,8 +823,8 @@ def _render_pointer(
     pointer: ResolvedPointer,
     font_size: float,
     *,
-    connector_style: dict[str, object],
-    label_style: dict[str, object],
+    connector_style: AnnotationConnectorStyle,
+    label_style: AnnotationLabelStyle,
 ) -> None:
     """Render a pointer with connector and margin label."""
     if pointer.label_text:
@@ -909,8 +860,8 @@ def _render_label(
     label: ResolvedLabel,
     font_size: float,
     *,
-    connector_style: dict[str, object],
-    label_style: dict[str, object],
+    connector_style: AnnotationConnectorStyle,
+    label_style: AnnotationLabelStyle,
 ) -> None:
     """Render a label with optional connector to its target."""
     if label.connector_path:
@@ -1009,83 +960,34 @@ def _render_legend(svg: _Svg, legend: ResolvedLegend, font_size: float) -> None:
 
 def render_pcb_svg(
     board: Pcb,
+    settings: RenderSettings,
     *,
-    side: str | None = None,
-    highlight_nets: list[str] | None = None,
-    highlight_components: list[str] | None = None,
-    highlight_specs: list[HighlightSpec] | None = None,
-    width_px: int | None = None,
-    custom_css: str = "",
     annotations: ResolvedAnnotations | None = None,
-    render_settings: RenderSettings | None = None,
     profiler: RenderProfiler | None = None,
 ) -> RenderResult:
-    """Render a Pcb as a layered SVG from structured render settings.
+    """Render a Pcb as a layered SVG from fully-resolved render settings.
 
     Parameters
     ----------
     board:
         Parsed PCB board.
-    side:
-        "front" or "back".  Back view mirrors horizontally.
-    highlight_nets:
-        Net names to highlight (case-insensitive exact match).
-    highlight_components:
-        Component references to highlight (footprint only, not nets).
-    highlight_specs:
-        Structured highlights with optional per-net/component colors.
-        Merged with ``highlight_nets``/``highlight_components``.
-    width_px:
-        Pixel width of the SVG.
-    custom_css:
-        Extra CSS injected after structured render styles.
-        Overrides any built-in rule.  Useful for board mask recoloring,
-        layer visibility, etc.
+    settings:
+        Fully-resolved render settings. ``side``, ``width``, and
+        ``font_size`` must be concrete (use
+        ``resolve_effective_settings`` to fill defaults and merge CLI
+        flags). Highlights and custom CSS are read directly from here.
     annotations:
         Resolved annotations to overlay on the board.
     """
-    with _profile_span(profiler, "render.settings"):
-        effective_settings = render_settings or load_render_settings_json(
-            '{"extends": "phosphor:review"}'
+    with profile_span(profiler, "render.build_plan"):
+        plan = build_derived_render_plan(
+            board,
+            settings=settings,
+            annotations=annotations,
+            profiler=profiler,
         )
-        effective_side = side if side is not None else effective_settings.side or "front"
-        effective_width_px = width_px if width_px is not None else effective_settings.width or 800
-        plan_settings = _settings_for_plan(
-            effective_settings,
-            highlight_nets=highlight_nets,
-            highlight_components=highlight_components,
-            highlight_specs=highlight_specs,
-            custom_css=custom_css,
-        )
-    with _profile_span(profiler, "render.build_plan"):
-        if profiler is None:
-            plan = build_derived_render_plan(
-                board,
-                settings=plan_settings,
-                side=effective_side,
-                width_px=effective_width_px,
-                annotations=annotations,
-            )
-        else:
-            plan = build_derived_render_plan(
-                board,
-                settings=plan_settings,
-                side=effective_side,
-                width_px=effective_width_px,
-                annotations=annotations,
-                profiler=profiler,
-            )
-    with _profile_span(profiler, "render.serialize"):
+    with profile_span(profiler, "render.serialize"):
         svg = render_pcb_svg_from_derived_plan(plan, profiler=profiler)
-    with _profile_span(profiler, "render.metadata"):
+    with profile_span(profiler, "render.metadata"):
         svg = _append_pcb_metadata(svg, board)
     return RenderResult(svg=svg, warnings=plan.warnings)
-
-
-@contextmanager
-def _profile_span(profiler: RenderProfiler | None, name: str) -> Iterator[None]:
-    if profiler is None:
-        yield
-        return
-    with profiler.span(name):
-        yield

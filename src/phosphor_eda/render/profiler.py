@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import TYPE_CHECKING
@@ -50,3 +50,18 @@ class RenderProfiler:
                 for event in self._events
             ],
         }
+
+
+def profile_span(
+    profiler: RenderProfiler | None,
+    name: str,
+    **data: ProfileValue,
+) -> AbstractContextManager[None]:
+    """Return a timing span when *profiler* is set, else a no-op context.
+
+    Lets callers wrap a block in ``with profile_span(profiler, "name"):``
+    without branching on whether profiling is enabled.
+    """
+    if profiler is None:
+        return nullcontext()
+    return profiler.span(name, **data)

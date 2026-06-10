@@ -28,23 +28,42 @@ from phosphor_eda.domain.pcb import (
     PcbText,
     PcbVia,
 )
-from phosphor_eda.render.api import load_render_settings_json, render_pcb_svg
+from phosphor_eda.render.api import render_pcb_svg
 from phosphor_eda.render.inventory import (
     InventoryItemKind,
     InventoryPurpose,
     build_inventory,
     select_inventory_items,
 )
-from phosphor_eda.render.settings import load_render_settings_file
+from phosphor_eda.render.settings import (
+    CliOverrides,
+    HighlightSpec,
+    RenderSettings,
+    load_render_settings_file,
+    load_render_settings_json,
+    resolve_effective_settings,
+)
+
+
+def _design_settings(
+    *,
+    side: str = "front",
+    highlight_nets: tuple[str, ...] = (),
+) -> RenderSettings:
+    """Resolve the bundled ``phosphor:design`` settings for render tests."""
+    base = load_render_settings_json('{"extends": "phosphor:design"}')
+    overrides = CliOverrides(
+        side=side,
+        highlights=tuple(HighlightSpec(net=net) for net in highlight_nets),
+    )
+    return resolve_effective_settings(base, overrides)
 
 
 def test_render_result_carries_unknown_highlight_warning() -> None:
     """render_pcb_svg returns warnings for an unresolved highlight target."""
     result = render_pcb_svg(
         _board(),
-        side="front",
-        highlight_nets=["DOES_NOT_EXIST"],
-        render_settings=load_render_settings_json('{"extends": "phosphor:design"}'),
+        _design_settings(highlight_nets=("DOES_NOT_EXIST",)),
     )
 
     assert "<svg" in result.svg
@@ -53,20 +72,12 @@ def test_render_result_carries_unknown_highlight_warning() -> None:
 
 
 def test_render_result_no_warnings_on_clean_render() -> None:
-    result = render_pcb_svg(
-        _board(),
-        side="front",
-        render_settings=load_render_settings_json('{"extends": "phosphor:design"}'),
-    )
+    result = render_pcb_svg(_board(), _design_settings())
     assert result.warnings == ()
 
 
 def test_render_svg_uses_typed_inventory_metadata() -> None:
-    svg = render_pcb_svg(
-        _board(),
-        side="front",
-        render_settings=load_render_settings_json('{"extends": "phosphor:design"}'),
-    ).svg
+    svg = render_pcb_svg(_board(), _design_settings()).svg
 
     assert 'data-kind="pad"' in svg
     assert 'data-kind="via"' in svg
@@ -83,11 +94,7 @@ def test_mask_viewports_cover_full_board_bbox() -> None:
     import re
 
     board = _board()
-    svg = render_pcb_svg(
-        board,
-        side="front",
-        render_settings=load_render_settings_json('{"extends": "phosphor:design"}'),
-    ).svg
+    svg = render_pcb_svg(board, _design_settings()).svg
 
     min_x, min_y, max_x, max_y = board.bbox()
     masks = re.findall(r"<mask ([^>]*)>", svg)
@@ -337,6 +344,101 @@ def test_high_contrast_presets_hide_mechanical_artwork_by_default(name: str) -> 
     )
 
     assert "line:U1:body" not in {item.id for item in selected}
+
+
+def test_render_settings_validate_annotations_at_parse() -> None:
+    # A box with no targets is invalid; parse_render_settings must reject it
+    # at load, not defer the failure to render time.
+    with pytest.raises(ValueError, match="target"):
+        load_render_settings_json(json.dumps({"annotations": {"boxes": [{"label": "no targets"}]}}))
+
+
+def test_render_settings_accept_valid_annotations() -> None:
+    settings = load_render_settings_json(
+        json.dumps({"annotations": {"labels": [{"target": "U1", "content": "MCU"}]}})
+    )
+    assert settings.annotations["labels"] == [{"target": "U1", "content": "MCU"}]
+
+
+def test_render_settings_reject_oversized_custom_css() -> None:
+    from phosphor_eda.render.settings import MAX_CUSTOM_CSS_LENGTH
+
+    oversized = "a" * (MAX_CUSTOM_CSS_LENGTH + 1)
+    with pytest.raises(ValueError, match="custom_css must be at most"):
+        load_render_settings_json(json.dumps({"custom_css": oversized}))
+
+
+# Documents the imperative parser rejects; the JSON schema must reject the
+# same set (legacy keys via additionalProperties: False, value constraints
+# via enums/types/minimums).
+_REJECTED_SETTINGS_DOCUMENTS: list[dict[str, object]] = [
+    {"theme": "dark"},
+    {"font_size": 12},
+    {"font_size_px": 12},
+    {"include": ["copper"]},
+    {"highlight_behavior": "dim"},
+    {"style_rules": []},
+    {"exclude_component_prefixes": ["R"]},
+    {"renderMode": "sketch"},
+    {"side": "left"},
+    {"width": 0},
+    {"fontSizePx": 0},
+]
+
+
+@pytest.mark.parametrize("document", _REJECTED_SETTINGS_DOCUMENTS)
+def test_parser_rejects_invalid_settings_documents(document: dict[str, object]) -> None:
+    with pytest.raises(ValueError):
+        load_render_settings_json(json.dumps(document))
+
+
+@pytest.mark.parametrize("document", _REJECTED_SETTINGS_DOCUMENTS)
+def test_schema_rejects_invalid_settings_documents(document: dict[str, object]) -> None:
+    from phosphor_eda.render.api import render_settings_schema
+
+    schema = render_settings_schema()
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    (key,) = document
+    if key not in properties:
+        # Legacy keys: additionalProperties False makes the schema reject them.
+        assert schema["additionalProperties"] is False
+        return
+    # Value-constrained keys: schema declares an enum or numeric minimum that
+    # excludes the offending value.
+    constraint = properties[key]
+    assert isinstance(constraint, dict)
+    assert "enum" in constraint or "minimum" in constraint
+
+
+def test_annotation_style_tokens_resolve_typed() -> None:
+    from phosphor_eda.render.plan import annotation_style_for_settings
+    from phosphor_eda.render.settings import RenderSettings
+
+    settings = RenderSettings(
+        tokens={
+            "annotation.label.fill": "#fff",
+            "annotation.label.textHaloWidthPx": 3,
+            "annotation.label.pillVisible": False,
+            "annotation.connector.stroke": "#0f0",
+            "annotation.connector.strokeWidthPx": 1.5,
+        }
+    )
+    style = annotation_style_for_settings(settings)
+    assert style.label.fill == "#fff"
+    assert style.label.text_halo_width_px == 3.0
+    assert style.label.pill_visible is False
+    assert style.connector.stroke == "#0f0"
+    assert style.connector.stroke_width_px == 1.5
+
+
+def test_annotation_style_rejects_wrong_token_type() -> None:
+    from phosphor_eda.render.plan import annotation_style_for_settings
+    from phosphor_eda.render.settings import RenderSettings
+
+    settings = RenderSettings(tokens={"annotation.label.fill": 42})
+    with pytest.raises(ValueError, match="must be a string"):
+        annotation_style_for_settings(settings)
 
 
 def _board() -> Pcb:
