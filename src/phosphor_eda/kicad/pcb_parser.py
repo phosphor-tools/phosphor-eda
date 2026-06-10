@@ -1030,6 +1030,7 @@ def _parse_via(builder: PcbBuilder, item: SExpNode, index: int) -> None:
     via_kind = ""
     if len(item) > 1 and isinstance(item[1], sexpdata.Symbol):
         via_kind = item[1].value()
+    tented_front, tented_back = _via_tenting(item)
     drill = builder.add_drill_object(
         PcbDrill(
             id=f"drill:via:{index}",
@@ -1059,6 +1060,8 @@ def _parse_via(builder: PcbBuilder, item: SExpNode, index: int) -> None:
             drill=drill,
             net=_resolve_net_node(builder, item, source="via"),
             via_type=_via_type(via_kind),
+            tented_front=tented_front,
+            tented_back=tented_back,
             metadata=_object_metadata(
                 native_type="via",
                 source_collection="vias",
@@ -1070,6 +1073,19 @@ def _parse_via(builder: PcbBuilder, item: SExpNode, index: int) -> None:
         ),
         source="via",
     )
+
+
+def _via_tenting(item: SExpNode) -> tuple[bool, bool]:
+    """Read a via's ``(tenting ...)`` sides.
+
+    KiCad lists the tented sides as ``front``/``back`` symbols (``none`` or an
+    absent node means neither side is tented).
+    """
+    tenting_node = sexp.find(item, "tenting")
+    if not tenting_node:
+        return False, False
+    sides = {sub.value() for sub in tenting_node[1:] if isinstance(sub, sexpdata.Symbol)}
+    return "front" in sides, "back" in sides
 
 
 def _via_type(native_kind: str) -> PcbViaType:
