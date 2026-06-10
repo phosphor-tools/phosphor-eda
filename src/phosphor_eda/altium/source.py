@@ -6,7 +6,6 @@ It does not construct the public ``Schematic``/``Page``/``Net`` model.
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -624,10 +623,6 @@ def load_project_source_sheets(
                     "missing_sheet",
                     f"Schematic sheet not found: {rel_path} (resolved to {schdoc})",
                 )
-                print(
-                    f"Warning: schematic sheet not found: {rel_path} (resolved to {schdoc})",
-                    file=sys.stderr,
-                )
 
         base_sources_by_file = {
             source_file: _source_sheet(sheet_records, source_file)
@@ -688,9 +683,16 @@ def load_project_source_sheets(
     return project, sheets
 
 
-def altium_to_source(path: Path, name: str = "") -> AltiumSourceDesign:
-    """Extract Altium-native source connectivity from a project or sheet."""
-    ctx = ParseContext()
+def altium_to_source(
+    path: Path, name: str = "", ctx: ParseContext | None = None
+) -> AltiumSourceDesign:
+    """Extract Altium-native source connectivity from a project or sheet.
+
+    Missing-sheet and other non-fatal issues are recorded on *ctx* when
+    provided, mirroring the other parser pipelines.
+    """
+    if ctx is None:
+        ctx = ParseContext()
     project, sheets = load_project_source_sheets(path, ctx=ctx)
     root_sheet_name = next(iter(sheets), "")
     return AltiumSourceDesign(

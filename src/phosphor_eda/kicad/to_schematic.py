@@ -10,8 +10,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from phosphor_eda.diagnostics import ParseContext
 from phosphor_eda.kicad.resolver import resolve_kicad_source
-from phosphor_eda.kicad.sheet_loader import load_sheet_tree
+from phosphor_eda.kicad.sheet_loader import (
+    ParseContextSheetWarningReporter,
+    load_sheet_tree,
+)
 from phosphor_eda.kicad.source import (
     KiCadGlobalLabel,
     KiCadHierarchicalLabel,
@@ -33,13 +37,21 @@ if TYPE_CHECKING:
 
 def kicad_to_design(path: Path, name: str = "") -> Schematic:
     """Parse a KiCad schematic into the public model."""
-    source = kicad_to_source(path, name)
-    return resolve_kicad_source(source)
+    ctx = ParseContext()
+    source = kicad_to_source(path, name, ctx)
+    return resolve_kicad_source(source, ctx)
 
 
-def kicad_to_source(path: Path, name: str = "") -> KiCadSourceDesign:
-    """Extract KiCad-native source connectivity from a root schematic file."""
-    sheet_tree = load_sheet_tree(path, name)
+def kicad_to_source(
+    path: Path, name: str = "", ctx: ParseContext | None = None
+) -> KiCadSourceDesign:
+    """Extract KiCad-native source connectivity from a root schematic file.
+
+    Missing or cyclic child-sheet references are recorded on *ctx* when
+    provided, mirroring the other parser pipelines.
+    """
+    reporter = ParseContextSheetWarningReporter(ctx) if ctx is not None else None
+    sheet_tree = load_sheet_tree(path, name, reporter)
 
     local_nets: list[KiCadLocalNet] = []
     pin_occurrences: list[KiCadPinOccurrence] = []

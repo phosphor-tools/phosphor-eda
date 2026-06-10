@@ -68,5 +68,6 @@ def load_project_source(
 
 def altium_to_design(path: Path, name: str = "") -> Schematic:
     """Convert an Altium project into the public schematic domain model."""
-    source = altium_to_source(path, name=name)
-    return resolve_altium_source(source)
+    ctx = ParseContext()
+    source = altium_to_source(path, name=name, ctx=ctx)
+    return resolve_altium_source(source, ctx)

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
@@ -16,6 +15,7 @@ from phosphor_eda.schematic import ScopeId
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from phosphor_eda.diagnostics import ParseContext
     from phosphor_eda.kicad.sexp import SExpNode
 
 
@@ -23,9 +23,21 @@ class SheetWarningReporter(Protocol):
     def warn(self, message: str) -> None: ...
 
 
-class StderrSheetWarningReporter:
+class NullSheetWarningReporter:
+    """Drops sheet-loading warnings. Used when no ParseContext is supplied."""
+
     def warn(self, message: str) -> None:
-        print(message, file=sys.stderr)
+        return
+
+
+class ParseContextSheetWarningReporter:
+    """Routes sheet-loading warnings onto a shared ParseContext."""
+
+    def __init__(self, ctx: ParseContext) -> None:
+        self._ctx = ctx
+
+    def warn(self, message: str) -> None:
+        self._ctx.warn("missing_sheet", message)
 
 
 @dataclass(slots=True)
@@ -49,13 +61,19 @@ def load_sheet_tree(
     name: str = "",
     warning_reporter: SheetWarningReporter | None = None,
 ) -> LoadedSheetTree:
-    """Load a root KiCad sheet and all reachable child sheets."""
+    """Load a root KiCad sheet and all reachable child sheets.
+
+    Missing or cyclic child-sheet references are reported through
+    *warning_reporter*. When none is supplied warnings are dropped rather than
+    printed, keeping library code free of stdout/stderr noise; callers that
+    want them surfaced pass a ``ParseContextSheetWarningReporter``.
+    """
     loaded_sheets: list[LoadedSheet] = []
     sheet_instances: list[KiCadSheetInstance] = []
     lib_pins: LibPins = {}
     lib_descs: dict[str, str] = {}
     root_scope = ScopeId(path=())
-    reporter = warning_reporter or StderrSheetWarningReporter()
+    reporter = warning_reporter or NullSheetWarningReporter()
 
     _load_sheet_tree(
         path=path,
