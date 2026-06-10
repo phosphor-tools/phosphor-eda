@@ -3,7 +3,6 @@
 import math
 import struct
 
-from phosphor_eda.altium.errors import ParseContext
 from phosphor_eda.altium.pcb_parser import linearize_arc_vertices
 from phosphor_eda.altium.pcb_records import (
     ArcRecord,
@@ -15,6 +14,7 @@ from phosphor_eda.altium.pcb_records import (
     TrackRecord,
     ViaRecord,
 )
+from phosphor_eda.diagnostics import ParseContext
 
 
 def _pack_i32(val: int) -> bytes:

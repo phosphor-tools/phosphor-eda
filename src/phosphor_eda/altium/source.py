@@ -10,7 +10,6 @@ import sys
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from phosphor_eda.altium.errors import ParseContext
 from phosphor_eda.altium.project import AltiumProject, parse_prjpcb_file
 from phosphor_eda.altium.records import (
     AltiumRecord,
@@ -28,6 +27,7 @@ from phosphor_eda.altium.sheet_builder import (
     load_sheet,
     resolve_local_net_groups,
 )
+from phosphor_eda.diagnostics import ParseContext
 from phosphor_eda.schematic import ScopeId
 
 if TYPE_CHECKING:

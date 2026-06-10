@@ -5,7 +5,6 @@ from __future__ import annotations
 import sys
 from typing import TYPE_CHECKING
 
-from phosphor_eda.altium.errors import ParseContext
 from phosphor_eda.altium.project import parse_prjpcb_file
 from phosphor_eda.altium.resolver import resolve_altium_source
 from phosphor_eda.altium.sheet_builder import SheetRecords, load_sheet
@@ -14,6 +13,7 @@ from phosphor_eda.altium.source import (
     altium_to_source,
     load_project_source_sheets,
 )
+from phosphor_eda.diagnostics import ParseContext
 
 if TYPE_CHECKING:
     from pathlib import Path

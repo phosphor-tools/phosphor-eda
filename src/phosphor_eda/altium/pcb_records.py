@@ -19,7 +19,7 @@ from phosphor_eda.altium.enums import PcbPrimitiveFlags2
 from phosphor_eda.altium.record_parser import parse_record_payload
 
 if TYPE_CHECKING:
-    from phosphor_eda.altium.errors import ParseContext
+    from phosphor_eda.diagnostics import ParseContext
 
 # Sentinel values used across record types.
 NET_UNCONNECTED = 0xFFFF
