@@ -3,7 +3,7 @@
 import pytest
 from fontTools.ttLib.tables import _h_e_a_d
 
-from phosphor_eda.text_metrics import _build_embedded_font, measure_text
+from phosphor_eda.geometry.text_metrics import _build_embedded_font, measure_text
 
 
 class TestMeasureText:

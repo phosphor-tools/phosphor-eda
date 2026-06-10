@@ -1,4 +1,4 @@
-from phosphor_eda.pcb import LayerRole, PcbLayer
+from phosphor_eda.domain.pcb import LayerRole, PcbLayer
 
 
 def make_pcb_layer(

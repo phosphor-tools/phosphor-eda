@@ -4,14 +4,14 @@ from pathlib import Path
 
 from test_pcb_render import _board
 
-from phosphor_eda.kicad.pcb_parser import parse_kicad_pcb
-from phosphor_eda.pcb_render_inventory import build_inventory
-from phosphor_eda.pcb_render_modes import (
+from phosphor_eda.formats.kicad.pcb_parser import parse_kicad_pcb
+from phosphor_eda.render.inventory import build_inventory
+from phosphor_eda.render.modes import (
     build_eda_layers,
     build_highlight_layers,
     build_realistic_layers,
 )
-from phosphor_eda.pcb_render_settings import (
+from phosphor_eda.render.settings import (
     HighlightSpec,
     LayerMatch,
     LayerSelectionRule,
@@ -30,8 +30,8 @@ def test_layer_mask_bounds_from_real_geometry_not_path_pairing() -> None:
     ``d`` string drops the true vertical extremes. ``LayerMask.bounds()`` reads
     the primitive's real geometry bbox instead.
     """
-    from phosphor_eda.pcb_render_inventory import InventoryTags
-    from phosphor_eda.pcb_render_primitives import (
+    from phosphor_eda.render.inventory import InventoryTags
+    from phosphor_eda.render.primitives import (
         LayerMask,
         SvgPrimitive,
         _circle_path_d,

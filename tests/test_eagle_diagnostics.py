@@ -6,7 +6,7 @@ must be observable via a recorded warning, not silent.
 
 from pathlib import Path
 
-from phosphor_eda.eagle.to_schematic import eagle_to_design
+from phosphor_eda.formats.eagle.to_schematic import eagle_to_design
 
 _SCH_WITH_MISSING_LIBRARY = """<?xml version="1.0" encoding="utf-8"?>
 <eagle version="9.0.0">

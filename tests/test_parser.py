@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from phosphor_eda.dsn.parser import parse_dsn
+from phosphor_eda.formats.dsn.parser import parse_dsn
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 DSN_FILE = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
@@ -43,7 +43,7 @@ def test_parse_dsn_string_list():
 
 
 def test_public_api_imports():
-    from phosphor_eda.dsn import (
+    from phosphor_eda.formats.dsn import (
         ParsedDesign,
         SchematicPage,
         build_netlist,

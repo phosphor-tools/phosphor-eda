@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from shapely import MultiPolygon, Polygon
 
-from phosphor_eda.pcb import (
+from phosphor_eda.domain.pcb import (
     PcbArc,
     PcbArtworkKind,
     PcbBoardProfile,
@@ -18,7 +18,7 @@ from phosphor_eda.pcb import (
     PcbPolygon,
     PcbVia,
 )
-from phosphor_eda.sql.geometry import (
+from phosphor_eda.geometry.pcb_geometry import (
     arc_center_from_three_points,
     arc_sweep_angle,
     arc_to_polyline,
@@ -112,7 +112,7 @@ def test_polygon_degenerate_returns_none() -> None:
 
 
 def test_board_outline_from_normalized_fixture_geometry() -> None:
-    from phosphor_eda.kicad.pcb_parser import parse_kicad_pcb
+    from phosphor_eda.formats.kicad.pcb_parser import parse_kicad_pcb
 
     pcb = parse_kicad_pcb(SWD_SWITCH_PCB)
 
@@ -126,7 +126,7 @@ def test_board_outline_from_normalized_fixture_geometry() -> None:
 
 
 def test_board_outline_closes_orangecrab_fractional_arc_ring() -> None:
-    from phosphor_eda.kicad.pcb_parser import parse_kicad_pcb
+    from phosphor_eda.formats.kicad.pcb_parser import parse_kicad_pcb
 
     pcb = parse_kicad_pcb(ORANGECRAB_PCB)
 
@@ -140,7 +140,7 @@ def test_board_outline_closes_orangecrab_fractional_arc_ring() -> None:
 
 
 def test_board_outline_closes_pi_mx8_altium_fractional_arc_ring() -> None:
-    from phosphor_eda.altium.pcb_parser import parse_altium_pcb
+    from phosphor_eda.formats.altium.pcb_parser import parse_altium_pcb
 
     pcb = parse_altium_pcb(PI_MX8_PCB)
 

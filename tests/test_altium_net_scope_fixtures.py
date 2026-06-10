@@ -4,9 +4,10 @@ The matching fixture README documents why these are not hand-authored
 `.SchDoc` parser fixtures.
 """
 
-from phosphor_eda.altium.project import AltiumHierarchyMode, AltiumProject
-from phosphor_eda.altium.resolver import resolve_altium_source
-from phosphor_eda.altium.source import (
+from phosphor_eda.domain.schematic import Net, ScopeId
+from phosphor_eda.formats.altium.project import AltiumHierarchyMode, AltiumProject
+from phosphor_eda.formats.altium.resolver import resolve_altium_source
+from phosphor_eda.formats.altium.source import (
     AltiumLocalNet,
     AltiumNetLabel,
     AltiumPinOccurrence,
@@ -17,7 +18,6 @@ from phosphor_eda.altium.source import (
     AltiumSheetSymbol,
     AltiumSourceDesign,
 )
-from phosphor_eda.schematic import Net, ScopeId
 
 
 def _scope(name: str) -> ScopeId:

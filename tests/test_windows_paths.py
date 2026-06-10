@@ -10,10 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from phosphor_eda.altium.project import parse_prjpcb
-from phosphor_eda.altium.to_schematic import altium_to_design
-from phosphor_eda.convert import find_project_root
-from phosphor_eda.kicad.to_schematic import kicad_to_design
+from phosphor_eda.formats.altium.project import parse_prjpcb
+from phosphor_eda.formats.altium.to_schematic import altium_to_design
+from phosphor_eda.formats.kicad.to_schematic import kicad_to_design
+from phosphor_eda.query.convert import find_project_root
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -61,8 +61,8 @@ def test_altium_loads_schdoc_with_backslash_paths(tmp_path: Path):
 
 def test_altium_warns_on_missing_schdoc(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
     """A missing sheet records a ParseContext warning (not a stdout/stderr print)."""
-    from phosphor_eda.altium.to_schematic import load_project_sheets
-    from phosphor_eda.diagnostics import ParseContext
+    from phosphor_eda.formats.altium.to_schematic import load_project_sheets
+    from phosphor_eda.formats.common.diagnostics import ParseContext
 
     prjpcb = tmp_path / "Test.PrjPcb"
     prjpcb.write_text("[Design]\nHierarchyMode=1\n\n[Document1]\nDocumentPath=Missing.SchDoc\n")
@@ -85,8 +85,8 @@ def test_altium_warns_on_missing_schdoc(tmp_path: Path, capsys: pytest.CaptureFi
 
 def test_altium_warns_on_missing_backslash_schdoc(tmp_path: Path) -> None:
     """The recorded warning includes the original path when a backslash path is missing."""
-    from phosphor_eda.altium.to_schematic import load_project_sheets
-    from phosphor_eda.diagnostics import ParseContext
+    from phosphor_eda.formats.altium.to_schematic import load_project_sheets
+    from phosphor_eda.formats.common.diagnostics import ParseContext
 
     prjpcb = tmp_path / "Test.PrjPcb"
     prjpcb.write_text(

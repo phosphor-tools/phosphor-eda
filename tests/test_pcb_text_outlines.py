@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from phosphor_eda.pcb import PcbText
-from phosphor_eda.text_outlines import text_outline_geometry
+from phosphor_eda.domain.pcb import PcbText
+from phosphor_eda.geometry.text_outlines import text_outline_geometry
 
 
 def test_text_outline_geometry_accepts_normalized_text_payload() -> None:

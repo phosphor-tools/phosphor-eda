@@ -6,7 +6,7 @@ import pytest
 from click.testing import CliRunner
 
 from phosphor_eda.cli import main
-from phosphor_eda.pcb_render import RenderResult
+from phosphor_eda.render.api import RenderResult
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 DSN_FILE = str(FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN")
@@ -417,8 +417,10 @@ def test_cli_render_prjpcb_resolves_single_existing_pcbdoc(
         assert board is parsed_board
         return RenderResult(svg="<svg></svg>")
 
-    monkeypatch.setattr("phosphor_eda.altium.pcb_parser.parse_altium_pcb", fake_parse_altium_pcb)
-    monkeypatch.setattr("phosphor_eda.pcb_render.render_pcb_svg", fake_render_pcb_svg)
+    monkeypatch.setattr(
+        "phosphor_eda.formats.altium.pcb_parser.parse_altium_pcb", fake_parse_altium_pcb
+    )
+    monkeypatch.setattr("phosphor_eda.render.api.render_pcb_svg", fake_render_pcb_svg)
 
     runner = CliRunner()
     result = runner.invoke(main, ["pcb", "render", str(prjpcb)])

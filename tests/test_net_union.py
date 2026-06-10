@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from phosphor_eda.net_union import NetUnion
+from phosphor_eda.formats.common.net_union import NetUnion
 
 
 def test_find_returns_each_id_as_its_initial_representative() -> None:

@@ -1,4 +1,4 @@
-from phosphor_eda.models import ParsedDesign, PlacedInstance, SchematicPage
+from phosphor_eda.formats.common.raw_models import ParsedDesign, PlacedInstance, SchematicPage
 
 
 def test_parsed_design_defaults():

@@ -1,6 +1,6 @@
 """Tests for schematic dataclass defaults and basic relationships."""
 
-from phosphor_eda.schematic import Component, Net, Page, Pin, Schematic, ScopeId
+from phosphor_eda.domain.schematic import Component, Net, Page, Pin, Schematic, ScopeId
 
 
 def test_pin_defaults() -> None:

@@ -2,7 +2,7 @@
 
 import pytest
 
-from phosphor_eda.pcb import (
+from phosphor_eda.domain.pcb import (
     LayerRole,
     Pcb,
     PcbArtwork,
@@ -17,7 +17,7 @@ from phosphor_eda.pcb import (
     PcbPad,
     PcbPadType,
 )
-from phosphor_eda.pcb_annotations import (
+from phosphor_eda.render.annotations import (
     AnnotationSpec,
     BoxSpec,
     LabelSpec,
@@ -446,7 +446,7 @@ class TestMeasureLabel:
 
     def test_includes_padding(self) -> None:
         """Label pill should be larger than raw text measurement."""
-        from phosphor_eda.text_metrics import measure_text
+        from phosphor_eda.geometry.text_metrics import measure_text
 
         text = "Hello"
         raw_w, raw_h = measure_text(text, 1.0)

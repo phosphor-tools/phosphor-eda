@@ -1,6 +1,6 @@
 """Tests for shared text helpers."""
 
-from phosphor_eda.text import strip_overline
+from phosphor_eda.formats.common.text import strip_overline
 
 
 def test_strip_overline_active_low() -> None:

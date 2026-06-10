@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import struct
 
-from phosphor_eda.altium._helpers import (
+from phosphor_eda.formats.altium._helpers import (
     compute_pin_tip,
     distance_from_top,
     f64,

@@ -2,12 +2,17 @@
 
 from pathlib import Path
 
-from phosphor_eda.altium.project import AltiumHierarchyMode
-from phosphor_eda.altium.records import FileNameRec, RecordType, SheetNameRec, SheetSymbolRec
-from phosphor_eda.altium.sheet_builder import SheetRecords
-from phosphor_eda.altium.source import load_project_source_sheets
-from phosphor_eda.altium.spatial import WireIndex
-from phosphor_eda.altium.to_schematic import altium_to_source
+from phosphor_eda.formats.altium.project import AltiumHierarchyMode
+from phosphor_eda.formats.altium.records import (
+    FileNameRec,
+    RecordType,
+    SheetNameRec,
+    SheetSymbolRec,
+)
+from phosphor_eda.formats.altium.sheet_builder import SheetRecords
+from phosphor_eda.formats.altium.source import load_project_source_sheets
+from phosphor_eda.formats.altium.to_schematic import altium_to_source
+from phosphor_eda.formats.common.spatial import WireIndex
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 QFSAE_PRJPCB = FIXTURES / "altium/qfsae-debugger/Debugger.PrjPcb"
@@ -149,7 +154,7 @@ def test_project_source_expands_nested_repeated_sheet_instances(tmp_path, monkey
     }
 
     monkeypatch.setattr(
-        "phosphor_eda.altium.source.parse_prjpcb_file",
+        "phosphor_eda.formats.altium.source.parse_prjpcb_file",
         lambda _path: type(
             "Project",
             (),
@@ -160,7 +165,7 @@ def test_project_source_expands_nested_repeated_sheet_instances(tmp_path, monkey
         )(),
     )
     monkeypatch.setattr(
-        "phosphor_eda.altium.source.load_sheet",
+        "phosphor_eda.formats.altium.source.load_sheet",
         lambda path, ctx: records_by_file[Path(path).name],
     )
 

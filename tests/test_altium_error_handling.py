@@ -5,9 +5,9 @@ rather than crashes, and that parse issues propagate from leaf parsers
 up to the top-level entry points.
 """
 
-from phosphor_eda.altium.record_factory import materialize_records
-from phosphor_eda.altium.records import RecordType, UnknownRecord
-from phosphor_eda.diagnostics import ParseContext
+from phosphor_eda.formats.altium.record_factory import materialize_records
+from phosphor_eda.formats.altium.records import RecordType, UnknownRecord
+from phosphor_eda.formats.common.diagnostics import ParseContext
 
 # ---------------------------------------------------------------------------
 # Schematic record materialization: invalid inputs
@@ -61,7 +61,7 @@ def test_pin_missing_location():
     )
     assert len(records) == 1
     # Pin should still be created with default location
-    from phosphor_eda.altium.records import PinRec
+    from phosphor_eda.formats.altium.records import PinRec
 
     assert isinstance(records[0], PinRec)
     assert records[0].location == (0, 0)
@@ -95,7 +95,7 @@ def test_load_sheet_accepts_ctx():
     """load_sheet passes its ctx down to materialize_records."""
     from pathlib import Path
 
-    from phosphor_eda.altium.sheet_builder import load_sheet
+    from phosphor_eda.formats.altium.sheet_builder import load_sheet
 
     # Use a real fixture to verify ctx propagates without crashing
     fixtures = Path(__file__).resolve().parent / "fixtures"
@@ -114,7 +114,7 @@ def test_altium_to_design_returns_parse_issues():
     """altium_to_design includes parse issues in design metadata."""
     from pathlib import Path
 
-    from phosphor_eda.altium.to_schematic import altium_to_design
+    from phosphor_eda.formats.altium.to_schematic import altium_to_design
 
     fixtures = Path(__file__).resolve().parent / "fixtures"
     schdoc = fixtures / "altium/qfsae-debugger/MCU.SchDoc"

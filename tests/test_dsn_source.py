@@ -1,7 +1,6 @@
 """Tests for OrCAD DSN source connectivity extraction."""
 
-from phosphor_eda.dsn.to_schematic import dsn_to_source
-from phosphor_eda.models import (
+from phosphor_eda.formats.common.raw_models import (
     GraphicInst,
     NetIdMapping,
     PageNetEntry,
@@ -12,6 +11,7 @@ from phosphor_eda.models import (
     Wire,
     WireAlias,
 )
+from phosphor_eda.formats.dsn.to_schematic import dsn_to_source
 
 
 def test_graphic_connectors_at_mapped_coordinates_become_source_objects() -> None:

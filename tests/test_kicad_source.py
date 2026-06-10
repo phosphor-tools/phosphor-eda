@@ -2,18 +2,18 @@
 
 from pathlib import Path
 
-from phosphor_eda.diagnostics import ParseContext
-from phosphor_eda.kicad.resolver import resolve_kicad_source
-from phosphor_eda.kicad.source import (
+from phosphor_eda.domain.schematic import ScopeId
+from phosphor_eda.formats.common.diagnostics import ParseContext
+from phosphor_eda.formats.kicad.resolver import resolve_kicad_source
+from phosphor_eda.formats.kicad.source import (
     KiCadGlobalLabel,
     KiCadHierarchicalLabel,
     KiCadLocalLabel,
     KiCadPowerSymbol,
     KiCadSheetPin,
 )
-from phosphor_eda.kicad.source_extractor import _generated_local_net_name
-from phosphor_eda.kicad.to_schematic import kicad_to_source
-from phosphor_eda.schematic import ScopeId
+from phosphor_eda.formats.kicad.source_extractor import _generated_local_net_name
+from phosphor_eda.formats.kicad.to_schematic import kicad_to_source
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 HIERARCHY_ROOT = FIXTURES / "kicad-hierarchy" / "root.kicad_sch"

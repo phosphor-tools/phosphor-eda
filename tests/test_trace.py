@@ -4,23 +4,23 @@ from __future__ import annotations
 
 import pytest
 
-from phosphor_eda.schematic import (
+from phosphor_eda.domain.schematic import (
     Component as DomainComponent,
 )
-from phosphor_eda.schematic import (
+from phosphor_eda.domain.schematic import (
     Net as DomainNet,
 )
-from phosphor_eda.schematic import (
+from phosphor_eda.domain.schematic import (
     Page as DomainPage,
 )
-from phosphor_eda.schematic import (
+from phosphor_eda.domain.schematic import (
     Pin as DomainPin,
 )
-from phosphor_eda.schematic import (
+from phosphor_eda.domain.schematic import (
     Schematic,
     ScopeId,
 )
-from phosphor_eda.trace import (
+from phosphor_eda.query.trace import (
     find_paths,
     is_two_pin_passive,
     trace_from_net,

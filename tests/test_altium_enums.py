@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from phosphor_eda.altium.enums import (
+from phosphor_eda.formats.altium.enums import (
     AltiumLayer,
     MechKind,
     PadShape,

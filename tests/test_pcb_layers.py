@@ -1,4 +1,4 @@
-from phosphor_eda.pcb import LayerRole, Pcb, PcbLayer, normalize_roles
+from phosphor_eda.domain.pcb import LayerRole, Pcb, PcbLayer, normalize_roles
 
 
 def test_normalize_roles_removes_duplicates_and_uses_canonical_order() -> None:

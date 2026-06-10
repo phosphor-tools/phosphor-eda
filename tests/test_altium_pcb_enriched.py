@@ -7,15 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from phosphor_eda.altium.pcb_parser import (
-    parse_altium_classes,
-    parse_altium_diff_pairs,
-    parse_altium_pcb,
-    parse_altium_rules,
-    parse_altium_stackup,
-    read_text_records,
-)
-from phosphor_eda.pcb import (
+from phosphor_eda.domain.pcb import (
     Pcb,
     PcbArc,
     PcbArtworkKind,
@@ -25,9 +17,17 @@ from phosphor_eda.pcb import (
     PcbLine,
     PcbPolygon,
 )
+from phosphor_eda.formats.altium.pcb_parser import (
+    parse_altium_classes,
+    parse_altium_diff_pairs,
+    parse_altium_pcb,
+    parse_altium_rules,
+    parse_altium_stackup,
+    read_text_records,
+)
 
 if TYPE_CHECKING:
-    from phosphor_eda.project import Stackup
+    from phosphor_eda.domain.project import Stackup
 
 FIXTURE = Path(__file__).parent / "fixtures" / "altium" / "pi-mx8" / "PCB" / "PiMX8MP_r0.3.PcbDoc"
 

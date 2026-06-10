@@ -10,8 +10,7 @@ import pytest
 from click.testing import CliRunner
 
 from phosphor_eda.cli import main
-from phosphor_eda.convert import load_project
-from phosphor_eda.pcb import (
+from phosphor_eda.domain.pcb import (
     LayerRole,
     Pcb,
     PcbConductor,
@@ -25,9 +24,9 @@ from phosphor_eda.pcb import (
     PcbVia,
     PcbViaType,
 )
-from phosphor_eda.pcb_builder import PcbBuilder
-from phosphor_eda.project import Project
-from phosphor_eda.schematic import (
+from phosphor_eda.domain.pcb_builder import PcbBuilder
+from phosphor_eda.domain.project import Project
+from phosphor_eda.domain.schematic import (
     Component,
     ComponentOccurrence,
     Net,
@@ -38,7 +37,8 @@ from phosphor_eda.schematic import (
     Schematic,
     ScopeId,
 )
-from phosphor_eda.sql import load_database
+from phosphor_eda.query.convert import load_project
+from phosphor_eda.query.sql import load_database
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SWD_SWITCH_PCB = FIXTURES / "swd_switch.kicad_pcb"
