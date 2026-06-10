@@ -19,13 +19,13 @@ from phosphor_eda.formats.common.resolved_graph import (
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from phosphor_eda.domain.schematic import Schematic, ScopeId
     from phosphor_eda.formats.common.diagnostics import ParseContext
     from phosphor_eda.formats.kicad.source import (
         KiCadLocalNet,
         KiCadPinOccurrence,
         KiCadSourceDesign,
     )
-    from phosphor_eda.domain.schematic import Schematic, ScopeId
 
 
 # KiCad pin electrical types mapped to the canonical schematic vocabulary

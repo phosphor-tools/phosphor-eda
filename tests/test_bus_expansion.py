@@ -5,6 +5,7 @@ Bus notation like ``D[0..7]`` expands into individual signal names
 evidence and must not create aggregate-name public connectivity.
 """
 
+from phosphor_eda.domain.schematic import ScopeId
 from phosphor_eda.formats.altium._helpers import parse_bus_notation
 from phosphor_eda.formats.altium.enums import SheetEntrySide
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode, AltiumProject
@@ -21,7 +22,6 @@ from phosphor_eda.formats.altium.source import (
     AltiumSourceDesign,
 )
 from phosphor_eda.formats.common.spatial import WireIndex
-from phosphor_eda.domain.schematic import ScopeId
 
 
 def _make_sheet(name: str, records: list[AltiumRecord]) -> SheetRecords:

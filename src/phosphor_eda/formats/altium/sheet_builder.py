@@ -48,8 +48,8 @@ from phosphor_eda.formats.altium.records import (
     TextFrameRec,
     WireRec,
 )
-from phosphor_eda.formats.common.spatial import UnionFind, WireIndex, point_on_segment
 from phosphor_eda.formats.common.diagnostics import ParseContext
+from phosphor_eda.formats.common.spatial import UnionFind, WireIndex, point_on_segment
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

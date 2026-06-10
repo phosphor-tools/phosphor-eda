@@ -2,6 +2,8 @@
 
 import pytest
 
+from phosphor_eda.domain.schematic import Net, ScopeId
+from phosphor_eda.formats.common.resolved_graph import ResolutionInputError
 from phosphor_eda.formats.kicad.resolver import resolve_kicad_source, select_kicad_net_name
 from phosphor_eda.formats.kicad.source import (
     KiCadGlobalLabel,
@@ -15,8 +17,6 @@ from phosphor_eda.formats.kicad.source import (
     KiCadSheetSymbol,
     KiCadSourceDesign,
 )
-from phosphor_eda.formats.common.resolved_graph import ResolutionInputError
-from phosphor_eda.domain.schematic import Net, ScopeId
 
 
 def _scope(*parts: str) -> ScopeId:

@@ -5,12 +5,6 @@ from pathlib import Path
 import pytest
 import sexpdata
 
-from phosphor_eda.formats.kicad.pcb_parser import (
-    _extract_value,  # pyright: ignore[reportPrivateUsage]
-    parse_kicad_pcb,
-    parse_kicad_pcb_from_sexpr,
-    parse_kicad_stackup,
-)
 from phosphor_eda.domain.pcb import (
     LayerRole,
     Pcb,
@@ -21,10 +15,16 @@ from phosphor_eda.domain.pcb import (
     PcbPolygon,
     PcbText,
 )
+from phosphor_eda.domain.project import Stackup
+from phosphor_eda.formats.kicad.pcb_parser import (
+    _extract_value,  # pyright: ignore[reportPrivateUsage]
+    parse_kicad_pcb,
+    parse_kicad_pcb_from_sexpr,
+    parse_kicad_stackup,
+)
+from phosphor_eda.geometry.pcb_geometry import pad_polygon
 from phosphor_eda.render.drills import drill_geometry
 from phosphor_eda.render.inventory import InventoryItemKind, build_inventory
-from phosphor_eda.domain.project import Stackup
-from phosphor_eda.geometry.pcb_geometry import pad_polygon
 
 FIXTURE = Path(__file__).parent / "fixtures" / "swd_switch.kicad_pcb"
 ORANGECRAB_FIXTURE = Path(__file__).parent / "fixtures" / "orangecrab.kicad_pcb"

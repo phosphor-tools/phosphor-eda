@@ -12,8 +12,8 @@ import pytest
 
 from phosphor_eda.formats.altium.project import parse_prjpcb
 from phosphor_eda.formats.altium.to_schematic import altium_to_design
-from phosphor_eda.query.convert import find_project_root
 from phosphor_eda.formats.kicad.to_schematic import kicad_to_design
+from phosphor_eda.query.convert import find_project_root
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 

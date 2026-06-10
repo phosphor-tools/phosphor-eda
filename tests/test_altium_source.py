@@ -3,11 +3,16 @@
 from pathlib import Path
 
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode
-from phosphor_eda.formats.altium.records import FileNameRec, RecordType, SheetNameRec, SheetSymbolRec
+from phosphor_eda.formats.altium.records import (
+    FileNameRec,
+    RecordType,
+    SheetNameRec,
+    SheetSymbolRec,
+)
 from phosphor_eda.formats.altium.sheet_builder import SheetRecords
 from phosphor_eda.formats.altium.source import load_project_source_sheets
-from phosphor_eda.formats.common.spatial import WireIndex
 from phosphor_eda.formats.altium.to_schematic import altium_to_source
+from phosphor_eda.formats.common.spatial import WireIndex
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 QFSAE_PRJPCB = FIXTURES / "altium/qfsae-debugger/Debugger.PrjPcb"

@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from phosphor_eda.domain.schematic import ScopeId
 from phosphor_eda.formats.altium.project import AltiumProject, parse_prjpcb_file
 from phosphor_eda.formats.altium.records import (
     AltiumRecord,
@@ -27,7 +28,6 @@ from phosphor_eda.formats.altium.sheet_builder import (
     resolve_local_net_groups,
 )
 from phosphor_eda.formats.common.diagnostics import ParseContext
-from phosphor_eda.domain.schematic import ScopeId
 
 if TYPE_CHECKING:
     from collections.abc import Iterable

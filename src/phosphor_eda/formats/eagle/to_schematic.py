@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET
 
+from phosphor_eda.domain.schematic import Schematic, ScopeId
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.common.net_union import NetUnion
 from phosphor_eda.formats.common.resolved_graph import (
@@ -22,7 +23,6 @@ from phosphor_eda.formats.common.resolved_graph import (
     ResolvedPinInput,
     build_resolved_schematic,
 )
-from phosphor_eda.domain.schematic import Schematic, ScopeId
 
 if TYPE_CHECKING:
     from pathlib import Path

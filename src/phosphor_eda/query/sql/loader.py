@@ -11,7 +11,6 @@ import duckdb
 from shapely import LineString, Point
 from shapely.affinity import rotate
 
-from phosphor_eda.query.classify import is_power_net
 from phosphor_eda.domain.pcb import (
     LayerRole,
     PcbArc,
@@ -45,8 +44,9 @@ from phosphor_eda.geometry.pcb_geometry import (
     trace_arc_geometry,
     via_geometry,
 )
-from phosphor_eda.query.sql.schema import create_tables, create_views
 from phosphor_eda.geometry.text_outlines import text_outline_geometry
+from phosphor_eda.query.classify import is_power_net
+from phosphor_eda.query.sql.schema import create_tables, create_views
 
 if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry

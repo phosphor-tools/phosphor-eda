@@ -3,14 +3,14 @@ from __future__ import annotations
 from test_pcb_render import _board
 
 from phosphor_eda.domain.pcb import PcbClosedPath, PcbKeepout
-from phosphor_eda.render.primitives import (
-    solder_mask_opening_primitives,
-)
 from phosphor_eda.render.inventory import (
     InventoryItemKind,
     InventoryPurpose,
     build_inventory,
     select_inventory_items,
+)
+from phosphor_eda.render.primitives import (
+    solder_mask_opening_primitives,
 )
 from phosphor_eda.render.settings import LayerMatch, LayerSelectionRule
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from phosphor_eda.domain.project import Project
 from phosphor_eda.formats.altium.pcb_parser import (
     parse_altium_classes,
     parse_altium_diff_pairs,
@@ -32,7 +33,6 @@ from phosphor_eda.formats.kicad.pcb_parser import (
 )
 from phosphor_eda.formats.kicad.pro_parser import parse_kicad_pro
 from phosphor_eda.formats.kicad.to_schematic import kicad_to_design
-from phosphor_eda.domain.project import Project
 from phosphor_eda.query.serialize import serialize_design
 
 if TYPE_CHECKING:

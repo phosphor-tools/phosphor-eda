@@ -10,7 +10,6 @@ import pytest
 from click.testing import CliRunner
 
 from phosphor_eda.cli import main
-from phosphor_eda.query.convert import load_project
 from phosphor_eda.domain.pcb import (
     LayerRole,
     Pcb,
@@ -38,6 +37,7 @@ from phosphor_eda.domain.schematic import (
     Schematic,
     ScopeId,
 )
+from phosphor_eda.query.convert import load_project
 from phosphor_eda.query.sql import load_database
 
 FIXTURES = Path(__file__).parent / "fixtures"

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from phosphor_eda.domain.schematic import Schematic, ScopeId
+from phosphor_eda.formats.common.text import strip_overline
 from phosphor_eda.formats.dsn.resolver import resolve_dsn_source
 from phosphor_eda.formats.dsn.source import (
     DsnGlobal,
@@ -18,8 +20,6 @@ from phosphor_eda.formats.dsn.source import (
     DsnWireAlias,
     dsn_name_key,
 )
-from phosphor_eda.domain.schematic import Schematic, ScopeId
-from phosphor_eda.formats.common.text import strip_overline
 
 if TYPE_CHECKING:
     from phosphor_eda.formats.common.diagnostics import ParseContext

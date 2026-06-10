@@ -18,8 +18,8 @@ from phosphor_eda.domain.schematic import (
 )
 
 if TYPE_CHECKING:
-    from phosphor_eda.formats.common.net_union import NetUnion
     from phosphor_eda.domain.schematic import ScopeId
+    from phosphor_eda.formats.common.net_union import NetUnion
 
 
 class ResolutionInputError(ValueError):

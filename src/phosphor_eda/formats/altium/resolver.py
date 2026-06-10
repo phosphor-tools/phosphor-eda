@@ -21,6 +21,7 @@ from phosphor_eda.formats.common.resolved_graph import (
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from phosphor_eda.domain.schematic import Schematic, ScopeId
     from phosphor_eda.formats.altium.source import (
         AltiumLocalNet,
         AltiumPinOccurrence,
@@ -30,7 +31,6 @@ if TYPE_CHECKING:
         AltiumSourceDesign,
     )
     from phosphor_eda.formats.common.diagnostics import ParseContext
-    from phosphor_eda.domain.schematic import Schematic, ScopeId
 
 
 @dataclass(slots=True)

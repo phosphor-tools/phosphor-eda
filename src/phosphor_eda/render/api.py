@@ -16,6 +16,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 from xml.sax.saxutils import escape as xml_escape
 
+from phosphor_eda.geometry.text_metrics import BASELINE_CENTER_OFFSET, INTER_REGULAR_BASE64
 from phosphor_eda.render.plan import (
     DerivedRenderPlan,
     build_derived_render_plan,
@@ -29,7 +30,6 @@ from phosphor_eda.render.settings import (
     parse_render_settings,
     render_settings_schema,
 )
-from phosphor_eda.geometry.text_metrics import BASELINE_CENTER_OFFSET, INTER_REGULAR_BASE64
 
 __all__ = [
     "HighlightSpec",
@@ -71,8 +71,8 @@ if TYPE_CHECKING:
         ResolvedLegend,
         ResolvedPointer,
     )
-    from phosphor_eda.render.modes import DerivedLayer
     from phosphor_eda.render.inventory import InventoryTags
+    from phosphor_eda.render.modes import DerivedLayer
     from phosphor_eda.render.primitives import LayerClip, LayerMask, SvgPrimitive
     from phosphor_eda.render.profiler import RenderProfiler
     from phosphor_eda.render.tokens import ResolvedStyle, VisualRole

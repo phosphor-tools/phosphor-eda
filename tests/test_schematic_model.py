@@ -1,15 +1,6 @@
 """Tests for the public schematic graph model."""
 
 import phosphor_eda.domain.schematic as schematic
-from phosphor_eda.formats.common.net_union import NetUnion
-from phosphor_eda.formats.common.resolved_graph import (
-    ResolvedComponentOccurrenceInput,
-    ResolvedLocalNetInput,
-    ResolvedNetInput,
-    ResolvedPageInput,
-    ResolvedPinInput,
-    build_resolved_schematic,
-)
 from phosphor_eda.domain.schematic import (
     Component,
     ComponentOccurrence,
@@ -20,6 +11,15 @@ from phosphor_eda.domain.schematic import (
     PinOccurrence,
     Schematic,
     ScopeId,
+)
+from phosphor_eda.formats.common.net_union import NetUnion
+from phosphor_eda.formats.common.resolved_graph import (
+    ResolvedComponentOccurrenceInput,
+    ResolvedLocalNetInput,
+    ResolvedNetInput,
+    ResolvedPageInput,
+    ResolvedPinInput,
+    build_resolved_schematic,
 )
 
 

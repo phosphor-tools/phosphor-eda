@@ -2,9 +2,9 @@
 
 from pathlib import Path
 
+from phosphor_eda.domain.schematic import Net
 from phosphor_eda.formats.dsn.parser import parse_dsn
 from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
-from phosphor_eda.domain.schematic import Net
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 PICO_W_DSN = FIXTURES / "dsn" / "raspberry-pi-pico-w" / "RPI-PICOW-R2.DSN"

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import sexpdata
 
 import phosphor_eda.formats.kicad.sexp as sexp
+from phosphor_eda.domain.schematic import ScopeId
 from phosphor_eda.formats.kicad.lib_symbols import (
     LibPins,
     lib_description,
@@ -21,7 +22,6 @@ from phosphor_eda.formats.kicad.source import (
     KiCadSheetSymbol,
 )
 from phosphor_eda.formats.kicad.wire_graph import WireGraph, point_from_at
-from phosphor_eda.domain.schematic import ScopeId
 
 if TYPE_CHECKING:
     from phosphor_eda.formats.kicad.sexp import SExpNode

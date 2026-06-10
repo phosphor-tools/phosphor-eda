@@ -19,6 +19,7 @@ from phosphor_eda.formats.common.resolved_graph import (
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from phosphor_eda.domain.schematic import Net, Schematic, ScopeId
     from phosphor_eda.formats.common.diagnostics import ParseContext
     from phosphor_eda.formats.dsn.source import (
         DsnPageNet,
@@ -26,7 +27,6 @@ if TYPE_CHECKING:
         DsnPinOccurrence,
         DsnSourceDesign,
     )
-    from phosphor_eda.domain.schematic import Net, Schematic, ScopeId
 
 
 @dataclass(slots=True)

@@ -2,6 +2,15 @@
 
 import pytest
 
+from phosphor_eda.domain.schematic import Net, ScopeId
+from phosphor_eda.formats.common.raw_models import (
+    PageNetEntry,
+    ParsedDesign,
+    PinConnection,
+    PlacedInstance,
+    SchematicPage,
+)
+from phosphor_eda.formats.common.resolved_graph import ResolutionInputError
 from phosphor_eda.formats.dsn.resolver import resolve_dsn_source
 from phosphor_eda.formats.dsn.source import (
     DsnGlobal,
@@ -15,15 +24,6 @@ from phosphor_eda.formats.dsn.source import (
     dsn_name_key,
 )
 from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
-from phosphor_eda.formats.common.raw_models import (
-    PageNetEntry,
-    ParsedDesign,
-    PinConnection,
-    PlacedInstance,
-    SchematicPage,
-)
-from phosphor_eda.formats.common.resolved_graph import ResolutionInputError
-from phosphor_eda.domain.schematic import Net, ScopeId
 
 
 def _scope(*parts: str) -> ScopeId:

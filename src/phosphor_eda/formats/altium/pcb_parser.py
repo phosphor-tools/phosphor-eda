@@ -20,30 +20,6 @@ from typing import TYPE_CHECKING
 
 import olefile
 
-from phosphor_eda.formats.altium._helpers import u32
-from phosphor_eda.formats.altium.enums import (
-    AltiumLayer,
-    PadShape,
-    PadShapeAlt,
-    PcbRecordType,
-    RegionKind,
-)
-from phosphor_eda.formats.altium.errors import AltiumPcbParseError
-from phosphor_eda.formats.altium.pcb_records import (
-    COMPONENT_NONE,
-    NET_UNCONNECTED,
-    ArcRecord,
-    ExtendedVertex,
-    FillRecord,
-    PadRecord,
-    RegionRecord,
-    ShapeBasedRegionRecord,
-    TextRecord,
-    TrackRecord,
-    ViaRecord,
-)
-from phosphor_eda.formats.altium.record_parser import parse_record_payload
-from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.domain.pcb import (
     LayerRole,
     Pcb,
@@ -84,6 +60,30 @@ from phosphor_eda.domain.pcb import (
 )
 from phosphor_eda.domain.pcb_builder import PcbBuilder
 from phosphor_eda.domain.project import DesignRule, DiffPair, NetClass, Stackup, StackupLayer
+from phosphor_eda.formats.altium._helpers import u32
+from phosphor_eda.formats.altium.enums import (
+    AltiumLayer,
+    PadShape,
+    PadShapeAlt,
+    PcbRecordType,
+    RegionKind,
+)
+from phosphor_eda.formats.altium.errors import AltiumPcbParseError
+from phosphor_eda.formats.altium.pcb_records import (
+    COMPONENT_NONE,
+    NET_UNCONNECTED,
+    ArcRecord,
+    ExtendedVertex,
+    FillRecord,
+    PadRecord,
+    RegionRecord,
+    ShapeBasedRegionRecord,
+    TextRecord,
+    TrackRecord,
+    ViaRecord,
+)
+from phosphor_eda.formats.altium.record_parser import parse_record_payload
+from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.common.text import strip_overline
 
 if TYPE_CHECKING:
