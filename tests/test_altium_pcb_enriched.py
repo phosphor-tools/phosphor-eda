@@ -19,6 +19,7 @@ from phosphor_eda.pcb import (
     Pcb,
     PcbArc,
     PcbArtworkKind,
+    PcbCircle,
     PcbConductorKind,
     PcbKeepoutPermission,
     PcbLine,
@@ -251,8 +252,8 @@ def test_altium_board_level_solder_mask_lines_and_arcs_are_preserved(pcb: Pcb) -
 def test_altium_component_non_silk_fab_graphics_are_preserved(pcb: Pcb) -> None:
     assert _artwork_matching(pcb, "Top Paste", PcbLine, footprint_owned=True)
     assert _artwork_matching(pcb, "Bottom Paste", PcbLine, footprint_owned=True)
-    assert _artwork_matching(pcb, "Top 3D Body", PcbArc, footprint_owned=True)
-    assert _artwork_matching(pcb, "Bottom 3D Body", PcbArc, footprint_owned=True)
+    assert _artwork_matching(pcb, "Top 3D Body", PcbCircle, footprint_owned=True)
+    assert _artwork_matching(pcb, "Bottom 3D Body", PcbCircle, footprint_owned=True)
 
 
 def test_polygons_with_holes(pcb: Pcb) -> None:
@@ -325,7 +326,7 @@ def test_pimx8_problematic_polygon_boundary_is_not_renderable_copper(pcb: Pcb) -
 def _artwork_matching(
     pcb: Pcb,
     layer_name: str,
-    payload_type: type[PcbLine] | type[PcbArc],
+    payload_type: type[PcbLine] | type[PcbArc] | type[PcbCircle],
     *,
     footprint_owned: bool,
 ):

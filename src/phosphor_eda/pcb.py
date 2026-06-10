@@ -566,7 +566,7 @@ class PcbConductor:
     id: str
     kind: PcbConductorKind
     layer: PcbLayer
-    data: PcbLine | PcbArc | PcbPolygon
+    data: PcbLine | PcbArc | PcbCircle | PcbPolygon
     net: PcbNet | None = None
     footprint: PcbFootprint | None = None
     pour: PcbPour | None = None

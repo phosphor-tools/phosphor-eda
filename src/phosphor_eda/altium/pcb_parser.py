@@ -45,6 +45,7 @@ from phosphor_eda.pcb import (
     PcbArtworkPurpose,
     PcbBoardProfile,
     PcbBoardProfileElement,
+    PcbCircle,
     PcbClosedPath,
     PcbConductor,
     PcbConductorKind,
@@ -368,7 +369,14 @@ class _ParsedViaPayload:
 
 
 type _ParsedPayload = (
-    PcbLine | PcbArc | PcbPolygon | PcbText | PcbModel3D | _ParsedPadPayload | _ParsedViaPayload
+    PcbLine
+    | PcbArc
+    | PcbCircle
+    | PcbPolygon
+    | PcbText
+    | PcbModel3D
+    | _ParsedPadPayload
+    | _ParsedViaPayload
 )
 
 
@@ -790,6 +798,26 @@ def _arc_to_three_point(
     return (sx, sy, mx, my, ex, ey)
 
 
+def _arc_shape_payload(
+    cx: float,
+    cy_orig: float,
+    radius: float,
+    width: float,
+    start_deg: float,
+    end_deg: float,
+) -> tuple[_ParsedShapeKind, PcbArc | PcbCircle]:
+    if _is_full_circle_arc(start_deg, end_deg):
+        # Altium stores the radius at the stroke centerline. Unfilled PcbCircle
+        # payloads use the outer radius plus width to describe the annulus.
+        return (
+            _ParsedShapeKind.CIRCLE,
+            PcbCircle(cx, -cy_orig, radius + width / 2.0, width, fill=False),
+        )
+
+    sx, sy, mx, my, ex, ey = _arc_to_three_point(cx, cy_orig, radius, start_deg, end_deg)
+    return _ParsedShapeKind.ARC, PcbArc(sx, -sy, mx, -my, ex, -ey, width)
+
+
 # ---------------------------------------------------------------------------
 # Arc linearization for ShapeBasedRegion extended vertices
 # ---------------------------------------------------------------------------
@@ -1119,11 +1147,9 @@ def _parse_arcs(
         radius = _int_to_mm(arc.radius)
         width = _int_to_mm(arc.width)
 
-        # Compute arc CCW in original Altium coords, then negate Y.
-        sx, sy, mx, my, ex, ey = _arc_to_three_point(
-            cx, cy_orig, radius, arc.start_angle, arc.end_angle
+        shape, payload = _arc_shape_payload(
+            cx, cy_orig, radius, width, arc.start_angle, arc.end_angle
         )
-        sy, my, ey = -sy, -my, -ey
 
         component_index = None if arc.component == _COMPONENT_NONE else arc.component
         if arc.is_keepout:
@@ -1189,9 +1215,9 @@ def _parse_arcs(
             _ParsedPrimitive(
                 id=f"arc:{arc.layer}:{index}",
                 object_type=object_type,
-                shape=_ParsedShapeKind.ARC,
+                shape=shape,
                 roles=roles,
-                data=PcbArc(sx, sy, mx, my, ex, ey, width),
+                data=payload,
                 layers=(layer,),
                 net_number=net_number,
                 pour_id=pour_id,
@@ -2219,23 +2245,21 @@ def _parse_board_outline(
             radius = _int_to_mm(arc.radius)
             width = _int_to_mm(arc.width)
 
-            # Compute arc CCW in original Altium coords, then negate Y.
-            sx, sy, mx, my, ex, ey = _arc_to_three_point(
-                cx, cy_orig, radius, arc.start_angle, arc.end_angle
+            shape, payload = _arc_shape_payload(
+                cx, cy_orig, radius, width, arc.start_angle, arc.end_angle
             )
-            sy, my, ey = -sy, -my, -ey
             outline.append(
                 _ParsedPrimitive(
                     id=f"outline_arc:{target_layer}:{index}",
                     object_type=_ParsedObjectKind.GRAPHIC,
-                    shape=_ParsedShapeKind.ARC,
+                    shape=shape,
                     roles=_layered_geometry_roles(
                         target_layer,
                         layer_map,
                         _ParsedRole.BOARD_OUTLINE,
                         _ParsedRole.BOARD_LEVEL,
                     ),
-                    data=PcbArc(sx, sy, mx, my, ex, ey, width),
+                    data=payload,
                     layers=(edge_name,),
                     metadata=_geometry_metadata(
                         native_type="ARC",
@@ -2520,7 +2544,7 @@ def _parsed_conductor(
     footprints: list[PcbFootprint],
     pours: list[PcbPour],
 ) -> PcbConductor | None:
-    if not isinstance(primitive.data, PcbLine | PcbArc | PcbPolygon):
+    if not isinstance(primitive.data, PcbLine | PcbArc | PcbCircle | PcbPolygon):
         return None
     layer = _primary_layer_ref(builder, primitive, source=primitive.id)
     pour = _pour_for_primitive(primitive, pours)
@@ -2549,7 +2573,10 @@ def _parsed_artwork(
     primitive: _ParsedPrimitive,
     footprints: list[PcbFootprint],
 ) -> PcbArtwork | None:
-    if not isinstance(primitive.data, PcbLine | PcbArc | PcbPolygon | PcbText | PcbModel3D):
+    if not isinstance(
+        primitive.data,
+        PcbLine | PcbArc | PcbCircle | PcbPolygon | PcbText | PcbModel3D,
+    ):
         return None
     layer = (
         None
@@ -2573,7 +2600,7 @@ def _board_profile_element(
     builder: PcbBuilder,
     primitive: _ParsedPrimitive,
 ) -> PcbBoardProfileElement | None:
-    if not isinstance(primitive.data, PcbLine | PcbArc | PcbPolygon):
+    if not isinstance(primitive.data, PcbLine | PcbArc | PcbCircle | PcbPolygon):
         return None
     return PcbBoardProfileElement(
         id=primitive.id,

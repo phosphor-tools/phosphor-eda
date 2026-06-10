@@ -249,6 +249,43 @@ def test_builtin_render_settings_hide_non_silkscreen_footprint_text(name: str) -
     assert "text:U1:mech-user" not in selected_ids
 
 
+@pytest.mark.parametrize(
+    "name",
+    ["high-contrast", "print", "print-callout", "simplified-high-contrast"],
+)
+def test_high_contrast_presets_hide_mechanical_artwork_by_default(name: str) -> None:
+    board = _board()
+    mechanical_layer = PcbLayer(
+        "Top 3D Body",
+        (LayerRole.MECHANICAL, LayerRole.THREE_D_BODY, LayerRole.FRONT),
+        number=69,
+    )
+    footprint = board.footprints[0]
+    board.layers.append(mechanical_layer)
+    board.artwork.append(
+        PcbArtwork(
+            id="line:U1:body",
+            kind=PcbArtworkKind.LINE,
+            purpose=PcbArtworkPurpose.COMPONENT_BODY,
+            layer=mechanical_layer,
+            data=PcbLine(1.0, 1.0, 4.0, 1.0, 0.1),
+            footprint=footprint,
+        )
+    )
+
+    settings_file = files("phosphor_eda.render_settings").joinpath(f"{name}.json")
+    with as_file(settings_file) as path:
+        settings = load_render_settings_file(path)
+
+    selected = select_source_artwork(
+        build_inventory(board, side="front"),
+        settings.source.layers,
+        active_side="front",
+    )
+
+    assert "line:U1:body" not in {item.id for item in selected}
+
+
 def _board() -> Pcb:
     front_cu = PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT, LayerRole.OUTER), number=0)
     back_cu = PcbLayer("B.Cu", (LayerRole.COPPER, LayerRole.BACK, LayerRole.OUTER), number=31)

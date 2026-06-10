@@ -353,7 +353,10 @@ def _load_conductors(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
             is_arc = True
             length = centerline.length
         else:
-            geom = polygon_geometry(data)
+            geom = _shape_geometry(data)
+            if geom is None:
+                msg = f"unsupported conductor payload type {type(data).__name__}"
+                raise TypeError(msg)
             length = 0.0
         _ = con.execute(
             """INSERT INTO conductors VALUES
