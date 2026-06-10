@@ -15,7 +15,32 @@ if TYPE_CHECKING:
 
 PASSIVE_PREFIXES = ("R", "C", "L", "D", "FB", "F", "Y")
 
-_POWER_NET_RE = re.compile(r"^P?\d+V\d*$")
+# Named rails and grounds matched on the whole name, so decorated signals like
+# GND_DETECT or VCC_SENSE stay signals.
+_POWER_NET_NAMES = frozenset(
+    {
+        "GND",
+        "VCC",
+        "VDD",
+        "VSS",
+        "VBAT",
+        "VBUS",
+        "VIN",
+        "VEE",
+        "AVDD",
+        "DVDD",
+        "AGND",
+        "PGND",
+        "DGND",
+    }
+)
+
+# Voltage-rail patterns, optional +/-/P prefix:
+#   value-first: 3V3, 5V, 12V0, P3V3, +5V, -12V, 3.3V, 1.8V, +1V8
+#   rail-first (Altium/OrCAD VxPy): V3P3, V1P8, V5P0
+_POWER_NET_RE = re.compile(
+    r"^[+\-P]?(?:\d+V\d*|\d*\.\d+V|\d+\.\d*V|V\d+P\d+)$",
+)
 
 
 def ref_prefix(reference: str) -> str:
@@ -32,7 +57,7 @@ def ref_prefix(reference: str) -> str:
 
 def is_power_net(name: str, net: Net | None = None) -> bool:
     upper = name.upper()
-    if upper in ("GND", "VCC", "VDD", "VSS", "VBAT"):
+    if upper in _POWER_NET_NAMES:
         return True
     if _POWER_NET_RE.match(upper):
         return True
