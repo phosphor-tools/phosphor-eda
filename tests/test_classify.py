@@ -2,7 +2,7 @@
 
 import pytest
 
-from phosphor_eda.classify import is_power_net
+from phosphor_eda.query.classify import is_power_net
 from phosphor_eda.domain.schematic import Net
 
 # name -> expected is_power_net result.

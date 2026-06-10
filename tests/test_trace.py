@@ -20,7 +20,7 @@ from phosphor_eda.domain.schematic import (
     Schematic,
     ScopeId,
 )
-from phosphor_eda.trace import (
+from phosphor_eda.query.trace import (
     find_paths,
     is_two_pin_passive,
     trace_from_net,

@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from phosphor_eda.classify import PASSIVE_PREFIXES, is_power_net, ref_prefix
+from phosphor_eda.query.classify import PASSIVE_PREFIXES, is_power_net, ref_prefix
 
 if TYPE_CHECKING:
     from phosphor_eda.domain.schematic import Component, Net, Pin, Schematic

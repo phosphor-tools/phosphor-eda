@@ -33,7 +33,7 @@ from phosphor_eda.formats.kicad.pcb_parser import (
 from phosphor_eda.formats.kicad.pro_parser import parse_kicad_pro
 from phosphor_eda.formats.kicad.to_schematic import kicad_to_design
 from phosphor_eda.domain.project import Project
-from phosphor_eda.serialize import serialize_design
+from phosphor_eda.query.serialize import serialize_design
 
 if TYPE_CHECKING:
     from collections.abc import Callable

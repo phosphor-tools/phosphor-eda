@@ -25,7 +25,7 @@ from phosphor_eda.domain.schematic import (
 from phosphor_eda.domain.schematic import (
     Pin as DomainPin,
 )
-from phosphor_eda.serialize import (
+from phosphor_eda.query.serialize import (
     filter_components,
     filter_nets,
     filter_pages,
@@ -366,7 +366,7 @@ def test_serialize_grep_friendly():
 
 
 def test_serialize_to_file(tmp_path: Path):
-    from phosphor_eda.serialize import write_design
+    from phosphor_eda.query.serialize import write_design
 
     design = _simple_design()
     out = tmp_path / "test.txt"
@@ -667,7 +667,7 @@ def test_inline_destinations_power_net_excluded():
 
 def test_is_power_net_classname():
     """ClassName=PWR metadata should mark a net as power."""
-    from phosphor_eda.serialize import is_power_net
+    from phosphor_eda.query.serialize import is_power_net
 
     net = Net(name="CUSTOM_RAIL", metadata={"ClassName": "PWR"})
     assert is_power_net("CUSTOM_RAIL", net)
@@ -1207,7 +1207,7 @@ def test_format_component_detail_trace_through():
 
 def test_inline_destinations_fan_out_lists_each_endpoint():
     """A series passive feeding two ICs renders one destination per endpoint."""
-    from phosphor_eda.serialize import _trace_destinations
+    from phosphor_eda.query.serialize import _trace_destinations
 
     page = Page(name="P")
     u1 = Component(reference="U1", part="MCU", description="", pages=[page])

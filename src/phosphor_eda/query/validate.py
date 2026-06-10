@@ -7,7 +7,7 @@ works for Altium, OrCAD, or any future input format.
 
 Usage::
 
-    from phosphor_eda.validate import validate_design
+    from phosphor_eda.query.validate import validate_design
 
     findings = validate_design(design)
     for f in findings:

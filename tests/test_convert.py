@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from phosphor_eda.convert import (
+from phosphor_eda.query.convert import (
     SCHEMATIC_EXTENSIONS,
     convert,
     find_project_root,

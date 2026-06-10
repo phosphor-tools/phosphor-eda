@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from phosphor_eda.classify import PASSIVE_PREFIXES, is_power_net, ref_prefix
-from phosphor_eda.trace import find_paths, is_two_pin_passive, other_pin, trace_from_net
-from phosphor_eda.validate import Severity, validate_design
+from phosphor_eda.query.classify import PASSIVE_PREFIXES, is_power_net, ref_prefix
+from phosphor_eda.query.trace import find_paths, is_two_pin_passive, other_pin, trace_from_net
+from phosphor_eda.query.validate import Severity, validate_design
 
 # Re-export classify utilities so existing importers don't break
 __all__ = ["PASSIVE_PREFIXES", "is_power_net", "ref_prefix"]
