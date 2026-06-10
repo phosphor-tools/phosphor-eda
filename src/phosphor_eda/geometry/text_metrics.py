@@ -19,9 +19,9 @@ from fontTools.ttLib import TTFont  # pyright: ignore[reportMissingTypeStubs]
 from phosphor_eda.geometry.fonts import INTER_REGULAR
 
 # Compile once: matches any HTML tag
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
+HTML_TAG_RE = re.compile(r"<[^>]+>")
 # Matches <br> in any form: <br>, <br/>, <br />
-_BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
+BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
 
 # Load font metrics once at import time.
 # fontTools has no type stubs — all table access returns untyped objects.
@@ -98,13 +98,13 @@ def measure_text(text: str, font_size: float) -> tuple[float, float]:
         Font size in output units (typically board mm).
     """
     # Split on <br> variants first
-    lines = _BR_RE.split(text)
+    lines = BR_RE.split(text)
     num_lines = max(len(lines), 1)
 
     # Measure each line (strip HTML tags for character measurement)
     max_width_units = 0
     for line in lines:
-        plain = _HTML_TAG_RE.sub("", line)
+        plain = HTML_TAG_RE.sub("", line)
         width_units = _measure_line_width(plain)
         max_width_units = max(max_width_units, width_units)
 
