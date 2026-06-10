@@ -227,6 +227,8 @@ def build_highlight_layers(
 ) -> tuple[HighlightGroup, ...]:
     """Build highlight overlays for net/component/pad targets."""
     groups: list[HighlightGroup] = []
+    board_mask = _board_layer_mask(inventory)
+    silkscreen_masks = _silkscreen_layer_masks(inventory, settings.side)
     for highlight in settings.highlights:
         selected = tuple(item for item in inventory.items if _matches_highlight(item, highlight))
         if not selected:
@@ -239,6 +241,8 @@ def build_highlight_layers(
             namespace="highlight",
             warn=warn,
             highlight_color=highlight.color,
+            board_mask=board_mask,
+            silkscreen_masks=silkscreen_masks,
             profiler=profiler,
         )
         groups.append(HighlightGroup(target=_highlight_target(highlight), layers=layers))
@@ -476,6 +480,8 @@ def _filter_excluded_components(
 
 
 def _matches_highlight(item: InventoryItem, highlight: HighlightSpec) -> bool:
+    if item.item_kind == InventoryItemKind.DRILL:
+        return False
     if highlight.net:
         return item.tags.net_name.upper() == highlight.net.upper()
     if highlight.component:

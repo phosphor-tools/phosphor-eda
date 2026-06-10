@@ -132,3 +132,39 @@ def test_highlights_match_typed_inventory_tags() -> None:
     assert len(groups) == 1
     assert groups[0].target == "net:VCC"
     assert any(layer.primitives for layer in groups[0].layers)
+
+
+def test_highlight_layers_use_board_and_drill_cutouts() -> None:
+    inventory = build_inventory(_board(), side="front")
+    settings = load_render_settings_json('{"extends": "phosphor:review"}')
+    settings.render_mode = "eda"
+    settings.side = "front"
+    settings.highlights = [HighlightSpec(net="VCC")]
+
+    groups = build_highlight_layers(inventory, settings, warn=lambda _message: None)
+
+    copper = next(
+        layer
+        for layer in groups[0].layers
+        if layer.role.function == "copper" and layer.role.side == "front"
+    )
+    assert copper.mask is not None
+    assert copper.mask.board
+    assert copper.mask.drills
+
+
+def test_highlights_do_not_select_drills_from_net_tags() -> None:
+    inventory = build_inventory(_board(), side="front")
+    settings = load_render_settings_json('{"extends": "phosphor:review"}')
+    settings.render_mode = "eda"
+    settings.side = "front"
+    settings.highlights = [HighlightSpec(net="VCC")]
+
+    groups = build_highlight_layers(inventory, settings, warn=lambda _message: None)
+
+    assert all(layer.role.function != "drill" for layer in groups[0].layers)
+    assert all(
+        not source_id.startswith("drill:")
+        for layer in groups[0].layers
+        for source_id in layer.source_ids
+    )
