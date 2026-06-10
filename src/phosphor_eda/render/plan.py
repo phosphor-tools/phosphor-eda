@@ -4,8 +4,8 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.pcb import PcbConductorKind
-from phosphor_eda.pcb_render_inventory import build_inventory
-from phosphor_eda.pcb_render_modes import (
+from phosphor_eda.render.inventory import build_inventory
+from phosphor_eda.render.modes import (
     HighlightGroup,
     build_eda_layers,
     build_highlight_layers,
@@ -14,10 +14,10 @@ from phosphor_eda.pcb_render_modes import (
 
 if TYPE_CHECKING:
     from phosphor_eda.domain.pcb import Pcb
-    from phosphor_eda.pcb_annotations import ResolvedAnnotations
-    from phosphor_eda.pcb_render_artwork import DerivedLayer
-    from phosphor_eda.pcb_render_profile import RenderProfiler
-    from phosphor_eda.pcb_render_settings import RenderSettings
+    from phosphor_eda.render.annotations import ResolvedAnnotations
+    from phosphor_eda.render.modes import DerivedLayer
+    from phosphor_eda.render.profiler import RenderProfiler
+    from phosphor_eda.render.settings import RenderSettings
 
 
 @dataclass(frozen=True)

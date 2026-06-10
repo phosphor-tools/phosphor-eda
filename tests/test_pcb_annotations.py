@@ -17,7 +17,7 @@ from phosphor_eda.domain.pcb import (
     PcbPad,
     PcbPadType,
 )
-from phosphor_eda.pcb_annotations import (
+from phosphor_eda.render.annotations import (
     AnnotationSpec,
     BoxSpec,
     LabelSpec,

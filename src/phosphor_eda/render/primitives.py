@@ -26,8 +26,13 @@ from phosphor_eda.domain.pcb import (
     PcbText,
     PcbVia,
 )
-from phosphor_eda.pcb_render_drills import drill_geometry
-from phosphor_eda.pcb_render_inventory import InventoryItem, InventoryItemKind, InventoryPurpose
+from phosphor_eda.render.drills import drill_geometry
+from phosphor_eda.render.inventory import (
+    InventoryItem,
+    InventoryItemKind,
+    InventoryPurpose,
+    PcbRenderInventory,
+)
 from phosphor_eda.geometry.shapely_ops import normalize_geometry
 from phosphor_eda.geometry.pcb_geometry import (
     arc_center_from_three_points,
@@ -44,7 +49,7 @@ if TYPE_CHECKING:
 
     from shapely.coords import CoordinateSequence
 
-    from phosphor_eda.pcb_render_inventory import InventoryTags
+    from phosphor_eda.render.inventory import InventoryTags
 
 
 def _empty_data() -> dict[str, str]:
@@ -486,3 +491,38 @@ def layer_function_for_item(item: InventoryItem) -> str:
 
 def source_layer_name(item: InventoryItem) -> str:
     return "" if item.layer is None else item.layer.name
+
+
+def solder_mask_opening_primitives(
+    inventory: PcbRenderInventory,
+    *,
+    side: str,
+) -> tuple[SvgPrimitive, ...]:
+    """Return source-derived solder-mask openings."""
+    primitives: list[SvgPrimitive] = []
+    explicit_sources: set[tuple[InventoryItemKind, str, str]] = set()
+    for item in inventory.items:
+        if item.purpose == InventoryPurpose.SOLDER_MASK:
+            if item.layer is not None and item.layer.side not in {"", side}:
+                continue
+            primitive = inventory_item_to_svg_primitive(item)
+            explicit_sources.add((item.item_kind, _mask_source_id(item), side))
+        else:
+            primitive = None
+        if primitive is not None:
+            primitives.append(primitive)
+    for item in inventory.items:
+        if item.item_kind != InventoryItemKind.PAD:
+            continue
+        if (item.item_kind, _mask_source_id(item), side) in explicit_sources:
+            continue
+        primitive = pad_solder_mask_opening_primitive(item, side=side)
+        if primitive is not None:
+            primitives.append(primitive)
+    return tuple(primitives)
+
+
+def _mask_source_id(item: InventoryItem) -> str:
+    if isinstance(item.source, (PcbPad, PcbVia)):
+        return item.source.id
+    return item.id

@@ -4,8 +4,8 @@ from typing import Any
 
 from test_pcb_render import _board
 
-from phosphor_eda.pcb_render_plan import build_derived_render_plan
-from phosphor_eda.pcb_render_settings import (
+from phosphor_eda.render.plan import build_derived_render_plan
+from phosphor_eda.render.settings import (
     LayerMatch,
     LayerSelectionRule,
     RenderSettings,

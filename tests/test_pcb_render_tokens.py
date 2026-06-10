@@ -1,6 +1,6 @@
 import pytest
 
-from phosphor_eda.pcb_render_tokens import (
+from phosphor_eda.render.tokens import (
     ResolvedStyle,
     VisualRole,
     eda_default_copper_color,

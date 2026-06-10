@@ -16,11 +16,11 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 from xml.sax.saxutils import escape as xml_escape
 
-from phosphor_eda.pcb_render_plan import (
+from phosphor_eda.render.plan import (
     DerivedRenderPlan,
     build_derived_render_plan,
 )
-from phosphor_eda.pcb_render_settings import (
+from phosphor_eda.render.settings import (
     HighlightSpec,
     RenderSettings,
     is_json_dict,
@@ -64,18 +64,18 @@ if TYPE_CHECKING:
     from phosphor_eda.domain.pcb import (
         Pcb,
     )
-    from phosphor_eda.pcb_annotations import (
+    from phosphor_eda.render.annotations import (
         ResolvedAnnotations,
         ResolvedBox,
         ResolvedLabel,
         ResolvedLegend,
         ResolvedPointer,
     )
-    from phosphor_eda.pcb_render_artwork import DerivedLayer
-    from phosphor_eda.pcb_render_inventory import InventoryTags
-    from phosphor_eda.pcb_render_primitives import LayerClip, LayerMask, SvgPrimitive
-    from phosphor_eda.pcb_render_profile import RenderProfiler
-    from phosphor_eda.pcb_render_tokens import ResolvedStyle, VisualRole
+    from phosphor_eda.render.modes import DerivedLayer
+    from phosphor_eda.render.inventory import InventoryTags
+    from phosphor_eda.render.primitives import LayerClip, LayerMask, SvgPrimitive
+    from phosphor_eda.render.profiler import RenderProfiler
+    from phosphor_eda.render.tokens import ResolvedStyle, VisualRole
 
 _STYLE_BLOCK_TERMINATOR_RE = re.compile(r"</\s*style\s*>", re.IGNORECASE)
 _LayerClipSignature = tuple[str, ...]

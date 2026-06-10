@@ -32,7 +32,7 @@ from phosphor_eda.domain.pcb import (
 )
 
 if TYPE_CHECKING:
-    from phosphor_eda.pcb_render_settings import LayerSelectionRule
+    from phosphor_eda.render.settings import LayerSelectionRule
 
 type RenderPoint = tuple[float, float]
 type InventorySource = (

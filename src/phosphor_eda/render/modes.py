@@ -3,37 +3,52 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.pcb import LayerRole
-from phosphor_eda.pcb_render_artwork import (
-    DerivedLayer,
-    solder_mask_opening_primitives,
-)
-from phosphor_eda.pcb_render_inventory import (
+from phosphor_eda.render.inventory import (
     InventoryItem,
     InventoryItemKind,
     InventoryPurpose,
     PcbRenderInventory,
     select_inventory_items,
 )
-from phosphor_eda.pcb_render_primitives import (
+from phosphor_eda.render.primitives import (
     LayerClip,
     LayerMask,
     SvgPrimitive,
     drill_to_svg_primitive,
     inventory_item_to_svg_primitive,
     layer_function_for_item,
+    solder_mask_opening_primitives,
     source_layer_name,
 )
-from phosphor_eda.pcb_render_tokens import VisualRole, resolve_layer_style
+from phosphor_eda.render.tokens import VisualRole, resolve_layer_style
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Callable, Iterable, Mapping
 
-    from phosphor_eda.pcb_render_profile import RenderProfiler
-    from phosphor_eda.pcb_render_settings import HighlightSpec, RenderSettings
+    from phosphor_eda.render.profiler import RenderProfiler
+    from phosphor_eda.render.settings import HighlightSpec, RenderSettings
+    from phosphor_eda.render.tokens import ResolvedStyle
+
+
+def _empty_data() -> dict[str, str]:
+    return {}
+
+
+@dataclass(frozen=True)
+class DerivedLayer:
+    id: str
+    role: VisualRole
+    primitives: tuple[SvgPrimitive, ...]
+    source_layers: tuple[str, ...]
+    source_ids: tuple[str, ...]
+    style: ResolvedStyle | None = None
+    data: Mapping[str, str] = field(default_factory=_empty_data)
+    clip: LayerClip | None = None
+    mask: LayerMask | None = None
 
 
 @dataclass(frozen=True)

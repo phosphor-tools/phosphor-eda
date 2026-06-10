@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Literal, TypeGuard, cast
 
 from phosphor_eda.domain.pcb import LayerRole, PcbArtworkKind, PcbConductorKind
-from phosphor_eda.pcb_render_inventory import InventoryItemKind, InventoryPurpose
+from phosphor_eda.render.inventory import InventoryItemKind, InventoryPurpose
 
 RENDER_MODES = ("eda", "realistic")
 SOURCE_LAYER_ROLES = tuple(role.value for role in LayerRole)
@@ -27,7 +27,7 @@ SOURCE_CONTENT_KINDS = tuple(
     )
 )
 
-_BUNDLED_SETTINGS_PACKAGE = "phosphor_eda.render_settings"
+_BUNDLED_SETTINGS_PACKAGE = "phosphor_eda.render.profiles"
 _SETTINGS_EXTENDS_KEY = "extends"
 _PHOSPHOR_SETTINGS_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _PAD_TARGET_RE = re.compile(r"^[^.]+\..+$")

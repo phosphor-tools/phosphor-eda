@@ -21,8 +21,8 @@ from phosphor_eda.domain.pcb import (
     PcbPolygon,
     PcbText,
 )
-from phosphor_eda.pcb_render_drills import drill_geometry
-from phosphor_eda.pcb_render_inventory import InventoryItemKind, build_inventory
+from phosphor_eda.render.drills import drill_geometry
+from phosphor_eda.render.inventory import InventoryItemKind, build_inventory
 from phosphor_eda.domain.project import Stackup
 from phosphor_eda.geometry.pcb_geometry import pad_polygon
 
