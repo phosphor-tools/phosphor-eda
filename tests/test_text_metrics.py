@@ -1,8 +1,9 @@
 """Tests for text measurement using fonttools."""
 
 import pytest
+from fontTools.ttLib.tables import _h_e_a_d
 
-from phosphor_eda.text_metrics import measure_text
+from phosphor_eda.text_metrics import _build_embedded_font, measure_text
 
 
 class TestMeasureText:
@@ -66,3 +67,15 @@ class TestMeasureText:
         """A typical word should be wider than tall."""
         w, h = measure_text("Hello", 1.0)
         assert w > h
+
+
+def test_embedded_font_subset_does_not_depend_on_generation_timestamp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(_h_e_a_d, "timestampNow", lambda: 1)
+    first = _build_embedded_font()
+
+    monkeypatch.setattr(_h_e_a_d, "timestampNow", lambda: 2)
+    second = _build_embedded_font()
+
+    assert second == first

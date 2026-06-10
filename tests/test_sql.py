@@ -1,12 +1,31 @@
-"""Integration tests for the DuckDB SQL loader and CLI command."""
+"""Integration tests for the typed DuckDB SQL loader and CLI command."""
 
-from collections.abc import Iterator
+from __future__ import annotations
+
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import duckdb
 import pytest
+from click.testing import CliRunner
 
-from phosphor_eda.pcb import Pcb, PcbFootprint, PcbNet, PcbPad, PcbSegment, PcbVia
+from phosphor_eda.cli import main
+from phosphor_eda.convert import load_project
+from phosphor_eda.pcb import (
+    LayerRole,
+    Pcb,
+    PcbConductor,
+    PcbConductorKind,
+    PcbDrillPlating,
+    PcbFootprint,
+    PcbLayer,
+    PcbLine,
+    PcbNet,
+    PcbPadType,
+    PcbVia,
+    PcbViaType,
+)
+from phosphor_eda.pcb_builder import PcbBuilder
 from phosphor_eda.project import Project
 from phosphor_eda.schematic import (
     Component,
@@ -23,11 +42,15 @@ from phosphor_eda.sql import load_database
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SWD_SWITCH_PCB = FIXTURES / "swd_switch.kicad_pcb"
+ORANGECRAB_PCB = FIXTURES / "orangecrab.kicad_pcb"
+PI_MX8_PCB = FIXTURES / "altium/pi-mx8/PCB/PiMX8MP_r0.3.PcbDoc"
 JETSON_ORIN_PRO = FIXTURES / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pro"
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 def _count(db: duckdb.DuckDBPyConnection, sql: str) -> int:
-    """Execute a COUNT query and return the scalar result."""
     row = db.execute(sql).fetchone()
     assert row is not None
     return int(row[0])
@@ -290,47 +313,64 @@ def _constructed_schematic() -> Schematic:
 
 
 def _constructed_pcb() -> Pcb:
-    reset_pad = PcbPad(
+    """One footprint J1 with one pad on net RESET, one trace, and one via."""
+    builder = PcbBuilder("Constructed PCB")
+    front = builder.add_layer(PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT)))
+    back = builder.add_layer(PcbLayer("B.Cu", (LayerRole.COPPER, LayerRole.BACK)))
+    reset = builder.add_net(PcbNet(number=1, name="RESET"))
+    connector = builder.add_footprint(
+        PcbFootprint(
+            reference="J1",
+            footprint_lib="Connector_Test",
+            x=1.0,
+            y=1.0,
+            rotation=0.0,
+            layer=front,
+        )
+    )
+    builder.add_pad(
+        id="pad:J1:1",
         number="1",
         x=1.0,
         y=1.0,
         width=1.0,
         height=1.0,
         shape="rect",
-        layers=["F.Cu"],
-        net_number=1,
-        net_name="RESET",
-        footprint_ref="J1",
+        pad_type=PcbPadType.SMD,
+        layers=(front,),
+        net=reset,
+        footprint=connector,
     )
-    return Pcb(
-        name="Constructed PCB",
-        nets={1: PcbNet(number=1, name="RESET")},
-        footprints=[
-            PcbFootprint(
-                reference="J1",
-                footprint_lib="Connector_Test",
-                x=1.0,
-                y=1.0,
-                rotation=0.0,
-                layer="F.Cu",
-                pads=[reset_pad],
-            )
-        ],
-        segments=[
-            PcbSegment(
-                start_x=0.0,
-                start_y=0.0,
-                end_x=10.0,
-                end_y=0.0,
-                width=0.2,
-                layer="F.Cu",
-                net_number=1,
-            )
-        ],
-        vias=[PcbVia(x=5.0, y=0.0, size=0.8, drill=0.4, layers=["F.Cu", "B.Cu"], net_number=1)],
-        outline_lines=[],
-        outline_arcs=[],
+    builder.add_conductor_object(
+        PcbConductor(
+            id="trace:1",
+            kind=PcbConductorKind.TRACE,
+            layer=front,
+            data=PcbLine(0.0, 0.0, 10.0, 0.0, 0.2),
+            net=reset,
+        )
     )
+    via_drill = builder.add_drill(
+        id="drill:via:1",
+        x=5.0,
+        y=0.0,
+        diameter=0.4,
+        plating=PcbDrillPlating.PLATED,
+        layers=(front, back),
+    )
+    builder.add_via_object(
+        PcbVia(
+            id="via:1",
+            x=5.0,
+            y=0.0,
+            diameter=0.8,
+            layers=(front, back),
+            drill=via_drill,
+            net=reset,
+            via_type=PcbViaType.THROUGH,
+        )
+    )
+    return builder.build()
 
 
 @pytest.fixture
@@ -760,9 +800,11 @@ class TestConstructedSchematicSql:
             ("net:sync", "SYNC", "source_scope_ids", "/root/control,/root/power"),
         ]
 
-    def test_net_summary_groups_schematic_by_net_id_without_name_joined_pcb_counts(
+    def test_net_summary_groups_schematic_by_net_id_with_name_joined_pcb_counts(
         self, constructed_db: duckdb.DuckDBPyConnection
     ) -> None:
+        # PCB tables key nets by board-global name, so both scoped RESET nets
+        # share the board-level pad/via/trace aggregates.
         rows = constructed_db.execute(
             """
             SELECT net_id, name, sch_pin_count, pcb_pad_count, pcb_via_count, trace_length_mm
@@ -772,8 +814,8 @@ class TestConstructedSchematicSql:
             """
         ).fetchall()
         assert rows == [
-            ("net:reset:control", "RESET", 1, None, None, None),
-            ("net:reset:power", "RESET", 2, None, None, None),
+            ("net:reset:control", "RESET", 1, 1, 1, 10.0),
+            ("net:reset:power", "RESET", 2, 1, 1, 10.0),
         ]
 
     def test_loader_referential_integrity(self, constructed_db: duckdb.DuckDBPyConnection) -> None:
@@ -1025,8 +1067,6 @@ class TestConstructedSchematicSql:
 
 @pytest.fixture(scope="module")
 def db() -> Iterator[duckdb.DuckDBPyConnection]:
-    from phosphor_eda.convert import load_project
-
     project = load_project(SWD_SWITCH_PCB)
     con = load_database(project)
     try:
@@ -1046,104 +1086,130 @@ class TestFootprints:
         rows = db.execute(
             "SELECT side, count(*) FROM footprints GROUP BY side ORDER BY side"
         ).fetchall()
-        side_counts = dict(rows)
-        assert side_counts["front"] == 23
-        assert side_counts["back"] == 5
+        assert dict(rows) == {"back": 5, "front": 23}
 
 
-class TestPads:
-    def test_count(self, db: duckdb.DuckDBPyConnection) -> None:
+class TestTypedTables:
+    def test_geometry_table_is_removed(self, db: duckdb.DuckDBPyConnection) -> None:
+        with pytest.raises(duckdb.CatalogException):
+            db.execute("SELECT * FROM geometry").fetchall()
+
+    def test_expected_typed_collection_counts(self, db: duckdb.DuckDBPyConnection) -> None:
         assert _count(db, "SELECT count(*) FROM pads") == 120
+        assert _count(db, "SELECT count(*) FROM vias") == 49
+        assert _count(db, "SELECT count(*) FROM drills") == 71
+        assert _count(db, "SELECT count(*) FROM conductors") == 282
+        assert _count(db, "SELECT count(*) FROM artwork") == 317
+        assert _count(db, "SELECT count(*) FROM board_profile") == 16
 
-    def test_net_names(self, db: duckdb.DuckDBPyConnection) -> None:
-        assert _count(db, "SELECT count(*) FROM pads WHERE net_name = 'VCC'") > 0
+    def test_conductors_replace_segments_and_polygons(self, db: duckdb.DuckDBPyConnection) -> None:
+        assert (
+            _count(db, "SELECT count(*) FROM conductors WHERE kind IN ('trace', 'trace_arc')")
+            == 276
+        )
+        assert _count(db, "SELECT count(*) FROM conductors WHERE kind = 'pour_fill'") == 6
+        assert _count(db, "SELECT count(*) FROM conductors WHERE geom IS NULL") == 0
 
-    def test_have_geometry(self, db: duckdb.DuckDBPyConnection) -> None:
+    def test_artwork_contains_text_and_graphics(self, db: duckdb.DuckDBPyConnection) -> None:
+        assert _count(db, "SELECT count(*) FROM artwork WHERE content_kind = 'text'") > 0
+        assert _count(db, "SELECT count(*) FROM artwork WHERE content_kind = 'line'") > 0
+
+    def test_board_profile_has_geometry(self, db: duckdb.DuckDBPyConnection) -> None:
+        assert _count(db, "SELECT count(*) FROM board_profile WHERE geom IS NOT NULL") == 16
+
+
+class TestPadsAndVias:
+    def test_unconnected_pads_use_nullable_net(self, db: duckdb.DuckDBPyConnection) -> None:
+        assert _count(db, "SELECT count(*) FROM pads WHERE net_number IS NULL") > 0
+        assert _count(db, "SELECT count(*) FROM pads WHERE net_number = 0") == 0
+
+    def test_pads_join_to_drills(self, db: duckdb.DuckDBPyConnection) -> None:
+        assert _count(db, "SELECT count(*) FROM pads p JOIN drills d ON p.drill_id = d.id") > 0
+
+    def test_vias_join_to_drills(self, db: duckdb.DuckDBPyConnection) -> None:
+        assert _count(db, "SELECT count(*) FROM vias v JOIN drills d ON v.drill_id = d.id") == 49
+
+    def test_pad_geometry_is_loaded(self, db: duckdb.DuckDBPyConnection) -> None:
         assert _count(db, "SELECT count(*) FROM pads WHERE geom IS NULL") == 0
 
 
-class TestSegments:
-    def test_count(self, db: duckdb.DuckDBPyConnection) -> None:
-        assert _count(db, "SELECT count(*) FROM segments") == 276
+def test_altium_free_pad_mask_apertures_are_queryable_without_freepads_footprint() -> None:
+    project = load_project(PI_MX8_PCB)
+    con = load_database(project)
+    try:
+        rows = con.execute(
+            """
+            SELECT reference, mask_aperture_width, mask_aperture_height, mask_aperture_source
+            FROM pads
+            WHERE reference IS NULL
+              AND pad_number = 'MT'
+              AND mask_aperture_source IS NOT NULL
+            ORDER BY x, y
+            """
+        ).fetchall()
+    finally:
+        con.close()
 
-    def test_net_resolution(self, db: duckdb.DuckDBPyConnection) -> None:
-        """Segments with net_number > 0 should have net_name populated."""
-        unresolved = _count(
-            db, "SELECT count(*) FROM segments WHERE net_number > 0 AND net_name = ''"
-        )
-        assert unresolved == 0
-
-    def test_have_geometry(self, db: duckdb.DuckDBPyConnection) -> None:
-        null_geom = _count(
-            db, "SELECT count(*) FROM segments WHERE geom IS NULL OR centerline IS NULL"
-        )
-        assert null_geom == 0
-
-
-class TestVias:
-    def test_count(self, db: duckdb.DuckDBPyConnection) -> None:
-        assert _count(db, "SELECT count(*) FROM vias") == 49
-
-    def test_have_geometry(self, db: duckdb.DuckDBPyConnection) -> None:
-        null_geom = _count(
-            db,
-            "SELECT count(*) FROM vias WHERE geom IS NULL OR drill_geom IS NULL",
-        )
-        assert null_geom == 0
+    assert len(rows) == 4
+    for reference, width, height, source in rows:
+        assert reference is None
+        assert width == pytest.approx(5.8, abs=0.02)
+        assert height == pytest.approx(5.85, abs=0.02)
+        assert source.startswith("altium:drill-manager-template:")
 
 
-class TestPolygons:
-    def test_count(self, db: duckdb.DuckDBPyConnection) -> None:
-        assert _count(db, "SELECT count(*) FROM polygons") == 6
+class TestPoursAndKeepouts:
+    def test_pours_count(self, db: duckdb.DuckDBPyConnection) -> None:
+        assert _count(db, "SELECT count(*) FROM pours") == 2
 
-
-class TestZones:
-    def test_count(self, db: duckdb.DuckDBPyConnection) -> None:
-        assert _count(db, "SELECT count(*) FROM zones") == 2
-
-
-class TestGraphicTexts:
-    def test_count(self, db: duckdb.DuckDBPyConnection) -> None:
-        assert _count(db, "SELECT count(*) FROM graphic_texts") == 8
+    def test_swd_switch_has_keepouts_table(self, db: duckdb.DuckDBPyConnection) -> None:
+        assert _count(db, "SELECT count(*) FROM keepouts") == 0
 
 
 class TestLayers:
-    def test_has_copper(self, db: duckdb.DuckDBPyConnection) -> None:
-        assert _count(db, "SELECT count(*) FROM layers WHERE layer_type = 'copper'") > 0
+    def test_layers_have_roles_but_no_primary_role(self, db: duckdb.DuckDBPyConnection) -> None:
+        row = db.execute(
+            """
+            SELECT roles, side
+            FROM layers
+            WHERE name = 'F.CrtYd'
+            """
+        ).fetchone()
+
+        assert row is not None
+        assert set(row[0]) >= {"fabrication", "courtyard", "front"}
+        assert row[1] == "front"
+        with pytest.raises(duckdb.BinderException):
+            db.execute("SELECT primary_role FROM layers").fetchall()
 
     def test_position_ordered(self, db: duckdb.DuckDBPyConnection) -> None:
-        """Stackup layers should have monotonically increasing positions."""
         rows = db.execute(
             "SELECT position FROM layers WHERE position IS NOT NULL ORDER BY position"
         ).fetchall()
-        positions = [r[0] for r in rows]
+        positions = [row[0] for row in rows]
         assert positions == sorted(positions)
-        assert len(positions) > 0
+        assert positions
 
 
 class TestBoard:
     def test_outline_exists(self, db: duckdb.DuckDBPyConnection) -> None:
         row = db.execute("SELECT geom, layer_count FROM board").fetchone()
         assert row is not None
-        assert row[0] is not None  # geom
-        assert row[1] > 0  # layer_count
+        assert row[0] is not None
+        assert row[1] > 0
 
 
 class TestViews:
-    def test_net_routes(self, db: duckdb.DuckDBPyConnection) -> None:
-        rows = db.execute("SELECT * FROM net_routes WHERE trace_length_mm > 0 LIMIT 5").fetchall()
-        assert len(rows) > 0
+    def test_net_routes_reads_conductors(self, db: duckdb.DuckDBPyConnection) -> None:
+        assert _count(db, "SELECT count(*) FROM net_routes WHERE trace_length_mm > 0") > 0
 
-    def test_drill_histogram(self, db: duckdb.DuckDBPyConnection) -> None:
+    def test_drill_histogram_reads_drills(self, db: duckdb.DuckDBPyConnection) -> None:
         rows = db.execute("SELECT * FROM drill_histogram").fetchall()
-        assert len(rows) > 0
-        # Should have both via and pad sources
-        sources = {r[2] for r in rows}
-        assert "via" in sources
-        assert "pad" in sources
+        assert rows
+        sources = {row[2] for row in rows}
+        assert {"via", "pad"}.issubset(sources)
 
     def test_spatial_distance_query(self, db: duckdb.DuckDBPyConnection) -> None:
-        """ST_Distance between two footprints returns a plausible value."""
         row = db.execute("""
             SELECT ST_Distance(a.geom, b.geom)
             FROM footprints a, footprints b
@@ -1153,8 +1219,28 @@ class TestViews:
         """).fetchone()
         assert row is not None
         distance = float(row[0])
-        # Board is small, distances should be in mm range (< 200mm)
         assert 0 <= distance < 200
+
+
+def test_kicad_keepouts_are_queryable_in_sql() -> None:
+    project = load_project(ORANGECRAB_PCB)
+    con = load_database(project)
+    try:
+        assert _count(con, "SELECT count(*) FROM keepouts") > 0
+    finally:
+        con.close()
+
+
+def test_altium_typed_tables_are_populated() -> None:
+    project = load_project(PI_MX8_PCB)
+    con = load_database(project)
+    try:
+        assert _count(con, "SELECT count(*) FROM drills") > 0
+        assert _count(con, "SELECT count(*) FROM conductors") > 0
+        assert _count(con, "SELECT count(*) FROM artwork") > 0
+        assert _count(con, "SELECT count(*) FROM board_profile") > 0
+    finally:
+        con.close()
 
 
 # ---------------------------------------------------------------------------
@@ -1164,8 +1250,6 @@ class TestViews:
 
 @pytest.fixture(scope="module")
 def jetson_db() -> Iterator[duckdb.DuckDBPyConnection]:
-    from phosphor_eda.convert import load_project
-
     if not JETSON_ORIN_PRO.exists():
         pytest.skip("Jetson Orin fixture not available")
     project = load_project(JETSON_ORIN_PRO)
@@ -1206,10 +1290,6 @@ class TestJetsonSchematic:
 
 class TestCLI:
     def test_basic_query(self) -> None:
-        from click.testing import CliRunner
-
-        from phosphor_eda.cli import main
-
         runner = CliRunner()
         result = runner.invoke(
             main, ["sql", str(SWD_SWITCH_PCB), "SELECT count(*) FROM footprints"]
@@ -1218,39 +1298,23 @@ class TestCLI:
         assert "28" in result.output
 
     def test_schema_flag(self) -> None:
-        from click.testing import CliRunner
-
-        from phosphor_eda.cli import main
-
         runner = CliRunner()
         result = runner.invoke(main, ["sql", str(SWD_SWITCH_PCB), "--schema"])
         assert result.exit_code == 0
         assert "CREATE TABLE footprints" in result.output
 
     def test_no_query_error(self) -> None:
-        from click.testing import CliRunner
-
-        from phosphor_eda.cli import main
-
         runner = CliRunner()
         result = runner.invoke(main, ["sql", str(SWD_SWITCH_PCB)])
         assert result.exit_code != 0
 
     def test_invalid_query(self) -> None:
-        from click.testing import CliRunner
-
-        from phosphor_eda.cli import main
-
         runner = CliRunner()
         result = runner.invoke(main, ["sql", str(SWD_SWITCH_PCB), "SELECT * FROM nonexistent"])
         assert result.exit_code != 0
         assert "error" in result.output.lower()
 
     def test_spatial_query(self) -> None:
-        from click.testing import CliRunner
-
-        from phosphor_eda.cli import main
-
         runner = CliRunner()
         result = runner.invoke(
             main, ["sql", str(SWD_SWITCH_PCB), "SELECT ST_Area(geom) FROM footprints LIMIT 1"]

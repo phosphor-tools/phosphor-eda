@@ -40,24 +40,32 @@ def _pack_f64(val: float) -> bytes:
 
 def _make_track_body(
     layer: int = 1,
+    flags2: int = 0,
     net: int = 5,
+    polygon: int = 0xFFFF,
     component: int = 0xFFFF,
+    subpoly_index: int = 0,
     x1: int = 100000,
     y1: int = 200000,
     x2: int = 300000,
     y2: int = 200000,
     width: int = 10000,
+    keepout_restrictions: int = 0,
 ) -> bytes:
-    """Build a 33-byte track body."""
-    body = bytearray(33)
+    """Build a track body."""
+    body = bytearray(57)
     body[0] = layer
+    body[2] = flags2
     body[3:5] = _pack_u16(net)
+    body[5:7] = _pack_u16(polygon)
     body[7:9] = _pack_u16(component)
+    body[9:11] = _pack_u16(subpoly_index)
     body[13:17] = _pack_i32(x1)
     body[17:21] = _pack_i32(y1)
     body[21:25] = _pack_i32(x2)
     body[25:29] = _pack_i32(y2)
     body[29:33] = _pack_i32(width)
+    body[56] = keepout_restrictions
     return bytes(body)
 
 
@@ -69,10 +77,28 @@ def test_track_from_bytes():
     assert rec.layer == 1
     assert rec.net == 5
     assert rec.component == 0xFFFF
+    assert rec.polygon == 0xFFFF
+    assert rec.subpoly_index == 0
     assert rec.start == (100, 200)
     assert rec.end == (300, 200)
     assert rec.width == 50
     assert len(ctx.issues) == 0
+
+
+def test_track_from_bytes_parses_polygon_and_keepout_metadata():
+    ctx = ParseContext()
+    body = _make_track_body(
+        polygon=29,
+        subpoly_index=6,
+        flags2=0x02,
+        keepout_restrictions=31,
+    )
+    rec = TrackRecord.from_bytes(body, ctx)
+    assert rec is not None
+    assert rec.polygon == 29
+    assert rec.subpoly_index == 6
+    assert rec.keepout_restrictions == 31
+    assert rec.is_keepout is True
 
 
 def test_track_truncated():
@@ -136,7 +162,10 @@ def test_via_truncated():
 
 def _make_arc_body(
     layer: int = 1,
+    flags1: int = 0,
+    flags2: int = 0,
     net: int = 0,
+    polygon: int = 0xFFFF,
     component: int = 0xFFFF,
     cx: int = 1000,
     cy: int = 2000,
@@ -144,10 +173,15 @@ def _make_arc_body(
     start_angle: float = 0.0,
     end_angle: float = 180.0,
     width: int = 100,
+    subpoly_index: int = 0,
+    keepout_restrictions: int = 0,
 ) -> bytes:
-    body = bytearray(45)
+    body = bytearray(57)
     body[0] = layer
+    body[1] = flags1
+    body[2] = flags2
     body[3:5] = _pack_u16(net)
+    body[5:7] = _pack_u16(polygon)
     body[7:9] = _pack_u16(component)
     body[13:17] = _pack_i32(cx)
     body[17:21] = _pack_i32(cy)
@@ -155,6 +189,8 @@ def _make_arc_body(
     body[25:33] = _pack_f64(start_angle)
     body[33:41] = _pack_f64(end_angle)
     body[41:45] = _pack_u32(width)
+    body[45:47] = _pack_u16(subpoly_index)
+    body[56] = keepout_restrictions
     return bytes(body)
 
 
@@ -168,6 +204,24 @@ def test_arc_from_bytes():
     assert rec.radius == 500
     assert rec.start_angle == 45.0
     assert rec.end_angle == 270.0
+
+
+def test_arc_from_bytes_parses_keepout_metadata():
+    ctx = ParseContext()
+    body = _make_arc_body(
+        flags2=0x02,
+        polygon=3,
+        subpoly_index=7,
+        keepout_restrictions=31,
+    )
+    rec = ArcRecord.from_bytes(body, ctx)
+
+    assert rec is not None
+    assert rec.flags2 == 0x02
+    assert rec.polygon == 3
+    assert rec.subpoly_index == 7
+    assert rec.keepout_restrictions == 31
+    assert rec.is_keepout is True
 
 
 def test_arc_truncated():
@@ -310,6 +364,7 @@ def _make_pad_record(
     top_sy: int = 500,
     hole_size: int = 250,
     shape: int = 1,
+    rotation: float = 0.0,
     pad_name: str = "1",
 ) -> bytes:
     """Build a minimal pad record with subrecords."""
@@ -337,6 +392,7 @@ def _make_pad_record(
     sub5[25:29] = _pack_i32(top_sy)
     sub5[45:49] = _pack_u32(hole_size)
     sub5[49] = shape
+    sub5[52:60] = _pack_f64(rotation)
     result.extend(_pack_u32(len(sub5)))
     result.extend(bytes(sub5))
 
@@ -358,6 +414,7 @@ def test_pad_from_bytes():
         top_sy=500,
         hole_size=250,
         shape=1,
+        rotation=30.0,
         pad_name="A1",
     )
     rec = PadRecord.from_bytes(data, ctx)
@@ -370,6 +427,7 @@ def test_pad_from_bytes():
     assert rec.top_size == (500, 500)
     assert rec.hole_size == 250
     assert rec.shape == 1  # circle
+    assert rec.rotation == 30.0
 
 
 def test_pad_truncated():

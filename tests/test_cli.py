@@ -2,6 +2,7 @@ import json
 from importlib.metadata import version
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from phosphor_eda.cli import main
@@ -324,10 +325,171 @@ def test_cli_kicad_root_not_rejected():
 PCB_FILE = str(FIXTURES / "swd_switch.kicad_pcb")
 
 
-def test_cli_render_settings_from_file(tmp_path: Path) -> None:
-    """--render-settings loads theme, highlights, and annotations from a JSON file."""
+def test_cli_render_settings_schema_outputs_json_without_file() -> None:
+    runner = CliRunner()
+    result = runner.invoke(main, ["pcb", "render", "--render-settings-schema"])
+
+    assert result.exit_code == 0, result.output
+    schema = json.loads(result.output)
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert "theme" not in schema["properties"]
+    assert "font_size" not in schema["properties"]
+    assert "font_size_px" not in schema["properties"]
+    assert "include" not in schema["properties"]
+    assert "highlight_behavior" not in schema["properties"]
+    assert "style_rules" not in schema["properties"]
+    assert "fontSizePx" in schema["properties"]
+    assert "source" in schema["properties"]
+    assert "tokens" in schema["properties"]
+    assert "pad" in json.dumps(schema["properties"]["highlights"])
+    assert schema["examples"]
+
+
+def test_cli_render_settings_schema_exits_before_other_option_validation() -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["pcb", "render", "--render-settings-schema", "--side", "invalid"],
+    )
+
+    assert result.exit_code == 0, result.output
+    schema = json.loads(result.output)
+    assert schema["type"] == "object"
+
+
+def test_cli_render_without_file_reports_missing_file() -> None:
+    runner = CliRunner()
+    result = runner.invoke(main, ["pcb", "render"])
+
+    assert result.exit_code != 0
+    assert "missing FILE" in result.output
+
+
+def test_cli_render_custom_css_file_option_is_removed() -> None:
+    runner = CliRunner()
+    result = runner.invoke(main, ["pcb", "render", "--custom-css-file", "theme.css", PCB_FILE])
+
+    assert result.exit_code != 0
+    assert "No such option: --custom-css-file" in result.output
+
+
+def test_cli_render_theme_option_is_removed() -> None:
+    runner = CliRunner()
+    result = runner.invoke(main, ["pcb", "render", "--theme", "print", PCB_FILE])
+
+    assert result.exit_code != 0
+    assert "No such option: --theme" in result.output
+
+
+def test_cli_render_supports_highlight_pad() -> None:
+    runner = CliRunner()
+    result = runner.invoke(main, ["pcb", "render", "--highlight-pad", "TP3.1", PCB_FILE])
+
+    assert result.exit_code == 0, result.output
+    assert 'class="highlight-overlay"' in result.output
+    assert 'data-highlight-target="pad:TP3.1"' in result.output
+    assert 'data-source-id="pad:' in result.output
+    assert ":TP3:1:copper:" in result.output
+    assert 'data-source-ids="' not in result.output
+
+
+def test_cli_render_prjpcb_resolves_single_existing_pcbdoc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    board_dir = tmp_path / "boards"
+    board_dir.mkdir()
+    pcbdoc = board_dir / "Board.PcbDoc"
+    pcbdoc.write_text("")
+    prjpcb = tmp_path / "Project.PrjPcb"
+    prjpcb.write_text(
+        "[Design]\nHierarchyMode=1\n\n[Document1]\nDocumentPath=boards\\Board.PcbDoc\n"
+    )
+    parsed_board = object()
+    parsed_paths: list[Path] = []
+
+    def fake_parse_altium_pcb(path: Path) -> object:
+        parsed_paths.append(path)
+        return parsed_board
+
+    def fake_render_pcb_svg(board: object, **_kwargs: object) -> str:
+        assert board is parsed_board
+        return "<svg></svg>"
+
+    monkeypatch.setattr("phosphor_eda.altium.pcb_parser.parse_altium_pcb", fake_parse_altium_pcb)
+    monkeypatch.setattr("phosphor_eda.pcb_render.render_pcb_svg", fake_render_pcb_svg)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["pcb", "render", str(prjpcb)])
+
+    assert result.exit_code == 0, result.output
+    assert parsed_paths == [pcbdoc]
+    assert "<svg></svg>" in result.output
+
+
+def test_cli_render_prjpcb_without_existing_pcbdoc_reports_clear_error(tmp_path: Path) -> None:
+    prjpcb = tmp_path / "Project.PrjPcb"
+    prjpcb.write_text(
+        "[Design]\nHierarchyMode=1\n\n[Document1]\nDocumentPath=boards\\Missing.PcbDoc\n"
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["pcb", "render", str(prjpcb)])
+
+    assert result.exit_code != 0
+    assert ".PcbDoc" in result.output
+
+
+def test_cli_render_prjpcb_with_multiple_existing_pcbdocs_reports_clear_error(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "First.PcbDoc"
+    second = tmp_path / "Second.PcbDoc"
+    first.write_text("")
+    second.write_text("")
+    prjpcb = tmp_path / "Project.PrjPcb"
+    prjpcb.write_text(
+        "[Design]\n"
+        "HierarchyMode=1\n\n"
+        "[Document1]\n"
+        "DocumentPath=First.PcbDoc\n\n"
+        "[Document2]\n"
+        "DocumentPath=Second.PcbDoc\n"
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["pcb", "render", str(prjpcb)])
+
+    assert result.exit_code != 0
+    assert "multiple" in result.output.lower()
+    assert ".PcbDoc" in result.output
+
+
+def test_cli_render_settings_inline_custom_css_is_injected(tmp_path: Path) -> None:
     settings = {
-        "theme": "review",
+        "extends": "phosphor:review",
+        "custom_css": ".board-fill { fill: rgb(1, 2, 3); }",
+    }
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps(settings))
+    out_file = tmp_path / "out.svg"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file), "-o", str(out_file)],
+    )
+
+    assert result.exit_code == 0, result.output
+    svg = out_file.read_text()
+    assert '<style id="custom">' in svg
+    assert "rgb(1, 2, 3)" in svg
+
+
+def test_cli_render_settings_from_file(tmp_path: Path) -> None:
+    """--render-settings loads highlights and annotations from a JSON file."""
+    settings = {
+        "extends": "phosphor:review",
         "highlights": [{"net": "/SWDIO_TMS"}],
         "annotations": {
             "pointers": [{"target": "TP3", "label": "SWD"}],
@@ -345,14 +507,127 @@ def test_cli_render_settings_from_file(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     svg = out_file.read_text()
     assert svg.startswith("<svg")
-    assert 'style id="highlight"' in svg
+    assert 'class="highlight-overlay"' in svg
+    assert 'data-highlight-target="net:/SWDIO_TMS"' in svg
     assert "SWD" in svg
+
+
+def test_cli_render_profile_outputs_json_to_stderr(tmp_path: Path) -> None:
+    settings = {"extends": "phosphor:review"}
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps(settings))
+    out_file = tmp_path / "out.svg"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "pcb",
+            "render",
+            PCB_FILE,
+            "--render-settings",
+            str(settings_file),
+            "--profile-render",
+            "-o",
+            str(out_file),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert out_file.read_text().startswith("<svg")
+    profile = json.loads(result.stderr.split("Wrote", maxsplit=1)[1].split("\n", maxsplit=1)[1])
+    event_names = [event["name"] for event in profile["events"]]
+    assert "cli.parse_board" in event_names
+    assert "plan.build_inventory" in event_names
+    assert "render.serialize" in event_names
+    assert "svg.output" in event_names
+
+
+def test_cli_render_settings_font_size_sets_annotation_size(tmp_path: Path) -> None:
+    settings = {
+        "extends": "phosphor:review",
+        "fontSizePx": 24,
+        "annotations": {
+            "pointers": [{"target": "TP3", "label": "SWD"}],
+        },
+    }
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps(settings))
+    out_file = tmp_path / "out.svg"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file), "-o", str(out_file)],
+    )
+
+    assert result.exit_code == 0, result.output
+    svg = out_file.read_text()
+    assert "font-size: 24.0px" in svg
+
+
+def test_cli_render_settings_accepts_packaged_v2_settings(tmp_path: Path) -> None:
+    settings = {
+        "extends": "phosphor:simplified-high-contrast",
+        "fontSizePx": 64,
+        "annotations": {
+            "pointers": [{"target": "TP3.1", "label": "SWD"}],
+        },
+    }
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps(settings))
+    out_file = tmp_path / "out.svg"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file), "-o", str(out_file)],
+    )
+
+    assert result.exit_code == 0, result.output
+    svg = out_file.read_text()
+    assert svg.startswith("<svg")
+    assert "SWD" in svg
+
+
+def test_cli_font_size_overrides_render_settings(tmp_path: Path) -> None:
+    settings = {
+        "extends": "phosphor:review",
+        "fontSizePx": 12,
+        "annotations": {
+            "pointers": [{"target": "TP3", "label": "SWD"}],
+        },
+    }
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps(settings))
+    out_file = tmp_path / "out.svg"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "pcb",
+            "render",
+            PCB_FILE,
+            "--render-settings",
+            str(settings_file),
+            "--font-size",
+            "24",
+            "-o",
+            str(out_file),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    svg = out_file.read_text()
+    assert "font-size: 24.0px" in svg
+    assert "font-size: 12.0px" not in svg
 
 
 def test_cli_render_settings_from_stdin(tmp_path: Path) -> None:
     """--render-settings - reads JSON from stdin."""
     settings = {
-        "theme": "review",
+        "extends": "phosphor:review",
         "highlights": [{"net": "/SWDIO_TMS"}],
     }
     out_file = tmp_path / "out.svg"
@@ -366,13 +641,14 @@ def test_cli_render_settings_from_stdin(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     svg = out_file.read_text()
     assert svg.startswith("<svg")
-    assert 'style id="highlight"' in svg
+    assert 'class="highlight-overlay"' in svg
+    assert 'data-highlight-target="net:/SWDIO_TMS"' in svg
 
 
 def test_cli_render_settings_with_highlight_colors(tmp_path: Path) -> None:
     """Highlight colors from render settings appear in the SVG CSS."""
     settings = {
-        "theme": "review",
+        "extends": "phosphor:review",
         "highlights": [
             {"net": "/SWDIO_TMS", "color": "#d4a843"},
             {"net": "/SWDCLK_TCK", "color": "#5b8abf"},
@@ -421,8 +697,8 @@ def test_cli_render_settings_non_object(tmp_path: Path) -> None:
     assert "must be an object" in result.output
 
 
-def test_cli_render_settings_invalid_theme(tmp_path: Path) -> None:
-    """Invalid theme in render settings produces a clear error."""
+def test_cli_render_settings_rejects_theme(tmp_path: Path) -> None:
+    """Unsupported theme in render settings produces a clear error."""
     settings_file = tmp_path / "bad.json"
     settings_file.write_text(json.dumps({"theme": "neon"}))
 

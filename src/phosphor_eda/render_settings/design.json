@@ -1,0 +1,39 @@
+{
+  "renderMode": "eda",
+  "source": {
+    "layers": [
+      {
+        "match": { "role": "copper" },
+        "itemKinds": ["pad", "via", "conductor"],
+        "purposes": ["copper"]
+      },
+      {
+        "match": { "role": "silkscreen" },
+        "purposes": ["silkscreen", "designator", "value", "user_text"]
+      },
+      { "match": { "role": "edge" }, "itemKinds": ["board_profile"] },
+      { "match": { "role": "drill" }, "itemKinds": ["drill"] }
+    ]
+  },
+  "tokens": {
+    "eda.copper.front.opacity": 0.35,
+    "eda.copper.back.opacity": 0.35,
+    "eda.copper.inner.default.opacity": 0.35,
+    "highlight.copper.front.fill": "#ff8a00",
+    "highlight.copper.front.opacity": 0.85,
+    "highlight.copper.front.stroke": "none",
+    "highlight.copper.front.strokeWidthMm": 0,
+    "highlight.copper.back.fill": "#5aa7ff",
+    "highlight.copper.back.opacity": 0.85,
+    "highlight.copper.back.stroke": "none",
+    "highlight.copper.back.strokeWidthMm": 0,
+    "highlight.copper.inner.default.fill": "#ffe066",
+    "highlight.copper.inner.default.opacity": 0.85,
+    "highlight.copper.inner.default.stroke": "none",
+    "highlight.copper.inner.default.strokeWidthMm": 0,
+    "highlight.layer.default.fill": "#ff8a00",
+    "highlight.layer.default.opacity": 0.85,
+    "highlight.layer.default.stroke": "none",
+    "highlight.layer.default.strokeWidthMm": 0
+  }
+}

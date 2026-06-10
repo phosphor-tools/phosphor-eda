@@ -6,7 +6,7 @@ PCB enums from pcbnew/pcb_io/altium/altium_parser_pcb.h.
 
 from __future__ import annotations
 
-from enum import IntEnum
+from enum import IntEnum, IntFlag
 
 # ---------------------------------------------------------------------------
 # Schematic enums
@@ -184,6 +184,13 @@ class PolylineStyle(IntEnum):
 # ---------------------------------------------------------------------------
 # PCB enums
 # ---------------------------------------------------------------------------
+
+
+class PcbPrimitiveFlags2(IntFlag):
+    """Secondary binary PCB primitive flags."""
+
+    NONE = 0
+    KEEPOUT = 0x02
 
 
 class AltiumLayer(IntEnum):

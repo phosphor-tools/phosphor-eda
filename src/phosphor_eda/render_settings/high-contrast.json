@@ -1,0 +1,52 @@
+{
+  "renderMode": "eda",
+  "source": {
+    "layers": [
+      {
+        "match": { "role": "copper" },
+        "itemKinds": ["pad", "via", "conductor"],
+        "purposes": ["copper"]
+      },
+      {
+        "match": { "role": "silkscreen", "side": "active" },
+        "purposes": ["silkscreen", "designator", "value", "user_text"]
+      },
+      { "match": { "role": "edge" }, "itemKinds": ["board_profile"] }
+    ]
+  },
+  "tokens": {
+    "eda.copper.front.fill": "#111111",
+    "eda.copper.back.fill": "#111111",
+    "eda.copper.inner.default.fill": "#444444",
+    "eda.silkscreen.front.fill": "#000000",
+    "eda.silkscreen.back.fill": "#000000",
+    "eda.fabrication.front.fill": "#666666",
+    "eda.fabrication.back.fill": "#666666",
+    "eda.mechanical.fill": "#777777",
+    "eda.edge.fill": "none",
+    "eda.edge.stroke": "#444444",
+    "eda.edge.strokeWidthMm": 0.12,
+    "highlight.copper.front.fill": "#000000",
+    "highlight.copper.front.opacity": 1,
+    "highlight.copper.front.stroke": "none",
+    "highlight.copper.front.strokeWidthMm": 0,
+    "highlight.copper.back.fill": "#000000",
+    "highlight.copper.back.opacity": 1,
+    "highlight.copper.back.stroke": "none",
+    "highlight.copper.back.strokeWidthMm": 0,
+    "highlight.copper.inner.default.fill": "#000000",
+    "highlight.copper.inner.default.opacity": 1,
+    "highlight.copper.inner.default.stroke": "none",
+    "highlight.copper.inner.default.strokeWidthMm": 0,
+    "highlight.layer.default.fill": "#000000",
+    "highlight.layer.default.opacity": 1,
+    "highlight.layer.default.stroke": "none",
+    "highlight.layer.default.strokeWidthMm": 0,
+    "annotation.label.fill": "#000",
+    "annotation.label.textHalo": "#fff",
+    "annotation.label.textHaloWidthPx": 4,
+    "annotation.label.fontWeight": 650,
+    "annotation.connector.stroke": "#333",
+    "annotation.connector.strokeWidthPx": 3
+  }
+}

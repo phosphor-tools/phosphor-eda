@@ -3,11 +3,19 @@
 import pytest
 
 from phosphor_eda.pcb import (
+    LayerRole,
     Pcb,
+    PcbArtwork,
+    PcbArtworkKind,
+    PcbArtworkPurpose,
+    PcbBoardProfile,
+    PcbBoardProfileElement,
     PcbFootprint,
+    PcbLayer,
     PcbLine,
     PcbNet,
     PcbPad,
+    PcbPadType,
 )
 from phosphor_eda.pcb_annotations import (
     ANNOTATION_FONT_PX,
@@ -36,73 +44,22 @@ from phosphor_eda.pcb_annotations import (
 
 def _make_test_board() -> Pcb:
     """Board with two footprints (U1, U2) and a shared net for target resolution tests."""
-    u1_pads = [
-        PcbPad(
-            number="1",
-            x=10.0,
-            y=10.0,
-            width=1.0,
-            height=1.0,
-            shape="rect",
-            layers=["F.Cu"],
-            net_number=1,
-            net_name="VCC",
-            footprint_ref="U1",
-        ),
-        PcbPad(
-            number="2",
-            x=12.0,
-            y=10.0,
-            width=1.0,
-            height=1.0,
-            shape="rect",
-            layers=["F.Cu"],
-            net_number=2,
-            net_name="SPI_CLK",
-            footprint_ref="U1",
-        ),
-    ]
-    u2_pads = [
-        PcbPad(
-            number="1",
-            x=30.0,
-            y=10.0,
-            width=1.0,
-            height=1.0,
-            shape="rect",
-            layers=["F.Cu"],
-            net_number=2,
-            net_name="SPI_CLK",
-            footprint_ref="U2",
-        ),
-        PcbPad(
-            number="2",
-            x=32.0,
-            y=10.0,
-            width=1.0,
-            height=1.0,
-            shape="rect",
-            layers=["F.Cu"],
-            net_number=3,
-            net_name="SPI_MOSI",
-            footprint_ref="U2",
-        ),
-    ]
+    front_cu = PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT), number=0)
+    front_fab = PcbLayer("F.Fab", (LayerRole.FABRICATION, LayerRole.FRONT), number=36)
+    edge = PcbLayer("Edge.Cuts", (LayerRole.EDGE,), number=44)
+    nets = {
+        1: PcbNet(1, "VCC"),
+        2: PcbNet(2, "SPI_CLK"),
+        3: PcbNet(3, "SPI_MOSI"),
+    }
     u1 = PcbFootprint(
         reference="U1",
         footprint_lib="Package_SO:SOIC-8",
         x=11.0,
         y=10.0,
         rotation=0.0,
-        layer="F.Cu",
+        layer=front_cu,
         value="MCU",
-        pads=u1_pads,
-        fab_lines=[
-            PcbLine(9, 9, 13, 9, "F.Fab", 0.1, footprint_ref="U1"),
-            PcbLine(13, 9, 13, 11, "F.Fab", 0.1, footprint_ref="U1"),
-            PcbLine(13, 11, 9, 11, "F.Fab", 0.1, footprint_ref="U1"),
-            PcbLine(9, 11, 9, 9, "F.Fab", 0.1, footprint_ref="U1"),
-        ],
         bbox=(9.0, 9.0, 13.0, 11.0),
     )
     u2 = PcbFootprint(
@@ -111,35 +68,98 @@ def _make_test_board() -> Pcb:
         x=31.0,
         y=10.0,
         rotation=0.0,
-        layer="F.Cu",
+        layer=front_cu,
         value="ADC",
-        pads=u2_pads,
-        fab_lines=[
-            PcbLine(29, 9, 33, 9, "F.Fab", 0.1, footprint_ref="U2"),
-            PcbLine(33, 9, 33, 11, "F.Fab", 0.1, footprint_ref="U2"),
-            PcbLine(33, 11, 29, 11, "F.Fab", 0.1, footprint_ref="U2"),
-            PcbLine(29, 11, 29, 9, "F.Fab", 0.1, footprint_ref="U2"),
-        ],
         bbox=(29.0, 9.0, 33.0, 11.0),
     )
     return Pcb(
         name="test",
-        nets={
-            0: PcbNet(0, ""),
-            1: PcbNet(1, "VCC"),
-            2: PcbNet(2, "SPI_CLK"),
-            3: PcbNet(3, "SPI_MOSI"),
-        },
+        layers=[front_cu, front_fab, edge],
+        nets=nets,
         footprints=[u1, u2],
-        segments=[],
-        vias=[],
-        outline_lines=[
-            PcbLine(0, 0, 40, 0, "Edge.Cuts", 0.1),
-            PcbLine(40, 0, 40, 20, "Edge.Cuts", 0.1),
-            PcbLine(40, 20, 0, 20, "Edge.Cuts", 0.1),
-            PcbLine(0, 20, 0, 0, "Edge.Cuts", 0.1),
+        pads=[
+            _pad(u1, "1", 10.0, 10.0, nets[1], front_cu),
+            _pad(u1, "2", 12.0, 10.0, nets[2], front_cu),
+            _pad(u2, "1", 30.0, 10.0, nets[2], front_cu),
+            _pad(u2, "2", 32.0, 10.0, nets[3], front_cu),
         ],
-        outline_arcs=[],
+        vias=[],
+        drills=[],
+        conductors=[],
+        artwork=[
+            *_box_lines(u1, 9.0, 9.0, 13.0, 11.0, front_fab),
+            *_box_lines(u2, 29.0, 9.0, 33.0, 11.0, front_fab),
+        ],
+        pours=[],
+        keepouts=[],
+        board_profile=PcbBoardProfile(elements=tuple(_outline_lines(edge))),
+    )
+
+
+def _pad(
+    footprint: PcbFootprint,
+    number: str,
+    x: float,
+    y: float,
+    net: PcbNet,
+    layer: PcbLayer,
+) -> PcbPad:
+    return PcbPad(
+        id=f"pad:{footprint.reference}:{number}",
+        number=number,
+        x=x,
+        y=y,
+        width=1.0,
+        height=1.0,
+        shape="rect",
+        pad_type=PcbPadType.SMD,
+        layers=(layer,),
+        net=net,
+        footprint=footprint,
+    )
+
+
+def _box_lines(
+    footprint: PcbFootprint,
+    x1: float,
+    y1: float,
+    x2: float,
+    y2: float,
+    layer: PcbLayer,
+) -> list[PcbArtwork]:
+    return [
+        _artwork_line(f"fab:{footprint.reference}:0", x1, y1, x2, y1, layer, footprint),
+        _artwork_line(f"fab:{footprint.reference}:1", x2, y1, x2, y2, layer, footprint),
+        _artwork_line(f"fab:{footprint.reference}:2", x2, y2, x1, y2, layer, footprint),
+        _artwork_line(f"fab:{footprint.reference}:3", x1, y2, x1, y1, layer, footprint),
+    ]
+
+
+def _outline_lines(layer: PcbLayer) -> list[PcbBoardProfileElement]:
+    return [
+        PcbBoardProfileElement("edge:0", PcbArtworkKind.LINE, layer, PcbLine(0, 0, 40, 0, 0.1)),
+        PcbBoardProfileElement("edge:1", PcbArtworkKind.LINE, layer, PcbLine(40, 0, 40, 20, 0.1)),
+        PcbBoardProfileElement("edge:2", PcbArtworkKind.LINE, layer, PcbLine(40, 20, 0, 20, 0.1)),
+        PcbBoardProfileElement("edge:3", PcbArtworkKind.LINE, layer, PcbLine(0, 20, 0, 0, 0.1)),
+    ]
+
+
+def _artwork_line(
+    id_: str,
+    start_x: float,
+    start_y: float,
+    end_x: float,
+    end_y: float,
+    layer: PcbLayer,
+    footprint: PcbFootprint,
+) -> PcbArtwork:
+    return PcbArtwork(
+        id=id_,
+        kind=PcbArtworkKind.LINE,
+        purpose=PcbArtworkPurpose.FABRICATION,
+        layer=layer,
+        data=PcbLine(start_x, start_y, end_x, end_y, 0.1),
+        footprint=footprint,
     )
 
 
@@ -556,6 +576,45 @@ class TestResolveAnnotations:
         assert ptr.target_x * s == pytest.approx(30.0)
         assert ptr.target_y * s == pytest.approx(10.0)
 
+    def test_back_side_auto_margin_uses_rendered_view(self, board: Pcb) -> None:
+        """Back-side automatic placement uses the mirrored rendered target position."""
+        spec = AnnotationSpec(
+            boxes=[],
+            pointers=[PointerSpec(target="U1.1", label="Pin 1")],
+            labels=[],
+        )
+        front = resolve_annotations(spec, board, "front", width_px=800)
+        back = resolve_annotations(spec, board, "back", width_px=800)
+
+        assert front.pointers[0].label_x < front.pointers[0].target_x
+        assert back.pointers[0].label_x > back.pointers[0].target_x
+
+    def test_back_side_position_hint_is_rendered_view(self, board: Pcb) -> None:
+        """Back-side explicit position hints are interpreted in rendered-view space."""
+        spec = AnnotationSpec(
+            boxes=[],
+            pointers=[PointerSpec(target="U1.1", label="Pin 1", position="right")],
+            labels=[],
+        )
+        resolved = resolve_annotations(spec, board, "back", width_px=800)
+        ptr = resolved.pointers[0]
+
+        assert ptr.label_x > ptr.target_x
+
+    def test_back_side_pointer_target_uses_rendered_pad_location(self, board: Pcb) -> None:
+        """Back-side connector endpoints point to the mirrored rendered pad location."""
+        spec = AnnotationSpec(
+            boxes=[],
+            pointers=[PointerSpec(target="U1.1", label="Pin 1", position="right")],
+            labels=[],
+        )
+        resolved = resolve_annotations(spec, board, "back", width_px=800)
+        ptr = resolved.pointers[0]
+
+        assert ptr.target_x * resolved.px_scale == pytest.approx(30.0)
+        assert ptr.target_y * resolved.px_scale == pytest.approx(10.0)
+        assert ptr.connector_path[-1] == pytest.approx((ptr.target_x, ptr.target_y))
+
     def test_empty_spec_returns_empty(self, board: Pcb) -> None:
         spec = AnnotationSpec(boxes=[], pointers=[], labels=[])
         resolved = resolve_annotations(spec, board, "front")
@@ -598,6 +657,39 @@ class TestResolveAnnotations:
         resolved = resolve_annotations(spec, board, "front")
         box = resolved.boxes[0]
         assert len(box.connector_path) >= 2
+
+    def test_box_label_anchor_comes_from_margin(self, board: Pcb) -> None:
+        """Left margin box labels should right-align their text inside the pill."""
+        spec = AnnotationSpec(
+            boxes=[BoxSpec(targets=["U1"], label="MCU", label_position="left")],
+            pointers=[],
+            labels=[],
+        )
+        resolved = resolve_annotations(spec, board, "front")
+
+        assert resolved.boxes[0].text_anchor == "end"
+
+    def test_pointer_label_anchor_comes_from_margin(self, board: Pcb) -> None:
+        """Right margin pointer labels should left-align their text inside the pill."""
+        spec = AnnotationSpec(
+            boxes=[],
+            pointers=[PointerSpec(target="U1", label="MCU", position="right")],
+            labels=[],
+        )
+        resolved = resolve_annotations(spec, board, "front")
+
+        assert resolved.pointers[0].text_anchor == "start"
+
+    def test_label_anchor_comes_from_margin(self, board: Pcb) -> None:
+        """Top/bottom margin labels should keep centered text."""
+        spec = AnnotationSpec(
+            boxes=[],
+            pointers=[],
+            labels=[LabelSpec(target="U1", content="Main MCU", position="top")],
+        )
+        resolved = resolve_annotations(spec, board, "front")
+
+        assert resolved.labels[0].text_anchor == "middle"
 
     def test_label_dimensions_populated(self, board: Pcb) -> None:
         """Resolved labels should have positive width and height."""

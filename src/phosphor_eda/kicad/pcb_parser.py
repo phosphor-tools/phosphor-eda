@@ -1,37 +1,53 @@
-"""Parse a KiCad .kicad_pcb file into the PCB domain model.
-
-Uses sexpdata and the same helper pattern as to_schematic.py.
-Handles both KiCad 6 (fp_text reference) and KiCad 8 (property
-"Reference") formats.
-"""
+"""Parse a KiCad .kicad_pcb file into the strict PCB domain model."""
 
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import sexpdata
 
 from phosphor_eda.kicad import sexp
 from phosphor_eda.pcb import (
-    LayerFunction,
+    LayerRole,
     Pcb,
     PcbArc,
+    PcbArtwork,
+    PcbArtworkKind,
+    PcbArtworkPurpose,
+    PcbBoardProfile,
+    PcbBoardProfileElement,
     PcbCircle,
+    PcbClosedPath,
+    PcbConductor,
+    PcbConductorKind,
+    PcbDrill,
+    PcbDrillPlating,
+    PcbDrillShape,
     PcbFootprint,
-    PcbGraphicText,
+    PcbFootprintMetadata,
+    PcbKeepout,
+    PcbKeepoutPermission,
+    PcbKeepoutRules,
     PcbLayer,
+    PcbLayerMetadata,
     PcbLine,
+    PcbMetadata,
     PcbModel3D,
     PcbNet,
+    PcbObjectMetadata,
     PcbPad,
+    PcbPadType,
     PcbPolygon,
-    PcbSegment,
+    PcbPour,
+    PcbPourFillMode,
+    PcbPourSettings,
     PcbText,
-    PcbTraceArc,
     PcbVia,
-    PcbZone,
+    PcbViaType,
 )
+from phosphor_eda.pcb_builder import PcbBuilder
 from phosphor_eda.project import Stackup, StackupLayer
 
 if TYPE_CHECKING:
@@ -40,1073 +56,1281 @@ if TYPE_CHECKING:
     from phosphor_eda.kicad.sexp import SExpNode
 
 
-# ---------------------------------------------------------------------------
-# Coordinate helpers
-# ---------------------------------------------------------------------------
+@dataclass
+class _FootprintParseResult:
+    footprint: PcbFootprint
+    profile_elements: list[PcbBoardProfileElement]
 
 
 def _xy(item: SExpNode) -> tuple[float, float]:
-    """Extract (x, y) from an S-expression like (start 1.0 2.0)."""
     return (sexp.num(item, 1), sexp.num(item, 2))
 
 
 def _float_val(item: SExpNode) -> float:
-    """Extract a single float from item[1]."""
     return sexp.num(item, 1)
 
 
 def _at(item: SExpNode) -> tuple[float, float, float]:
-    """Extract (x, y, rotation) from (at X Y [ROT]).
-
-    The rotation field may be absent, or followed by keywords like
-    ``unlocked`` which must be skipped.
-    """
     x = sexp.num(item, 1)
     y = sexp.num(item, 2)
-    rot = 0.0
-    if len(item) > 3:
-        v = item[3]
-        if isinstance(v, (int, float)):
-            rot = float(v)
-    return (x, y, rot)
+    rotation = 0.0
+    if len(item) > 3 and isinstance(item[3], (int, float)):
+        rotation = float(item[3])
+    return (x, y, rotation)
 
 
 def _transform_point(
-    local_x: float, local_y: float, fp_x: float, fp_y: float, fp_rot_deg: float
+    local_x: float,
+    local_y: float,
+    fp_x: float,
+    fp_y: float,
+    fp_rot_deg: float,
 ) -> tuple[float, float]:
-    """Transform footprint-local coords to absolute board coords."""
     rad = math.radians(-fp_rot_deg)
-    cos_r, sin_r = math.cos(rad), math.sin(rad)
-    abs_x = fp_x + local_x * cos_r - local_y * sin_r
-    abs_y = fp_y + local_x * sin_r + local_y * cos_r
-    return (abs_x, abs_y)
+    cos_r = math.cos(rad)
+    sin_r = math.sin(rad)
+    return (
+        fp_x + local_x * cos_r - local_y * sin_r,
+        fp_y + local_x * sin_r + local_y * cos_r,
+    )
 
 
-def _layers(item: SExpNode) -> list[str]:
-    """Extract layer names from (layers "F.Cu" "B.Cu" ...)."""
+def _transform_rotation(local_rotation: float, fp_rotation: float) -> float:
+    return fp_rotation + local_rotation
+
+
+def _layers(item: SExpNode | None) -> list[str]:
+    if item is None:
+        return []
     result: list[str] = []
-    for v in item[1:]:
-        if isinstance(v, str):
-            result.append(v)
-        elif isinstance(v, sexpdata.Symbol):
-            result.append(v.value())
+    for value in item[1:]:
+        if isinstance(value, sexpdata.Symbol):
+            result.append(value.value())
+        elif isinstance(value, str):
+            result.append(value)
     return result
 
 
-# ---------------------------------------------------------------------------
-# Layer definitions
-# ---------------------------------------------------------------------------
+def _kicad_type_roles(native_type: str) -> tuple[LayerRole, ...]:
+    normalized = native_type.strip().lower()
+    if normalized == "signal":
+        return (LayerRole.COPPER, LayerRole.SIGNAL)
+    if normalized == "power":
+        return (LayerRole.COPPER, LayerRole.POWER)
+    if normalized == "mixed":
+        return (LayerRole.COPPER, LayerRole.MIXED)
+    if normalized == "jumper":
+        return (LayerRole.COPPER, LayerRole.JUMPER)
+    if normalized == "front":
+        return (LayerRole.FRONT,)
+    if normalized == "back":
+        return (LayerRole.BACK,)
+    return ()
 
-# KiCad name-pattern → function mapping.
-_KICAD_FUNCTION_RULES: list[tuple[str, LayerFunction]] = [
-    (".Cu", LayerFunction.COPPER),
-    ("SilkS", LayerFunction.SILKSCREEN),
-    ("Silkscreen", LayerFunction.SILKSCREEN),
-    ("Mask", LayerFunction.SOLDER_MASK),
-    ("Paste", LayerFunction.SOLDER_PASTE),
-    ("Fab", LayerFunction.FAB),
-    ("CrtYd", LayerFunction.COURTYARD),
-    ("Courtyard", LayerFunction.COURTYARD),
-]
 
-
-def _infer_kicad_function(name: str) -> LayerFunction:
-    """Infer layer function from a KiCad layer name."""
+def _kicad_name_roles(name: str) -> tuple[LayerRole, ...]:
+    if name == "F.Cu":
+        return (LayerRole.COPPER, LayerRole.FRONT, LayerRole.OUTER)
+    if name == "B.Cu":
+        return (LayerRole.COPPER, LayerRole.BACK, LayerRole.OUTER)
+    if name.startswith("In") and name.endswith(".Cu"):
+        return (LayerRole.COPPER, LayerRole.INNER)
+    if name == "F.Mask":
+        return (LayerRole.SOLDER_MASK, LayerRole.FRONT)
+    if name == "B.Mask":
+        return (LayerRole.SOLDER_MASK, LayerRole.BACK)
+    if name == "F.Paste":
+        return (LayerRole.SOLDER_PASTE, LayerRole.FRONT)
+    if name == "B.Paste":
+        return (LayerRole.SOLDER_PASTE, LayerRole.BACK)
+    if name == "F.SilkS":
+        return (LayerRole.SILKSCREEN, LayerRole.FRONT)
+    if name == "B.SilkS":
+        return (LayerRole.SILKSCREEN, LayerRole.BACK)
+    if name == "F.Adhes":
+        return (LayerRole.ADHESIVE, LayerRole.FRONT)
+    if name == "B.Adhes":
+        return (LayerRole.ADHESIVE, LayerRole.BACK)
+    if name == "F.Fab":
+        return (LayerRole.FABRICATION, LayerRole.FRONT)
+    if name == "B.Fab":
+        return (LayerRole.FABRICATION, LayerRole.BACK)
+    if name == "F.CrtYd":
+        return (LayerRole.FABRICATION, LayerRole.COURTYARD, LayerRole.FRONT)
+    if name == "B.CrtYd":
+        return (LayerRole.FABRICATION, LayerRole.COURTYARD, LayerRole.BACK)
     if name == "Edge.Cuts":
-        return LayerFunction.EDGE
-    for pattern, fn in _KICAD_FUNCTION_RULES:
-        if pattern in name:
-            return fn
-    return LayerFunction.OTHER
-
-
-def _infer_kicad_side(name: str) -> str:
-    """Infer front/back side from a KiCad layer name prefix."""
-    if name.startswith("F."):
-        return "front"
-    if name.startswith("B."):
-        return "back"
-    return ""
+        return (LayerRole.EDGE,)
+    if name == "Margin":
+        return (LayerRole.MARGIN,)
+    if name == "Dwgs.User":
+        return (LayerRole.DRAWING,)
+    if name == "Cmts.User":
+        return (LayerRole.COMMENT,)
+    if name in {"Eco1.User", "Eco2.User"} or name.startswith("User."):
+        return (LayerRole.USER,)
+    return ()
 
 
 def _parse_layer_defs(sexpr: SExpNode) -> list[PcbLayer]:
-    """Parse the board-level ``(layers ...)`` section into PcbLayer objects."""
     layers_section = sexp.find(sexpr, "layers")
     if not layers_section:
         return []
-    result: list[PcbLayer] = []
+    layers: list[PcbLayer] = []
     for item in layers_section[1:]:
         if not isinstance(item, list) or len(item) < 3:
             continue
         raw_num = item[0]
-        num = int(raw_num) if isinstance(raw_num, (int, float)) else 0
+        number = int(raw_num) if isinstance(raw_num, (int, float)) else 0
         raw_name = item[1]
         name = raw_name.value() if isinstance(raw_name, sexpdata.Symbol) else str(raw_name)
-        fn = _infer_kicad_function(name)
-        side = _infer_kicad_side(name)
-        result.append(PcbLayer(name=name, function=fn, side=side, number=num))
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Net parsing
-# ---------------------------------------------------------------------------
+        raw_type = item[2]
+        native_type = raw_type.value() if isinstance(raw_type, sexpdata.Symbol) else str(raw_type)
+        native_user_name = str(item[3]) if len(item) > 3 else ""
+        layers.append(
+            PcbLayer(
+                name=name,
+                roles=(*_kicad_type_roles(native_type), *_kicad_name_roles(name)),
+                number=number,
+                metadata=PcbLayerMetadata(
+                    source_format="kicad",
+                    native_type=native_type,
+                    native_user_name=native_user_name,
+                ),
+            )
+        )
+    return layers
 
 
 def _parse_nets(sexpr: SExpNode) -> dict[int, PcbNet]:
-    """Parse top-level (net N "name") entries."""
     nets: dict[int, PcbNet] = {}
     for item in sexp.find_all(sexpr, "net"):
-        if len(item) >= 3:
-            num = int(sexp.num(item, 1))
-            name = str(item[2])
-            nets[num] = PcbNet(number=num, name=name)
+        if len(item) < 3:
+            continue
+        number = int(sexp.num(item, 1))
+        if number == 0:
+            continue
+        nets[number] = PcbNet(number=number, name=str(item[2]))
     return nets
 
 
-# ---------------------------------------------------------------------------
-# Footprint / pad parsing
-# ---------------------------------------------------------------------------
+def _object_metadata(
+    *,
+    native_type: str,
+    source_collection: str,
+    native_kind: str = "",
+    native_id: str = "",
+    native_index: int | None = None,
+    locked: bool = False,
+    hidden: bool = False,
+    properties: dict[str, str] | None = None,
+) -> PcbObjectMetadata:
+    return PcbObjectMetadata(
+        source_format="kicad",
+        native_type=native_type,
+        native_kind=native_kind,
+        native_id=native_id,
+        native_index=native_index,
+        source_collection=source_collection,
+        locked=locked,
+        hidden=hidden,
+        properties=properties or {},
+    )
+
+
+def _item_uuid(item: SExpNode) -> str:
+    uuid_node = sexp.find(item, "uuid") or sexp.find(item, "tstamp")
+    return sexp.val(uuid_node) if uuid_node else ""
+
+
+def _item_locked(item: SExpNode) -> bool:
+    return any(isinstance(node, sexpdata.Symbol) and node.value() == "locked" for node in item)
+
+
+def _item_hidden(item: SExpNode) -> bool:
+    for node in item:
+        if isinstance(node, sexpdata.Symbol) and node.value() == "hide":
+            return True
+        if isinstance(node, list) and sexp.tag(node) == "hide":
+            if len(node) < 2:
+                return True
+            return _sexp_bool(node[1], default=True)
+    return False
+
+
+def _sexp_bool(value: object, *, default: bool) -> bool:
+    raw = value.value() if isinstance(value, sexpdata.Symbol) else str(value)
+    normalized = raw.lower()
+    if normalized in {"yes", "true"}:
+        return True
+    if normalized in {"no", "false"}:
+        return False
+    return default
+
+
+def _resolve_layer_selector(builder: PcbBuilder, name: str, *, source: str) -> tuple[PcbLayer, ...]:
+    if name == "*.Cu":
+        return tuple(layer for layer in builder.layers if layer.has_role(LayerRole.COPPER))
+    if name == "*.Mask":
+        return tuple(layer for layer in builder.layers if layer.has_role(LayerRole.SOLDER_MASK))
+    if name == "*.Paste":
+        return tuple(layer for layer in builder.layers if layer.has_role(LayerRole.SOLDER_PASTE))
+    if name == "*.SilkS":
+        return tuple(layer for layer in builder.layers if layer.has_role(LayerRole.SILKSCREEN))
+    if name == "F&B.Cu":
+        return tuple(
+            layer
+            for layer in builder.layers
+            if layer.has_role(LayerRole.COPPER)
+            and (layer.has_role(LayerRole.FRONT) or layer.has_role(LayerRole.BACK))
+        )
+    if name == "F&B.Mask":
+        return tuple(
+            layer
+            for layer in builder.layers
+            if layer.has_role(LayerRole.SOLDER_MASK)
+            and (layer.has_role(LayerRole.FRONT) or layer.has_role(LayerRole.BACK))
+        )
+    if name == "F&B.Paste":
+        return tuple(
+            layer
+            for layer in builder.layers
+            if layer.has_role(LayerRole.SOLDER_PASTE)
+            and (layer.has_role(LayerRole.FRONT) or layer.has_role(LayerRole.BACK))
+        )
+    return (builder.resolve_layer(name, source=source),)
+
+
+def _resolve_layers(builder: PcbBuilder, names: list[str], *, source: str) -> tuple[PcbLayer, ...]:
+    resolved: list[PcbLayer] = []
+    for name in names:
+        for layer in _resolve_layer_selector(builder, name, source=source):
+            if layer not in resolved:
+                resolved.append(layer)
+    return tuple(resolved)
+
+
+def _resolve_net_node(builder: PcbBuilder, item: SExpNode, *, source: str) -> PcbNet | None:
+    net_node = sexp.find(item, "net")
+    if not net_node or len(net_node) < 2:
+        return None
+    number = int(sexp.num(net_node, 1))
+    if number == 0:
+        return None
+    return builder.resolve_net_number(number, source=source)
 
 
 def _extract_reference(fp_sexpr: SExpNode) -> str:
-    """Get reference designator, handling both KiCad 6 and 8 formats."""
-    # KiCad 8: (property "Reference" "R1" ...)
     ref = sexp.find_property(fp_sexpr, "Reference")
     if ref:
         return ref
-    # KiCad 6: (fp_text reference "R1" ...)
     for item in fp_sexpr:
         if isinstance(item, list) and sexp.tag(item) == "fp_text" and len(item) > 2:
-            v = item[1]
-            if isinstance(v, sexpdata.Symbol) and v.value() == "reference":
+            value = item[1]
+            if isinstance(value, sexpdata.Symbol) and value.value() == "reference":
                 return str(item[2])
     return "?"
 
 
 def _extract_value(fp_sexpr: SExpNode) -> str:
-    """Get component value, handling both KiCad 6 and 8 formats."""
-    # KiCad 8: (property "Value" "100nF" ...)
-    val = sexp.find_property(fp_sexpr, "Value")
-    if val:
-        return val
-    # KiCad 6: (fp_text value "100nF" ...)
+    value = sexp.find_property(fp_sexpr, "Value")
+    if value:
+        return value
     for item in fp_sexpr:
         if isinstance(item, list) and sexp.tag(item) == "fp_text" and len(item) > 2:
-            v = item[1]
-            if isinstance(v, sexpdata.Symbol) and v.value() == "value":
+            kind = item[1]
+            if isinstance(kind, sexpdata.Symbol) and kind.value() == "value":
                 return str(item[2])
     return ""
 
 
+def _parse_fp_properties(fp_sexpr: SExpNode) -> dict[str, str]:
+    builtin = {"Reference", "Value", "Footprint", "Datasheet", "Description"}
+    properties: dict[str, str] = {}
+    for item in sexp.find_all(fp_sexpr, "property"):
+        if len(item) < 3:
+            continue
+        key = str(item[1])
+        if key not in builtin:
+            properties[key] = str(item[2])
+    return properties
+
+
+def _stroke_width(item: SExpNode, *, default: float = 0.1) -> float:
+    width_node = sexp.find(item, "width")
+    if width_node:
+        return _float_val(width_node)
+    stroke_node = sexp.find(item, "stroke")
+    stroke_width = sexp.find(stroke_node, "width") if stroke_node else None
+    return _float_val(stroke_width) if stroke_width else default
+
+
+def _fill_flag(item: SExpNode) -> bool:
+    fill_node = sexp.find(item, "fill")
+    return fill_node is not None and sexp.val(fill_node) == "solid"
+
+
+def _artwork_purpose(
+    layer: PcbLayer | None,
+    *,
+    native_type: str,
+    text_kind: str = "",
+) -> PcbArtworkPurpose:
+    if native_type == "model":
+        return PcbArtworkPurpose.COMPONENT_BODY
+    if text_kind == "reference":
+        return PcbArtworkPurpose.DESIGNATOR
+    if text_kind == "value":
+        return PcbArtworkPurpose.VALUE
+    if text_kind:
+        return PcbArtworkPurpose.USER_TEXT
+    if layer is None:
+        return PcbArtworkPurpose.UNKNOWN
+    if layer.has_role(LayerRole.SILKSCREEN):
+        return PcbArtworkPurpose.SILKSCREEN
+    if layer.has_role(LayerRole.COURTYARD):
+        return PcbArtworkPurpose.COURTYARD
+    if layer.has_role(LayerRole.FABRICATION):
+        return PcbArtworkPurpose.FABRICATION
+    if layer.has_role(LayerRole.ASSEMBLY):
+        return PcbArtworkPurpose.ASSEMBLY
+    if layer.has_role(LayerRole.SOLDER_MASK):
+        return PcbArtworkPurpose.SOLDER_MASK
+    if layer.has_role(LayerRole.SOLDER_PASTE):
+        return PcbArtworkPurpose.SOLDER_PASTE
+    if layer.has_role(LayerRole.DIMENSION):
+        return PcbArtworkPurpose.DIMENSION
+    if layer.has_role(LayerRole.MECHANICAL):
+        return PcbArtworkPurpose.MECHANICAL
+    if layer.has_role(LayerRole.USER) or layer.has_role(LayerRole.COMMENT):
+        return PcbArtworkPurpose.USER
+    return PcbArtworkPurpose.UNKNOWN
+
+
 def _parse_pad(
+    builder: PcbBuilder,
     pad_sexpr: SExpNode,
+    footprint: PcbFootprint,
     fp_x: float,
     fp_y: float,
     fp_rot: float,
-    fp_ref: str,
-) -> PcbPad:
-    """Parse a (pad ...) S-expression into a PcbPad with absolute coords."""
+    index: int,
+) -> None:
+    global_pad_index = len(builder.pads)
     number = str(pad_sexpr[1])
-    # pad_sexpr[2] = type (smd/thru_hole), pad_sexpr[3] = shape
-    shape_sym = pad_sexpr[3]
-    shape = shape_sym.value() if isinstance(shape_sym, sexpdata.Symbol) else str(shape_sym)
-
+    raw_pad_type = pad_sexpr[2]
+    native_pad_type = (
+        raw_pad_type.value() if isinstance(raw_pad_type, sexpdata.Symbol) else str(raw_pad_type)
+    )
+    raw_shape = pad_sexpr[3]
+    shape = raw_shape.value() if isinstance(raw_shape, sexpdata.Symbol) else str(raw_shape)
     at_node = sexp.find(pad_sexpr, "at")
-    local_x, local_y, pad_rot = _at(at_node) if at_node else (0.0, 0.0, 0.0)
-
+    local_x, local_y, pad_rotation = _at(at_node) if at_node else (0.0, 0.0, 0.0)
+    abs_x, abs_y = _transform_point(local_x, local_y, fp_x, fp_y, fp_rot)
+    # KiCad placed-board pad positions are footprint-local, but pad angles are
+    # already board-space orientations. Adding footprint rotation rotates pads twice.
+    pad_board_rotation = pad_rotation
     size_node = sexp.find(pad_sexpr, "size")
     width = sexp.num(size_node, 1) if size_node else 0.0
     height = sexp.num(size_node, 2) if size_node and len(size_node) > 2 else width
-
-    layers_node = sexp.find(pad_sexpr, "layers")
-    pad_layers = _layers(layers_node) if layers_node else []
-
-    net_node = sexp.find(pad_sexpr, "net")
-    net_num = int(sexp.num(net_node, 1)) if net_node and len(net_node) > 1 else 0
-    net_name = str(net_node[2]) if net_node and len(net_node) > 2 else ""
-
-    drill_node = sexp.find(pad_sexpr, "drill")
-    drill = 0.0
-    if drill_node and len(drill_node) > 1:
-        # (drill 3.2) or (drill oval 0.6 1.2) — take first numeric value
-        for v in drill_node[1:]:
-            if isinstance(v, (int, float)):
-                drill = float(v)
-                break
-
-    # Roundrect corner ratio
-    rratio_node = sexp.find(pad_sexpr, "roundrect_rratio")
-    roundrect_rratio = _float_val(rratio_node) if rratio_node else 0.0
-
-    # Pin function and type (KiCad 8+)
-    pinfunc_node = sexp.find(pad_sexpr, "pinfunction")
-    pin_function = sexp.val(pinfunc_node) if pinfunc_node else ""
-    pintype_node = sexp.find(pad_sexpr, "pintype")
-    pin_type = sexp.val(pintype_node) if pintype_node else ""
-
-    abs_x, abs_y = _transform_point(local_x, local_y, fp_x, fp_y, fp_rot)
-
-    return PcbPad(
-        number=number,
+    layer_names = _layers(sexp.find(pad_sexpr, "layers"))
+    source = f"pad {footprint.reference}.{number}"
+    layers = _resolve_layers(builder, layer_names, source=source)
+    drill = _parse_pad_drill(
+        builder,
+        pad_sexpr,
+        id=f"drill:pad:{global_pad_index}:{number}",
         x=abs_x,
         y=abs_y,
-        width=width,
-        height=height,
-        shape=shape,
-        layers=pad_layers,
-        net_number=net_num,
-        net_name=net_name,
-        footprint_ref=fp_ref,
-        rotation=fp_rot + pad_rot,
-        drill=drill,
-        roundrect_rratio=roundrect_rratio,
-        pin_function=pin_function,
-        pin_type=pin_type,
+        layers=layers,
+        native_pad_type=native_pad_type,
+        rotation=pad_board_rotation,
+        source=source,
+    )
+    rratio_node = sexp.find(pad_sexpr, "roundrect_rratio")
+    pin_function_node = sexp.find(pad_sexpr, "pinfunction")
+    pin_type_node = sexp.find(pad_sexpr, "pintype")
+    builder.add_pad_object(
+        PcbPad(
+            id=f"pad:{global_pad_index}:{footprint.reference}:{number}",
+            number=number,
+            x=abs_x,
+            y=abs_y,
+            width=width,
+            height=height,
+            shape=shape,
+            pad_type=(
+                PcbPadType.SMD
+                if native_pad_type == "smd" or drill is None
+                else PcbPadType.THROUGH_HOLE
+            ),
+            layers=layers,
+            net=_resolve_net_node(builder, pad_sexpr, source=source),
+            footprint=footprint,
+            drill=drill,
+            rotation=pad_board_rotation,
+            roundrect_rratio=_float_val(rratio_node) if rratio_node else 0.0,
+            pin_function=sexp.val(pin_function_node) if pin_function_node else "",
+            pin_type=sexp.val(pin_type_node) if pin_type_node else "",
+            custom_shapes=_parse_pad_custom_shapes(
+                pad_sexpr,
+                transform=(abs_x, abs_y, pad_board_rotation),
+            )
+            if shape == "custom"
+            else (),
+            metadata=_object_metadata(
+                native_type="pad",
+                source_collection="pads",
+                native_kind=native_pad_type,
+                native_id=_item_uuid(pad_sexpr),
+                native_index=index,
+                locked=_item_locked(pad_sexpr),
+                properties={"shape": shape},
+            ),
+        ),
+        source=source,
     )
 
 
-def _parse_fp_lines(
-    fp_sexpr: SExpNode,
-    fp_x: float,
-    fp_y: float,
-    fp_rot: float,
-    layer_filter: set[str],
-    fp_ref: str = "",
-) -> list[PcbLine]:
-    """Parse fp_line elements matching layer_filter, transform to absolute."""
-    lines: list[PcbLine] = []
-    for item in sexp.find_all(fp_sexpr, "fp_line"):
-        layer_node = sexp.find(item, "layer")
-        if not layer_node:
+def _parse_pad_custom_shapes(
+    pad_sexpr: SExpNode,
+    *,
+    transform: tuple[float, float, float],
+) -> tuple[PcbLine | PcbArc | PcbCircle | PcbPolygon, ...]:
+    primitives_node = sexp.find(pad_sexpr, "primitives")
+    if not primitives_node:
+        return ()
+    shapes: list[PcbLine | PcbArc | PcbCircle | PcbPolygon] = []
+    for item in primitives_node[1:]:
+        tag = sexp.tag(item)
+        if tag is None or not isinstance(item, list):
             continue
-        layer = sexp.val(layer_node)
-        if layer not in layer_filter:
-            continue
-        start_node = sexp.find(item, "start")
-        end_node = sexp.find(item, "end")
-        if not start_node or not end_node:
-            continue
-        sx, sy = _xy(start_node)
-        ex, ey = _xy(end_node)
-        abs_s = _transform_point(sx, sy, fp_x, fp_y, fp_rot)
-        abs_e = _transform_point(ex, ey, fp_x, fp_y, fp_rot)
-        width_node = sexp.find(item, "width")
-        stroke_node = sexp.find(item, "stroke")
-        if width_node:
-            w = _float_val(width_node)
-        elif stroke_node:
-            sw = sexp.find(stroke_node, "width")
-            w = _float_val(sw) if sw else 0.1
-        else:
-            w = 0.1
-        lines.append(
-            PcbLine(abs_s[0], abs_s[1], abs_e[0], abs_e[1], layer, w, footprint_ref=fp_ref)
-        )
-    return lines
+        payload = _graphic_payload(item, tag=tag, transform=transform)
+        if isinstance(payload, (PcbLine, PcbArc, PcbCircle, PcbPolygon)):
+            shapes.append(payload)
+    return tuple(shapes)
 
 
-def _parse_fp_circles(
-    fp_sexpr: SExpNode,
-    fp_x: float,
-    fp_y: float,
-    fp_rot: float,
-    layer_filter: set[str],
-    fp_ref: str = "",
-) -> list[PcbCircle]:
-    """Parse fp_circle elements matching layer_filter, transform to absolute."""
-    circles: list[PcbCircle] = []
-    for item in sexp.find_all(fp_sexpr, "fp_circle"):
-        layer_node = sexp.find(item, "layer")
-        if not layer_node:
-            continue
-        layer = sexp.val(layer_node)
-        if layer not in layer_filter:
-            continue
-        center_node = sexp.find(item, "center")
-        end_node = sexp.find(item, "end")
-        if not center_node or not end_node:
-            continue
-        cx, cy = _xy(center_node)
-        ex, ey = _xy(end_node)
-        radius = math.hypot(ex - cx, ey - cy)
-        abs_c = _transform_point(cx, cy, fp_x, fp_y, fp_rot)
-        width_node = sexp.find(item, "width")
-        stroke_node = sexp.find(item, "stroke")
-        if width_node:
-            w = _float_val(width_node)
-        elif stroke_node:
-            sw = sexp.find(stroke_node, "width")
-            w = _float_val(sw) if sw else 0.1
-        else:
-            w = 0.1
-        fill_node = sexp.find(item, "fill")
-        filled = fill_node is not None and sexp.val(fill_node) == "solid"
-        circles.append(
-            PcbCircle(abs_c[0], abs_c[1], radius, layer, w, filled, footprint_ref=fp_ref)
-        )
-    return circles
-
-
-def _parse_fp_rects_as_lines(
-    fp_sexpr: SExpNode,
-    fp_x: float,
-    fp_y: float,
-    fp_rot: float,
-    layer_filter: set[str],
-    fp_ref: str = "",
-) -> list[PcbLine]:
-    """Parse fp_rect elements as four PcbLine segments."""
-    lines: list[PcbLine] = []
-    for item in sexp.find_all(fp_sexpr, "fp_rect"):
-        layer_node = sexp.find(item, "layer")
-        if not layer_node:
-            continue
-        layer = sexp.val(layer_node)
-        if layer not in layer_filter:
-            continue
-        start_node = sexp.find(item, "start")
-        end_node = sexp.find(item, "end")
-        if not start_node or not end_node:
-            continue
-        sx, sy = _xy(start_node)
-        ex, ey = _xy(end_node)
-        width_node = sexp.find(item, "width")
-        stroke_node = sexp.find(item, "stroke")
-        if width_node:
-            w = _float_val(width_node)
-        elif stroke_node:
-            sw = sexp.find(stroke_node, "width")
-            w = _float_val(sw) if sw else 0.1
-        else:
-            w = 0.1
-        # Four corners
-        corners = [(sx, sy), (ex, sy), (ex, ey), (sx, ey)]
-        abs_corners = [_transform_point(cx, cy, fp_x, fp_y, fp_rot) for cx, cy in corners]
-        for i in range(4):
-            j = (i + 1) % 4
-            lines.append(
-                PcbLine(
-                    abs_corners[i][0],
-                    abs_corners[i][1],
-                    abs_corners[j][0],
-                    abs_corners[j][1],
-                    layer,
-                    w,
-                    footprint_ref=fp_ref,
-                )
-            )
-    return lines
-
-
-def _parse_fp_arcs(
-    fp_sexpr: SExpNode,
-    fp_x: float,
-    fp_y: float,
-    fp_rot: float,
-    layer_filter: set[str],
-    fp_ref: str = "",
-) -> list[PcbArc]:
-    """Parse fp_arc elements matching layer_filter, transform to absolute."""
-    arcs: list[PcbArc] = []
-    for item in sexp.find_all(fp_sexpr, "fp_arc"):
-        layer_node = sexp.find(item, "layer")
-        if not layer_node:
-            continue
-        layer = sexp.val(layer_node)
-        if layer not in layer_filter:
-            continue
-        start_node = sexp.find(item, "start")
-        mid_node = sexp.find(item, "mid")
-        end_node = sexp.find(item, "end")
-        if not start_node or not mid_node or not end_node:
-            continue
-        sx, sy = _xy(start_node)
-        mx, my = _xy(mid_node)
-        ex, ey = _xy(end_node)
-        abs_s = _transform_point(sx, sy, fp_x, fp_y, fp_rot)
-        abs_m = _transform_point(mx, my, fp_x, fp_y, fp_rot)
-        abs_e = _transform_point(ex, ey, fp_x, fp_y, fp_rot)
-        width_node = sexp.find(item, "width")
-        stroke_node = sexp.find(item, "stroke")
-        if width_node:
-            w = _float_val(width_node)
-        elif stroke_node:
-            sw = sexp.find(stroke_node, "width")
-            w = _float_val(sw) if sw else 0.1
-        else:
-            w = 0.1
-        arcs.append(
-            PcbArc(
-                abs_s[0],
-                abs_s[1],
-                abs_m[0],
-                abs_m[1],
-                abs_e[0],
-                abs_e[1],
-                layer,
-                w,
-                footprint_ref=fp_ref,
-            )
-        )
-    return arcs
-
-
-_SILK_LAYERS = {"F.SilkS", "B.SilkS", "F.Silkscreen", "B.Silkscreen"}
-_COURTYARD_LAYERS = {"F.CrtYd", "B.CrtYd"}
-_FAB_LAYERS = {"F.Fab", "B.Fab"}
-_EDGE_LAYERS = {"Edge.Cuts"}
+def _parse_pad_drill(
+    builder: PcbBuilder,
+    pad_sexpr: SExpNode,
+    *,
+    id: str,
+    x: float,
+    y: float,
+    layers: tuple[PcbLayer, ...],
+    native_pad_type: str,
+    rotation: float,
+    source: str,
+) -> PcbDrill | None:
+    drill_node = sexp.find(pad_sexpr, "drill")
+    if not drill_node or len(drill_node) < 2:
+        return None
+    numeric_values = [float(value) for value in drill_node[1:] if isinstance(value, (int, float))]
+    if not numeric_values:
+        return None
+    shape = PcbDrillShape.ROUND
+    width = numeric_values[0]
+    height = numeric_values[0]
+    diameter = numeric_values[0]
+    if (
+        len(drill_node) > 1
+        and isinstance(drill_node[1], sexpdata.Symbol)
+        and drill_node[1].value() == "oval"
+    ):
+        shape = PcbDrillShape.SLOT
+        height = numeric_values[1] if len(numeric_values) > 1 else width
+        diameter = min(width, height)
+    plating = (
+        PcbDrillPlating.NON_PLATED if native_pad_type == "np_thru_hole" else PcbDrillPlating.PLATED
+    )
+    return builder.add_drill_object(
+        PcbDrill(
+            id=id,
+            x=x,
+            y=y,
+            diameter=diameter,
+            shape=shape,
+            plating=plating,
+            width=width,
+            height=height,
+            rotation=rotation,
+            layers=layers,
+            metadata=_object_metadata(
+                native_type="drill",
+                source_collection="drills",
+                native_kind=native_pad_type,
+                native_id=_item_uuid(pad_sexpr),
+            ),
+        ),
+        source=source,
+    )
 
 
 def _compute_bbox(
-    pads: list[PcbPad], courtyard_lines: list[PcbLine]
+    pads: list[PcbPad], courtyard_artwork: list[PcbArtwork]
 ) -> tuple[float, float, float, float] | None:
-    """Compute bounding box from courtyard lines, or pad extents + margin."""
     xs: list[float] = []
     ys: list[float] = []
-    if courtyard_lines:
-        for ln in courtyard_lines:
-            xs.extend([ln.start_x, ln.end_x])
-            ys.extend([ln.start_y, ln.end_y])
+    if courtyard_artwork:
+        for artwork in courtyard_artwork:
+            _extend_payload_bounds(xs, ys, artwork.data)
     elif pads:
         margin = 0.5
-        for p in pads:
-            xs.extend([p.x - p.width / 2 - margin, p.x + p.width / 2 + margin])
-            ys.extend([p.y - p.height / 2 - margin, p.y + p.height / 2 + margin])
+        for pad in pads:
+            xs.extend([pad.x - pad.width / 2 - margin, pad.x + pad.width / 2 + margin])
+            ys.extend([pad.y - pad.height / 2 - margin, pad.y + pad.height / 2 + margin])
     if not xs:
         return None
     return (min(xs), min(ys), max(xs), max(ys))
 
 
-def _parse_fp_texts(
-    fp_sexpr: SExpNode,
-    fp_x: float,
-    fp_y: float,
-    fp_rot: float,
-    fp_ref: str,
-) -> list[PcbText]:
-    """Parse fp_text elements into PcbText with absolute coords."""
-    texts: list[PcbText] = []
-    for item in sexp.find_all(fp_sexpr, "fp_text"):
-        if len(item) < 3:
-            continue
-        kind_sym = item[1]
-        kind = kind_sym.value() if isinstance(kind_sym, sexpdata.Symbol) else str(kind_sym)
-        raw_text = str(item[2])
-
-        # Resolve ${REFERENCE} placeholder
-        if "${REFERENCE}" in raw_text:
-            raw_text = raw_text.replace("${REFERENCE}", fp_ref)
-
-        # Check hidden flag
-        hidden = any(isinstance(x, sexpdata.Symbol) and x.value() == "hide" for x in item)
-
-        layer_node = sexp.find(item, "layer")
-        layer = sexp.val(layer_node) if layer_node else ""
-
-        at_node = sexp.find(item, "at")
-        local_x, local_y, text_rot = _at(at_node) if at_node else (0.0, 0.0, 0.0)
-
-        # Font size
-        effects = sexp.find(item, "effects")
-        font = sexp.find(effects, "font") if effects else None
-        size_node = sexp.find(font, "size") if font else None
-        font_size = sexp.num(size_node, 1) if size_node else 1.0
-
-        abs_x, abs_y = _transform_point(local_x, local_y, fp_x, fp_y, fp_rot)
-        abs_rot = fp_rot + text_rot
-
-        texts.append(
-            PcbText(
-                text=raw_text,
-                x=abs_x,
-                y=abs_y,
-                rotation=abs_rot,
-                layer=layer,
-                font_size=font_size,
-                kind=kind,
-                hidden=hidden,
-                footprint_ref=fp_ref,
-            )
-        )
-    return texts
+def _extend_payload_bounds(xs: list[float], ys: list[float], payload: object) -> None:
+    if isinstance(payload, PcbLine):
+        xs.extend([payload.start_x, payload.end_x])
+        ys.extend([payload.start_y, payload.end_y])
+    elif isinstance(payload, PcbArc):
+        xs.extend([payload.start_x, payload.mid_x, payload.end_x])
+        ys.extend([payload.start_y, payload.mid_y, payload.end_y])
+    elif isinstance(payload, PcbCircle):
+        xs.extend([payload.cx - payload.radius, payload.cx + payload.radius])
+        ys.extend([payload.cy - payload.radius, payload.cy + payload.radius])
+    elif isinstance(payload, PcbPolygon):
+        xs.extend(x for x, _y in payload.points)
+        ys.extend(y for _x, y in payload.points)
 
 
-_BUILTIN_PROPERTIES = {"Reference", "Value", "Footprint", "Datasheet", "Description"}
-
-
-def _parse_fp_properties(fp_sexpr: SExpNode) -> dict[str, str]:
-    """Extract custom properties beyond Reference/Value from a footprint.
-
-    KiCad 8 stores footprint properties as (property "Key" "Value" ...).
-    Builtin keys (Reference, Value, Footprint, Datasheet, Description) are
-    skipped since they're already captured in dedicated fields.
-    """
-    props: dict[str, str] = {}
-    for item in sexp.find_all(fp_sexpr, "property"):
-        if len(item) < 3:
-            continue
-        key = str(item[1])
-        if key in _BUILTIN_PROPERTIES:
-            continue
-        value = str(item[2])
-        props[key] = value
-    return props
-
-
-def _parse_fp_models(fp_sexpr: SExpNode) -> list[PcbModel3D]:
-    """Parse all (model ...) entries from a footprint s-expression."""
-    models: list[PcbModel3D] = []
-    for node in sexp.find_all(fp_sexpr, "model"):
-        if len(node) < 2:
-            continue
-        raw_path = node[1]
-        source = raw_path.value() if isinstance(raw_path, sexpdata.Symbol) else str(raw_path)
-
-        # KiCad 6+ uses (offset (xyz ...)), KiCad 5 uses (at (xyz ...))
-        offset_node = sexp.find(node, "offset") or sexp.find(node, "at")
-        scale_node = sexp.find(node, "scale")
-        rotate_node = sexp.find(node, "rotate")
-
-        def _xyz(parent: SExpNode | None) -> tuple[float, float, float]:
-            if not parent:
-                return (0.0, 0.0, 0.0)
-            xyz = sexp.find(parent, "xyz")
-            if not xyz or len(xyz) < 4:
-                return (0.0, 0.0, 0.0)
-            return (sexp.num(xyz, 1), sexp.num(xyz, 2), sexp.num(xyz, 3))
-
-        offset = _xyz(offset_node)
-        scale = _xyz(scale_node)
-        rotation = _xyz(rotate_node)
-
-        # Default scale to (1, 1, 1) if all zeros (missing node)
-        if scale == (0.0, 0.0, 0.0) and not scale_node:
-            scale = (1.0, 1.0, 1.0)
-
-        models.append(
-            PcbModel3D(
-                source=source,
-                offset=offset,
-                rotation=rotation,
-                scale=scale,
-            )
-        )
-    return models
-
-
-def _parse_footprint(
-    fp_sexpr: SExpNode,
-) -> tuple[PcbFootprint, list[PcbLine], list[PcbArc], list[PcbPolygon]]:
-    """Parse a footprint, returning (PcbFootprint, edge_cuts_lines, edge_cuts_arcs, fp_polys)."""
+def _parse_footprint(builder: PcbBuilder, fp_sexpr: SExpNode) -> _FootprintParseResult:
     lib_name = str(fp_sexpr[1])
-
     layer_node = sexp.find(fp_sexpr, "layer")
-    layer = sexp.val(layer_node) if layer_node else "F.Cu"
-
+    layer = builder.resolve_layer(
+        sexp.val(layer_node) if layer_node else "F.Cu", source="footprint"
+    )
     at_node = sexp.find(fp_sexpr, "at")
     fp_x, fp_y, fp_rot = _at(at_node) if at_node else (0.0, 0.0, 0.0)
-
-    ref = _extract_reference(fp_sexpr)
-    value = _extract_value(fp_sexpr)
-
-    pads = [_parse_pad(p, fp_x, fp_y, fp_rot, ref) for p in sexp.find_all(fp_sexpr, "pad")]
-
-    silk_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _SILK_LAYERS, fp_ref=ref)
-    court_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _COURTYARD_LAYERS, fp_ref=ref)
-    fab_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS, fp_ref=ref)
-    fab_lines.extend(
-        _parse_fp_rects_as_lines(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS, fp_ref=ref)
-    )
-    fab_circles = _parse_fp_circles(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS, fp_ref=ref)
-    fab_arcs = _parse_fp_arcs(fp_sexpr, fp_x, fp_y, fp_rot, _FAB_LAYERS, fp_ref=ref)
-    edge_lines = _parse_fp_lines(fp_sexpr, fp_x, fp_y, fp_rot, _EDGE_LAYERS)
-    edge_arcs = _parse_fp_arcs(fp_sexpr, fp_x, fp_y, fp_rot, _EDGE_LAYERS)
-    fp_polys = _parse_fp_polys(
-        fp_sexpr,
-        fp_x,
-        fp_y,
-        fp_rot,
-        _FAB_LAYERS | _SILK_LAYERS,
-        fp_ref=ref,
+    reference = _extract_reference(fp_sexpr)
+    footprint = builder.add_footprint(
+        PcbFootprint(
+            reference=reference,
+            footprint_lib=lib_name,
+            x=fp_x,
+            y=fp_y,
+            rotation=fp_rot,
+            layer=layer,
+            value=_extract_value(fp_sexpr),
+            properties=_parse_fp_properties(fp_sexpr),
+            metadata=PcbFootprintMetadata(source_format="kicad", native_type="footprint"),
+        ),
+        source=f"footprint {reference}",
     )
 
-    texts = _parse_fp_texts(fp_sexpr, fp_x, fp_y, fp_rot, ref)
+    pad_start_index = len(builder.pads)
+    for index, pad_sexpr in enumerate(sexp.find_all(fp_sexpr, "pad")):
+        _parse_pad(builder, pad_sexpr, footprint, fp_x, fp_y, fp_rot, index)
 
-    models = _parse_fp_models(fp_sexpr)
-
-    bbox = _compute_bbox(pads, court_lines)
-
-    # Custom properties beyond Reference/Value (KiCad 8 format)
-    properties = _parse_fp_properties(fp_sexpr)
-
-    fp = PcbFootprint(
-        reference=ref,
-        footprint_lib=lib_name,
-        x=fp_x,
-        y=fp_y,
-        rotation=fp_rot,
-        layer=layer,
-        value=value,
-        pads=pads,
-        silkscreen_lines=silk_lines,
-        courtyard_lines=court_lines,
-        fab_lines=fab_lines,
-        fab_circles=fab_circles,
-        fab_arcs=fab_arcs,
-        texts=texts,
-        models_3d=models,
-        bbox=bbox,
-        properties=properties,
-    )
-    return fp, edge_lines, edge_arcs, fp_polys
-
-
-# ---------------------------------------------------------------------------
-# Segment / via parsing
-# ---------------------------------------------------------------------------
-
-
-def _parse_segment(seg_sexpr: SExpNode) -> PcbSegment:
-    start_node = sexp.find(seg_sexpr, "start")
-    end_node = sexp.find(seg_sexpr, "end")
-    width_node = sexp.find(seg_sexpr, "width")
-    layer_node = sexp.find(seg_sexpr, "layer")
-    if not start_node or not end_node or not width_node or not layer_node:
-        msg = "Segment missing required start/end/width/layer"
-        raise ValueError(msg)
-    start = _xy(start_node)
-    end = _xy(end_node)
-    width = _float_val(width_node)
-    layer = sexp.val(layer_node)
-    net_node = sexp.find(seg_sexpr, "net")
-    net = int(sexp.num(net_node, 1)) if net_node else 0
-    return PcbSegment(start[0], start[1], end[0], end[1], width, layer, net)
-
-
-def _parse_via(via_sexpr: SExpNode) -> PcbVia:
-    at_node = sexp.find(via_sexpr, "at")
-    size_node = sexp.find(via_sexpr, "size")
-    drill_node = sexp.find(via_sexpr, "drill")
-    if not at_node or not size_node or not drill_node:
-        msg = "Via missing required at/size/drill"
-        raise ValueError(msg)
-    x, y = sexp.num(at_node, 1), sexp.num(at_node, 2)
-    size = _float_val(size_node)
-    drill = _float_val(drill_node)
-    layers_node = sexp.find(via_sexpr, "layers")
-    via_layers = _layers(layers_node) if layers_node else []
-    net_node = sexp.find(via_sexpr, "net")
-    net = int(sexp.num(net_node, 1)) if net_node else 0
-    return PcbVia(x, y, size, drill, via_layers, net)
-
-
-# ---------------------------------------------------------------------------
-# Board outline parsing
-# ---------------------------------------------------------------------------
-
-
-def _parse_gr_line(item: SExpNode) -> PcbLine | None:
-    """Parse a (gr_line ...) if it's on Edge.Cuts."""
-    layer_node = sexp.find(item, "layer")
-    if not layer_node or sexp.val(layer_node) != "Edge.Cuts":
-        return None
-    start_node = sexp.find(item, "start")
-    end_node = sexp.find(item, "end")
-    if not start_node or not end_node:
-        return None
-    start = _xy(start_node)
-    end = _xy(end_node)
-    width_node = sexp.find(item, "width")
-    stroke_node = sexp.find(item, "stroke")
-    if width_node:
-        w = _float_val(width_node)
-    elif stroke_node:
-        sw = sexp.find(stroke_node, "width")
-        w = _float_val(sw) if sw else 0.1
-    else:
-        w = 0.1
-    return PcbLine(start[0], start[1], end[0], end[1], "Edge.Cuts", w)
-
-
-def _parse_gr_arc(item: SExpNode) -> PcbArc | None:
-    """Parse a (gr_arc ...) if it's on Edge.Cuts.
-
-    KiCad 6+ uses start/mid/end; KiCad 5 uses start/end/angle where
-    start is the centre and end is one endpoint.
-    """
-    layer_node = sexp.find(item, "layer")
-    if not layer_node or sexp.val(layer_node) != "Edge.Cuts":
-        return None
-    mid_node = sexp.find(item, "mid")
-    start_node = sexp.find(item, "start")
-    end_node = sexp.find(item, "end")
-    if not start_node or not end_node:
-        return None
-    width_node = sexp.find(item, "width")
-    stroke_node = sexp.find(item, "stroke")
-    if width_node:
-        w = _float_val(width_node)
-    elif stroke_node:
-        sw = sexp.find(stroke_node, "width")
-        w = _float_val(sw) if sw else 0.1
-    else:
-        w = 0.1
-    if mid_node:
-        # KiCad 6+: start/mid/end are three points on the arc
-        start = _xy(start_node)
-        mid = _xy(mid_node)
-        end = _xy(end_node)
-        return PcbArc(start[0], start[1], mid[0], mid[1], end[0], end[1], "Edge.Cuts", w)
-    else:
-        # KiCad 5: start=centre, end=one endpoint, angle=sweep
-        angle_node = sexp.find(item, "angle")
-        if not angle_node:
-            return None
-        cx, cy = _xy(start_node)
-        ex, ey = _xy(end_node)
-        angle_deg = _float_val(angle_node)
-        # Compute the other endpoint and midpoint
-        rad = math.radians(angle_deg)
-        half_rad = rad / 2
-        dx, dy = ex - cx, ey - cy
-        # Midpoint of the arc
-        cos_h, sin_h = math.cos(half_rad), math.sin(half_rad)
-        mx = cx + dx * cos_h - dy * sin_h
-        my = cy + dx * sin_h + dy * cos_h
-        # Far endpoint
-        cos_f, sin_f = math.cos(rad), math.sin(rad)
-        fx = cx + dx * cos_f - dy * sin_f
-        fy = cy + dx * sin_f + dy * cos_f
-        return PcbArc(ex, ey, mx, my, fx, fy, "Edge.Cuts", w)
-
-
-# ---------------------------------------------------------------------------
-# Zone / polygon / trace-arc parsing
-# ---------------------------------------------------------------------------
-
-
-def _parse_zone_polygons(zone_sexpr: SExpNode) -> list[PcbPolygon]:
-    """Extract filled_polygon entries from a zone as PcbPolygon objects."""
-    net_node = sexp.find(zone_sexpr, "net")
-    net_num = int(sexp.num(net_node, 1)) if net_node and len(net_node) > 1 else 0
-    net_name_node = sexp.find(zone_sexpr, "net_name")
-    net_name = sexp.val(net_name_node) if net_name_node else ""
-
-    # Zone-level layer (KiCad 5 filled_polygons inherit this)
-    zone_layer_node = sexp.find(zone_sexpr, "layer")
-    zone_layer = sexp.val(zone_layer_node) if zone_layer_node else ""
-
-    polygons: list[PcbPolygon] = []
-    for fp_node in sexp.find_all(zone_sexpr, "filled_polygon"):
-        # KiCad 6+ has per-filled_polygon layer; KiCad 5 inherits from zone
-        layer_node = sexp.find(fp_node, "layer")
-        layer = sexp.val(layer_node) if layer_node else zone_layer
-        pts_node = sexp.find(fp_node, "pts")
-        if not pts_node:
-            continue
-        points: list[tuple[float, float]] = []
-        for xy_node in sexp.find_all(pts_node, "xy"):
-            points.append((sexp.num(xy_node, 1), sexp.num(xy_node, 2)))
-        if points:
-            polygons.append(
-                PcbPolygon(
-                    points=points,
-                    layer=layer,
-                    net_number=net_num,
-                    net_name=net_name,
-                )
+    profile_elements: list[PcbBoardProfileElement] = []
+    courtyard_artwork: list[PcbArtwork] = []
+    for tag in ("fp_line", "fp_arc", "fp_circle", "fp_rect", "fp_poly"):
+        for index, item in enumerate(sexp.find_all(fp_sexpr, tag)):
+            parsed = _parse_graphic_item(
+                builder,
+                item,
+                tag=tag,
+                index=index,
+                footprint=footprint,
+                transform=(fp_x, fp_y, fp_rot),
             )
-    return polygons
+            if isinstance(parsed, PcbBoardProfileElement):
+                profile_elements.append(parsed)
+            elif isinstance(parsed, PcbArtwork):
+                builder.add_artwork_object(parsed, source=f"{tag} {reference}")
+                if parsed.layer is not None and parsed.layer.has_role(LayerRole.COURTYARD):
+                    courtyard_artwork.append(parsed)
+
+    for index, item in enumerate(sexp.find_all(fp_sexpr, "fp_text")):
+        artwork = _parse_fp_text(builder, item, footprint, fp_x, fp_y, fp_rot, index)
+        if artwork is not None:
+            builder.add_artwork_object(artwork, source=f"fp_text {reference}")
+
+    for index, item in enumerate(sexp.find_all(fp_sexpr, "model")):
+        builder.add_artwork_object(
+            _parse_model(item, footprint, index), source=f"model {reference}"
+        )
+
+    for index, zone_sexpr in enumerate(sexp.find_all(fp_sexpr, "zone")):
+        keepout = _parse_zone_keepout(
+            builder,
+            zone_sexpr,
+            index=index,
+            footprint=footprint,
+            transform=(fp_x, fp_y, fp_rot),
+        )
+        if keepout is not None:
+            builder.add_keepout_object(keepout, source=f"footprint keepout {reference}")
+
+    footprint.bbox = _compute_bbox(builder.pads[pad_start_index:], courtyard_artwork)
+    return _FootprintParseResult(footprint=footprint, profile_elements=profile_elements)
 
 
-def _parse_gr_poly(item: SExpNode) -> PcbPolygon | None:
-    """Parse a (gr_poly ...) as a PcbPolygon."""
+def _parse_graphic_item(
+    builder: PcbBuilder,
+    item: SExpNode,
+    *,
+    tag: str,
+    index: int,
+    footprint: PcbFootprint | None = None,
+    transform: tuple[float, float, float] | None = None,
+) -> PcbArtwork | PcbBoardProfileElement | None:
     layer_node = sexp.find(item, "layer")
     if not layer_node:
         return None
-    layer = sexp.val(layer_node)
-    pts_node = sexp.find(item, "pts")
-    if not pts_node:
+    layer = builder.resolve_layer(sexp.val(layer_node), source=tag)
+    payload = _graphic_payload(item, tag=tag, transform=transform)
+    if payload is None:
         return None
-    points: list[tuple[float, float]] = []
-    for xy_node in sexp.find_all(pts_node, "xy"):
-        points.append((sexp.num(xy_node, 1), sexp.num(xy_node, 2)))
-    if not points:
-        return None
-    return PcbPolygon(points=points, layer=layer)
+    kind = _artwork_kind_for_payload(payload)
+    metadata = _object_metadata(
+        native_type=tag,
+        source_collection="footprint_artwork" if footprint is not None else "artwork",
+        native_id=_item_uuid(item),
+        native_index=index,
+        locked=_item_locked(item),
+    )
+    if layer.has_role(LayerRole.EDGE):
+        return PcbBoardProfileElement(
+            id=f"{tag}:profile:{index}",
+            kind=kind,
+            layer=layer,
+            data=payload,
+            metadata=metadata,
+        )
+    return PcbArtwork(
+        id=f"{tag}:{footprint.reference if footprint else 'board'}:{index}:{layer.name}",
+        kind=kind,
+        purpose=_artwork_purpose(layer, native_type=tag),
+        layer=layer,
+        data=payload,
+        footprint=footprint,
+        metadata=metadata,
+    )
 
 
-def _parse_fp_polys(
-    fp_sexpr: SExpNode,
+def _graphic_payload(
+    item: SExpNode,
+    *,
+    tag: str,
+    transform: tuple[float, float, float] | None,
+) -> PcbLine | PcbArc | PcbCircle | PcbPolygon | None:
+    if tag.endswith("_line") or tag == "gr_line":
+        start_node = sexp.find(item, "start")
+        end_node = sexp.find(item, "end")
+        if not start_node or not end_node:
+            return None
+        start = _maybe_transform(_xy(start_node), transform)
+        end = _maybe_transform(_xy(end_node), transform)
+        return PcbLine(start[0], start[1], end[0], end[1], _stroke_width(item))
+    if tag.endswith("_arc") or tag == "gr_arc":
+        return _arc_payload(item, transform)
+    if tag.endswith("_circle") or tag == "gr_circle":
+        center_node = sexp.find(item, "center")
+        end_node = sexp.find(item, "end")
+        if not center_node or not end_node:
+            return None
+        center_local = _xy(center_node)
+        end_local = _xy(end_node)
+        radius = math.hypot(end_local[0] - center_local[0], end_local[1] - center_local[1])
+        center = _maybe_transform(center_local, transform)
+        return PcbCircle(center[0], center[1], radius, _stroke_width(item), _fill_flag(item))
+    if tag.endswith("_rect") or tag == "gr_rect":
+        start_node = sexp.find(item, "start")
+        end_node = sexp.find(item, "end")
+        if not start_node or not end_node:
+            return None
+        sx, sy = _xy(start_node)
+        ex, ey = _xy(end_node)
+        points = [
+            _maybe_transform(point, transform) for point in ((sx, sy), (ex, sy), (ex, ey), (sx, ey))
+        ]
+        return PcbPolygon(points)
+    if tag.endswith("_poly") or tag == "gr_poly":
+        pts_node = sexp.find(item, "pts")
+        if not pts_node:
+            return None
+        points = [
+            _maybe_transform(_xy(xy_node), transform) for xy_node in sexp.find_all(pts_node, "xy")
+        ]
+        return PcbPolygon(points) if points else None
+    return None
+
+
+def _arc_payload(
+    item: SExpNode,
+    transform: tuple[float, float, float] | None,
+) -> PcbArc | None:
+    start_node = sexp.find(item, "start")
+    mid_node = sexp.find(item, "mid")
+    end_node = sexp.find(item, "end")
+    if not start_node or not end_node:
+        return None
+    if mid_node:
+        start = _maybe_transform(_xy(start_node), transform)
+        mid = _maybe_transform(_xy(mid_node), transform)
+        end = _maybe_transform(_xy(end_node), transform)
+        return PcbArc(start[0], start[1], mid[0], mid[1], end[0], end[1], _stroke_width(item))
+    angle_node = sexp.find(item, "angle")
+    if not angle_node:
+        return None
+    cx, cy = _xy(start_node)
+    ex, ey = _xy(end_node)
+    angle_rad = math.radians(_float_val(angle_node))
+    half_rad = angle_rad / 2.0
+    dx = ex - cx
+    dy = ey - cy
+    mid = (
+        cx + dx * math.cos(half_rad) - dy * math.sin(half_rad),
+        cy + dx * math.sin(half_rad) + dy * math.cos(half_rad),
+    )
+    far = (
+        cx + dx * math.cos(angle_rad) - dy * math.sin(angle_rad),
+        cy + dx * math.sin(angle_rad) + dy * math.cos(angle_rad),
+    )
+    start = _maybe_transform((ex, ey), transform)
+    middle = _maybe_transform(mid, transform)
+    end = _maybe_transform(far, transform)
+    return PcbArc(start[0], start[1], middle[0], middle[1], end[0], end[1], _stroke_width(item))
+
+
+def _maybe_transform(
+    point: tuple[float, float],
+    transform: tuple[float, float, float] | None,
+) -> tuple[float, float]:
+    if transform is None:
+        return point
+    return _transform_point(point[0], point[1], transform[0], transform[1], transform[2])
+
+
+def _artwork_kind_for_payload(payload: object) -> PcbArtworkKind:
+    if isinstance(payload, PcbLine):
+        return PcbArtworkKind.LINE
+    if isinstance(payload, PcbArc):
+        return PcbArtworkKind.ARC
+    if isinstance(payload, PcbCircle):
+        return PcbArtworkKind.CIRCLE
+    if isinstance(payload, PcbPolygon):
+        return PcbArtworkKind.POLYGON
+    if isinstance(payload, PcbText):
+        return PcbArtworkKind.TEXT
+    if isinstance(payload, PcbModel3D):
+        return PcbArtworkKind.MODEL_3D
+    return PcbArtworkKind.IMAGE
+
+
+def _parse_fp_text(
+    builder: PcbBuilder,
+    item: SExpNode,
+    footprint: PcbFootprint,
     fp_x: float,
     fp_y: float,
     fp_rot: float,
-    layer_filter: set[str],
-    fp_ref: str = "",
-) -> list[PcbPolygon]:
-    """Parse fp_poly elements matching layer_filter, transform to absolute."""
-    polys: list[PcbPolygon] = []
-    for item in sexp.find_all(fp_sexpr, "fp_poly"):
-        layer_node = sexp.find(item, "layer")
-        if not layer_node:
-            continue
-        layer = sexp.val(layer_node)
-        if layer not in layer_filter:
-            continue
-        pts_node = sexp.find(item, "pts")
-        if not pts_node:
-            continue
-        points: list[tuple[float, float]] = []
-        for xy_node in sexp.find_all(pts_node, "xy"):
-            lx, ly = sexp.num(xy_node, 1), sexp.num(xy_node, 2)
-            ax, ay = _transform_point(lx, ly, fp_x, fp_y, fp_rot)
-            points.append((ax, ay))
-        if points:
-            polys.append(PcbPolygon(points=points, layer=layer, footprint_ref=fp_ref))
-    return polys
-
-
-def _parse_trace_arc(arc_sexpr: SExpNode) -> PcbTraceArc | None:
-    """Parse a top-level (arc ...) copper trace arc."""
-    start_node = sexp.find(arc_sexpr, "start")
-    mid_node = sexp.find(arc_sexpr, "mid")
-    end_node = sexp.find(arc_sexpr, "end")
-    if not start_node or not mid_node or not end_node:
+    index: int,
+) -> PcbArtwork | None:
+    if len(item) < 3:
         return None
-    sx, sy = _xy(start_node)
-    mx, my = _xy(mid_node)
-    ex, ey = _xy(end_node)
-    width_node = sexp.find(arc_sexpr, "width")
-    w = _float_val(width_node) if width_node else 0.1
-    layer_node = sexp.find(arc_sexpr, "layer")
-    layer = sexp.val(layer_node) if layer_node else ""
-    net_node = sexp.find(arc_sexpr, "net")
-    net = int(sexp.num(net_node, 1)) if net_node and len(net_node) > 1 else 0
-    return PcbTraceArc(sx, sy, mx, my, ex, ey, w, layer, net)
-
-
-# ---------------------------------------------------------------------------
-# Graphic text parsing
-# ---------------------------------------------------------------------------
-
-
-def _parse_gr_text(item: SExpNode) -> PcbGraphicText | None:
-    """Parse a (gr_text ...) into a PcbGraphicText."""
-    if len(item) < 2:
-        return None
-    raw_text = str(item[1])
-
+    kind_node = item[1]
+    text_kind = kind_node.value() if isinstance(kind_node, sexpdata.Symbol) else str(kind_node)
+    text = str(item[2]).replace("${REFERENCE}", footprint.reference)
     layer_node = sexp.find(item, "layer")
-    layer = sexp.val(layer_node) if layer_node else ""
-
+    if not layer_node:
+        return None
+    layer = builder.resolve_layer(sexp.val(layer_node), source=f"fp_text {footprint.reference}")
     at_node = sexp.find(item, "at")
-    x, y, rot = _at(at_node) if at_node else (0.0, 0.0, 0.0)
-
+    local_x, local_y, local_rotation = _at(at_node) if at_node else (0.0, 0.0, 0.0)
+    x, y = _transform_point(local_x, local_y, fp_x, fp_y, fp_rot)
     effects = sexp.find(item, "effects")
     font = sexp.find(effects, "font") if effects else None
     size_node = sexp.find(font, "size") if font else None
     font_size = sexp.num(size_node, 1) if size_node else 1.0
+    return PcbArtwork(
+        id=f"fp_text:{footprint.reference}:{index}:{text_kind}",
+        kind=PcbArtworkKind.TEXT,
+        purpose=_artwork_purpose(layer, native_type="fp_text", text_kind=text_kind),
+        layer=layer,
+        data=PcbText(
+            text=text,
+            x=x,
+            y=y,
+            rotation=_transform_rotation(local_rotation, fp_rot),
+            font_size=font_size,
+            justify=_justify(effects),
+        ),
+        footprint=footprint,
+        metadata=_object_metadata(
+            native_type="fp_text",
+            source_collection="artwork",
+            native_kind=text_kind,
+            native_id=_item_uuid(item),
+            native_index=index,
+            hidden=_item_hidden(item),
+            locked=_item_locked(item),
+        ),
+    )
 
-    # Justify
+
+def _parse_gr_text(builder: PcbBuilder, item: SExpNode, index: int) -> PcbArtwork | None:
+    if len(item) < 2:
+        return None
+    layer_node = sexp.find(item, "layer")
+    if not layer_node:
+        return None
+    layer = builder.resolve_layer(sexp.val(layer_node), source="gr_text")
+    at_node = sexp.find(item, "at")
+    x, y, rotation = _at(at_node) if at_node else (0.0, 0.0, 0.0)
+    effects = sexp.find(item, "effects")
+    font = sexp.find(effects, "font") if effects else None
+    size_node = sexp.find(font, "size") if font else None
+    font_size = sexp.num(size_node, 1) if size_node else 1.0
+    return PcbArtwork(
+        id=f"gr_text:board:{index}:{layer.name}",
+        kind=PcbArtworkKind.TEXT,
+        purpose=_artwork_purpose(layer, native_type="gr_text", text_kind="user"),
+        layer=layer,
+        data=PcbText(
+            text=str(item[1]),
+            x=x,
+            y=y,
+            rotation=rotation,
+            font_size=font_size,
+            justify=_justify(effects),
+        ),
+        metadata=_object_metadata(
+            native_type="gr_text",
+            source_collection="artwork",
+            native_id=_item_uuid(item),
+            native_index=index,
+            locked=_item_locked(item),
+        ),
+    )
+
+
+def _justify(effects: SExpNode | None) -> str:
     justify_node = sexp.find(effects, "justify") if effects else None
-    justify = ""
-    if justify_node and len(justify_node) > 1:
-        justify = (
-            justify_node[1].value()
-            if isinstance(justify_node[1], sexpdata.Symbol)
-            else str(justify_node[1])
-        )
+    if not justify_node:
+        return ""
+    values: list[str] = []
+    for value in justify_node[1:]:
+        values.append(value.value() if isinstance(value, sexpdata.Symbol) else str(value))
+    return " ".join(values)
 
-    return PcbGraphicText(
-        text=raw_text,
-        x=x,
-        y=y,
-        rotation=rot,
-        layer=layer,
-        font_size=font_size,
-        justify=justify,
+
+def _parse_model(item: SExpNode, footprint: PcbFootprint, index: int) -> PcbArtwork:
+    raw_path = item[1] if len(item) > 1 else ""
+    source = raw_path.value() if isinstance(raw_path, sexpdata.Symbol) else str(raw_path)
+    offset_node = sexp.find(item, "offset") or sexp.find(item, "at")
+    scale_node = sexp.find(item, "scale")
+    rotate_node = sexp.find(item, "rotate")
+    scale = _xyz(scale_node)
+    if scale == (0.0, 0.0, 0.0) and not scale_node:
+        scale = (1.0, 1.0, 1.0)
+    return PcbArtwork(
+        id=f"model_3d:{footprint.reference}:{index}",
+        kind=PcbArtworkKind.MODEL_3D,
+        purpose=PcbArtworkPurpose.COMPONENT_BODY,
+        layer=None,
+        data=PcbModel3D(
+            source=source,
+            offset=_xyz(offset_node),
+            rotation=_xyz(rotate_node),
+            scale=scale,
+        ),
+        footprint=footprint,
+        metadata=_object_metadata(
+            native_type="model",
+            source_collection="artwork",
+            native_id=_item_uuid(item),
+            native_index=index,
+            hidden=_item_hidden(item),
+        ),
     )
 
 
-# ---------------------------------------------------------------------------
-# Zone boundary parsing
-# ---------------------------------------------------------------------------
+def _xyz(parent: SExpNode | None) -> tuple[float, float, float]:
+    if not parent:
+        return (0.0, 0.0, 0.0)
+    xyz = sexp.find(parent, "xyz")
+    if not xyz or len(xyz) < 4:
+        return (0.0, 0.0, 0.0)
+    return (sexp.num(xyz, 1), sexp.num(xyz, 2), sexp.num(xyz, 3))
 
 
-def _parse_zone_boundary(zone_sexpr: SExpNode) -> PcbZone | None:
-    """Parse a zone's boundary polygon and properties into a PcbZone."""
-    net_node = sexp.find(zone_sexpr, "net")
-    net_num = int(sexp.num(net_node, 1)) if net_node and len(net_node) > 1 else 0
-    net_name_node = sexp.find(zone_sexpr, "net_name")
-    net_name = sexp.val(net_name_node) if net_name_node else ""
+def _parse_segment(builder: PcbBuilder, item: SExpNode, index: int) -> None:
+    start_node = sexp.find(item, "start")
+    end_node = sexp.find(item, "end")
+    width_node = sexp.find(item, "width")
+    layer_node = sexp.find(item, "layer")
+    if not start_node or not end_node or not width_node or not layer_node:
+        msg = "Segment missing required start/end/width/layer"
+        raise ValueError(msg)
+    layer = builder.resolve_layer(sexp.val(layer_node), source="segment")
+    start = _xy(start_node)
+    end = _xy(end_node)
+    builder.add_conductor_object(
+        PcbConductor(
+            id=f"segment:{layer.name}:{index}",
+            kind=PcbConductorKind.TRACE,
+            layer=layer,
+            data=PcbLine(start[0], start[1], end[0], end[1], _float_val(width_node)),
+            net=_resolve_net_node(builder, item, source="segment"),
+            metadata=_object_metadata(
+                native_type="segment",
+                source_collection="conductors",
+                native_id=_item_uuid(item),
+                native_index=index,
+                locked=_item_locked(item),
+            ),
+        ),
+        source="segment",
+    )
 
+
+def _parse_trace_arc(builder: PcbBuilder, item: SExpNode, index: int) -> None:
+    payload = _arc_payload(item, transform=None)
+    layer_node = sexp.find(item, "layer")
+    if payload is None or not layer_node:
+        return
+    layer = builder.resolve_layer(sexp.val(layer_node), source="arc")
+    builder.add_conductor_object(
+        PcbConductor(
+            id=f"trace_arc:{layer.name}:{index}",
+            kind=PcbConductorKind.TRACE_ARC,
+            layer=layer,
+            data=payload,
+            net=_resolve_net_node(builder, item, source="arc"),
+            metadata=_object_metadata(
+                native_type="arc",
+                source_collection="conductors",
+                native_id=_item_uuid(item),
+                native_index=index,
+                locked=_item_locked(item),
+            ),
+        ),
+        source="arc",
+    )
+
+
+def _parse_via(builder: PcbBuilder, item: SExpNode, index: int) -> None:
+    at_node = sexp.find(item, "at")
+    size_node = sexp.find(item, "size")
+    drill_node = sexp.find(item, "drill")
+    if not at_node or not size_node or not drill_node:
+        msg = "Via missing required at/size/drill"
+        raise ValueError(msg)
+    x = sexp.num(at_node, 1)
+    y = sexp.num(at_node, 2)
+    layers = _resolve_layers(builder, _layers(sexp.find(item, "layers")), source="via")
+    via_kind = ""
+    if len(item) > 1 and isinstance(item[1], sexpdata.Symbol):
+        via_kind = item[1].value()
+    drill = builder.add_drill_object(
+        PcbDrill(
+            id=f"drill:via:{index}",
+            x=x,
+            y=y,
+            diameter=_float_val(drill_node),
+            shape=PcbDrillShape.ROUND,
+            plating=PcbDrillPlating.PLATED,
+            layers=layers,
+            metadata=_object_metadata(
+                native_type="drill",
+                source_collection="drills",
+                native_kind="via",
+                native_id=_item_uuid(item),
+                native_index=index,
+            ),
+        ),
+        source="via",
+    )
+    builder.add_via_object(
+        PcbVia(
+            id=f"via:{index}",
+            x=x,
+            y=y,
+            diameter=_float_val(size_node),
+            layers=layers,
+            drill=drill,
+            net=_resolve_net_node(builder, item, source="via"),
+            via_type=_via_type(via_kind),
+            metadata=_object_metadata(
+                native_type="via",
+                source_collection="vias",
+                native_kind=via_kind,
+                native_id=_item_uuid(item),
+                native_index=index,
+                locked=_item_locked(item),
+            ),
+        ),
+        source="via",
+    )
+
+
+def _via_type(native_kind: str) -> PcbViaType:
+    if native_kind == "blind":
+        return PcbViaType.BLIND
+    if native_kind == "micro":
+        return PcbViaType.MICROVIA
+    if native_kind == "free":
+        return PcbViaType.FREE
+    return PcbViaType.THROUGH
+
+
+def _parse_zone_keepout(
+    builder: PcbBuilder,
+    zone_sexpr: SExpNode,
+    *,
+    index: int,
+    footprint: PcbFootprint | None = None,
+    transform: tuple[float, float, float] | None = None,
+) -> PcbKeepout | None:
+    keepout_node = sexp.find(zone_sexpr, "keepout")
+    if not keepout_node:
+        return None
+    boundary_points = _parse_zone_polygon_points(zone_sexpr)
+    if not boundary_points:
+        return None
+    points = [_maybe_transform(point, transform) for point in boundary_points]
+    layers = _resolve_layers(builder, _zone_layer_names(zone_sexpr), source="keepout")
+    prefix = f"fp_keepout:{footprint.reference}" if footprint is not None else "keepout"
+    return PcbKeepout(
+        id=f"{prefix}:{index}",
+        boundary=PcbClosedPath.from_points(points),
+        layers=layers,
+        rules=_parse_keepout_rules(keepout_node),
+        footprint=footprint,
+        metadata=_object_metadata(
+            native_type="zone",
+            source_collection="keepouts",
+            native_kind="footprint_keepout" if footprint is not None else "keepout",
+            native_id=_item_uuid(zone_sexpr),
+            native_index=index,
+            locked=_item_locked(zone_sexpr),
+        ),
+    )
+
+
+def _parse_keepout_rules(keepout_node: SExpNode) -> PcbKeepoutRules:
+    return PcbKeepoutRules(
+        tracks=_keepout_rule_value(keepout_node, "tracks"),
+        vias=_keepout_rule_value(keepout_node, "vias"),
+        pads=_keepout_rule_value(keepout_node, "pads"),
+        copper_pours=_keepout_rule_value(keepout_node, "copperpour"),
+        footprints=_keepout_rule_value(keepout_node, "footprints"),
+    )
+
+
+def _keepout_rule_value(keepout_node: SExpNode, name: str) -> PcbKeepoutPermission:
+    rule_node = sexp.find(keepout_node, name)
+    if not rule_node:
+        return PcbKeepoutPermission.UNKNOWN
+    raw = sexp.val(rule_node)
+    if raw == "allowed":
+        return PcbKeepoutPermission.ALLOWED
+    if raw == "not_allowed":
+        return PcbKeepoutPermission.NOT_ALLOWED
+    return PcbKeepoutPermission.UNKNOWN
+
+
+def _zone_layer_names(zone_sexpr: SExpNode) -> list[str]:
     layer_node = sexp.find(zone_sexpr, "layer")
-    layer = sexp.val(layer_node) if layer_node else ""
+    if layer_node:
+        return [sexp.val(layer_node)]
+    return _layers(sexp.find(zone_sexpr, "layers"))
 
-    # Priority
-    priority_node = sexp.find(zone_sexpr, "priority")
-    priority = int(sexp.num(priority_node, 1)) if priority_node and len(priority_node) > 1 else 0
 
-    # Boundary polygon
+def _parse_zone_polygon_points(zone_sexpr: SExpNode) -> list[tuple[float, float]]:
     polygon_node = sexp.find(zone_sexpr, "polygon")
-    if not polygon_node:
-        return None
-    pts_node = sexp.find(polygon_node, "pts")
+    pts_node = sexp.find(polygon_node, "pts") if polygon_node else None
     if not pts_node:
-        return None
-    boundary: list[tuple[float, float]] = []
-    for xy_node in sexp.find_all(pts_node, "xy"):
-        boundary.append((sexp.num(xy_node, 1), sexp.num(xy_node, 2)))
-    if not boundary:
-        return None
+        return []
+    return [_xy(xy_node) for xy_node in sexp.find_all(pts_node, "xy")]
 
-    # Fill settings
+
+def _parse_zone(builder: PcbBuilder, zone_sexpr: SExpNode, index: int) -> None:
+    keepout = _parse_zone_keepout(builder, zone_sexpr, index=index)
+    if keepout is not None:
+        builder.add_keepout_object(keepout, source="zone keepout")
+        return
+    boundary_points = _parse_zone_polygon_points(zone_sexpr)
+    if not boundary_points:
+        return
+    layers = _resolve_layers(builder, _zone_layer_names(zone_sexpr), source="zone")
     fill_node = sexp.find(zone_sexpr, "fill")
-    fill_type = ""
-    thermal_gap = 0.0
-    thermal_bridge = 0.0
-    if fill_node:
-        # (fill yes) or (fill (thermal_gap 0.5) (thermal_bridge_width 0.25))
-        thermal_gap_node = sexp.find(fill_node, "thermal_gap")
-        thermal_gap = _float_val(thermal_gap_node) if thermal_gap_node else 0.0
-        bridge_node = sexp.find(fill_node, "thermal_bridge_width")
-        thermal_bridge = _float_val(bridge_node) if bridge_node else 0.0
-
-    # Min thickness
-    min_thick_node = sexp.find(zone_sexpr, "min_thickness")
-    min_thickness = _float_val(min_thick_node) if min_thick_node else 0.0
-
-    # Connect pads clearance
+    thermal_gap_node = sexp.find(fill_node, "thermal_gap") if fill_node else None
+    bridge_node = sexp.find(fill_node, "thermal_bridge_width") if fill_node else None
+    min_thickness_node = sexp.find(zone_sexpr, "min_thickness")
     connect_node = sexp.find(zone_sexpr, "connect_pads")
-    connect_clearance = 0.0
-    if connect_node:
-        clr_node = sexp.find(connect_node, "clearance")
-        connect_clearance = _float_val(clr_node) if clr_node else 0.0
-
-    return PcbZone(
-        net_number=net_num,
-        net_name=net_name,
-        layer=layer,
-        boundary=boundary,
-        priority=priority,
-        min_thickness_mm=min_thickness,
-        thermal_gap_mm=thermal_gap,
-        thermal_bridge_width_mm=thermal_bridge,
-        connect_pads_clearance_mm=connect_clearance,
-        fill_type=fill_type,
+    clearance_node = sexp.find(connect_node, "clearance") if connect_node else None
+    priority_node = sexp.find(zone_sexpr, "priority")
+    layer_name = layers[0].name if layers else "unknown"
+    pour = builder.add_pour_object(
+        PcbPour(
+            id=f"zone:{index}:{layer_name}",
+            boundary=PcbClosedPath.from_points(boundary_points),
+            layers=layers,
+            net=_resolve_net_node(builder, zone_sexpr, source="zone"),
+            priority=int(sexp.num(priority_node, 1))
+            if priority_node and len(priority_node) > 1
+            else 0,
+            settings=PcbPourSettings(
+                fill_mode=_kicad_fill_mode(fill_node) if fill_node else PcbPourFillMode.UNKNOWN,
+                min_thickness_mm=_float_val(min_thickness_node) if min_thickness_node else 0.0,
+                thermal_gap_mm=_float_val(thermal_gap_node) if thermal_gap_node else 0.0,
+                thermal_bridge_width_mm=_float_val(bridge_node) if bridge_node else 0.0,
+                connect_pads_clearance_mm=_float_val(clearance_node) if clearance_node else 0.0,
+            ),
+            metadata=_object_metadata(
+                native_type="zone",
+                source_collection="pours",
+                native_id=_item_uuid(zone_sexpr),
+                native_index=index,
+                locked=_item_locked(zone_sexpr),
+            ),
+        ),
+        source="zone",
     )
+    fills = _parse_zone_fills(builder, zone_sexpr, zone_index=index, pour=pour)
+    pour.fills = tuple(fills)
 
 
-# ---------------------------------------------------------------------------
-# Stackup parsing
-# ---------------------------------------------------------------------------
+def _parse_zone_fills(
+    builder: PcbBuilder,
+    zone_sexpr: SExpNode,
+    *,
+    zone_index: int,
+    pour: PcbPour,
+) -> list[PcbConductor]:
+    zone_layers = _zone_layer_names(zone_sexpr)
+    zone_layer = zone_layers[0] if zone_layers else ""
+    conductors: list[PcbConductor] = []
+    for index, fill_node in enumerate(sexp.find_all(zone_sexpr, "filled_polygon")):
+        layer_node = sexp.find(fill_node, "layer")
+        layer = builder.resolve_layer(
+            sexp.val(layer_node) if layer_node else zone_layer,
+            source="filled_polygon",
+        )
+        pts_node = sexp.find(fill_node, "pts")
+        if not pts_node:
+            continue
+        points = [_xy(xy_node) for xy_node in sexp.find_all(pts_node, "xy")]
+        if not points:
+            continue
+        conductor = builder.add_conductor_object(
+            PcbConductor(
+                id=f"pour_fill:{zone_index}:{index}:{layer.name}",
+                kind=PcbConductorKind.POUR_FILL,
+                layer=layer,
+                data=PcbPolygon(points=points),
+                net=pour.net,
+                pour=pour,
+                metadata=_object_metadata(
+                    native_type="filled_polygon",
+                    source_collection="conductors",
+                    native_id=_item_uuid(fill_node),
+                    native_index=index,
+                ),
+            ),
+            source="filled_polygon",
+        )
+        conductors.append(conductor)
+    return conductors
+
+
+def _kicad_fill_mode(fill_node: SExpNode) -> PcbPourFillMode:
+    if len(fill_node) > 1:
+        raw = fill_node[1]
+        if isinstance(raw, sexpdata.Symbol):
+            value = raw.value()
+            if value == "yes":
+                return PcbPourFillMode.SOLID
+            if value == "no":
+                return PcbPourFillMode.NONE
+    return PcbPourFillMode.UNKNOWN
 
 
 def parse_kicad_stackup(sexpr: SExpNode) -> Stackup | None:
-    """Parse stackup from the (setup (stackup ...)) section of a .kicad_pcb.
-
-    Returns None if the file has no stackup section.
-    """
     setup_node = sexp.find(sexpr, "setup")
     if not setup_node:
         return None
     stackup_node = sexp.find(setup_node, "stackup")
     if not stackup_node:
         return None
-
     layers: list[StackupLayer] = []
     copper_finish = ""
-
     for item in stackup_node[1:]:
         if not isinstance(item, list) or not item:
             continue
         tag = item[0].value() if isinstance(item[0], sexpdata.Symbol) else str(item[0])
-
         if tag == "copper_finish":
             copper_finish = str(item[1]) if len(item) > 1 else ""
             continue
-
         if tag != "layer":
             continue
-
-        # (layer "F.Cu" (type "copper") (thickness 0.035) ...)
         name = str(item[1]) if len(item) > 1 else ""
         type_node = sexp.find(item, "type")
-        layer_type = sexp.val(type_node) if type_node else ""
         thickness_node = sexp.find(item, "thickness")
-        thickness = _float_val(thickness_node) if thickness_node else 0.0
         material_node = sexp.find(item, "material")
-        material = sexp.val(material_node) if material_node else ""
         epsilon_node = sexp.find(item, "epsilon_r")
-        epsilon_r = _float_val(epsilon_node) if epsilon_node else 0.0
         loss_node = sexp.find(item, "loss_tangent")
-        loss_tangent = _float_val(loss_node) if loss_node else 0.0
-
-        # Determine side from layer name convention
         side = ""
         if name.startswith("F.") or name == "Top":
             side = "front"
         elif name.startswith("B.") or name == "Bottom":
             side = "back"
-
+        layer_type = sexp.val(type_node) if type_node else ""
         layers.append(
             StackupLayer(
                 name=name,
                 layer_type=layer_type,
-                thickness_mm=thickness,
-                material=material,
-                epsilon_r=epsilon_r,
-                loss_tangent=loss_tangent,
+                thickness_mm=_float_val(thickness_node) if thickness_node else 0.0,
+                material=sexp.val(material_node) if material_node else "",
+                epsilon_r=_float_val(epsilon_node) if epsilon_node else 0.0,
+                loss_tangent=_float_val(loss_node) if loss_node else 0.0,
                 side=side,
             )
         )
-
-        # Handle sublayers (addsublayer) — appears inside the parent layer node
         for sub_item in item[2:]:
             if not isinstance(sub_item, list) or not sub_item:
                 continue
-            first = sub_item[0]
-            sub_tag = first.value() if isinstance(first, sexpdata.Symbol) else str(first)
+            sub_tag = (
+                sub_item[0].value()
+                if isinstance(sub_item[0], sexpdata.Symbol)
+                else str(sub_item[0])
+            )
             if sub_tag != "addsublayer":
                 continue
             sub_thickness_node = sexp.find(sub_item, "thickness")
-            sub_thickness = _float_val(sub_thickness_node) if sub_thickness_node else 0.0
             sub_material_node = sexp.find(sub_item, "material")
-            sub_material = sexp.val(sub_material_node) if sub_material_node else ""
             sub_epsilon_node = sexp.find(sub_item, "epsilon_r")
-            sub_epsilon = _float_val(sub_epsilon_node) if sub_epsilon_node else 0.0
             sub_loss_node = sexp.find(sub_item, "loss_tangent")
-            sub_loss = _float_val(sub_loss_node) if sub_loss_node else 0.0
             layers.append(
                 StackupLayer(
                     name=f"{name} (sublayer)",
                     layer_type=layer_type,
-                    thickness_mm=sub_thickness,
-                    material=sub_material,
-                    epsilon_r=sub_epsilon,
-                    loss_tangent=sub_loss,
+                    thickness_mm=_float_val(sub_thickness_node) if sub_thickness_node else 0.0,
+                    material=sexp.val(sub_material_node) if sub_material_node else "",
+                    epsilon_r=_float_val(sub_epsilon_node) if sub_epsilon_node else 0.0,
+                    loss_tangent=_float_val(sub_loss_node) if sub_loss_node else 0.0,
                     side=side,
                 )
             )
-
     if not layers:
         return None
-
-    total = sum(ly.thickness_mm for ly in layers)
-    return Stackup(layers=layers, total_thickness_mm=total, copper_finish=copper_finish)
-
-
-# ---------------------------------------------------------------------------
-# Top-level parser
-# ---------------------------------------------------------------------------
+    return Stackup(
+        layers=layers,
+        total_thickness_mm=sum(layer.thickness_mm for layer in layers),
+        copper_finish=copper_finish,
+    )
 
 
 def load_kicad_stackup(path: Path) -> Stackup | None:
-    """Parse stackup from a .kicad_pcb file on disk.
-
-    Convenience wrapper around parse_kicad_stackup() that handles file I/O.
-    """
     text = path.read_text(encoding="utf-8")
     data: SExpNode = sexpdata.loads(text)
     sexpr: SExpNode = list(data[1:]) if data else []
@@ -1114,101 +1338,53 @@ def load_kicad_stackup(path: Path) -> Stackup | None:
 
 
 def parse_kicad_pcb(path: Path) -> Pcb:
-    """Parse a .kicad_pcb file into the PCB domain model."""
     sexpr = read_kicad_pcb_sexpr(path)
     return parse_kicad_pcb_from_sexpr(sexpr, default_name=path.stem)
 
 
 def read_kicad_pcb_sexpr(path: Path) -> SExpNode:
-    """Read a .kicad_pcb file and return the top-level S-expression list."""
     text = path.read_text(encoding="utf-8")
     data: SExpNode = sexpdata.loads(text)
     return list(data[1:]) if data else []
 
 
 def parse_kicad_pcb_from_sexpr(sexpr: SExpNode, *, default_name: str = "") -> Pcb:
-    """Parse a PCB from an already-loaded S-expression list."""
-    # Layer definitions
-    layer_defs = _parse_layer_defs(sexpr)
-
-    # Title for the board name
     title_block = sexp.find(sexpr, "title_block")
     title_node = sexp.find(title_block, "title") if title_block else None
-    name = sexp.val(title_node) if title_node else default_name
+    builder = PcbBuilder(
+        sexp.val(title_node) if title_node else default_name,
+        metadata=PcbMetadata(source_format="kicad"),
+    )
+    for layer in _parse_layer_defs(sexpr):
+        builder.add_layer(layer, source="layers")
+    for net in _parse_nets(sexpr).values():
+        builder.add_net(net, source="nets")
 
-    nets = _parse_nets(sexpr)
-
-    footprints: list[PcbFootprint] = []
-    edge_lines_from_fps: list[PcbLine] = []
-    edge_arcs_from_fps: list[PcbArc] = []
-    polygons_from_fps: list[PcbPolygon] = []
-    # KiCad 6+ uses "footprint", KiCad 5 uses "module"
+    profile_elements: list[PcbBoardProfileElement] = []
     for tag in ("footprint", "module"):
         for fp_sexpr in sexp.find_all(sexpr, tag):
-            fp, edge_lines, edge_arcs, fp_polys = _parse_footprint(fp_sexpr)
-            footprints.append(fp)
-            edge_lines_from_fps.extend(edge_lines)
-            edge_arcs_from_fps.extend(edge_arcs)
-            polygons_from_fps.extend(fp_polys)
-
-    segments = [_parse_segment(s) for s in sexp.find_all(sexpr, "segment")]
-    vias = [_parse_via(v) for v in sexp.find_all(sexpr, "via")]
-
-    # Zones — extract filled_polygon geometry + zone boundaries
-    polygons: list[PcbPolygon] = []
-    zones: list[PcbZone] = []
-    for zone_sexpr in sexp.find_all(sexpr, "zone"):
-        polygons.extend(_parse_zone_polygons(zone_sexpr))
-        zone = _parse_zone_boundary(zone_sexpr)
-        if zone:
-            zones.append(zone)
-    # Top-level graphic polygons
-    for item in sexp.find_all(sexpr, "gr_poly"):
-        p = _parse_gr_poly(item)
-        if p:
-            polygons.append(p)
-    # Footprint polygons (fab/silk)
-    polygons.extend(polygons_from_fps)
-
-    # Trace arcs (curved copper traces)
-    trace_arcs: list[PcbTraceArc] = []
-    for item in sexp.find_all(sexpr, "arc"):
-        ta = _parse_trace_arc(item)
-        if ta:
-            trace_arcs.append(ta)
-
-    # Board outline: top-level gr_line/gr_arc on Edge.Cuts + fp-internal ones
-    outline_lines: list[PcbLine] = []
-    outline_arcs: list[PcbArc] = []
-    for item in sexp.find_all(sexpr, "gr_line"):
-        ln = _parse_gr_line(item)
-        if ln:
-            outline_lines.append(ln)
-    for item in sexp.find_all(sexpr, "gr_arc"):
-        arc = _parse_gr_arc(item)
-        if arc:
-            outline_arcs.append(arc)
-    outline_lines.extend(edge_lines_from_fps)
-    outline_arcs.extend(edge_arcs_from_fps)
-
-    # Graphic texts (board-level, not inside footprints)
-    graphic_texts: list[PcbGraphicText] = []
-    for item in sexp.find_all(sexpr, "gr_text"):
-        gt = _parse_gr_text(item)
-        if gt:
-            graphic_texts.append(gt)
-
-    return Pcb(
-        name=name,
-        nets=nets,
-        footprints=footprints,
-        segments=segments,
-        vias=vias,
-        outline_lines=outline_lines,
-        outline_arcs=outline_arcs,
-        polygons=polygons,
-        trace_arcs=trace_arcs,
-        layers=layer_defs,
-        zones=zones,
-        graphic_texts=graphic_texts,
+            result = _parse_footprint(builder, fp_sexpr)
+            profile_elements.extend(result.profile_elements)
+    for index, item in enumerate(sexp.find_all(sexpr, "segment")):
+        _parse_segment(builder, item, index)
+    for index, item in enumerate(sexp.find_all(sexpr, "via")):
+        _parse_via(builder, item, index)
+    for index, item in enumerate(sexp.find_all(sexpr, "zone")):
+        _parse_zone(builder, item, index)
+    for index, item in enumerate(sexp.find_all(sexpr, "arc")):
+        _parse_trace_arc(builder, item, index)
+    for tag in ("gr_line", "gr_arc", "gr_circle", "gr_rect", "gr_poly"):
+        for index, item in enumerate(sexp.find_all(sexpr, tag)):
+            parsed = _parse_graphic_item(builder, item, tag=tag, index=index)
+            if isinstance(parsed, PcbBoardProfileElement):
+                profile_elements.append(parsed)
+            elif isinstance(parsed, PcbArtwork):
+                builder.add_artwork_object(parsed, source=tag)
+    for index, item in enumerate(sexp.find_all(sexpr, "gr_text")):
+        artwork = _parse_gr_text(builder, item, index)
+        if artwork is not None:
+            builder.add_artwork_object(artwork, source="gr_text")
+    builder.set_board_profile(
+        PcbBoardProfile(elements=tuple(profile_elements)), source="board profile"
     )
+    return builder.build(require_board_profile=True)

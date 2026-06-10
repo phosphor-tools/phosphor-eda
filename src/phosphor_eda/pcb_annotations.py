@@ -128,6 +128,7 @@ class ResolvedBox:
     label_height: float
     connector_path: list[tuple[float, float]]
     color: str
+    text_anchor: str = "middle"
 
 
 @dataclass
@@ -147,6 +148,7 @@ class ResolvedPointer:
     label_height: float
     connector_path: list[tuple[float, float]]
     color: str
+    text_anchor: str = "middle"
 
 
 @dataclass
@@ -163,6 +165,7 @@ class ResolvedLabel:
     label_width: float
     label_height: float
     connector_path: list[tuple[float, float]]
+    text_anchor: str = "middle"
 
 
 @dataclass
@@ -330,7 +333,7 @@ def _resolve_pad_target(ref_pad: str, board: Pcb) -> tuple[float, float]:
     if fp is None:
         msg = f"Component '{ref}' not found on board"
         raise ValueError(msg)
-    for pad in fp.pads:
+    for pad in board.pads_for_footprint(fp):
         if pad.number == pad_num:
             return (pad.x, pad.y)
     msg = f"Pad '{pad_num}' not found on component '{ref}'"
@@ -346,11 +349,12 @@ def _resolve_net_target(net_name: str, near_ref: str, board: Pcb) -> tuple[float
     if fp is None:
         msg = f"Component '{near_ref}' not found on board"
         raise ValueError(msg)
-    needle = net_name.upper()
-    for pad in fp.pads:
-        if pad.net_name.upper() == needle:
+    requested_net_name = net_name
+    needle = requested_net_name.upper()
+    for pad in board.pads_for_footprint(fp):
+        if pad.net is not None and pad.net.name.upper() == needle:
             return (pad.x, pad.y)
-    msg = f"Net '{net_name}' not found on component '{near_ref}'"
+    msg = f"Net '{requested_net_name}' not found on component '{near_ref}'"
     raise ValueError(msg)
 
 
@@ -409,6 +413,29 @@ def _px_scale(
     """
     bw = board_bbox[2] - board_bbox[0]
     return bw / width_px if width_px > 0 else 1.0
+
+
+def _to_rendered_view_x(
+    x_mm: float,
+    board_bbox: tuple[float, float, float, float],
+    side: str,
+) -> float:
+    """Convert a physical board x-coordinate to rendered-view x-coordinate."""
+    if side == "back":
+        return board_bbox[0] + board_bbox[2] - x_mm
+    return x_mm
+
+
+def _to_rendered_view_bbox(
+    bbox: tuple[float, float, float, float],
+    board_bbox: tuple[float, float, float, float],
+    side: str,
+) -> tuple[float, float, float, float]:
+    """Convert a physical board bbox to rendered-view coordinates."""
+    x1, y1, x2, y2 = bbox
+    rx1 = _to_rendered_view_x(x2, board_bbox, side)
+    rx2 = _to_rendered_view_x(x1, board_bbox, side)
+    return (min(rx1, rx2), y1, max(rx1, rx2), y2)
 
 
 def _measure_label(text: str, font_size: float) -> tuple[float, float]:
@@ -470,6 +497,15 @@ def _auto_assign_margin(
     }
 
     return min(distances, key=distances.__getitem__)
+
+
+def _text_anchor_for_margin(margin: str) -> str:
+    """Return SVG text-anchor for text inside a pill placed in a board margin."""
+    if margin == "left":
+        return "end"
+    if margin == "right":
+        return "start"
+    return "middle"
 
 
 # ---------------------------------------------------------------------------
@@ -804,6 +840,7 @@ def resolve_annotations(
     board: Pcb,
     side: str,
     width_px: int = 800,
+    font_size: float = ANNOTATION_FONT_PX,
 ) -> ResolvedAnnotations:
     """Resolve annotation spec to concrete pixel-space coordinates.
 
@@ -816,7 +853,6 @@ def resolve_annotations(
     """
     board_bbox = board.bbox()
     scale = _px_scale(board_bbox, width_px)
-    font_size = ANNOTATION_FONT_PX
     margin_gap = _MARGIN_GAP_PX
     box_pad = _BOX_PAD_PX
 
@@ -848,7 +884,7 @@ def resolve_annotations(
         max_y = float("-inf")
         for ref in box_spec.targets:
             _center, bbox = _resolve_component_target(ref, board)
-            bx1, by1, bx2, by2 = bbox
+            bx1, by1, bx2, by2 = _to_rendered_view_bbox(bbox, board_bbox, side)
             min_x = min(min_x, bx1 / scale)
             min_y = min(min_y, by1 / scale)
             max_x = max(max_x, bx2 / scale)
@@ -883,6 +919,7 @@ def resolve_annotations(
                 tx_mm, ty_mm = center
         else:
             tx_mm, ty_mm = _resolve_net_target(ptr_spec.target_net, ptr_spec.target_near, board)
+        tx_mm = _to_rendered_view_x(tx_mm, board_bbox, side)
         tx = tx_mm / scale
         ty = ty_mm / scale
         color = ptr_spec.color or "rgba(255,107,53,0.9)"
@@ -901,7 +938,7 @@ def resolve_annotations(
     for i, label_spec in enumerate(spec.labels):
         if label_spec.target:
             center, _bbox = _resolve_component_target(label_spec.target, board)
-            tx = center[0] / scale
+            tx = _to_rendered_view_x(center[0], board_bbox, side) / scale
             ty = center[1] / scale
         else:
             tx = (board_bbox[0] + board_bbox[2]) / 2 / scale
@@ -986,6 +1023,7 @@ def resolve_annotations(
                     label_height=item.label_height,
                     connector_path=connector,
                     color=color,
+                    text_anchor=_text_anchor_for_margin(item.margin),
                 )
             )
             all_xs.extend([bx, bx + bw, result.label_x, result.label_x + item.label_width])
@@ -1004,6 +1042,7 @@ def resolve_annotations(
                     label_height=0,
                     connector_path=[],
                     color=color,
+                    text_anchor="middle",
                 )
             )
             all_xs.extend([bx, bx + bw])
@@ -1037,6 +1076,7 @@ def resolve_annotations(
                     label_height=item.label_height,
                     connector_path=connector,
                     color=color,
+                    text_anchor=_text_anchor_for_margin(item.margin),
                 )
             )
             all_xs.extend([tx, result.label_x, result.label_x + item.label_width])
@@ -1053,6 +1093,7 @@ def resolve_annotations(
                     label_height=0,
                     connector_path=[],
                     color=color,
+                    text_anchor="middle",
                 )
             )
             all_xs.append(tx)
@@ -1088,6 +1129,7 @@ def resolve_annotations(
                     label_width=item.label_width,
                     label_height=item.label_height,
                     connector_path=connector,
+                    text_anchor=_text_anchor_for_margin(item.margin),
                 )
             )
             all_xs.extend([result.label_x, result.label_x + item.label_width])
@@ -1101,6 +1143,7 @@ def resolve_annotations(
                     label_width=0,
                     label_height=0,
                     connector_path=[],
+                    text_anchor="middle",
                 )
             )
 

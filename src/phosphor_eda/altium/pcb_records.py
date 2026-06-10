@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, ClassVar, Self
 
 from phosphor_eda.altium._helpers import f64, i32, u16, u32
+from phosphor_eda.altium.enums import PcbPrimitiveFlags2
 from phosphor_eda.altium.record_parser import parse_record_payload
 
 if TYPE_CHECKING:
@@ -31,23 +32,38 @@ class TrackRecord:
 
     Byte layout (33 bytes):
       [0]     layer    u8
+      [1]     flags1   u8
+      [2]     flags2   u8
       [3:5]   net      u16
+      [5:7]   polygon  u16
       [7:9]   component u16
+      [9:11]  subpoly_index u16
       [13:17] x1       i32
       [17:21] y1       i32
       [21:25] x2       i32
       [25:29] y2       i32
       [29:33] width    i32
+      [56]    keepout restrictions bitmask, when present
     """
 
     layer: int
+    flags1: int
+    flags2: int
     net: int
+    polygon: int
     component: int
+    subpoly_index: int
     start: tuple[int, int]
     end: tuple[int, int]
     width: int
+    keepout_restrictions: int = 0
 
     MIN_SIZE: ClassVar[int] = 33
+
+    @property
+    def is_keepout(self) -> bool:
+        """Return whether this track is an Altium keepout primitive."""
+        return bool(PcbPrimitiveFlags2(self.flags2) & PcbPrimitiveFlags2.KEEPOUT)
 
     @classmethod
     def from_bytes(cls, body: bytes, ctx: ParseContext) -> Self | None:
@@ -56,11 +72,16 @@ class TrackRecord:
             return None
         return cls(
             layer=body[0],
+            flags1=body[1] if len(body) > 1 else 0,
+            flags2=body[2] if len(body) > 2 else 0,
             net=u16(body, 3),
+            polygon=u16(body, 5),
             component=u16(body, 7),
+            subpoly_index=u16(body, 9) if len(body) >= 11 else 0,
             start=(i32(body, 13), i32(body, 17)),
             end=(i32(body, 21), i32(body, 25)),
             width=i32(body, 29),
+            keepout_restrictions=body[56] if len(body) >= 57 else 0,
         )
 
 
@@ -68,9 +89,12 @@ class TrackRecord:
 class ArcRecord:
     """Binary arc record (Arcs6, rec_type=1).
 
-    Byte layout (45 bytes):
+    Byte layout (45+ bytes):
       [0]     layer    u8
+      [1]     flags1   u8
+      [2]     flags2   u8
       [3:5]   net      u16
+      [5:7]   polygon  u16
       [7:9]   component u16
       [13:17] cx       i32
       [17:21] cy       i32
@@ -78,18 +102,30 @@ class ArcRecord:
       [25:33] start_angle f64
       [33:41] end_angle   f64
       [41:45] width    u32
+      [45:47] subpoly_index u16
+      [56]    keepout restrictions bitmask, when present
     """
 
     layer: int
+    flags1: int
+    flags2: int
     net: int
+    polygon: int
     component: int
     center: tuple[int, int]
     radius: int
     start_angle: float
     end_angle: float
     width: int
+    subpoly_index: int = 0
+    keepout_restrictions: int = 0
 
     MIN_SIZE: ClassVar[int] = 45
+
+    @property
+    def is_keepout(self) -> bool:
+        """Return whether this arc is an Altium keepout primitive."""
+        return bool(PcbPrimitiveFlags2(self.flags2) & PcbPrimitiveFlags2.KEEPOUT)
 
     @classmethod
     def from_bytes(cls, body: bytes, ctx: ParseContext) -> Self | None:
@@ -98,13 +134,18 @@ class ArcRecord:
             return None
         return cls(
             layer=body[0],
+            flags1=body[1],
+            flags2=body[2],
             net=u16(body, 3),
+            polygon=u16(body, 5),
             component=u16(body, 7),
             center=(i32(body, 13), i32(body, 17)),
             radius=u32(body, 21),
             start_angle=f64(body, 25),
             end_angle=f64(body, 33),
             width=u32(body, 41),
+            subpoly_index=u16(body, 45) if len(body) >= 47 else 0,
+            keepout_restrictions=body[56] if len(body) >= 57 else 0,
         )
 
 
@@ -152,21 +193,32 @@ class FillRecord:
 
     Byte layout (37 bytes):
       [0]     layer  u8
+      [1]     flags1 u8
+      [2]     flags2 u8
       [3:5]   net    u16
       [13:17] x1     i32
       [17:21] y1     i32
       [21:25] x2     i32
       [25:29] y2     i32
       [29:37] rotation f64
+      [56]    keepout restrictions bitmask, when present
     """
 
     layer: int
+    flags1: int
+    flags2: int
     net: int
     pos1: tuple[int, int]
     pos2: tuple[int, int]
     rotation: float
+    keepout_restrictions: int = 0
 
     MIN_SIZE: ClassVar[int] = 37
+
+    @property
+    def is_keepout(self) -> bool:
+        """Return whether this fill is an Altium keepout primitive."""
+        return bool(PcbPrimitiveFlags2(self.flags2) & PcbPrimitiveFlags2.KEEPOUT)
 
     @classmethod
     def from_bytes(cls, body: bytes, ctx: ParseContext) -> Self | None:
@@ -175,10 +227,13 @@ class FillRecord:
             return None
         return cls(
             layer=body[0],
+            flags1=body[1] if len(body) > 1 else 0,
+            flags2=body[2] if len(body) > 2 else 0,
             net=u16(body, 3),
             pos1=(i32(body, 13), i32(body, 17)),
             pos2=(i32(body, 21), i32(body, 25)),
             rotation=f64(body, 29),
+            keepout_restrictions=body[56] if len(body) >= 57 else 0,
         )
 
 
@@ -278,6 +333,7 @@ class PadRecord:
       [25:29] top_sy   i32
       [45:49] hole_size u32
       [49]    shape    u8
+      [52:60] rotation f64
     """
 
     name: str
@@ -288,6 +344,7 @@ class PadRecord:
     top_size: tuple[int, int]
     hole_size: int
     shape: int
+    rotation: float
     shape_alt: int | None = None  # from sub6 per-layer override
 
     @classmethod
@@ -353,6 +410,7 @@ class PadRecord:
             top_size=(i32(sub5, 21), i32(sub5, 25)),
             hole_size=u32(sub5, 45),
             shape=shape_byte,
+            rotation=f64(sub5, 52),
             shape_alt=shape_alt_val,
         )
 
