@@ -12,10 +12,10 @@ from typing import TYPE_CHECKING
 from xml.sax.saxutils import escape as xml_escape
 
 from phosphor_eda.geometry.text_metrics import (
-    BASELINE_CENTER_OFFSET,
     BR_RE,
+    EMBEDDED_FONT_FAMILY,
     HTML_TAG_RE,
-    INTER_REGULAR_BASE64,
+    baseline_center_offset,
 )
 
 if TYPE_CHECKING:
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     )
     from phosphor_eda.render.svg import Svg
 
-_ANNOTATION_FONT_FAMILY = "InterEmbed, Inter, system-ui, sans-serif"
+_ANNOTATION_FONT_FAMILY = f"{EMBEDDED_FONT_FAMILY}, Inter, system-ui, sans-serif"
 
 # Fallback annotation color (orange) used when a color is absent or
 # unparseable.
@@ -75,10 +75,11 @@ def annotation_css(
 ) -> str:
     """CSS for pure-SVG annotation elements.
 
-    Embeds a subset of Inter-Regular via @font-face so the rendered
-    font exactly matches the font used for text measurement.  The
-    annotation group has a ``scale()`` transform that maps pixel space
-    onto the SVG viewBox, so all sizes here are in display pixels.
+    The embedded Inter face (a single shared ``@font-face`` emitted by the
+    serializer) backs both annotations and board text, so the rendered font
+    matches the font used for measurement.  The annotation group has a
+    ``scale()`` transform that maps pixel space onto the SVG viewBox, so all
+    sizes here are in display pixels.
     """
     ff = _ANNOTATION_FONT_FAMILY
     label_style = annotation_style.label
@@ -112,8 +113,6 @@ def annotation_css(
     if connector_style.dot_visible is False:
         dot_rules.append("display: none")
     return f"""\
-@font-face {{ font-family: "InterEmbed"; font-weight: 400;
-  src: url("data:font/truetype;base64,{INTER_REGULAR_BASE64}") format("truetype"); }}
 .annotation-connector {{ {"; ".join(connector_rules)}; }}
 .annotation-box {{ stroke-width: 2; }}
 .annotation-pill {{ {"; ".join(pill_rules)}; }}
@@ -245,7 +244,7 @@ def _render_pill_label(
     total_text_h = len(lines) * line_height
     cx = x + width / 2
     center_y = y + height / 2
-    start_y = center_y - total_text_h / 2 + line_height / 2 + BASELINE_CENTER_OFFSET * font_size
+    start_y = center_y - total_text_h / 2 + line_height / 2 + baseline_center_offset() * font_size
 
     for i, line in enumerate(lines):
         ty = start_y + i * line_height
@@ -392,7 +391,7 @@ def _render_legend(svg: Svg, legend: ResolvedLegend, font_size: float) -> None:
     # Title
     if legend.title:
         title_fs = font_size * 0.85
-        cursor_y += title_fs / 2 + BASELINE_CENTER_OFFSET * title_fs
+        cursor_y += title_fs / 2 + baseline_center_offset() * title_fs
         svg.raw(
             "".join(
                 (
@@ -427,7 +426,7 @@ def _render_legend(svg: Svg, legend: ResolvedLegend, font_size: float) -> None:
         else:
             # Text-only entry (no swatch)
             text_x = legend.x + pad_h
-        text_y = cursor_y + font_size / 2 + BASELINE_CENTER_OFFSET * font_size
+        text_y = cursor_y + font_size / 2 + baseline_center_offset() * font_size
         svg.raw(
             "".join(
                 (

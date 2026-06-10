@@ -3,7 +3,11 @@
 import pytest
 from fontTools.ttLib.tables import _h_e_a_d
 
-from phosphor_eda.geometry.text_metrics import _build_embedded_font, measure_text
+from phosphor_eda.geometry.text_metrics import (
+    _BASE_SUBSET_CHARS,
+    _subset_font_base64,
+    measure_text,
+)
 
 
 class TestMeasureText:
@@ -73,9 +77,9 @@ def test_embedded_font_subset_does_not_depend_on_generation_timestamp(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(_h_e_a_d, "timestampNow", lambda: 1)
-    first = _build_embedded_font()
+    first = _subset_font_base64(_BASE_SUBSET_CHARS)
 
     monkeypatch.setattr(_h_e_a_d, "timestampNow", lambda: 2)
-    second = _build_embedded_font()
+    second = _subset_font_base64(_BASE_SUBSET_CHARS)
 
     assert second == first

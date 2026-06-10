@@ -37,7 +37,7 @@ from phosphor_eda.geometry.pcb_geometry import (
     pad_polygon,
     polygon_geometry,
 )
-from phosphor_eda.geometry.text_outlines import text_outline_geometry
+from phosphor_eda.geometry.text_metrics import baseline_center_offset, measure_text
 from phosphor_eda.render.drills import drill_geometry, drill_render
 from phosphor_eda.render.inventory import (
     InventoryItem,
@@ -69,6 +69,29 @@ class PaintMode(StrEnum):
 
 
 @dataclass(frozen=True)
+class SvgText:
+    """Native ``<text>`` placement for a board-text primitive.
+
+    ``x``/``y`` are the baseline anchor in board units; vertical centering
+    is already baked into ``y`` (see :func:`_text_render_for_payload`).
+    ``pivot_x``/``pivot_y`` is the authored text center — rotation and the
+    back-side mirror both turn about it, so the placement is independent of
+    the baseline shift. ``mirrored`` marks back-side text flipped
+    horizontally.
+    """
+
+    content: str
+    x: float
+    y: float
+    pivot_x: float
+    pivot_y: float
+    font_size: float
+    text_anchor: str
+    rotation: float
+    mirrored: bool
+
+
+@dataclass(frozen=True)
 class SvgPrimitive:
     d: str
     source_id: str
@@ -81,6 +104,7 @@ class SvgPrimitive:
     paint: PaintMode = PaintMode.FILL
     stroke_width: float | None = None
     stroke_linecap: str | None = None
+    text: SvgText | None = None
 
 
 def _union_bounds(primitives: tuple[SvgPrimitive, ...]) -> Bounds | None:
@@ -122,7 +146,7 @@ def inventory_item_to_svg_primitive(
 ) -> SvgPrimitive | None:
     """Convert one typed inventory item into SVG path data."""
     shape = _shape_render_for_item(item)
-    if not shape.d:
+    if not shape.d and shape.text is None:
         return None
     source_layer = target_layer_name or ("" if item.layer is None else item.layer.name)
     data = {
@@ -143,6 +167,7 @@ def inventory_item_to_svg_primitive(
         paint=shape.paint,
         stroke_width=shape.stroke_width,
         stroke_linecap=shape.stroke_linecap,
+        text=shape.text,
     )
 
 
@@ -250,7 +275,7 @@ def _payload_bounds(payload: object) -> Bounds | None:
     if isinstance(payload, PcbPolygon):
         return _geometry_bounds(polygon_geometry(payload))
     if isinstance(payload, PcbText):
-        return _geometry_bounds(text_outline_geometry(payload))
+        return _text_bounds(payload)
     if isinstance(payload, PcbClosedPath):
         return _geometry_bounds(closed_path_geometry(payload))
     if isinstance(payload, BaseGeometry):
@@ -268,13 +293,18 @@ def _point_bounds(points: tuple[tuple[float, float], ...]) -> Bounds | None:
 
 @dataclass(frozen=True)
 class _ShapeRender:
-    """Path data plus paint metadata for one rendered shape."""
+    """Path data plus paint metadata for one rendered shape.
+
+    Text shapes carry ``text`` (a :class:`SvgText`) and leave ``d`` empty;
+    the serializer emits ``<text>`` for them instead of ``<path>``.
+    """
 
     d: str
     paint: PaintMode = PaintMode.FILL
     stroke_width: float | None = None
     stroke_linecap: str | None = None
     style: Mapping[str, str] = field(default_factory=_empty_data)
+    text: SvgText | None = None
 
 
 _STROKE_LINECAP = "round"
@@ -310,6 +340,9 @@ def _shape_render_for_item(item: InventoryItem) -> _ShapeRender:
     if item.item_kind == InventoryItemKind.KEEPOUT and isinstance(item.payload, PcbClosedPath):
         geometry = closed_path_geometry(item.payload)
         return _filled("" if geometry is None else geometry_to_svg_path_d(geometry))
+    if isinstance(item.payload, PcbText):
+        mirrored = item.layer is not None and item.layer.side == "back"
+        return _text_render_for_payload(item.payload, mirrored=mirrored)
     return _shape_render_for_payload(
         item.payload, filled=item.purpose != InventoryPurpose.BOARD_PROFILE
     )
@@ -391,7 +424,7 @@ def _shape_render_for_payload(payload: object, *, filled: bool = True) -> _Shape
     if isinstance(payload, PcbPolygon):
         return _filled(geometry_to_svg_path_d(polygon_geometry(payload)))
     if isinstance(payload, PcbText):
-        return _filled(geometry_to_svg_path_d(text_outline_geometry(payload)))
+        return _text_render_for_payload(payload, mirrored=False)
     if isinstance(payload, PcbDimension):
         return _filled(
             _line_path_d(
@@ -406,6 +439,95 @@ def _shape_render_for_payload(payload: object, *, filled: bool = True) -> _Shape
     if isinstance(payload, BaseGeometry):
         return _filled(geometry_to_svg_path_d(payload))
     return _filled("")
+
+
+def _text_render_for_payload(text: PcbText, *, mirrored: bool) -> _ShapeRender:
+    """Render board text as a native ``<text>`` placement.
+
+    ``PcbText.x``/``y`` is the visual center of the string (matching the
+    legacy outline path, which centered the glyph union on that point).
+    Justification shifts the horizontal anchor and the vertical baseline so
+    the requested edge — not the center — lands on ``(x, y)``.
+    """
+    if not text.text or text.font_size <= 0:
+        return _filled("")
+    width, height = measure_text(text.text, text.font_size)
+    anchor, anchor_x = _text_horizontal_anchor(text, width)
+    baseline_y = _text_baseline_y(text, height)
+    return _ShapeRender(
+        d="",
+        text=SvgText(
+            content=text.text,
+            x=anchor_x,
+            y=baseline_y,
+            pivot_x=text.x,
+            pivot_y=text.y,
+            font_size=text.font_size,
+            text_anchor=anchor,
+            rotation=text.rotation,
+            mirrored=mirrored,
+        ),
+    )
+
+
+def _justify_tokens(text: PcbText) -> set[str]:
+    return {token for token in text.justify.lower().split() if token}
+
+
+def _text_horizontal_anchor(text: PcbText, width: float) -> tuple[str, float]:
+    """Map justify to an SVG ``text-anchor`` and the x the anchor sits at.
+
+    The center stays at ``text.x``; left/right justification anchors the
+    corresponding edge there instead (the edge is half the width away).
+    """
+    tokens = _justify_tokens(text)
+    if "left" in tokens:
+        return "start", text.x - width / 2.0
+    if "right" in tokens:
+        return "end", text.x + width / 2.0
+    return "middle", text.x
+
+
+def _text_baseline_y(text: PcbText, height: float) -> float:
+    """Baseline y for the requested vertical justification.
+
+    Default (and explicit center) vertically centers the line on ``text.y``
+    using the font's center-to-baseline offset. ``top``/``bottom`` move the
+    block edge onto ``text.y`` first, then offset to the baseline.
+    """
+    offset = baseline_center_offset() * text.font_size
+    tokens = _justify_tokens(text)
+    if "top" in tokens:
+        center_y = text.y + height / 2.0
+    elif "bottom" in tokens:
+        center_y = text.y - height / 2.0
+    else:
+        center_y = text.y
+    return center_y + offset
+
+
+def _text_bounds(text: PcbText) -> Bounds | None:
+    """Axis-aligned bounds of rendered text, accounting for rotation.
+
+    Sized from the measured glyph box centered on ``(x, y)`` (matching the
+    legacy outline extents closely enough for viewport sizing) and expanded
+    to the rotated box's footprint.
+    """
+    if not text.text or text.font_size <= 0:
+        return None
+    width, height = measure_text(text.text, text.font_size)
+    half_w = width / 2.0
+    half_h = height / 2.0
+    corners = ((-half_w, -half_h), (half_w, -half_h), (half_w, half_h), (-half_w, half_h))
+    angle = math.radians(text.rotation)
+    cos_a = math.cos(angle)
+    sin_a = math.sin(angle)
+    xs: list[float] = []
+    ys: list[float] = []
+    for dx, dy in corners:
+        xs.append(text.x + dx * cos_a - dy * sin_a)
+        ys.append(text.y + dx * sin_a + dy * cos_a)
+    return (min(xs), min(ys), max(xs), max(ys))
 
 
 def _board_material_path_d(item: InventoryItem) -> str:
