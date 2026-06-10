@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from phosphor_eda.schematic import ScopeId
+    from phosphor_eda.domain.schematic import ScopeId
 
 type KiCadPoint = tuple[float, float]
 

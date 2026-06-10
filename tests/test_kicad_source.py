@@ -13,7 +13,7 @@ from phosphor_eda.kicad.source import (
 )
 from phosphor_eda.kicad.source_extractor import _generated_local_net_name
 from phosphor_eda.kicad.to_schematic import kicad_to_source
-from phosphor_eda.schematic import ScopeId
+from phosphor_eda.domain.schematic import ScopeId
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 HIERARCHY_ROOT = FIXTURES / "kicad-hierarchy" / "root.kicad_sch"

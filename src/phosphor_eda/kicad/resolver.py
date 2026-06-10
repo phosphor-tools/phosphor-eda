@@ -25,7 +25,7 @@ if TYPE_CHECKING:
         KiCadPinOccurrence,
         KiCadSourceDesign,
     )
-    from phosphor_eda.schematic import Schematic, ScopeId
+    from phosphor_eda.domain.schematic import Schematic, ScopeId
 
 
 # KiCad pin electrical types mapped to the canonical schematic vocabulary

@@ -4,19 +4,19 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from phosphor_eda.schematic import (
+from phosphor_eda.domain.schematic import (
     Component as DomainComponent,
 )
-from phosphor_eda.schematic import (
+from phosphor_eda.domain.schematic import (
     Net as DomainNet,
 )
-from phosphor_eda.schematic import (
+from phosphor_eda.domain.schematic import (
     Page as DomainPage,
 )
-from phosphor_eda.schematic import (
+from phosphor_eda.domain.schematic import (
     Pin as DomainPin,
 )
-from phosphor_eda.schematic import (
+from phosphor_eda.domain.schematic import (
     Schematic,
     ScopeId,
 )

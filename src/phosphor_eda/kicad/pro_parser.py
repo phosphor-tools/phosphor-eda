@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from phosphor_eda.project import NetClass
+from phosphor_eda.domain.project import NetClass
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -32,14 +32,14 @@ from phosphor_eda.kicad.pcb_parser import (
 )
 from phosphor_eda.kicad.pro_parser import parse_kicad_pro
 from phosphor_eda.kicad.to_schematic import kicad_to_design
-from phosphor_eda.project import Project
+from phosphor_eda.domain.project import Project
 from phosphor_eda.serialize import serialize_design
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-    from phosphor_eda.schematic import Schematic
+    from phosphor_eda.domain.schematic import Schematic
 
 # Matches "Sheetfile" "<value>" in KiCad S-expression text.
 _SHEETFILE_RE = re.compile(r'"Sheetfile"\s+"([^"]+)"')

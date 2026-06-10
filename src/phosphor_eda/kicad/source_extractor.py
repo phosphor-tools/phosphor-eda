@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from phosphor_eda.kicad.lib_symbols import LibPins
     from phosphor_eda.kicad.sheet_loader import LoadedSheet
     from phosphor_eda.kicad.source import KiCadPoint
-    from phosphor_eda.schematic import ScopeId
+    from phosphor_eda.domain.schematic import ScopeId
 
 
 @dataclass(slots=True)

@@ -18,7 +18,7 @@ __all__ = ["PASSIVE_PREFIXES", "is_power_net", "ref_prefix"]
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from phosphor_eda.schematic import Component, Net, Page, Pin, Schematic
+    from phosphor_eda.domain.schematic import Component, Net, Page, Pin, Schematic
 
 _MAJOR_IC_PIN_THRESHOLD = 4
 

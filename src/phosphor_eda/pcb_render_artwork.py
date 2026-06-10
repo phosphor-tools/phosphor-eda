@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from phosphor_eda.pcb import PcbPad, PcbVia
+from phosphor_eda.domain.pcb import PcbPad, PcbVia
 from phosphor_eda.pcb_render_inventory import (
     InventoryItem,
     InventoryItemKind,

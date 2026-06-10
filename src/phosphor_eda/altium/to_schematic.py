@@ -17,7 +17,7 @@ from phosphor_eda.diagnostics import ParseContext
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from phosphor_eda.schematic import Schematic
+    from phosphor_eda.domain.schematic import Schematic
 
 
 def load_project_sheets(

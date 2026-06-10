@@ -17,7 +17,7 @@ from phosphor_eda.altium.source import (
     AltiumSheetSymbol,
     AltiumSourceDesign,
 )
-from phosphor_eda.schematic import Net, ScopeId
+from phosphor_eda.domain.schematic import Net, ScopeId
 
 
 def _scope(name: str) -> ScopeId:

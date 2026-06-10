@@ -30,7 +30,7 @@ if TYPE_CHECKING:
         AltiumSourceDesign,
     )
     from phosphor_eda.diagnostics import ParseContext
-    from phosphor_eda.schematic import Schematic, ScopeId
+    from phosphor_eda.domain.schematic import Schematic, ScopeId
 
 
 @dataclass(slots=True)

@@ -32,7 +32,7 @@ from phosphor_eda.kicad.source_extractor import extract_sheet_sources
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from phosphor_eda.schematic import Schematic
+    from phosphor_eda.domain.schematic import Schematic
 
 
 def kicad_to_design(path: Path, name: str = "") -> Schematic:

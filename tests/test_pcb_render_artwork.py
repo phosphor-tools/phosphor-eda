@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from test_pcb_render import _board
 
-from phosphor_eda.pcb import PcbClosedPath, PcbKeepout
+from phosphor_eda.domain.pcb import PcbClosedPath, PcbKeepout
 from phosphor_eda.pcb_render_artwork import (
     solder_mask_opening_primitives,
 )

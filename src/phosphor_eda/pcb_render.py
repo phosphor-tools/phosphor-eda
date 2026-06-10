@@ -61,7 +61,7 @@ class RenderResult:
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from phosphor_eda.pcb import (
+    from phosphor_eda.domain.pcb import (
         Pcb,
     )
     from phosphor_eda.pcb_annotations import (

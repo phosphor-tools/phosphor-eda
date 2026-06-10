@@ -11,8 +11,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from phosphor_eda.pcb import Pcb
-    from phosphor_eda.schematic import Schematic
+    from phosphor_eda.domain.pcb import Pcb
+    from phosphor_eda.domain.schematic import Schematic
 
 
 @dataclass

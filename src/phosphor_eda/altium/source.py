@@ -27,7 +27,7 @@ from phosphor_eda.altium.sheet_builder import (
     resolve_local_net_groups,
 )
 from phosphor_eda.diagnostics import ParseContext
-from phosphor_eda.schematic import ScopeId
+from phosphor_eda.domain.schematic import ScopeId
 
 if TYPE_CHECKING:
     from collections.abc import Iterable

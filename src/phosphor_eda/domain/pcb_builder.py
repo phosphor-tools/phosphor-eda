@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, NoReturn
 
-from phosphor_eda.pcb import (
+from phosphor_eda.domain.pcb import (
     Pcb,
     PcbArtwork,
     PcbBoardProfile,

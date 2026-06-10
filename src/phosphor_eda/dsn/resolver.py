@@ -26,7 +26,7 @@ if TYPE_CHECKING:
         DsnPinOccurrence,
         DsnSourceDesign,
     )
-    from phosphor_eda.schematic import Net, Schematic, ScopeId
+    from phosphor_eda.domain.schematic import Net, Schematic, ScopeId
 
 
 @dataclass(slots=True)

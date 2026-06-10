@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from phosphor_eda.pcb import (
+from phosphor_eda.domain.pcb import (
     LayerRole,
     Pcb,
     PcbArc,

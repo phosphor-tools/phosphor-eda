@@ -37,7 +37,7 @@ from phosphor_eda.text_metrics import measure_text
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from phosphor_eda.pcb import Pcb
+    from phosphor_eda.domain.pcb import Pcb
 
 # JSON data from json.loads() is inherently untyped — Any is the correct
 # boundary type for validating external input before converting to dataclasses.

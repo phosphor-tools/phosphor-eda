@@ -4,7 +4,7 @@ from pathlib import Path
 
 from phosphor_eda.kicad.resolver import resolve_kicad_source
 from phosphor_eda.kicad.to_schematic import kicad_to_source
-from phosphor_eda.schematic import Net
+from phosphor_eda.domain.schematic import Net
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 HIERARCHY_ROOT = FIXTURES / "kicad-hierarchy" / "root.kicad_sch"

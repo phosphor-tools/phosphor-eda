@@ -1,6 +1,6 @@
 import pytest
 
-from phosphor_eda.pcb import (
+from phosphor_eda.domain.pcb import (
     LayerRole,
     Pcb,
     PcbArc,
@@ -24,7 +24,7 @@ from phosphor_eda.pcb import (
     PcbVia,
     PcbViaType,
 )
-from phosphor_eda.pcb_builder import PcbBuilder, PcbBuildError
+from phosphor_eda.domain.pcb_builder import PcbBuilder, PcbBuildError
 
 
 def test_pcb_domain_has_typed_collections_without_generic_geometry_api() -> None:

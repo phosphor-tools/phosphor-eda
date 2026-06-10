@@ -17,7 +17,7 @@ from phosphor_eda.fonts import INTER_REGULAR
 if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry
 
-    from phosphor_eda.pcb import PcbText
+    from phosphor_eda.domain.pcb import PcbText
 
 _FONT = TTFont(INTER_REGULAR)
 _GLYPH_SET = _FONT.getGlyphSet()

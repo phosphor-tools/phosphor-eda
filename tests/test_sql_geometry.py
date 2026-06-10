@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from shapely import MultiPolygon, Polygon
 
-from phosphor_eda.pcb import (
+from phosphor_eda.domain.pcb import (
     PcbArc,
     PcbArtworkKind,
     PcbBoardProfile,

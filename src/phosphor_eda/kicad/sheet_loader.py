@@ -10,7 +10,7 @@ import sexpdata
 from phosphor_eda.kicad import sexp
 from phosphor_eda.kicad.lib_symbols import LibPins, parse_lib_symbols
 from phosphor_eda.kicad.source import KiCadSheetInstance
-from phosphor_eda.schematic import ScopeId
+from phosphor_eda.domain.schematic import ScopeId
 
 if TYPE_CHECKING:
     from pathlib import Path

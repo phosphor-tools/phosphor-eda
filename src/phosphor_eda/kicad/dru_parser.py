@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from phosphor_eda.project import DesignRule
+from phosphor_eda.domain.project import DesignRule
 
 if TYPE_CHECKING:
     from pathlib import Path

@@ -13,7 +13,7 @@ from phosphor_eda.altium.pcb_parser import (
 )
 from phosphor_eda.altium.pcb_records import EXTENDED_VERTEX_SIZE
 from phosphor_eda.diagnostics import ParseContext
-from phosphor_eda.pcb import LayerRole, PcbLayer, PcbNet
+from phosphor_eda.domain.pcb import LayerRole, PcbLayer, PcbNet
 
 _NET_UNCONNECTED = 0xFFFF
 

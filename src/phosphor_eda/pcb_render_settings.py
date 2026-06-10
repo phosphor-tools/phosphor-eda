@@ -10,7 +10,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Literal, TypeGuard, cast
 
-from phosphor_eda.pcb import LayerRole, PcbArtworkKind, PcbConductorKind
+from phosphor_eda.domain.pcb import LayerRole, PcbArtworkKind, PcbConductorKind
 from phosphor_eda.pcb_render_inventory import InventoryItemKind, InventoryPurpose
 
 RENDER_MODES = ("eda", "realistic")

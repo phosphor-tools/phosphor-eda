@@ -12,8 +12,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from phosphor_eda.diagnostics import ParseContext
-    from phosphor_eda.pcb import Pcb
-    from phosphor_eda.schematic import Schematic
+    from phosphor_eda.domain.pcb import Pcb
+    from phosphor_eda.domain.schematic import Schematic
 
 __all__ = [
     "altium_to_design",

@@ -16,7 +16,7 @@ from phosphor_eda.kicad.source import (
     KiCadSourceDesign,
 )
 from phosphor_eda.resolved_graph import ResolutionInputError
-from phosphor_eda.schematic import Net, ScopeId
+from phosphor_eda.domain.schematic import Net, ScopeId
 
 
 def _scope(*parts: str) -> ScopeId:

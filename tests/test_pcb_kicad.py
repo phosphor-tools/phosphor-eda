@@ -11,7 +11,7 @@ from phosphor_eda.kicad.pcb_parser import (
     parse_kicad_pcb_from_sexpr,
     parse_kicad_stackup,
 )
-from phosphor_eda.pcb import (
+from phosphor_eda.domain.pcb import (
     LayerRole,
     Pcb,
     PcbArtworkPurpose,
@@ -23,7 +23,7 @@ from phosphor_eda.pcb import (
 )
 from phosphor_eda.pcb_render_drills import drill_geometry
 from phosphor_eda.pcb_render_inventory import InventoryItemKind, build_inventory
-from phosphor_eda.project import Stackup
+from phosphor_eda.domain.project import Stackup
 from phosphor_eda.sql.geometry import pad_polygon
 
 FIXTURE = Path(__file__).parent / "fixtures" / "swd_switch.kicad_pcb"

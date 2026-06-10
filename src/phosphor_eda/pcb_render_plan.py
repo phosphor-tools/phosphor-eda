@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
-from phosphor_eda.pcb import PcbConductorKind
+from phosphor_eda.domain.pcb import PcbConductorKind
 from phosphor_eda.pcb_render_inventory import build_inventory
 from phosphor_eda.pcb_render_modes import (
     HighlightGroup,
@@ -13,7 +13,7 @@ from phosphor_eda.pcb_render_modes import (
 )
 
 if TYPE_CHECKING:
-    from phosphor_eda.pcb import Pcb
+    from phosphor_eda.domain.pcb import Pcb
     from phosphor_eda.pcb_annotations import ResolvedAnnotations
     from phosphor_eda.pcb_render_artwork import DerivedLayer
     from phosphor_eda.pcb_render_profile import RenderProfiler

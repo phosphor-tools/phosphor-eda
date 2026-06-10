@@ -1,7 +1,7 @@
 """Tests for the unified Project domain model."""
 
-from phosphor_eda.pcb import Pcb, PcbNet
-from phosphor_eda.project import (
+from phosphor_eda.domain.pcb import Pcb, PcbNet
+from phosphor_eda.domain.project import (
     DesignRule,
     DiffPair,
     NetClass,
@@ -10,7 +10,7 @@ from phosphor_eda.project import (
     Stackup,
     StackupLayer,
 )
-from phosphor_eda.schematic import Schematic
+from phosphor_eda.domain.schematic import Schematic
 
 
 def test_project_metadata_defaults():

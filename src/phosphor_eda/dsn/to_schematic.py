@@ -18,7 +18,7 @@ from phosphor_eda.dsn.source import (
     DsnWireAlias,
     dsn_name_key,
 )
-from phosphor_eda.schematic import Schematic, ScopeId
+from phosphor_eda.domain.schematic import Schematic, ScopeId
 from phosphor_eda.text import strip_overline
 
 if TYPE_CHECKING:

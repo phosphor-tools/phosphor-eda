@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import sexpdata
 
 from phosphor_eda.kicad import sexp
-from phosphor_eda.pcb import (
+from phosphor_eda.domain.pcb import (
     LayerRole,
     Pcb,
     PcbArc,
@@ -47,8 +47,8 @@ from phosphor_eda.pcb import (
     PcbVia,
     PcbViaType,
 )
-from phosphor_eda.pcb_builder import PcbBuilder
-from phosphor_eda.project import Stackup, StackupLayer
+from phosphor_eda.domain.pcb_builder import PcbBuilder
+from phosphor_eda.domain.project import Stackup, StackupLayer
 
 if TYPE_CHECKING:
     from pathlib import Path

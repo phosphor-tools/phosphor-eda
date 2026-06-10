@@ -6,7 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from phosphor_eda.pcb import LayerRole
+from phosphor_eda.domain.pcb import LayerRole
 from phosphor_eda.pcb_render_artwork import (
     DerivedLayer,
     solder_mask_opening_primitives,

@@ -21,7 +21,7 @@ from enum import StrEnum, auto
 from typing import TYPE_CHECKING, final, override
 
 if TYPE_CHECKING:
-    from phosphor_eda.schematic import Net, Page, Pin, Schematic
+    from phosphor_eda.domain.schematic import Net, Page, Pin, Schematic
 
 # ---------------------------------------------------------------------------
 # Finding data types

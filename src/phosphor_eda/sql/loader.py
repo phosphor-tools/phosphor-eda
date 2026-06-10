@@ -12,7 +12,7 @@ from shapely import LineString, Point
 from shapely.affinity import rotate
 
 from phosphor_eda.classify import is_power_net
-from phosphor_eda.pcb import (
+from phosphor_eda.domain.pcb import (
     LayerRole,
     PcbArc,
     PcbArtwork,
@@ -51,9 +51,9 @@ from phosphor_eda.text_outlines import text_outline_geometry
 if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry
 
-    from phosphor_eda.pcb import Pcb, PcbNet
-    from phosphor_eda.project import Project, Stackup
-    from phosphor_eda.schematic import Page, Schematic
+    from phosphor_eda.domain.pcb import Pcb, PcbNet
+    from phosphor_eda.domain.project import Project, Stackup
+    from phosphor_eda.domain.schematic import Page, Schematic
 
 
 def load_database(project: Project) -> duckdb.DuckDBPyConnection:

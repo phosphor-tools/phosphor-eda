@@ -13,7 +13,7 @@ from phosphor_eda.sql.geometry import VIA_DRILL_QUAD_SEGS
 if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry
 
-    from phosphor_eda.pcb import PcbDrill
+    from phosphor_eda.domain.pcb import PcbDrill
 
 
 def drill_dimensions(drill: PcbDrill) -> tuple[float, float]:

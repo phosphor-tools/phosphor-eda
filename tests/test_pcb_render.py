@@ -5,7 +5,7 @@ from importlib.resources import as_file, files
 
 import pytest
 
-from phosphor_eda.pcb import (
+from phosphor_eda.domain.pcb import (
     LayerRole,
     Pcb,
     PcbArtwork,

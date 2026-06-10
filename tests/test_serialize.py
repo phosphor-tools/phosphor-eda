@@ -6,23 +6,23 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from phosphor_eda.schematic import (
+from phosphor_eda.domain.schematic import (
     Component as DomainComponent,
 )
-from phosphor_eda.schematic import (
+from phosphor_eda.domain.schematic import (
     ComponentOccurrence,
     NetOccurrence,
     PinOccurrence,
     Schematic,
     ScopeId,
 )
-from phosphor_eda.schematic import (
+from phosphor_eda.domain.schematic import (
     Net as DomainNet,
 )
-from phosphor_eda.schematic import (
+from phosphor_eda.domain.schematic import (
     Page as DomainPage,
 )
-from phosphor_eda.schematic import (
+from phosphor_eda.domain.schematic import (
     Pin as DomainPin,
 )
 from phosphor_eda.serialize import (

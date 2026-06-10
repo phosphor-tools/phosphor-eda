@@ -21,7 +21,7 @@ from phosphor_eda.altium.source import (
     AltiumSourceDesign,
 )
 from phosphor_eda.altium.spatial import WireIndex
-from phosphor_eda.schematic import ScopeId
+from phosphor_eda.domain.schematic import ScopeId
 
 
 def _make_sheet(name: str, records: list[AltiumRecord]) -> SheetRecords:

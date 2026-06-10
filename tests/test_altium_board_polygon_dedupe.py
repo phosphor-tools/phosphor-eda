@@ -7,7 +7,7 @@ from phosphor_eda.altium.pcb_parser import (
     _ParsedRole,  # pyright: ignore[reportPrivateUsage]
     _ParsedShapeKind,  # pyright: ignore[reportPrivateUsage]
 )
-from phosphor_eda.pcb import PcbPolygon
+from phosphor_eda.domain.pcb import PcbPolygon
 
 
 def _polygon(prim_id: str, points: list[tuple[float, float]]) -> _ParsedPrimitive:

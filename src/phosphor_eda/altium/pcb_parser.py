@@ -44,7 +44,7 @@ from phosphor_eda.altium.pcb_records import (
 )
 from phosphor_eda.altium.record_parser import parse_record_payload
 from phosphor_eda.diagnostics import ParseContext
-from phosphor_eda.pcb import (
+from phosphor_eda.domain.pcb import (
     LayerRole,
     Pcb,
     PcbArc,
@@ -82,8 +82,8 @@ from phosphor_eda.pcb import (
     PcbVia,
     PcbViaType,
 )
-from phosphor_eda.pcb_builder import PcbBuilder
-from phosphor_eda.project import DesignRule, DiffPair, NetClass, Stackup, StackupLayer
+from phosphor_eda.domain.pcb_builder import PcbBuilder
+from phosphor_eda.domain.project import DesignRule, DiffPair, NetClass, Stackup, StackupLayer
 from phosphor_eda.text import strip_overline
 
 if TYPE_CHECKING:

@@ -11,7 +11,7 @@ import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from phosphor_eda.schematic import Net
+    from phosphor_eda.domain.schematic import Net
 
 PASSIVE_PREFIXES = ("R", "C", "L", "D", "FB", "F", "Y")
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from phosphor_eda.pcb import PcbText
+from phosphor_eda.domain.pcb import PcbText
 from phosphor_eda.text_outlines import text_outline_geometry
 
 

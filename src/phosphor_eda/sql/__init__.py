@@ -9,7 +9,7 @@ from phosphor_eda.sql.schema import schema_text
 if TYPE_CHECKING:
     import duckdb
 
-    from phosphor_eda.project import Project
+    from phosphor_eda.domain.project import Project
 
 __all__ = ["load_database", "schema_text"]
 

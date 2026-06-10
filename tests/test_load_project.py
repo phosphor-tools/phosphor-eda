@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from phosphor_eda.convert import load_project
-from phosphor_eda.project import Project
+from phosphor_eda.domain.project import Project
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

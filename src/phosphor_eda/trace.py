@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from phosphor_eda.classify import PASSIVE_PREFIXES, is_power_net, ref_prefix
 
 if TYPE_CHECKING:
-    from phosphor_eda.schematic import Component, Net, Pin, Schematic
+    from phosphor_eda.domain.schematic import Component, Net, Pin, Schematic
 
 
 @dataclass

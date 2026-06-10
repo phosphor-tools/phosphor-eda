@@ -54,7 +54,7 @@ from phosphor_eda.diagnostics import ParseContext
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from phosphor_eda.schematic import Page
+    from phosphor_eda.domain.schematic import Page
 
 
 # ---------------------------------------------------------------------------

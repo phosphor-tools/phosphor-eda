@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from shapely import GeometryCollection, LineString, MultiLineString, MultiPolygon, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
-from phosphor_eda.pcb import (
+from phosphor_eda.domain.pcb import (
     LayerRole,
     PcbArc,
     PcbArtworkKind,

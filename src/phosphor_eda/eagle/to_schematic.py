@@ -22,7 +22,7 @@ from phosphor_eda.resolved_graph import (
     ResolvedPinInput,
     build_resolved_schematic,
 )
-from phosphor_eda.schematic import Schematic, ScopeId
+from phosphor_eda.domain.schematic import Schematic, ScopeId
 
 if TYPE_CHECKING:
     from pathlib import Path

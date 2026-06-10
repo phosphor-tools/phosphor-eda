@@ -21,7 +21,7 @@ from phosphor_eda.kicad.source import (
     KiCadSheetSymbol,
 )
 from phosphor_eda.kicad.wire_graph import WireGraph, point_from_at
-from phosphor_eda.schematic import ScopeId
+from phosphor_eda.domain.schematic import ScopeId
 
 if TYPE_CHECKING:
     from phosphor_eda.kicad.sexp import SExpNode

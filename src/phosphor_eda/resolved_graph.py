@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from phosphor_eda.schematic import (
+from phosphor_eda.domain.schematic import (
     Component,
     ComponentOccurrence,
     Net,
@@ -19,7 +19,7 @@ from phosphor_eda.schematic import (
 
 if TYPE_CHECKING:
     from phosphor_eda.net_union import NetUnion
-    from phosphor_eda.schematic import ScopeId
+    from phosphor_eda.domain.schematic import ScopeId
 
 
 class ResolutionInputError(ValueError):
