@@ -2458,6 +2458,7 @@ def _add_parsed_pad(
                 ),
                 width=pad.drill_width,
                 height=pad.drill_height,
+                rotation=pad.rotation,
                 layers=layers,
                 metadata=primitive.metadata,
             ),

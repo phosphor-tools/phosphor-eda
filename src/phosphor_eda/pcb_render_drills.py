@@ -40,5 +40,5 @@ def drill_geometry(drill: PcbDrill) -> BaseGeometry | None:
         line = LineString(((drill.x, drill.y - half_span), (drill.x, drill.y + half_span)))
     geometry = line.buffer(radius, quad_segs=VIA_DRILL_QUAD_SEGS)
     if not math.isclose(drill.rotation % 360.0, 0.0):
-        geometry = rotate(geometry, drill.rotation, origin=(drill.x, drill.y))
+        geometry = rotate(geometry, -drill.rotation, origin=(drill.x, drill.y))
     return geometry

@@ -444,6 +444,7 @@ def _parse_pad(
         y=abs_y,
         layers=layers,
         native_pad_type=native_pad_type,
+        rotation=pad_board_rotation,
         source=source,
     )
     rratio_node = sexp.find(pad_sexpr, "roundrect_rratio")
@@ -519,6 +520,7 @@ def _parse_pad_drill(
     y: float,
     layers: tuple[PcbLayer, ...],
     native_pad_type: str,
+    rotation: float,
     source: str,
 ) -> PcbDrill | None:
     drill_node = sexp.find(pad_sexpr, "drill")
@@ -552,6 +554,7 @@ def _parse_pad_drill(
             plating=plating,
             width=width,
             height=height,
+            rotation=rotation,
             layers=layers,
             metadata=_object_metadata(
                 native_type="drill",

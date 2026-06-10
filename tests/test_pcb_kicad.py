@@ -21,6 +21,7 @@ from phosphor_eda.pcb import (
     PcbPolygon,
     PcbText,
 )
+from phosphor_eda.pcb_render_drills import drill_geometry
 from phosphor_eda.pcb_render_inventory import InventoryItemKind, build_inventory
 from phosphor_eda.project import Stackup
 from phosphor_eda.sql.geometry import pad_polygon
@@ -141,6 +142,44 @@ def test_kicad_pad_rotation_uses_board_coordinate_orientation() -> None:
     assert pad.rotation == pytest.approx(90.0)
     assert max_x - min_x == pytest.approx(2.0)
     assert max_y - min_y == pytest.approx(0.5)
+
+
+def test_kicad_pad_slot_drills_use_board_coordinate_orientation() -> None:
+    parsed = sexpdata.loads(
+        """
+        (kicad_pcb
+          (layers
+            (0 "F.Cu" signal)
+            (31 "B.Cu" signal)
+            (29 "F.Mask" user)
+            (30 "B.Mask" user)
+            (44 "Edge.Cuts" user)
+          )
+          (footprint "Test:Part"
+            (layer "F.Cu")
+            (at 10 10)
+            (property "Reference" "J1")
+            (pad "1" thru_hole oval
+              (at 0 0 45)
+              (size 1.0 3.0)
+              (drill oval 0.6 2.2)
+              (layers "*.Cu" "*.Mask")
+            )
+          )
+          (gr_line (start 0 0) (end 1 0) (layer "Edge.Cuts") (width 0.1))
+        )
+        """
+    )
+    board = parse_kicad_pcb_from_sexpr(list(parsed[1:]), default_name="rotated-slot")
+    pad = board.pads[0]
+    assert pad.drill is not None
+
+    drill_cutout = drill_geometry(pad.drill)
+
+    assert pad.rotation == pytest.approx(45.0)
+    assert pad.drill.rotation == pytest.approx(pad.rotation)
+    assert drill_cutout is not None
+    assert pad_polygon(pad).covers(drill_cutout)
 
 
 def test_kicad_layer_selectors_resolve_to_concrete_layer_references(board: Pcb) -> None:
