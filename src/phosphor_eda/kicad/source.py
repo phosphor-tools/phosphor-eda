@@ -106,6 +106,7 @@ class KiCadPinOccurrence:
     pin_designator: str
     pin_name: str
     location: KiCadPoint
+    pin_type: str = ""
     no_connect: bool = False
     component_value: str = ""
     component_footprint: str = ""
