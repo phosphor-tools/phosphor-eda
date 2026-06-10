@@ -328,6 +328,18 @@ def test_cli_render_settings_schema_outputs_json_without_file() -> None:
     assert schema["examples"]
 
 
+def test_cli_render_settings_schema_exits_before_other_option_validation() -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["pcb", "render", "--render-settings-schema", "--side", "invalid"],
+    )
+
+    assert result.exit_code == 0, result.output
+    schema = json.loads(result.output)
+    assert schema["type"] == "object"
+
+
 def test_cli_render_without_file_reports_missing_file() -> None:
     runner = CliRunner()
     result = runner.invoke(main, ["pcb", "render"])
