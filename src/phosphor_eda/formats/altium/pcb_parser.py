@@ -375,7 +375,6 @@ class _ParsedPrimitive:
     layers: tuple[str, ...] = ()
     net_number: int = 0
     net_name: str = ""
-    footprint_ref: str = ""
     pour_id: str = ""
     metadata: PcbObjectMetadata = field(default_factory=PcbObjectMetadata)
 
@@ -772,10 +771,6 @@ def _classify_copper_primitive(
         "footprint_artwork" if component_index is not None else "artwork",
         0,
     )
-
-
-def _with_footprint_ref(item: _ParsedPrimitive, footprint_ref: str) -> _ParsedPrimitive:
-    return replace(item, footprint_ref=footprint_ref)
 
 
 # ---------------------------------------------------------------------------
@@ -2227,14 +2222,20 @@ def _build_pcb_from_parsed_primitives(
     for pour in pours:
         builder.add_pour_object(pour, source=f"pour {pour.id}")
 
+    # Index footprints by their native component index and pours by id once, so
+    # primitive assembly resolves its owner footprint/pour in O(1) instead of
+    # scanning the lists per primitive.
+    footprints_by_index = dict(enumerate(footprints))
+    pours_by_id = {pour.id: pour for pour in pours}
+
     board_profile_elements: list[PcbBoardProfileElement] = []
     pour_fills: dict[str, list[PcbConductor]] = {}
     for primitive in primitives:
         _add_parsed_primitive(
             builder,
             primitive,
-            footprints=footprints,
-            pours=pours,
+            footprints_by_index=footprints_by_index,
+            pours_by_id=pours_by_id,
             board_profile_elements=board_profile_elements,
             pour_fills=pour_fills,
         )
@@ -2253,8 +2254,8 @@ def _add_parsed_primitive(
     builder: PcbBuilder,
     primitive: _ParsedPrimitive,
     *,
-    footprints: list[PcbFootprint],
-    pours: list[PcbPour],
+    footprints_by_index: dict[int, PcbFootprint],
+    pours_by_id: dict[str, PcbPour],
     board_profile_elements: list[PcbBoardProfileElement],
     pour_fills: dict[str, list[PcbConductor]],
 ) -> None:
@@ -2266,7 +2267,7 @@ def _add_parsed_primitive(
     if primitive.object_type == _ParsedObjectKind.PAD and isinstance(
         primitive.data, _ParsedPadPayload
     ):
-        _add_parsed_pad(builder, primitive, primitive.data, footprints)
+        _add_parsed_pad(builder, primitive, primitive.data, footprints_by_index)
         return
     if primitive.object_type == _ParsedObjectKind.VIA and isinstance(
         primitive.data, _ParsedViaPayload
@@ -2274,13 +2275,13 @@ def _add_parsed_primitive(
         _add_parsed_via(builder, primitive, primitive.data)
         return
     if _is_conductor_primitive(primitive):
-        conductor = _parsed_conductor(builder, primitive, footprints, pours)
+        conductor = _parsed_conductor(builder, primitive, footprints_by_index, pours_by_id)
         if conductor is not None:
             builder.add_conductor_object(conductor, source=primitive.id)
             if conductor.pour is not None:
                 pour_fills.setdefault(conductor.pour.id, []).append(conductor)
         return
-    artwork = _parsed_artwork(builder, primitive, footprints)
+    artwork = _parsed_artwork(builder, primitive, footprints_by_index)
     if artwork is not None:
         builder.add_artwork_object(artwork, source=primitive.id)
 
@@ -2289,7 +2290,7 @@ def _add_parsed_pad(
     builder: PcbBuilder,
     primitive: _ParsedPrimitive,
     pad: _ParsedPadPayload,
-    footprints: list[PcbFootprint],
+    footprints_by_index: dict[int, PcbFootprint],
 ) -> None:
     layers = _parsed_layer_refs(builder, primitive.layers, source=primitive.id)
     drill = None
@@ -2331,7 +2332,7 @@ def _add_parsed_pad(
             pad_type=PcbPadType.THROUGH_HOLE if drill is not None else PcbPadType.SMD,
             layers=layers,
             net=_net_from_parsed_number(builder, primitive.net_number, primitive.id),
-            footprint=_footprint_for_primitive(primitive, footprints),
+            footprint=_footprint_for_primitive(primitive, footprints_by_index),
             drill=drill,
             rotation=pad.rotation,
             mask_aperture=mask_aperture,
@@ -2387,13 +2388,13 @@ def _is_conductor_primitive(primitive: _ParsedPrimitive) -> bool:
 def _parsed_conductor(
     builder: PcbBuilder,
     primitive: _ParsedPrimitive,
-    footprints: list[PcbFootprint],
-    pours: list[PcbPour],
+    footprints_by_index: dict[int, PcbFootprint],
+    pours_by_id: dict[str, PcbPour],
 ) -> PcbConductor | None:
     if not isinstance(primitive.data, PcbLine | PcbArc | PcbCircle | PcbPolygon):
         return None
     layer = _primary_layer_ref(builder, primitive, source=primitive.id)
-    pour = _pour_for_primitive(primitive, pours)
+    pour = _pour_for_primitive(primitive, pours_by_id)
     if pour is not None:
         kind = PcbConductorKind.POUR_FILL
     elif isinstance(primitive.data, PcbArc):
@@ -2408,7 +2409,7 @@ def _parsed_conductor(
         layer=layer,
         data=primitive.data,
         net=_net_from_parsed_number(builder, primitive.net_number, primitive.id),
-        footprint=_footprint_for_primitive(primitive, footprints),
+        footprint=_footprint_for_primitive(primitive, footprints_by_index),
         pour=pour,
         metadata=primitive.metadata,
     )
@@ -2417,7 +2418,7 @@ def _parsed_conductor(
 def _parsed_artwork(
     builder: PcbBuilder,
     primitive: _ParsedPrimitive,
-    footprints: list[PcbFootprint],
+    footprints_by_index: dict[int, PcbFootprint],
 ) -> PcbArtwork | None:
     if not isinstance(
         primitive.data,
@@ -2429,7 +2430,7 @@ def _parsed_artwork(
         if not primitive.layers
         else _primary_layer_ref(builder, primitive, source=primitive.id)
     )
-    footprint = _footprint_for_primitive(primitive, footprints)
+    footprint = _footprint_for_primitive(primitive, footprints_by_index)
     metadata = _artwork_metadata_for_visibility(primitive, footprint)
     return PcbArtwork(
         id=primitive.id,
@@ -2495,17 +2496,12 @@ def _net_from_parsed_number(
 
 def _footprint_for_primitive(
     primitive: _ParsedPrimitive,
-    footprints: list[PcbFootprint],
+    footprints_by_index: dict[int, PcbFootprint],
 ) -> PcbFootprint | None:
     component_index = primitive.metadata.native_component_index
-    if component_index is not None and 0 <= component_index < len(footprints):
-        return footprints[component_index]
-    if not primitive.footprint_ref:
+    if component_index is None:
         return None
-    for footprint in footprints:
-        if footprint.reference == primitive.footprint_ref:
-            return footprint
-    return None
+    return footprints_by_index.get(component_index)
 
 
 def _artwork_metadata_for_visibility(
@@ -2537,13 +2533,12 @@ def _altium_component_text_visible(
     return raw.upper() in {"T", "TRUE", "1", "YES"}
 
 
-def _pour_for_primitive(primitive: _ParsedPrimitive, pours: list[PcbPour]) -> PcbPour | None:
+def _pour_for_primitive(
+    primitive: _ParsedPrimitive, pours_by_id: dict[str, PcbPour]
+) -> PcbPour | None:
     if not primitive.pour_id:
         return None
-    for pour in pours:
-        if pour.id == primitive.pour_id:
-            return pour
-    return None
+    return pours_by_id.get(primitive.pour_id)
 
 
 def _parsed_via_type(primitive: _ParsedPrimitive) -> PcbViaType:
@@ -3048,50 +3043,47 @@ def parse_altium_pcb(
     if not any(item.has_role(_ParsedRole.BOARD_OUTLINE) for item in geometry):
         geometry.extend(_parse_board_outline(tracks_data, arcs_data, layer_map, ctx))
 
+    # Component-owned primitives carry their owner index in
+    # metadata.native_component_index; board-level primitives carry None.
+    # Drop any primitive whose component index points past the footprint list.
     for comp_idx, pad in raw_pads:
-        if comp_idx == COMPONENT_NONE:
+        if comp_idx == COMPONENT_NONE or comp_idx < len(footprints):
             geometry.append(pad)
-        elif comp_idx < len(footprints):
-            geometry.append(_with_footprint_ref(pad, footprints[comp_idx].reference))
 
     for comp_idx, text in raw_texts:
-        if comp_idx != COMPONENT_NONE and comp_idx < len(footprints):
-            geometry.append(_with_footprint_ref(text, footprints[comp_idx].reference))
-        elif comp_idx == COMPONENT_NONE:
+        if comp_idx == COMPONENT_NONE or comp_idx < len(footprints):
             geometry.append(text)
 
     for item in track_geometry + arc_geometry + shape_regions:
         comp_idx = item.metadata.native_component_index
-        if comp_idx is None:
-            continue
-        if comp_idx < len(footprints):
-            geometry.append(_with_footprint_ref(item, footprints[comp_idx].reference))
+        if comp_idx is not None and comp_idx < len(footprints):
+            geometry.append(item)
 
     for comp_idx, models in comp_models.items():
         if comp_idx < len(footprints):
-            geometry.extend(
-                _with_footprint_ref(model, footprints[comp_idx].reference) for model in models
-            )
+            geometry.extend(models)
 
-    # Extract value text and compute bounding boxes
-    for fp in footprints:
+    # Group component-owned geometry by footprint index once, then derive each
+    # footprint's value text and pad bounding box from its own primitives.
+    geometry_by_component: dict[int, list[_ParsedPrimitive]] = {}
+    for item in geometry:
+        comp_idx = item.metadata.native_component_index
+        if comp_idx is not None:
+            geometry_by_component.setdefault(comp_idx, []).append(item)
+
+    for fp_idx, fp in enumerate(footprints):
+        owned = geometry_by_component.get(fp_idx, [])
         if not fp.value:
             fp.value = next(
                 (
-                    text.data.text
-                    for text in geometry
-                    if text.footprint_ref == fp.reference
-                    and text.has_role(_ParsedRole.VALUE)
-                    and isinstance(text.data, PcbText)
+                    item.data.text
+                    for item in owned
+                    if item.has_role(_ParsedRole.VALUE) and isinstance(item.data, PcbText)
                 ),
                 "",
             )
         fp.bbox = _compute_bbox(
-            [
-                item
-                for item in geometry
-                if item.footprint_ref == fp.reference and item.object_type == _ParsedObjectKind.PAD
-            ]
+            [item for item in owned if item.object_type == _ParsedObjectKind.PAD]
         )
 
     # Board name from Board6/Data (board_props already parsed above)
