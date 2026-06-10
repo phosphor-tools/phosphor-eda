@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET
 
+from phosphor_eda.diagnostics import ParseContext
 from phosphor_eda.net_union import NetUnion
 from phosphor_eda.resolved_graph import (
     ResolvedComponentOccurrenceInput,
@@ -248,6 +249,7 @@ def _build_pages(
     schematic: ET.Element,
     libraries: dict[str, _LibData],
     parts: dict[str, _PartInfo],
+    ctx: ParseContext | None = None,
 ) -> Schematic:
     """Build the public schematic graph from Eagle sheets.
 
@@ -330,14 +332,30 @@ def _build_pages(
         for part_name, instances in instances_per_part.items():
             part_info = parts.get(part_name)
             if part_info is None:
+                if ctx is not None:
+                    ctx.warn(
+                        "eagle_missing_part",
+                        f"{part_name}: no <part> definition; instance dropped",
+                    )
                 continue
 
             lib_data = libraries.get(part_info.library)
             if lib_data is None:
+                if ctx is not None:
+                    ctx.warn(
+                        "eagle_missing_library",
+                        f"{part_name}: library {part_info.library!r} not found; part dropped",
+                    )
                 continue
 
             ds_info = lib_data.devicesets.get(part_info.deviceset)
             if ds_info is None:
+                if ctx is not None:
+                    ctx.warn(
+                        "eagle_missing_deviceset",
+                        f"{part_name}: deviceset {part_info.deviceset!r} not found in "
+                        f"library {part_info.library!r}; part dropped",
+                    )
                 continue
 
             metadata: dict[str, str] = {}
@@ -429,6 +447,10 @@ def _build_pages(
         for local_net_id in local_net_ids[1:]:
             _ = net_union.union(first_id, local_net_id)
 
+    design_metadata: dict[str, str] = {}
+    if ctx is not None and ctx.issues:
+        design_metadata["parse_issue_count"] = str(len(ctx.issues))
+
     return build_resolved_schematic(
         name=name,
         pages=page_inputs,
@@ -441,6 +463,7 @@ def _build_pages(
             group_local_nets,
         ),
         include_net=_include_eagle_net,
+        metadata=design_metadata,
     )
 
 
@@ -493,9 +516,10 @@ def eagle_to_design(path: Path, name: str = "") -> Schematic:
     if schematic is None:
         return Schematic(name=name)
 
+    ctx = ParseContext()
     libraries = _parse_libraries(schematic)
     parts = _parse_parts(schematic)
-    design = _build_pages(name, schematic, libraries, parts)
+    design = _build_pages(name, schematic, libraries, parts, ctx)
 
     if not design.pages:
         return Schematic(name=name)
