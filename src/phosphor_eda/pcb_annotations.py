@@ -392,19 +392,6 @@ _PAD_V_PX = 4.0  # vertical padding on each side (pixels)
 _BOX_PAD_PX = 6.0
 
 
-def compute_annotation_font_size(
-    board_bbox: tuple[float, float, float, float],
-) -> float:
-    """Return the fixed annotation font size in pixels.
-
-    Kept as a function for backward compatibility with tests, but the
-    value is now a constant — board size no longer affects annotation
-    font size because annotations render in pixel space.
-    """
-    _x1, _y1, _x2, _y2 = board_bbox
-    return ANNOTATION_FONT_PX
-
-
 def _px_scale(
     board_bbox: tuple[float, float, float, float],
     width_px: int,

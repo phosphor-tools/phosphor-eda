@@ -4,7 +4,6 @@ from phosphor_eda.pcb import Pcb, PcbNet
 from phosphor_eda.project import (
     DesignRule,
     DiffPair,
-    LibraryRef,
     NetClass,
     Project,
     ProjectMetadata,
@@ -83,11 +82,6 @@ def test_diff_pair_construction():
     assert dp.negative_net == "HDMI_TX0_N"
 
 
-def test_library_ref_construction():
-    ref = LibraryRef(name="Device", kind="symbol", uri="/usr/share/kicad/symbols/Device.kicad_sym")
-    assert ref.kind == "symbol"
-
-
 def test_project_with_all_submodels():
     project = Project(
         name="test-board",
@@ -118,7 +112,6 @@ def test_project_with_all_submodels():
         net_classes=[NetClass(name="Default", clearance_mm=0.2)],
         design_rules=[DesignRule(name="clearance1", kind="clearance", min_value_mm=0.125)],
         diff_pairs=[DiffPair(name="USB", positive_net="USB_P", negative_net="USB_N")],
-        library_refs=[LibraryRef(name="Device", kind="symbol")],
     )
     assert project.name == "test-board"
     assert project.schematic is not None
@@ -127,7 +120,6 @@ def test_project_with_all_submodels():
     assert len(project.net_classes) == 1
     assert len(project.design_rules) == 1
     assert len(project.diff_pairs) == 1
-    assert len(project.library_refs) == 1
 
 
 def test_project_minimal():
@@ -139,4 +131,3 @@ def test_project_minimal():
     assert project.net_classes == []
     assert project.design_rules == []
     assert project.diff_pairs == []
-    assert project.library_refs == []

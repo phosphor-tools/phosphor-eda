@@ -1,7 +1,7 @@
 """Netlist construction from parsed OrCAD DSN designs."""
 
 from phosphor_eda.diagnostics import ParseContext
-from phosphor_eda.dsn.models import NetlistEntry, ParsedDesign
+from phosphor_eda.models import NetlistEntry, ParsedDesign
 
 
 def build_netlist(

@@ -133,10 +133,11 @@ def _materialize_one(i: int, rec: dict[str, str], ctx: ParseContext) -> AltiumRe
             record_index=i,
         )
         return UnknownRecord(
-            record_type=RecordType.HEADER,
+            record_type=RecordType.UNKNOWN,
             index=i,
             owner_index=owner,
             raw=rec,
+            raw_record_id=None,
         )
 
     try:
@@ -148,10 +149,11 @@ def _materialize_one(i: int, rec: dict[str, str], ctx: ParseContext) -> AltiumRe
             record_index=i,
         )
         return UnknownRecord(
-            record_type=RecordType.HEADER,
+            record_type=RecordType.UNKNOWN,
             index=i,
             owner_index=owner,
             raw=rec,
+            raw_record_id=rid,
         )
 
     factory = _DISPATCH.get(rt)
@@ -161,6 +163,7 @@ def _materialize_one(i: int, rec: dict[str, str], ctx: ParseContext) -> AltiumRe
             index=i,
             owner_index=owner,
             raw=rec,
+            raw_record_id=rid,
         )
 
     return factory(i, rec, ctx)

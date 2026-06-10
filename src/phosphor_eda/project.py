@@ -98,16 +98,6 @@ class DiffPair:
 
 
 @dataclass
-class LibraryRef:
-    """A library reference used by the project."""
-
-    name: str
-    kind: str = ""  # "symbol", "footprint"
-    uri: str = ""
-    source: str = ""  # "local", "global", "project"
-
-
-@dataclass
 class Project:
     """A complete EDA project — the unified top-level container."""
 
@@ -119,4 +109,3 @@ class Project:
     net_classes: list[NetClass] = field(default_factory=list)
     design_rules: list[DesignRule] = field(default_factory=list)
     diff_pairs: list[DiffPair] = field(default_factory=list)
-    library_refs: list[LibraryRef] = field(default_factory=list)

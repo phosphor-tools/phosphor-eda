@@ -27,9 +27,6 @@ if TYPE_CHECKING:
         PcbVia,
     )
 
-# Layer names indicating front copper (KiCad and Altium conventions)
-_FRONT_LAYERS = {"F.Cu", "Top Layer", "Top"}
-_BACK_LAYERS = {"B.Cu", "Bottom Layer", "Bottom"}
 PAD_CURVE_QUAD_SEGS = 12
 PAD_ROUNDRECT_QUAD_SEGS = 8
 VIA_DRILL_QUAD_SEGS = 8
@@ -433,22 +430,6 @@ def footprint_bbox_polygon(fp: PcbFootprint) -> Polygon | None:
     return None
 
 
-def pad_side(layers: tuple[str, ...]) -> str:
-    """Determine which board side a pad is accessible from."""
-    layer_names = [str(layer) for layer in layers]
-    has_wildcard = any("*" in ly for ly in layer_names)
-    has_front = any(ly in _FRONT_LAYERS for ly in layer_names)
-    has_back = any(ly in _BACK_LAYERS for ly in layer_names)
-
-    if has_wildcard or (has_front and has_back):
-        return "through"
-    if has_back:
-        return "back"
-    return "front"
-
-
 def footprint_side(fp: PcbFootprint) -> str:
     """Determine which board side a footprint is on."""
-    if fp.layer.name in _BACK_LAYERS or fp.layer.side == "back":
-        return "back"
-    return "front"
+    return "back" if fp.layer.side == "back" else "front"

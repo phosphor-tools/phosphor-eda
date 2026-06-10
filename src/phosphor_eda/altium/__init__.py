@@ -12,13 +12,11 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from phosphor_eda.diagnostics import ParseContext
-    from phosphor_eda.models import NetlistEntry
     from phosphor_eda.pcb import Pcb
     from phosphor_eda.schematic import Schematic
 
 __all__ = [
     "altium_to_design",
-    "build_netlist",
     "parse_altium_pcb",
 ]
 
@@ -28,13 +26,6 @@ def altium_to_design(path: Path, name: str = "") -> Schematic:
     from phosphor_eda.altium.to_schematic import altium_to_design as _altium_to_design
 
     return _altium_to_design(path, name)
-
-
-def build_netlist(path: Path) -> dict[str, list[NetlistEntry]]:
-    """Build a netlist from an Altium .PrjPcb or single .SchDoc file."""
-    from phosphor_eda.altium.netlist import build_netlist as _build_netlist
-
-    return _build_netlist(path)
 
 
 def parse_altium_pcb(path: Path, ctx: ParseContext | None = None) -> Pcb:
