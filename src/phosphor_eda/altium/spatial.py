@@ -39,14 +39,6 @@ class UnionFind(dict[T, T]):
         if ra != rb:
             self[ra] = rb
 
-    def groups(self) -> dict[T, list[T]]:
-        """Return root → [members] for all items."""
-        result: dict[T, list[T]] = {}
-        for item in list(self):
-            root = self.find(item)
-            result.setdefault(root, []).append(item)
-        return result
-
 
 # ---------------------------------------------------------------------------
 # Segment stored in a WireIndex row/column bucket

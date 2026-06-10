@@ -97,6 +97,9 @@ class RecordType(IntEnum):
     SIGNAL_HARNESS = 218
     BLANKET = 225
     HYPERLINK = 226
+    # Sentinel for records the factory cannot classify (unknown or non-integer
+    # RECORD field). Not a real Altium record id.
+    UNKNOWN = -1
 
 
 # ---------------------------------------------------------------------------
@@ -1217,6 +1220,11 @@ class HyperlinkRec(AltiumRecord):
 
 @dataclass
 class UnknownRecord(AltiumRecord):
-    """Catch-all for record types we don't actively parse."""
+    """Catch-all for record types we don't actively parse.
+
+    ``raw_record_id`` is the integer RECORD value when it parsed but matched no
+    known type, or ``None`` when the RECORD field was missing or non-integer.
+    """
 
     raw: dict[str, str] = field(default_factory=dict)
+    raw_record_id: int | None = None

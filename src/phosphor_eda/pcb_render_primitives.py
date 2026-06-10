@@ -146,11 +146,6 @@ def drill_to_svg_primitive(item: InventoryItem) -> SvgPrimitive | None:
     )
 
 
-def visible_drill_to_svg_primitive(item: InventoryItem) -> SvgPrimitive | None:
-    """Convert a drill inventory item into a visible EDA primitive."""
-    return drill_to_svg_primitive(item)
-
-
 def pad_solder_mask_opening_primitive(item: InventoryItem, *, side: str) -> SvgPrimitive | None:
     """Create an implicit solder-mask opening from a pad."""
     if item.item_kind != InventoryItemKind.PAD or not isinstance(item.source, PcbPad):
@@ -465,10 +460,6 @@ def _line_string_to_svg_path_d(line: LineString) -> str:
     commands = [f"M {coords[0][0]:.4f} {coords[0][1]:.4f}"]
     commands.extend(f"L {x:.4f} {y:.4f}" for x, y in coords[1:])
     return " ".join(commands)
-
-
-def side_mask_layer_name(side: str) -> str:
-    return "F.Mask" if side == "front" else "B.Mask"
 
 
 def layer_function_for_item(item: InventoryItem) -> str:

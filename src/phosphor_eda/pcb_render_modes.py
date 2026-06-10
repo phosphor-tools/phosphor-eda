@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 from phosphor_eda.pcb import LayerRole
 from phosphor_eda.pcb_render_artwork import (
     DerivedLayer,
-    select_source_artwork,
     solder_mask_opening_primitives,
 )
 from phosphor_eda.pcb_render_inventory import (
@@ -17,6 +16,7 @@ from phosphor_eda.pcb_render_inventory import (
     InventoryItemKind,
     InventoryPurpose,
     PcbRenderInventory,
+    select_inventory_items,
 )
 from phosphor_eda.pcb_render_primitives import (
     LayerClip,
@@ -79,7 +79,7 @@ def build_eda_layers(
 ) -> tuple[DerivedLayer, ...]:
     """Build EDA derived layers from typed source inventory."""
     selected = _filter_excluded_components(
-        select_source_artwork(inventory, settings.source.layers, active_side=settings.side),
+        select_inventory_items(inventory, settings.source.layers, active_side=settings.side),
         settings.source.exclude_components,
     )
     if profiler is not None:
@@ -108,7 +108,7 @@ def build_realistic_layers(
     """Build front/back realistic visual layers."""
     side = settings.side or "front"
     selected = _filter_excluded_components(
-        select_source_artwork(inventory, settings.source.layers, active_side=side),
+        select_inventory_items(inventory, settings.source.layers, active_side=side),
         settings.source.exclude_components,
     )
     board_primitives = _board_primitives(inventory)

@@ -148,8 +148,9 @@ def test_pcb_bbox_falls_back_to_pad_extents_when_profile_is_absent() -> None:
 
 
 def test_pcb_builder_rejects_unresolved_and_selector_references() -> None:
+    top = PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT))
     builder = PcbBuilder("bad")
-    builder.add_layer(PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT)))
+    builder.add_layer(top)
     builder.add_net(PcbNet(1, "VCC"))
 
     with pytest.raises(PcbBuildError, match="Layer selector"):
@@ -161,16 +162,31 @@ def test_pcb_builder_rejects_unresolved_and_selector_references() -> None:
     with pytest.raises(PcbBuildError, match="net 0"):
         builder.resolve_net_number(0, source="pad J1.1")
 
+    unregistered = PcbFootprint("U404", "Package:Unknown", 0.0, 0.0, 0.0, top)
+    pad = PcbPad(
+        id="pad:U404:1",
+        number="1",
+        x=0.0,
+        y=0.0,
+        width=1.0,
+        height=1.0,
+        shape="circle",
+        pad_type=PcbPadType.SMD,
+        layers=(top,),
+        footprint=unregistered,
+    )
     with pytest.raises(PcbBuildError, match="unknown footprint"):
-        builder.resolve_footprint("U404", source="graphic")
+        builder.add_pad_object(pad, source="graphic")
 
 
 def test_pcb_builder_rejects_duplicate_drill_id() -> None:
+    top = PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT))
     builder = PcbBuilder("dup-drill")
-    builder.add_drill(id="drill:1", x=0.0, y=0.0, diameter=0.3)
+    builder.add_layer(top)
+    builder.add_drill_object(PcbDrill("drill:1", 0.0, 0.0, 0.3))
 
     with pytest.raises(PcbBuildError, match="duplicate drill"):
-        builder.add_drill(id="drill:1", x=1.0, y=1.0, diameter=0.3)
+        builder.add_drill_object(PcbDrill("drill:1", 1.0, 1.0, 0.3))
 
 
 def test_pcb_builder_rejects_empty_required_board_profile() -> None:
@@ -186,26 +202,30 @@ def test_builder_accepts_unconnected_and_mechanical_drills() -> None:
     builder = PcbBuilder("mechanical")
     top = builder.add_layer(PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT)))
     edge = builder.add_layer(PcbLayer("Edge.Cuts", (LayerRole.EDGE,)))
-    drill = builder.add_drill(
-        id="mounting:1",
-        x=0.0,
-        y=0.0,
-        diameter=3.2,
-        shape=PcbDrillShape.ROUND,
-        plating=PcbDrillPlating.NON_PLATED,
+    drill = builder.add_drill_object(
+        PcbDrill(
+            id="mounting:1",
+            x=0.0,
+            y=0.0,
+            diameter=3.2,
+            shape=PcbDrillShape.ROUND,
+            plating=PcbDrillPlating.NON_PLATED,
+        )
     )
-    builder.add_pad(
-        id="pad:free",
-        number="MT",
-        x=1.0,
-        y=1.0,
-        width=4.0,
-        height=4.0,
-        shape="circle",
-        pad_type=PcbPadType.SMD,
-        layers=(top,),
-        net=None,
-        footprint=None,
+    builder.add_pad_object(
+        PcbPad(
+            id="pad:free",
+            number="MT",
+            x=1.0,
+            y=1.0,
+            width=4.0,
+            height=4.0,
+            shape="circle",
+            pad_type=PcbPadType.SMD,
+            layers=(top,),
+            net=None,
+            footprint=None,
+        )
     )
     builder.set_board_profile(
         PcbBoardProfile(

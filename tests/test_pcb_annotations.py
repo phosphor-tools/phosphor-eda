@@ -18,7 +18,6 @@ from phosphor_eda.pcb import (
     PcbPadType,
 )
 from phosphor_eda.pcb_annotations import (
-    ANNOTATION_FONT_PX,
     AnnotationSpec,
     BoxSpec,
     LabelSpec,
@@ -32,7 +31,6 @@ from phosphor_eda.pcb_annotations import (
     _resolve_component_target,  # pyright: ignore[reportPrivateUsage]
     _resolve_net_target,  # pyright: ignore[reportPrivateUsage]
     _resolve_pad_target,  # pyright: ignore[reportPrivateUsage]
-    compute_annotation_font_size,
     parse_annotations,
     resolve_annotations,
 )
@@ -455,26 +453,6 @@ class TestMeasureLabel:
         pill_w, pill_h = _measure_label(text, 1.0)
         assert pill_w > raw_w
         assert pill_h > raw_h
-
-
-# ---------------------------------------------------------------------------
-# Font size from board diagonal
-# ---------------------------------------------------------------------------
-
-
-def test_font_size_is_constant() -> None:
-    """Font size is a fixed pixel constant, independent of board size."""
-    small_bbox = (0.0, 0.0, 30.0, 30.0)
-    large_bbox = (0.0, 0.0, 100.0, 100.0)
-    assert compute_annotation_font_size(small_bbox) == ANNOTATION_FONT_PX
-    assert compute_annotation_font_size(large_bbox) == ANNOTATION_FONT_PX
-
-
-def test_font_size_constant_for_huge_board() -> None:
-    """Font size is the same constant even for very large boards."""
-    huge_bbox = (0.0, 0.0, 500.0, 500.0)
-    font = compute_annotation_font_size(huge_bbox)
-    assert font == ANNOTATION_FONT_PX
 
 
 # ---------------------------------------------------------------------------

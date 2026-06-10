@@ -309,6 +309,8 @@ def test_dispatch_table_covers_all_record_types():
     """Every RecordType member should be handled (typed record or UnknownRecord)."""
     ctx = ParseContext()
     for rt in RecordType:
+        if rt is RecordType.UNKNOWN:
+            continue  # sentinel for unclassifiable records, not a real type
         raw = [{"record": str(rt.value)}]
         records = materialize_records(raw, ctx)
         assert len(records) == 1

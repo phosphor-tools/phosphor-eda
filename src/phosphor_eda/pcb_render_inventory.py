@@ -114,14 +114,6 @@ class PcbRenderInventory:
     items: tuple[InventoryItem, ...]
     side: str = ""
 
-    def by_item_kind(self, item_kind: InventoryItemKind | str) -> tuple[InventoryItem, ...]:
-        normalized = InventoryItemKind(item_kind)
-        return tuple(item for item in self.items if item.item_kind == normalized)
-
-    def by_purpose(self, purpose: InventoryPurpose | str) -> tuple[InventoryItem, ...]:
-        normalized = InventoryPurpose(purpose)
-        return tuple(item for item in self.items if item.purpose == normalized)
-
 
 def build_inventory(board: Pcb, *, side: str = "") -> PcbRenderInventory:
     """Build typed render inventory from domain collections."""
