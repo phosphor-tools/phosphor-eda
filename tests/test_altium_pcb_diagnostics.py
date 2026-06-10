@@ -7,11 +7,15 @@ warnings, and the truncated-stream detection in the record readers.
 import struct
 
 from phosphor_eda.formats.altium.errors import AltiumPcbParseError
-from phosphor_eda.formats.altium.pcb_parser import (
-    _read_binary_records,  # pyright: ignore[reportPrivateUsage]
-    _region_kind,  # pyright: ignore[reportPrivateUsage]
+from phosphor_eda.formats.altium.pcb_layers import (
     _v9_stack_layer_id_to_num,  # pyright: ignore[reportPrivateUsage]
+)
+from phosphor_eda.formats.altium.pcb_primitives import (
+    read_binary_records,  # pyright: ignore[reportPrivateUsage]
     read_text_records,
+)
+from phosphor_eda.formats.altium.pcb_streams import (
+    _region_kind,  # pyright: ignore[reportPrivateUsage]
 )
 from phosphor_eda.formats.common.diagnostics import ParseContext
 
@@ -44,7 +48,7 @@ def test_read_binary_records_warns_on_truncation() -> None:
     # type byte 2, then a u32 length of 100 with no body following.
     data = bytes([2]) + struct.pack("<I", 100)
     ctx = ParseContext()
-    records = _read_binary_records(data, ctx, source="TestStream")
+    records = read_binary_records(data, ctx, source="TestStream")
     assert records == []
     assert any(
         "TestStream" in issue.message and "trailing" in issue.message for issue in ctx.issues

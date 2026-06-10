@@ -8,11 +8,11 @@ known parent pour via its (sub)polygon index.
 import struct
 
 from phosphor_eda.domain.pcb import LayerRole, PcbLayer, PcbNet
-from phosphor_eda.formats.altium.pcb_parser import (
-    _parse_regions,  # pyright: ignore[reportPrivateUsage]
-    _parse_shape_based_regions,  # pyright: ignore[reportPrivateUsage]
-)
 from phosphor_eda.formats.altium.pcb_records import EXTENDED_VERTEX_SIZE
+from phosphor_eda.formats.altium.pcb_streams import (
+    parse_regions,  # pyright: ignore[reportPrivateUsage]
+    parse_shape_based_regions,  # pyright: ignore[reportPrivateUsage]
+)
 from phosphor_eda.formats.common.diagnostics import ParseContext
 
 _NET_UNCONNECTED = 0xFFFF
@@ -99,7 +99,7 @@ _PROPS_INHERIT = b"|POLYGONINDEX=2|SUBPOLYINDEX=5\x00"
 def test_regions_inherit_pour_net_when_unconnected() -> None:
     ctx = ParseContext()
     stream = _frame(11, _region_body(_NET_UNCONNECTED, _PROPS_INHERIT))
-    result = _parse_regions(
+    result = parse_regions(
         stream, _nets(), _layer_map(), ctx, pour_id_map={5: "pour:1"}, pour_net_map={5: 7}
     )
     assert len(result) == 1
@@ -110,7 +110,7 @@ def test_regions_inherit_pour_net_when_unconnected() -> None:
 def test_shape_based_regions_inherit_pour_net_when_unconnected() -> None:
     ctx = ParseContext()
     stream = _frame(11, _shape_region_body(_NET_UNCONNECTED, _PROPS_INHERIT))
-    result = _parse_shape_based_regions(
+    result = parse_shape_based_regions(
         stream, _nets(), _layer_map(), ctx, pour_id_map={5: "pour:1"}, pour_net_map={5: 7}
     )
     assert len(result) == 1
@@ -126,7 +126,7 @@ def test_shape_based_regions_keep_direct_net() -> None:
     """
     ctx = ParseContext()
     stream = _frame(11, _shape_region_body(7, _PROPS_INHERIT))
-    result = _parse_shape_based_regions(
+    result = parse_shape_based_regions(
         stream, _nets(), _layer_map(), ctx, pour_id_map={5: "pour:1"}, pour_net_map={5: 7}
     )
     assert len(result) == 1
