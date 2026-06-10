@@ -1091,6 +1091,11 @@ def _parse_vias(
         else:
             roles.append(_ParsedRole.BLIND_VIA)
 
+        component_index = None if via.component == _COMPONENT_NONE else via.component
+        roles.append(
+            _ParsedRole.FOOTPRINT_MEMBER if component_index is not None else _ParsedRole.BOARD_LEVEL
+        )
+
         vias.append(
             _ParsedPrimitive(
                 id=f"via:{index}",
@@ -1109,6 +1114,7 @@ def _parse_vias(
                     native_type="VIA",
                     source_collection="vias",
                     native_index=index,
+                    native_component_index=component_index,
                     properties={
                         "start_layer": str(via.start_layer),
                         "end_layer": str(via.end_layer),
@@ -1791,12 +1797,17 @@ def _parse_fills(
             object_type = _ParsedObjectKind.GRAPHIC
             source_collection = "artwork"
 
+        component_index = None if fill.component == _COMPONENT_NONE else fill.component
+        footprint_role = (
+            _ParsedRole.FOOTPRINT_MEMBER if component_index is not None else _ParsedRole.BOARD_LEVEL
+        )
+
         fills.append(
             _ParsedPrimitive(
                 id=f"fill:{fill.layer}:{index}",
                 object_type=object_type,
                 shape=_ParsedShapeKind.POLYGON,
-                roles=_normalize_parsed_roles(*roles, _ParsedRole.BOARD_LEVEL),
+                roles=_normalize_parsed_roles(*roles, footprint_role),
                 data=PcbPolygon(points=points),
                 layers=(layer,),
                 net_number=_net_number(fill.net) if fill.layer in _COPPER_LAYERS else 0,
@@ -1804,6 +1815,7 @@ def _parse_fills(
                     native_type="FILL",
                     source_collection=source_collection,
                     native_index=index,
+                    native_component_index=component_index,
                 ),
             )
         )

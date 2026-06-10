@@ -117,6 +117,7 @@ def test_track_truncated():
 
 def _make_via_body(
     net: int = 3,
+    component: int = 0xFFFF,
     x: int = 500000,
     y: int = 600000,
     diameter: int = 50000,
@@ -126,6 +127,7 @@ def _make_via_body(
 ) -> bytes:
     body = bytearray(31)
     body[3:5] = _pack_u16(net)
+    body[7:9] = _pack_u16(component)
     body[13:17] = _pack_i32(x)
     body[17:21] = _pack_i32(y)
     body[21:25] = _pack_i32(diameter)
@@ -146,6 +148,14 @@ def test_via_from_bytes():
     assert rec.hole_size == 25
     assert rec.start_layer == 1
     assert rec.end_layer == 32
+
+
+def test_via_from_bytes_parses_component():
+    ctx = ParseContext()
+    body = _make_via_body(component=7)
+    rec = ViaRecord.from_bytes(body, ctx)
+    assert rec is not None
+    assert rec.component == 7
 
 
 def test_via_truncated():
@@ -313,6 +323,7 @@ def test_text_truncated():
 def _make_fill_body(
     layer: int = 1,
     net: int = 2,
+    component: int = 0xFFFF,
     x1: int = 100,
     y1: int = 200,
     x2: int = 300,
@@ -322,6 +333,7 @@ def _make_fill_body(
     body = bytearray(37)
     body[0] = layer
     body[3:5] = _pack_u16(net)
+    body[7:9] = _pack_u16(component)
     body[13:17] = _pack_i32(x1)
     body[17:21] = _pack_i32(y1)
     body[21:25] = _pack_i32(x2)
@@ -340,6 +352,14 @@ def test_fill_from_bytes():
     assert rec.pos1 == (100, 200)
     assert rec.pos2 == (300, 400)
     assert rec.rotation == 45.0
+
+
+def test_fill_from_bytes_parses_component():
+    ctx = ParseContext()
+    body = _make_fill_body(component=12)
+    rec = FillRecord.from_bytes(body, ctx)
+    assert rec is not None
+    assert rec.component == 12
 
 
 def test_fill_truncated():
