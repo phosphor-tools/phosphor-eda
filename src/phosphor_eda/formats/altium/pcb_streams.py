@@ -153,7 +153,7 @@ def _classify_copper_primitive(
     )
 
 
-def _arc_to_three_point(
+def arc_to_three_point(
     cx_mm: float,
     cy_mm: float,
     radius_mm: float,
@@ -204,7 +204,7 @@ def _arc_shape_payload(
             PcbCircle(cx, -cy_orig, radius + width / 2.0, width, fill=False),
         )
 
-    sx, sy, mx, my, ex, ey = _arc_to_three_point(cx, cy_orig, radius, start_deg, end_deg)
+    sx, sy, mx, my, ex, ey = arc_to_three_point(cx, cy_orig, radius, start_deg, end_deg)
     return ParsedShapeKind.ARC, PcbArc(sx, -sy, mx, -my, ex, -ey, width)
 
 
@@ -1089,7 +1089,7 @@ def parse_regions(
         )
 
         layer = altium_layer_ref(resolved_num, layer_map, source=f"region {index}").name
-        region_kind = _region_kind(region.properties, ctx)
+        region_kind = parse_region_kind(region.properties, ctx)
 
         points = [(int_to_mm(int(vx)), -int_to_mm(int(vy))) for vx, vy in region.vertices]
         if len(points) < 3:
@@ -1156,7 +1156,7 @@ def parse_shape_based_regions(
         )
 
         layer = altium_layer_ref(resolved_num, layer_map, source=f"shape region {index}").name
-        region_kind = _region_kind(region.properties, ctx)
+        region_kind = parse_region_kind(region.properties, ctx)
 
         # Linearize arc edges, then convert to mm with Y negated
         raw_pts = linearize_arc_vertices(region.vertices)
@@ -1226,7 +1226,7 @@ def _polygon_duplicate_key(poly: ParsedPrimitive) -> _PolygonDuplicateKey | None
     return (poly.primary_layer, len(vertices), tuple(vertices))
 
 
-def _region_kind(properties: dict[str, str], ctx: ParseContext | None = None) -> int | None:
+def parse_region_kind(properties: dict[str, str], ctx: ParseContext | None = None) -> int | None:
     raw_kind = properties.get("kind")
     if raw_kind is None:
         return None

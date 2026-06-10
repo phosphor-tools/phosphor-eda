@@ -255,7 +255,7 @@ def _apply_v9_stack_layer_names(
         if not layer_name:
             continue
 
-        layer_num = _v9_stack_layer_id_to_num(raw_layer_id, ctx, key=key)
+        layer_num = v9_stack_layer_id_to_num(raw_layer_id, ctx, key=key)
         if layer_num is None:
             continue
 
@@ -270,7 +270,7 @@ def _apply_v9_stack_layer_names(
         )
 
 
-def _v9_stack_layer_id_to_num(
+def v9_stack_layer_id_to_num(
     raw_layer_id: str, ctx: ParseContext | None = None, *, key: str = ""
 ) -> int | None:
     try:

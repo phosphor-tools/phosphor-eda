@@ -7,7 +7,7 @@ differ only in their segment density and output form:
   circle, integer Altium units, no Y flip — the caller converts to mm.
 - ``_arc_ring_points`` (keepout ring synthesis): 96 segments per circle,
   float mm with Y negated.
-- ``_arc_to_three_point`` (track/arc primitives): start / mid / end only.
+- ``arc_to_three_point`` (track/arc primitives): start / mid / end only.
 
 The full-circle epsilon (an arc whose endpoints differ by ≥ ``359.999``°
 is treated as a closed circle) is documented here, in one place.

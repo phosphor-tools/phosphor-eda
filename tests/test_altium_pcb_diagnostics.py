@@ -8,14 +8,14 @@ import struct
 
 from phosphor_eda.formats.altium.errors import AltiumPcbParseError
 from phosphor_eda.formats.altium.pcb_layers import (
-    _v9_stack_layer_id_to_num,  # pyright: ignore[reportPrivateUsage]
+    v9_stack_layer_id_to_num,
 )
 from phosphor_eda.formats.altium.pcb_primitives import (
-    read_binary_records,  # pyright: ignore[reportPrivateUsage]
+    read_binary_records,
     read_text_records,
 )
 from phosphor_eda.formats.altium.pcb_streams import (
-    _region_kind,  # pyright: ignore[reportPrivateUsage]
+    parse_region_kind,
 )
 from phosphor_eda.formats.common.diagnostics import ParseContext
 
@@ -27,19 +27,19 @@ def test_altium_pcb_parse_error_is_value_error() -> None:
 
 def test_region_kind_warns_on_non_integer() -> None:
     ctx = ParseContext()
-    assert _region_kind({"kind": "weird"}, ctx) is None
+    assert parse_region_kind({"kind": "weird"}, ctx) is None
     assert any("region kind" in issue.message for issue in ctx.issues)
 
 
 def test_region_kind_no_warning_when_absent() -> None:
     ctx = ParseContext()
-    assert _region_kind({}, ctx) is None
+    assert parse_region_kind({}, ctx) is None
     assert ctx.issues == []
 
 
 def test_v9_stack_layer_id_warns_on_non_integer() -> None:
     ctx = ParseContext()
-    assert _v9_stack_layer_id_to_num("not-an-int", ctx, key="v9_stack_layer3_layerid") is None
+    assert v9_stack_layer_id_to_num("not-an-int", ctx, key="v9_stack_layer3_layerid") is None
     assert any("stack layer id" in issue.message for issue in ctx.issues)
 
 

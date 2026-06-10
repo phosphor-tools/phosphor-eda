@@ -2,13 +2,13 @@
 
 from phosphor_eda.domain.pcb import PcbPolygon
 from phosphor_eda.formats.altium.pcb_primitives import (
-    ParsedObjectKind,  # pyright: ignore[reportPrivateUsage]
-    ParsedPrimitive,  # pyright: ignore[reportPrivateUsage]
-    ParsedRole,  # pyright: ignore[reportPrivateUsage]
-    ParsedShapeKind,  # pyright: ignore[reportPrivateUsage]
+    ParsedObjectKind,
+    ParsedPrimitive,
+    ParsedRole,
+    ParsedShapeKind,
 )
 from phosphor_eda.formats.altium.pcb_streams import (
-    dedupe_shape_based_board_polygons,  # pyright: ignore[reportPrivateUsage]
+    dedupe_shape_based_board_polygons,
 )
 
 
