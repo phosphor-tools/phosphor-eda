@@ -61,3 +61,25 @@ def num(node: SExpNode, index: int) -> float:
     if isinstance(v, (int, float)):
         return float(v)
     return float(str(v))
+
+
+def find_num(items: SExpNode, tag_name: str, default: float = 0.0) -> float:
+    """Find the first child with ``tag_name`` and return its item[1] as a float."""
+    node = find(items, tag_name)
+    return num(node, 1) if node else default
+
+
+def find_str(items: SExpNode, tag_name: str, default: str = "") -> str:
+    """Find the first child with ``tag_name`` and return its item[1] as a string."""
+    node = find(items, tag_name)
+    return val(node) if node else default
+
+
+def find_path(items: SExpNode, *tags: str) -> SExpNode | None:
+    """Chase a chain of tags down nested children, returning the final node."""
+    node: SExpNode | None = items
+    for tag_name in tags:
+        if node is None:
+            return None
+        node = find(node, tag_name)
+    return node

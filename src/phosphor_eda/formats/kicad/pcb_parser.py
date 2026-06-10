@@ -66,10 +66,6 @@ def _xy(item: SExpNode) -> tuple[float, float]:
     return (sexp.num(item, 1), sexp.num(item, 2))
 
 
-def _float_val(item: SExpNode) -> float:
-    return sexp.num(item, 1)
-
-
 def _at(item: SExpNode) -> tuple[float, float, float]:
     x = sexp.num(item, 1)
     y = sexp.num(item, 2)
@@ -360,10 +356,9 @@ def _parse_fp_properties(fp_sexpr: SExpNode) -> dict[str, str]:
 def _stroke_width(item: SExpNode, *, default: float = 0.1) -> float:
     width_node = sexp.find(item, "width")
     if width_node:
-        return _float_val(width_node)
-    stroke_node = sexp.find(item, "stroke")
-    stroke_width = sexp.find(stroke_node, "width") if stroke_node else None
-    return _float_val(stroke_width) if stroke_width else default
+        return sexp.num(width_node, 1)
+    stroke_width = sexp.find_path(item, "stroke", "width")
+    return sexp.num(stroke_width, 1) if stroke_width else default
 
 
 def _fill_flag(item: SExpNode) -> bool:
@@ -448,9 +443,6 @@ def _parse_pad(
         rotation=pad_board_rotation,
         source=source,
     )
-    rratio_node = sexp.find(pad_sexpr, "roundrect_rratio")
-    pin_function_node = sexp.find(pad_sexpr, "pinfunction")
-    pin_type_node = sexp.find(pad_sexpr, "pintype")
     builder.add_pad_object(
         PcbPad(
             id=f"pad:{global_pad_index}:{footprint.reference}:{number}",
@@ -470,9 +462,9 @@ def _parse_pad(
             footprint=footprint,
             drill=drill,
             rotation=pad_board_rotation,
-            roundrect_rratio=_float_val(rratio_node) if rratio_node else 0.0,
-            pin_function=sexp.val(pin_function_node) if pin_function_node else "",
-            pin_type=sexp.val(pin_type_node) if pin_type_node else "",
+            roundrect_rratio=sexp.find_num(pad_sexpr, "roundrect_rratio"),
+            pin_function=sexp.find_str(pad_sexpr, "pinfunction"),
+            pin_type=sexp.find_str(pad_sexpr, "pintype"),
             custom_shapes=_parse_pad_custom_shapes(
                 pad_sexpr,
                 transform=(abs_x, abs_y, pad_board_rotation),
@@ -784,7 +776,7 @@ def _arc_payload(
         return None
     cx, cy = _xy(start_node)
     ex, ey = _xy(end_node)
-    angle_rad = math.radians(_float_val(angle_node))
+    angle_rad = math.radians(sexp.num(angle_node, 1))
     half_rad = angle_rad / 2.0
     dx = ex - cx
     dy = ey - cy
@@ -851,9 +843,7 @@ def _parse_fp_text(
     local_x, local_y, local_rotation = _at(at_node) if at_node else (0.0, 0.0, 0.0)
     x, y = _transform_point(local_x, local_y, fp_x, fp_y, fp_rot)
     effects = sexp.find(item, "effects")
-    font = sexp.find(effects, "font") if effects else None
-    size_node = sexp.find(font, "size") if font else None
-    font_size = sexp.num(size_node, 1) if size_node else 1.0
+    font_size = _font_size(item)
     return PcbArtwork(
         id=f"fp_text:{footprint.reference}:{index}:{text_kind}",
         kind=PcbArtworkKind.TEXT,
@@ -892,9 +882,7 @@ def _parse_gr_text(builder: PcbBuilder, item: SExpNode, index: int) -> PcbArtwor
     at_node = sexp.find(item, "at")
     x, y, rotation = _at(at_node) if at_node else (0.0, 0.0, 0.0)
     effects = sexp.find(item, "effects")
-    font = sexp.find(effects, "font") if effects else None
-    size_node = sexp.find(font, "size") if font else None
-    font_size = sexp.num(size_node, 1) if size_node else 1.0
+    font_size = _font_size(item)
     return PcbArtwork(
         id=f"gr_text:board:{index}:{layer.name}",
         kind=PcbArtworkKind.TEXT,
@@ -916,6 +904,11 @@ def _parse_gr_text(builder: PcbBuilder, item: SExpNode, index: int) -> PcbArtwor
             locked=_item_locked(item),
         ),
     )
+
+
+def _font_size(item: SExpNode) -> float:
+    size_node = sexp.find_path(item, "effects", "font", "size")
+    return sexp.num(size_node, 1) if size_node else 1.0
 
 
 def _justify(effects: SExpNode | None) -> str:
@@ -984,7 +977,7 @@ def _parse_segment(builder: PcbBuilder, item: SExpNode, index: int) -> None:
             id=f"segment:{layer.name}:{index}",
             kind=PcbConductorKind.TRACE,
             layer=layer,
-            data=PcbLine(start[0], start[1], end[0], end[1], _float_val(width_node)),
+            data=PcbLine(start[0], start[1], end[0], end[1], sexp.num(width_node, 1)),
             net=_resolve_net_node(builder, item, source="segment"),
             metadata=_object_metadata(
                 native_type="segment",
@@ -1050,7 +1043,7 @@ def _parse_via(builder: PcbBuilder, item: SExpNode, index: int) -> None:
             id=f"drill:via:{index}",
             x=x,
             y=y,
-            diameter=_float_val(drill_node),
+            diameter=sexp.num(drill_node, 1),
             shape=PcbDrillShape.ROUND,
             plating=PcbDrillPlating.PLATED,
             layers=layers,
@@ -1069,7 +1062,7 @@ def _parse_via(builder: PcbBuilder, item: SExpNode, index: int) -> None:
             id=f"via:{index}",
             x=x,
             y=y,
-            diameter=_float_val(size_node),
+            diameter=sexp.num(size_node, 1),
             layers=layers,
             drill=drill,
             net=_resolve_net_node(builder, item, source="via"),
@@ -1193,11 +1186,7 @@ def _parse_zone(builder: PcbBuilder, zone_sexpr: SExpNode, index: int) -> None:
         return
     layers = _resolve_layers(builder, _zone_layer_names(zone_sexpr), source="zone")
     fill_node = sexp.find(zone_sexpr, "fill")
-    thermal_gap_node = sexp.find(fill_node, "thermal_gap") if fill_node else None
-    bridge_node = sexp.find(fill_node, "thermal_bridge_width") if fill_node else None
-    min_thickness_node = sexp.find(zone_sexpr, "min_thickness")
     connect_node = sexp.find(zone_sexpr, "connect_pads")
-    clearance_node = sexp.find(connect_node, "clearance") if connect_node else None
     priority_node = sexp.find(zone_sexpr, "priority")
     layer_name = layers[0].name if layers else "unknown"
     pour = builder.add_pour_object(
@@ -1211,10 +1200,14 @@ def _parse_zone(builder: PcbBuilder, zone_sexpr: SExpNode, index: int) -> None:
             else 0,
             settings=PcbPourSettings(
                 fill_mode=_kicad_fill_mode(fill_node) if fill_node else PcbPourFillMode.UNKNOWN,
-                min_thickness_mm=_float_val(min_thickness_node) if min_thickness_node else 0.0,
-                thermal_gap_mm=_float_val(thermal_gap_node) if thermal_gap_node else 0.0,
-                thermal_bridge_width_mm=_float_val(bridge_node) if bridge_node else 0.0,
-                connect_pads_clearance_mm=_float_val(clearance_node) if clearance_node else 0.0,
+                min_thickness_mm=sexp.find_num(zone_sexpr, "min_thickness"),
+                thermal_gap_mm=sexp.find_num(fill_node, "thermal_gap") if fill_node else 0.0,
+                thermal_bridge_width_mm=(
+                    sexp.find_num(fill_node, "thermal_bridge_width") if fill_node else 0.0
+                ),
+                connect_pads_clearance_mm=(
+                    sexp.find_num(connect_node, "clearance") if connect_node else 0.0
+                ),
             ),
             metadata=_object_metadata(
                 native_type="zone",
@@ -1304,25 +1297,20 @@ def parse_kicad_stackup(sexpr: SExpNode) -> Stackup | None:
         if tag != "layer":
             continue
         name = str(item[1]) if len(item) > 1 else ""
-        type_node = sexp.find(item, "type")
-        thickness_node = sexp.find(item, "thickness")
-        material_node = sexp.find(item, "material")
-        epsilon_node = sexp.find(item, "epsilon_r")
-        loss_node = sexp.find(item, "loss_tangent")
         side = ""
         if name.startswith("F.") or name == "Top":
             side = "front"
         elif name.startswith("B.") or name == "Bottom":
             side = "back"
-        layer_type = sexp.val(type_node) if type_node else ""
+        layer_type = sexp.find_str(item, "type")
         layers.append(
             StackupLayer(
                 name=name,
                 layer_type=layer_type,
-                thickness_mm=_float_val(thickness_node) if thickness_node else 0.0,
-                material=sexp.val(material_node) if material_node else "",
-                epsilon_r=_float_val(epsilon_node) if epsilon_node else 0.0,
-                loss_tangent=_float_val(loss_node) if loss_node else 0.0,
+                thickness_mm=sexp.find_num(item, "thickness"),
+                material=sexp.find_str(item, "material"),
+                epsilon_r=sexp.find_num(item, "epsilon_r"),
+                loss_tangent=sexp.find_num(item, "loss_tangent"),
                 side=side,
             )
         )
@@ -1336,18 +1324,14 @@ def parse_kicad_stackup(sexpr: SExpNode) -> Stackup | None:
             )
             if sub_tag != "addsublayer":
                 continue
-            sub_thickness_node = sexp.find(sub_item, "thickness")
-            sub_material_node = sexp.find(sub_item, "material")
-            sub_epsilon_node = sexp.find(sub_item, "epsilon_r")
-            sub_loss_node = sexp.find(sub_item, "loss_tangent")
             layers.append(
                 StackupLayer(
                     name=f"{name} (sublayer)",
                     layer_type=layer_type,
-                    thickness_mm=_float_val(sub_thickness_node) if sub_thickness_node else 0.0,
-                    material=sexp.val(sub_material_node) if sub_material_node else "",
-                    epsilon_r=_float_val(sub_epsilon_node) if sub_epsilon_node else 0.0,
-                    loss_tangent=_float_val(sub_loss_node) if sub_loss_node else 0.0,
+                    thickness_mm=sexp.find_num(sub_item, "thickness"),
+                    material=sexp.find_str(sub_item, "material"),
+                    epsilon_r=sexp.find_num(sub_item, "epsilon_r"),
+                    loss_tangent=sexp.find_num(sub_item, "loss_tangent"),
                     side=side,
                 )
             )
