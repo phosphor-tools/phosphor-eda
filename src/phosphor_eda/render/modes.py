@@ -171,7 +171,7 @@ def build_realistic_layers(
         _realistic_layer(
             inventory,
             settings,
-            function="solderMask",
+            function="solder_mask",
             primitives=board_primitives,
             source_items=board_items,
             warn=warn,
@@ -184,7 +184,7 @@ def build_realistic_layers(
         _realistic_layer(
             inventory,
             settings,
-            function="coveredCopper",
+            function="covered_copper",
             primitives=copper_primitives,
             source_items=copper_items,
             warn=warn,
@@ -196,7 +196,7 @@ def build_realistic_layers(
         _realistic_layer(
             inventory,
             settings,
-            function="exposedSubstrate",
+            function="exposed_substrate",
             primitives=board_primitives,
             source_items=board_items,
             warn=warn,
@@ -208,7 +208,7 @@ def build_realistic_layers(
         _realistic_layer(
             inventory,
             settings,
-            function="exposedCopper",
+            function="exposed_copper",
             primitives=copper_primitives,
             source_items=copper_items,
             warn=warn,

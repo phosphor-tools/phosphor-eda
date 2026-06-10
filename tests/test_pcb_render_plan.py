@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from test_pcb_render import _board
+from conftest import build_render_test_board as _board
 
 from phosphor_eda.render.plan import build_derived_render_plan
 from phosphor_eda.render.settings import (

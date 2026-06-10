@@ -4,29 +4,19 @@ import json
 from importlib.resources import as_file, files
 
 import pytest
+from conftest import build_render_test_board
 
 from phosphor_eda.domain.pcb import (
     LayerRole,
-    Pcb,
     PcbArtwork,
     PcbArtworkKind,
     PcbArtworkPurpose,
-    PcbBoardProfile,
-    PcbBoardProfileElement,
-    PcbConductor,
     PcbConductorKind,
     PcbDrill,
-    PcbDrillPlating,
-    PcbFootprint,
     PcbLayer,
     PcbLine,
-    PcbMaskAperture,
-    PcbNet,
     PcbObjectMetadata,
-    PcbPad,
-    PcbPadType,
     PcbText,
-    PcbVia,
 )
 from phosphor_eda.render.api import render_pcb_svg
 from phosphor_eda.render.inventory import (
@@ -441,106 +431,6 @@ def test_annotation_style_rejects_wrong_token_type() -> None:
         annotation_style_for_settings(settings)
 
 
-def _board() -> Pcb:
-    front_cu = PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT, LayerRole.OUTER), number=0)
-    back_cu = PcbLayer("B.Cu", (LayerRole.COPPER, LayerRole.BACK, LayerRole.OUTER), number=31)
-    front_mask = PcbLayer("F.Mask", (LayerRole.SOLDER_MASK, LayerRole.FRONT), number=37)
-    front_silk = PcbLayer("F.SilkS", (LayerRole.SILKSCREEN, LayerRole.FRONT), number=33)
-    edge = PcbLayer("Edge.Cuts", (LayerRole.EDGE,), number=44)
-    net = PcbNet(1, "VCC")
-    footprint = PcbFootprint("U1", "Package", 5.0, 5.0, 0.0, front_cu, value="MCU")
-    pad_drill = PcbDrill(
-        "drill:pad:U1:1",
-        5.0,
-        5.0,
-        0.4,
-        plating=PcbDrillPlating.PLATED,
-        layers=(front_cu, back_cu),
-    )
-    via_drill = PcbDrill(
-        "drill:via:1",
-        8.0,
-        5.0,
-        0.35,
-        plating=PcbDrillPlating.PLATED,
-        layers=(front_cu, back_cu),
-    )
-    pad = PcbPad(
-        id="pad:U1:1",
-        number="1",
-        x=5.0,
-        y=5.0,
-        width=1.4,
-        height=1.4,
-        shape="circle",
-        pad_type=PcbPadType.THROUGH_HOLE,
-        layers=(front_cu, front_mask),
-        net=net,
-        footprint=footprint,
-        drill=pad_drill,
-        mask_aperture=PcbMaskAperture(mask_expansion=0.05),
-    )
-    via = PcbVia(
-        id="via:1",
-        x=8.0,
-        y=5.0,
-        diameter=0.8,
-        layers=(front_cu, back_cu),
-        drill=via_drill,
-        net=net,
-    )
-    return Pcb(
-        name="render-test",
-        layers=[front_cu, back_cu, front_mask, front_silk, edge],
-        nets={1: net},
-        footprints=[footprint],
-        pads=[pad],
-        vias=[via],
-        drills=[pad_drill, via_drill],
-        conductors=[
-            PcbConductor(
-                id="trace:1",
-                kind=PcbConductorKind.TRACE,
-                layer=front_cu,
-                data=PcbLine(5.0, 5.0, 8.0, 5.0, 0.25),
-                net=net,
-            )
-        ],
-        artwork=[
-            PcbArtwork(
-                id="silk:1",
-                kind=PcbArtworkKind.LINE,
-                purpose=PcbArtworkPurpose.SILKSCREEN,
-                layer=front_silk,
-                data=PcbLine(4.0, 7.0, 6.0, 7.0, 0.12),
-                footprint=footprint,
-            ),
-            PcbArtwork(
-                id="text:U1:ref",
-                kind=PcbArtworkKind.TEXT,
-                purpose=PcbArtworkPurpose.DESIGNATOR,
-                layer=front_silk,
-                data=PcbText("U1", 5.0, 3.5, 0.0, 1.0),
-                footprint=footprint,
-            ),
-        ],
-        pours=[],
-        keepouts=[],
-        board_profile=PcbBoardProfile(
-            elements=tuple(
-                PcbBoardProfileElement(
-                    id=f"edge:{index}",
-                    kind=PcbArtworkKind.LINE,
-                    layer=edge,
-                    data=PcbLine(x1, y1, x2, y2, 0.1),
-                )
-                for index, ((x1, y1), (x2, y2)) in enumerate(
-                    zip(
-                        [(0.0, 0.0), (12.0, 0.0), (12.0, 10.0), (0.0, 10.0)],
-                        [(12.0, 0.0), (12.0, 10.0), (0.0, 10.0), (0.0, 0.0)],
-                        strict=False,
-                    )
-                )
-            )
-        ),
-    )
+# The shared synthetic render board lives in conftest so every render test
+# module reuses one builder instead of importing across test files.
+_board = build_render_test_board
