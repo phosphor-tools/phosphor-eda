@@ -1,10 +1,10 @@
-"""Spatial data structures for Altium schematic records.
+"""Shared spatial data structures for schematic wire connectivity.
 
-Provides efficient coordinate-based lookups for typed records:
+Used by both the Altium and KiCad parsers:
 
 - ``UnionFind`` — generic union-find for connectivity grouping
-- ``PointIndex`` — hash-based point lookup
-- ``WireIndex`` — axis-aligned segment index with binary search
+- ``WireIndex`` — axis-aligned segment index with binary search (Altium)
+- ``point_on_segment`` — axis-aligned point-on-segment test
 """
 
 from __future__ import annotations
@@ -132,16 +132,23 @@ class WireIndex:
 
 
 def point_on_segment(
-    px: int,
-    py: int,
-    x1: int,
-    y1: int,
-    x2: int,
-    y2: int,
+    point: tuple[float, float],
+    seg_start: tuple[float, float],
+    seg_end: tuple[float, float],
+    tol: float = 0.0,
 ) -> bool:
-    """Check if point (px,py) lies on the axis-aligned segment (x1,y1)-(x2,y2)."""
-    if y1 == y2 == py:
-        return min(x1, x2) <= px <= max(x1, x2)
-    if x1 == x2 == px:
-        return min(y1, y2) <= py <= max(y1, y2)
+    """Check if a point lies on a horizontal or vertical line segment.
+
+    With ``tol=0.0`` (the default) the test is exact, suitable for integer
+    Altium coordinates. KiCad passes ``tol=0.01`` to absorb float rounding.
+    Diagonal segments are never matched — both producers emit axis-aligned
+    wires only.
+    """
+    px, py = point
+    x1, y1 = seg_start
+    x2, y2 = seg_end
+    if abs(y1 - y2) <= tol and abs(py - y1) <= tol:
+        return min(x1, x2) - tol <= px <= max(x1, x2) + tol
+    if abs(x1 - x2) <= tol and abs(px - x1) <= tol:
+        return min(y1, y2) - tol <= py <= max(y1, y2) + tol
     return False

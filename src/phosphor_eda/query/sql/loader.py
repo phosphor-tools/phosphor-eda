@@ -44,6 +44,7 @@ from phosphor_eda.geometry.pcb_geometry import (
     trace_arc_geometry,
     via_geometry,
 )
+from phosphor_eda.formats.common.electrical import ELECTRICAL_KEY
 from phosphor_eda.geometry.text_outlines import text_outline_geometry
 from phosphor_eda.query.classify import is_power_net
 from phosphor_eda.query.sql.schema import create_tables, create_views
@@ -723,7 +724,7 @@ def _load_pins(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
         for pin in comp.pins:
             net_id = pin.net.id if pin.net else None
             net_name = pin.net.name if pin.net else None
-            electrical = pin.metadata.get("electrical")
+            electrical = pin.metadata.get(ELECTRICAL_KEY)
             _ = con.execute(
                 "INSERT INTO pins VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [

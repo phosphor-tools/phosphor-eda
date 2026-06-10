@@ -598,14 +598,7 @@ def _parse_harness_groups(
 
         # Connect to any signal harness segment touching this edge
         for seg in harness_wire_segments:
-            if point_on_segment(
-                wire_pt[0],
-                wire_pt[1],
-                seg[0][0],
-                seg[0][1],
-                seg[1][0],
-                seg[1][1],
-            ):
+            if point_on_segment(wire_pt, seg[0], seg[1]):
                 uf.union(wire_pt, seg[0])
                 break
         else:
@@ -624,14 +617,7 @@ def _parse_harness_groups(
     harness_ports: list[PortRec] = [p for p in sheet.ports if p.harness_type]
     for port in harness_ports:
         for seg in harness_wire_segments:
-            if point_on_segment(
-                port.location[0],
-                port.location[1],
-                seg[0][0],
-                seg[0][1],
-                seg[1][0],
-                seg[1][1],
-            ):
+            if point_on_segment(port.location, seg[0], seg[1]):
                 uf.union(port.location, seg[0])
                 break
 
