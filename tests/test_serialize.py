@@ -1203,3 +1203,42 @@ def test_format_component_detail_trace_through():
     assert "R1 -> U2.1" in detail
     assert "R2 to P3V3" in detail
     assert "TP1.1" in detail
+
+
+def test_inline_destinations_fan_out_lists_each_endpoint():
+    """A series passive feeding two ICs renders one destination per endpoint."""
+    from phosphor_eda.serialize import _trace_destinations
+
+    page = Page(name="P")
+    u1 = Component(reference="U1", part="MCU", description="", pages=[page])
+    r1 = Component(reference="R1", part="100R", description="", pages=[page])
+    u2 = Component(reference="U2", part="ADC", description="", pages=[page])
+    u3 = Component(reference="U3", part="DAC", description="", pages=[page])
+
+    sig_in = Net(name="SIG_IN", pages=[page])
+    sig_out = Net(name="SIG_OUT", pages=[page])
+
+    pin_u1 = Pin(designator="1", name="", component=u1, net=sig_in)
+    pin_r1_1 = Pin(designator="1", name="", component=r1, net=sig_in)
+    pin_r1_2 = Pin(designator="2", name="", component=r1, net=sig_out)
+    pin_u2 = Pin(designator="1", name="", component=u2, net=sig_out)
+    pin_u3 = Pin(designator="1", name="", component=u3, net=sig_out)
+    u1.pins = [pin_u1]
+    r1.pins = [pin_r1_1, pin_r1_2]
+    u2.pins = [pin_u2]
+    u3.pins = [pin_u3]
+    sig_in.pins = [pin_u1, pin_r1_1]
+    sig_out.pins = [pin_r1_2, pin_u2, pin_u3]
+
+    page.components = [u1, r1, u2, u3]
+    page.nets = [sig_in, sig_out]
+    design = Schematic(
+        name="FANOUT",
+        pages=[page],
+        nets=[sig_in, sig_out],
+        components=[u1, r1, u2, u3],
+    )
+
+    rendered = _trace_destinations(design, pin_u1, u1)
+    assert "R1 -> U2.1" in rendered
+    assert "R1 -> U3.1" in rendered

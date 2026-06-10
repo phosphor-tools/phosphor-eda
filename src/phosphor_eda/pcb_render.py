@@ -63,7 +63,6 @@ if TYPE_CHECKING:
     from phosphor_eda.pcb_render_tokens import ResolvedStyle, VisualRole
 
 _STYLE_BLOCK_TERMINATOR_RE = re.compile(r"</\s*style\s*>", re.IGNORECASE)
-_SVG_PATH_NUMBER_RE = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
 _LayerClipSignature = tuple[str, ...]
 _LayerMaskSignature = tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]
 
@@ -380,7 +379,7 @@ def _render_layer_mask(
         return
     if not mask.board:
         return
-    bounds = _layer_mask_bounds(mask)
+    bounds = mask.bounds()
     if bounds is None:
         return
     min_x, min_y, max_x, max_y = bounds
@@ -415,31 +414,13 @@ def _layer_clip_signature(clip: LayerClip) -> _LayerClipSignature:
     return tuple(primitive.d for primitive in clip.board)
 
 
-def _layer_mask_bounds(mask: LayerMask) -> tuple[float, float, float, float] | None:
-    coordinates = [
-        point
-        for primitive in (*mask.board, *mask.drills, *mask.openings)
-        for point in _svg_path_points(primitive.d)
-    ]
-    if not coordinates:
-        return None
-    xs = [point[0] for point in coordinates]
-    ys = [point[1] for point in coordinates]
-    return (min(xs), min(ys), max(xs), max(ys))
-
-
-def _svg_path_points(path_d: str) -> tuple[tuple[float, float], ...]:
-    numbers = [float(match.group(0)) for match in _SVG_PATH_NUMBER_RE.finditer(path_d)]
-    return tuple(zip(numbers[0::2], numbers[1::2], strict=False))
-
-
 def _layer_mask_id(group: str, index: int, layer: DerivedLayer) -> str:
-    raw = f"layer-clip-{group}-{index}-{layer.id}"
+    raw = f"layer-mask-{group}-{index}-{layer.id}"
     return re.sub(r"[^A-Za-z0-9_-]+", "-", raw)
 
 
 def _layer_clip_id(group: str, index: int, layer: DerivedLayer) -> str:
-    raw = f"layer-board-clip-{group}-{index}-{layer.id}"
+    raw = f"layer-clip-{group}-{index}-{layer.id}"
     return re.sub(r"[^A-Za-z0-9_-]+", "-", raw)
 
 

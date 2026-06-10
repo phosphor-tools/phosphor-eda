@@ -94,15 +94,16 @@ def trace_from_net(
     # Follow each series passive, attaching shunts from this net
     results: list[TraceResult] = []
     for pin in series_pins:
-        result = TraceResult(origin_pin=pin, origin_net=net, shunts=list(net_shunts))
-        _walk(
-            passive=pin.component,
-            entry_pin=pin,
-            net=net,
-            result=result,
-            visited={net.id},
+        seed = TraceResult(origin_pin=pin, origin_net=net, shunts=list(net_shunts))
+        results.extend(
+            _walk(
+                passive=pin.component,
+                entry_pin=pin,
+                net=net,
+                result=seed,
+                visited={net.id},
+            )
         )
-        results.append(result)
 
     return results
 
@@ -113,8 +114,13 @@ def _walk(
     net: Net,
     result: TraceResult,
     visited: set[str],
-) -> None:
-    """Recursive walk through a chain of 2-pin passives."""
+) -> list[TraceResult]:
+    """Recursive walk through a chain of 2-pin passives.
+
+    Returns one :class:`TraceResult` per distinct endpoint reachable from this
+    point in the walk.  Fan-out (multiple active pins, or multiple series-passive
+    branches, on the exit net) forks *result* into independent paths.
+    """
     exit_pin = other_pin(passive, entry_pin)
     exit_net = exit_pin.net
 
@@ -124,12 +130,12 @@ def _walk(
             Waypoint(passive, entry_pin, exit_pin, net),
         )
         result.terminal_net = net
-        return
+        return [result]
 
     # Shunt to power — record but don't follow
     if is_power_net(exit_net.name, exit_net):
         result.shunts.append((passive, exit_net))
-        return
+        return [result]
 
     waypoint = Waypoint(passive, entry_pin, exit_pin, exit_net)
     result.series_path.append(waypoint)
@@ -137,9 +143,10 @@ def _walk(
     if exit_net.id in visited:
         # Cycle — stop here
         result.terminal_net = exit_net
-        return
+        return [result]
 
-    visited.add(exit_net.id)
+    # Copy so parallel fan-out branches don't block each other.
+    visited = visited | {exit_net.id}
 
     # Look at what's on the other side of exit_net
     active_pins: list[Pin] = []
@@ -154,38 +161,59 @@ def _walk(
             active_pins.append(p)
 
     # Collect shunts from passives on exit_net whose other side is power
+    series_passives: list[Pin] = []
+    shunts: list[tuple[Component, Net]] = []
     for p in next_passives:
         other = other_pin(p.component, p)
         if other.net is not None and is_power_net(other.net.name, other.net):
-            result.shunts.append((p.component, other.net))
-
-    if active_pins:
-        # Reached an active component — pick the first as terminal
-        result.terminal_pin = active_pins[0]
-        result.terminal_net = exit_net
-    elif next_passives:
-        # Only more passives — keep walking through series ones (non-shunt)
-        series_passives = [
-            p
-            for p in next_passives
-            if not (
-                (other_net := other_pin(p.component, p).net) is not None
-                and is_power_net(other_net.name, other_net)
-            )
-        ]
-        if series_passives:
-            _walk(
-                series_passives[0].component,
-                series_passives[0],
-                exit_net,
-                result,
-                visited,
-            )
+            shunts.append((p.component, other.net))
         else:
-            result.terminal_net = exit_net
-    else:
-        # Dead end net
+            series_passives.append(p)
+    result.shunts.extend(shunts)
+
+    # No onward branches — terminate at each active pin (or the net itself).
+    if not series_passives:
+        if active_pins:
+            return [_fork_with_terminal(result, term_pin, exit_net) for term_pin in active_pins]
         result.terminal_net = exit_net
+        return [result]
+
+    # Fan-out: one branch per active pin plus one per onward series passive.
+    # The active pins terminate here; each series passive continues the walk
+    # from its own fork so paths don't share waypoint history.
+    branches: list[TraceResult] = []
+    branches.extend(_fork_with_terminal(result, term_pin, exit_net) for term_pin in active_pins)
+    for p in series_passives:
+        branches.extend(
+            _walk(
+                passive=p.component,
+                entry_pin=p,
+                net=exit_net,
+                result=_clone_result(result),
+                visited=visited,
+            )
+        )
+    return branches
+
+
+def _clone_result(result: TraceResult) -> TraceResult:
+    """Copy a result's in-progress state so a fork can diverge independently."""
+    return TraceResult(
+        origin_pin=result.origin_pin,
+        origin_net=result.origin_net,
+        series_path=list(result.series_path),
+        terminal_pin=result.terminal_pin,
+        terminal_net=result.terminal_net,
+        shunts=list(result.shunts),
+    )
+
+
+def _fork_with_terminal(result: TraceResult, terminal_pin: Pin, terminal_net: Net) -> TraceResult:
+    """Clone *result* and pin it to a terminal active endpoint."""
+    fork = _clone_result(result)
+    fork.terminal_pin = terminal_pin
+    fork.terminal_net = terminal_net
+    return fork
 
 
 def other_pin(comp: Component, pin: Pin) -> Pin:

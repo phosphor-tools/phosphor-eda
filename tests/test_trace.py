@@ -252,6 +252,109 @@ def test_trace_shunt_does_not_follow_into_power():
             assert wp.component.reference != "R2"
 
 
+def test_trace_fan_out_multiple_active_endpoints():
+    """A series passive feeding two ICs reports both as terminals."""
+    page = Page(name="P")
+    u1 = _make_comp("U1", "MCU", 2, page)
+    r1 = _make_comp("R1", "100R", 2, page)
+    u2 = _make_comp("U2", "ADC", 2, page)
+    u3 = _make_comp("U3", "DAC", 2, page)
+
+    sig_in = Net(name="SIG_IN")
+    sig_out = Net(name="SIG_OUT")
+
+    # U1.1 -> SIG_IN -> R1.1, R1.2 -> SIG_OUT -> U2.1 and U3.1
+    _connect(u1.pins[0], sig_in)
+    _connect(r1.pins[0], sig_in)
+    _connect(r1.pins[1], sig_out)
+    _connect(u2.pins[0], sig_out)
+    _connect(u3.pins[0], sig_out)
+
+    page.nets = [sig_in, sig_out]
+
+    results = trace_from_net(sig_in, origin_comp=u1)
+    terminal_refs = {
+        r.terminal_pin.component.reference for r in results if r.terminal_pin is not None
+    }
+    assert terminal_refs == {"U2", "U3"}
+
+
+def test_trace_parallel_series_passives():
+    """Two parallel series resistors to two different far nets both get walked."""
+    page = Page(name="P")
+    u1 = _make_comp("U1", "MCU", 2, page)
+    r1 = _make_comp("R1", "100R", 2, page)
+    r2 = _make_comp("R2", "100R", 2, page)
+    u2 = _make_comp("U2", "ADC", 2, page)
+    u3 = _make_comp("U3", "DAC", 2, page)
+
+    sig = Net(name="SIG")
+    far_a = Net(name="FAR_A")
+    far_b = Net(name="FAR_B")
+
+    # U1.1 -> SIG -> R1.1, R2.1 ; R1.2 -> FAR_A -> U2.1 ; R2.2 -> FAR_B -> U3.1
+    _connect(u1.pins[0], sig)
+    _connect(r1.pins[0], sig)
+    _connect(r2.pins[0], sig)
+    _connect(r1.pins[1], far_a)
+    _connect(u2.pins[0], far_a)
+    _connect(r2.pins[1], far_b)
+    _connect(u3.pins[0], far_b)
+
+    page.nets = [sig, far_a, far_b]
+
+    results = trace_from_net(sig, origin_comp=u1)
+    series_results = [r for r in results if r.terminal_pin is not None]
+    # R1 -> U2 and R2 -> U3
+    by_first_passive = {
+        r.series_path[0].component.reference: r.terminal_pin.component.reference
+        for r in series_results
+    }
+    assert by_first_passive == {"R1": "U2", "R2": "U3"}
+
+
+def test_trace_fan_out_after_series_chain():
+    """Fan-out at the end of a multi-hop chain reports each branch endpoint."""
+    page = Page(name="P")
+    u1 = _make_comp("U1", "MCU", 2, page)
+    r1 = _make_comp("R1", "100R", 2, page)
+    r2 = _make_comp("R2", "200R", 2, page)
+    r3 = _make_comp("R3", "300R", 2, page)
+    u2 = _make_comp("U2", "ADC", 2, page)
+    u3 = _make_comp("U3", "DAC", 2, page)
+
+    sig = Net(name="SIG")
+    mid = Net(name="MID")
+    branch_a = Net(name="BRANCH_A")
+    branch_b = Net(name="BRANCH_B")
+
+    # U1.1 -> SIG -> R1.1 ; R1.2 -> MID -> R2.1, R3.1
+    # R2.2 -> BRANCH_A -> U2.1 ; R3.2 -> BRANCH_B -> U3.1
+    _connect(u1.pins[0], sig)
+    _connect(r1.pins[0], sig)
+    _connect(r1.pins[1], mid)
+    _connect(r2.pins[0], mid)
+    _connect(r3.pins[0], mid)
+    _connect(r2.pins[1], branch_a)
+    _connect(u2.pins[0], branch_a)
+    _connect(r3.pins[1], branch_b)
+    _connect(u3.pins[0], branch_b)
+
+    page.nets = [sig, mid, branch_a, branch_b]
+
+    results = trace_from_net(sig, origin_comp=u1)
+    series_results = [r for r in results if r.terminal_pin is not None]
+    # Each branch shares R1 then diverges: R1,R2 -> U2 and R1,R3 -> U3
+    endpoint_paths = {
+        r.terminal_pin.component.reference: [w.component.reference for w in r.series_path]
+        for r in series_results
+    }
+    assert endpoint_paths == {
+        "U2": ["R1", "R2"],
+        "U3": ["R1", "R3"],
+    }
+
+
 def test_trace_cycle_detection():
     """Two passives forming a loop should not recurse infinitely."""
     page = Page(name="P")

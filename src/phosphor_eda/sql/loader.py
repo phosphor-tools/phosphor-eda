@@ -11,6 +11,7 @@ import duckdb
 from shapely import LineString, Point
 from shapely.affinity import rotate
 
+from phosphor_eda.classify import is_power_net
 from phosphor_eda.pcb import (
     LayerRole,
     PcbArc,
@@ -53,9 +54,6 @@ if TYPE_CHECKING:
     from phosphor_eda.pcb import Pcb, PcbNet
     from phosphor_eda.project import Project, Stackup
     from phosphor_eda.schematic import Page, Schematic
-
-_POWER_PREFIXES = ("VCC", "VDD", "GND", "VSS", "VBUS", "V3P3", "V1P8", "V5P0")
-_POWER_CHARS = ("+", "-")
 
 
 def load_database(project: Project) -> duckdb.DuckDBPyConnection:
@@ -780,7 +778,7 @@ def _load_nets(con: duckdb.DuckDBPyConnection, schematic: Schematic, project: Pr
         net_to_diff_pair[dp.negative_net] = (dp.name, "-")
 
     for net in schematic.nets:
-        is_power = _is_power_net(net.name)
+        is_power = is_power_net(net.name, net)
         net_class = net_to_class.get(net.name)
         dp_info = net_to_diff_pair.get(net.name)
         diff_pair = dp_info[0] if dp_info else None
@@ -866,14 +864,6 @@ def _load_net_metadata(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> 
                 "INSERT INTO net_metadata VALUES (?, ?, ?, ?)",
                 [net.id, net.name, key, value],
             )
-
-
-def _is_power_net(name: str) -> bool:
-    """Heuristic: detect power/ground nets from name."""
-    upper = name.upper()
-    if any(upper.startswith(p) for p in _POWER_PREFIXES):
-        return True
-    return bool(name and name[0] in _POWER_CHARS)
 
 
 def _load_pages(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:

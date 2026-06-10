@@ -51,6 +51,9 @@ def _empty_data() -> dict[str, str]:
     return {}
 
 
+Bounds = tuple[float, float, float, float]
+
+
 @dataclass(frozen=True)
 class SvgPrimitive:
     d: str
@@ -60,6 +63,19 @@ class SvgPrimitive:
     tags: InventoryTags
     data: Mapping[str, str] = field(default_factory=_empty_data)
     style: Mapping[str, str] = field(default_factory=_empty_data)
+    bbox: Bounds | None = None
+
+
+def _union_bounds(primitives: tuple[SvgPrimitive, ...]) -> Bounds | None:
+    boxes = [primitive.bbox for primitive in primitives if primitive.bbox is not None]
+    if not boxes:
+        return None
+    return (
+        min(box[0] for box in boxes),
+        min(box[1] for box in boxes),
+        max(box[2] for box in boxes),
+        max(box[3] for box in boxes),
+    )
 
 
 @dataclass(frozen=True)
@@ -67,6 +83,14 @@ class LayerMask:
     board: tuple[SvgPrimitive, ...] = ()
     drills: tuple[SvgPrimitive, ...] = ()
     openings: tuple[SvgPrimitive, ...] = ()
+
+    def bounds(self) -> Bounds | None:
+        """Viewport bounds from the white (board/opening) region's real geometry.
+
+        The mask paints ``board`` white and subtracts ``drills``/``openings``,
+        so the viewport only needs to cover the white region.
+        """
+        return _union_bounds(self.board)
 
 
 @dataclass(frozen=True)
@@ -97,6 +121,7 @@ def inventory_item_to_svg_primitive(
         kind=item.item_kind.value,
         tags=item.tags,
         data=data,
+        bbox=_bounds_for_item(item),
     )
 
 
@@ -117,6 +142,7 @@ def drill_to_svg_primitive(item: InventoryItem) -> SvgPrimitive | None:
         kind=InventoryItemKind.DRILL.value,
         tags=item.tags,
         data={"purpose": InventoryPurpose.DRILL.value, "item-kind": InventoryItemKind.DRILL.value},
+        bbox=_geometry_bounds(geometry),
     )
 
 
@@ -146,7 +172,81 @@ def pad_solder_mask_opening_primitive(item: InventoryItem, *, side: str) -> SvgP
             "purpose": InventoryPurpose.SOLDER_MASK.value,
             "item-kind": InventoryItemKind.PAD.value,
         },
+        bbox=_geometry_bounds(_pad_solder_mask_opening_geometry(pad)),
     )
+
+
+def _geometry_bounds(geometry: BaseGeometry | None) -> Bounds | None:
+    if geometry is None or geometry.is_empty:
+        return None
+    min_x, min_y, max_x, max_y = geometry.bounds
+    return (float(min_x), float(min_y), float(max_x), float(max_y))
+
+
+def _bounds_for_item(item: InventoryItem) -> Bounds | None:
+    """Real-geometry bounds for an inventory item.
+
+    Mirrors the geometry sources used by :func:`_path_d_for_item` so mask/clip
+    viewports can be sized from true extents rather than re-parsing path data.
+    """
+    if item.purpose == InventoryPurpose.BOARD_MATERIAL:
+        if isinstance(item.source, PcbBoardProfile):
+            bounds = _geometry_bounds(board_outline_polygon(item.source))
+            if bounds is not None:
+                return bounds
+        return item.bbox
+    if item.item_kind == InventoryItemKind.PAD and isinstance(item.source, PcbPad):
+        if item.purpose == InventoryPurpose.SOLDER_MASK:
+            return _geometry_bounds(_pad_solder_mask_opening_geometry(item.source))
+        return _geometry_bounds(pad_polygon(item.source))
+    if item.item_kind == InventoryItemKind.VIA and isinstance(item.source, PcbVia):
+        via = item.source
+        radius = via.diameter / 2.0
+        return (via.x - radius, via.y - radius, via.x + radius, via.y + radius)
+    if item.item_kind == InventoryItemKind.DRILL and isinstance(item.source, PcbDrill):
+        return _geometry_bounds(drill_geometry(item.source))
+    if item.item_kind == InventoryItemKind.KEEPOUT and isinstance(item.payload, PcbClosedPath):
+        return _geometry_bounds(closed_path_geometry(item.payload))
+    return _payload_bounds(item.payload)
+
+
+def _payload_bounds(payload: object) -> Bounds | None:
+    if isinstance(payload, PcbLine):
+        return _point_bounds(((payload.start_x, payload.start_y), (payload.end_x, payload.end_y)))
+    if isinstance(payload, PcbArc):
+        return _point_bounds(
+            (
+                (payload.start_x, payload.start_y),
+                (payload.mid_x, payload.mid_y),
+                (payload.end_x, payload.end_y),
+            )
+        )
+    if isinstance(payload, PcbCircle):
+        return (
+            payload.cx - payload.radius,
+            payload.cy - payload.radius,
+            payload.cx + payload.radius,
+            payload.cy + payload.radius,
+        )
+    if isinstance(payload, PcbDimension):
+        return _point_bounds(((payload.start_x, payload.start_y), (payload.end_x, payload.end_y)))
+    if isinstance(payload, PcbPolygon):
+        return _geometry_bounds(polygon_geometry(payload))
+    if isinstance(payload, PcbText):
+        return _geometry_bounds(text_outline_geometry(payload))
+    if isinstance(payload, PcbClosedPath):
+        return _geometry_bounds(closed_path_geometry(payload))
+    if isinstance(payload, BaseGeometry):
+        return _geometry_bounds(payload)
+    return None
+
+
+def _point_bounds(points: tuple[tuple[float, float], ...]) -> Bounds | None:
+    if not points:
+        return None
+    xs = [x for x, _ in points]
+    ys = [y for _, y in points]
+    return (min(xs), min(ys), max(xs), max(ys))
 
 
 def _path_d_for_item(item: InventoryItem) -> str:
@@ -169,7 +269,7 @@ def _path_d_for_item(item: InventoryItem) -> str:
     return shape_to_svg_path_d(item.payload, filled=item.purpose != InventoryPurpose.BOARD_PROFILE)
 
 
-def _pad_solder_mask_opening_path_d(pad: PcbPad) -> str:
+def _pad_solder_mask_opening_geometry(pad: PcbPad) -> BaseGeometry | None:
     width = pad.mask_aperture_width
     height = pad.mask_aperture_height
     if width is None or height is None:
@@ -177,9 +277,13 @@ def _pad_solder_mask_opening_path_d(pad: PcbPad) -> str:
         width = pad.width + 2.0 * expansion
         height = pad.height + 2.0 * expansion
     if width <= 0.0 or height <= 0.0:
-        return ""
-    mask_pad = replace(pad, width=width, height=height)
-    return geometry_to_svg_path_d(pad_polygon(mask_pad))
+        return None
+    return pad_polygon(replace(pad, width=width, height=height))
+
+
+def _pad_solder_mask_opening_path_d(pad: PcbPad) -> str:
+    geometry = _pad_solder_mask_opening_geometry(pad)
+    return "" if geometry is None else geometry_to_svg_path_d(geometry)
 
 
 def shape_to_svg_path_d(payload: object, *, filled: bool = True) -> str:

@@ -23,6 +23,37 @@ from phosphor_eda.pcb_render_settings import (
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
+def test_layer_mask_bounds_from_real_geometry_not_path_pairing() -> None:
+    """A circle board primitive's arc commands must not corrupt the viewport.
+
+    SVG arc commands carry 7 numbers; naive index pairing of every number in the
+    ``d`` string drops the true vertical extremes. ``LayerMask.bounds()`` reads
+    the primitive's real geometry bbox instead.
+    """
+    from phosphor_eda.pcb_render_inventory import InventoryTags
+    from phosphor_eda.pcb_render_primitives import (
+        LayerMask,
+        SvgPrimitive,
+        _circle_path_d,
+    )
+
+    cx, cy, radius = 50.0, 50.0, 20.0
+    board = SvgPrimitive(
+        d=_circle_path_d(cx, cy, radius),
+        source_id="board",
+        source_layer="edge",
+        kind="board_profile",
+        tags=InventoryTags(source_collection="board_profile"),
+        bbox=(cx - radius, cy - radius, cx + radius, cy + radius),
+    )
+    mask = LayerMask(board=(board,))
+
+    bounds = mask.bounds()
+    assert bounds == (cx - radius, cy - radius, cx + radius, cy + radius)
+    # The old number-pairing heuristic underestimated the vertical extent.
+    assert bounds is not None and bounds[3] >= cy + radius
+
+
 def test_eda_layers_are_built_from_typed_inventory() -> None:
     inventory = build_inventory(_board(), side="front")
     settings = RenderSettings(
