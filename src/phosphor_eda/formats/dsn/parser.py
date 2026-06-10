@@ -13,6 +13,16 @@ from pathlib import Path
 import olefile
 
 from phosphor_eda.formats.common.diagnostics import ParseContext
+from phosphor_eda.formats.common.raw_models import (
+    GraphicInst,
+    NetIdMapping,
+    PageNetEntry,
+    ParsedDesign,
+    PinConnection,
+    PlacedInstance,
+    SchematicPage,
+    Wire,
+)
 from phosphor_eda.formats.dsn.binary_reader import (
     PAGE_SETTINGS_SIZE,
     PREAMBLE,
@@ -22,16 +32,6 @@ from phosphor_eda.formats.dsn.binary_reader import (
     STRUCT_WIRE_BUS,
     STRUCT_WIRE_SCALAR,
     BinaryReader,
-)
-from phosphor_eda.formats.dsn.models import (
-    GraphicInst,
-    NetIdMapping,
-    PageNetEntry,
-    ParsedDesign,
-    PinConnection,
-    PlacedInstance,
-    SchematicPage,
-    Wire,
 )
 
 # --- Structure parsers ---
