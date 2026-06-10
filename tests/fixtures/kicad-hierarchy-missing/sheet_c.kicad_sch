@@ -1,0 +1,60 @@
+(kicad_sch (version 20230121) (generator eeschema)
+
+  (uuid cccccccc-0000-0000-0000-000000000001)
+
+  (paper "A4")
+
+  (lib_symbols
+    (symbol "Device:R" (pin_names (offset 0)) (in_bom yes) (on_board yes)
+      (property "Reference" "R" (at 2.032 0 90)
+        (effects (font (size 1.27 1.27)))
+      )
+      (property "Value" "R" (at 0 0 90)
+        (effects (font (size 1.27 1.27)))
+      )
+      (symbol "R_0_1"
+        (rectangle (start -1.016 -2.54) (end 1.016 2.54)
+          (stroke (width 0.254) (type default))
+          (fill (type none))
+        )
+      )
+      (symbol "R_1_1"
+        (pin passive line (at 0 3.81 270) (length 1.27)
+          (name "~" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27))))
+        )
+        (pin passive line (at 0 -3.81 90) (length 1.27)
+          (name "~" (effects (font (size 1.27 1.27))))
+          (number "2" (effects (font (size 1.27 1.27))))
+        )
+      )
+    )
+  )
+
+  (hierarchical_label "NET_C" (shape input) (at 25.4 25.4 180)
+    (effects (font (size 1.27 1.27)) (justify right))
+    (uuid cccccccc-0000-0000-0000-000000000002)
+  )
+
+  (symbol (lib_id "Device:R") (at 38.1 25.4 0) (unit 1)
+    (in_bom yes) (on_board yes)
+    (uuid cccccccc-0000-0000-0000-000000000003)
+    (property "Reference" "RC" (at 40.132 25.4 90)
+      (effects (font (size 1.27 1.27)))
+    )
+    (property "Value" "3k" (at 38.1 25.4 90)
+      (effects (font (size 1.27 1.27)))
+    )
+    (pin "1" (uuid cccccccc-0000-0000-0000-000000000004))
+    (pin "2" (uuid cccccccc-0000-0000-0000-000000000005))
+  )
+
+  (wire (pts (xy 25.4 25.4) (xy 38.1 25.4))
+    (stroke (width 0) (type default))
+    (uuid cccccccc-0000-0000-0000-000000000006)
+  )
+
+  (sheet_instances
+    (path "/" (page "4"))
+  )
+)

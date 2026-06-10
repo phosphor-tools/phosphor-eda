@@ -165,6 +165,14 @@ def test_pcb_builder_rejects_unresolved_and_selector_references() -> None:
         builder.resolve_footprint("U404", source="graphic")
 
 
+def test_pcb_builder_rejects_duplicate_drill_id() -> None:
+    builder = PcbBuilder("dup-drill")
+    builder.add_drill(id="drill:1", x=0.0, y=0.0, diameter=0.3)
+
+    with pytest.raises(PcbBuildError, match="duplicate drill"):
+        builder.add_drill(id="drill:1", x=1.0, y=1.0, diameter=0.3)
+
+
 def test_pcb_builder_rejects_empty_required_board_profile() -> None:
     builder = PcbBuilder("empty-profile")
     builder.add_layer(PcbLayer("Edge.Cuts", (LayerRole.EDGE,)))

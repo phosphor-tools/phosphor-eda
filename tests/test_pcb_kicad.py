@@ -182,6 +182,47 @@ def test_kicad_pad_slot_drills_use_board_coordinate_orientation() -> None:
     assert pad_polygon(pad).covers(drill_cutout)
 
 
+def _board_with_via(tenting_clause: str) -> Pcb:
+    parsed = sexpdata.loads(
+        f"""
+        (kicad_pcb
+          (layers
+            (0 "F.Cu" signal)
+            (31 "B.Cu" signal)
+            (44 "Edge.Cuts" user)
+          )
+          (via (at 5 5) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") {tenting_clause})
+          (gr_line (start 0 0) (end 1 0) (layer "Edge.Cuts") (width 0.1))
+        )
+        """
+    )
+    return parse_kicad_pcb_from_sexpr(list(parsed[1:]), default_name="tenting")
+
+
+def test_kicad_via_tenting_front_and_back() -> None:
+    via = _board_with_via("(tenting front back)").vias[0]
+    assert via.tented_front is True
+    assert via.tented_back is True
+
+
+def test_kicad_via_tenting_front_only() -> None:
+    via = _board_with_via("(tenting front)").vias[0]
+    assert via.tented_front is True
+    assert via.tented_back is False
+
+
+def test_kicad_via_tenting_none() -> None:
+    via = _board_with_via("(tenting none)").vias[0]
+    assert via.tented_front is False
+    assert via.tented_back is False
+
+
+def test_kicad_via_without_tenting_defaults_false() -> None:
+    via = _board_with_via("").vias[0]
+    assert via.tented_front is False
+    assert via.tented_back is False
+
+
 def test_kicad_layer_selectors_resolve_to_concrete_layer_references(board: Pcb) -> None:
     through_hole = next(
         pad for pad in board.pads if pad.drill is not None and pad.footprint is not None

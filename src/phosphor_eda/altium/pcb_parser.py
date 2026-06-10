@@ -1091,6 +1091,11 @@ def _parse_vias(
         else:
             roles.append(_ParsedRole.BLIND_VIA)
 
+        component_index = None if via.component == _COMPONENT_NONE else via.component
+        roles.append(
+            _ParsedRole.FOOTPRINT_MEMBER if component_index is not None else _ParsedRole.BOARD_LEVEL
+        )
+
         vias.append(
             _ParsedPrimitive(
                 id=f"via:{index}",
@@ -1109,6 +1114,7 @@ def _parse_vias(
                     native_type="VIA",
                     source_collection="vias",
                     native_index=index,
+                    native_component_index=component_index,
                     properties={
                         "start_layer": str(via.start_layer),
                         "end_layer": str(via.end_layer),
@@ -1791,12 +1797,17 @@ def _parse_fills(
             object_type = _ParsedObjectKind.GRAPHIC
             source_collection = "artwork"
 
+        component_index = None if fill.component == _COMPONENT_NONE else fill.component
+        footprint_role = (
+            _ParsedRole.FOOTPRINT_MEMBER if component_index is not None else _ParsedRole.BOARD_LEVEL
+        )
+
         fills.append(
             _ParsedPrimitive(
                 id=f"fill:{fill.layer}:{index}",
                 object_type=object_type,
                 shape=_ParsedShapeKind.POLYGON,
-                roles=_normalize_parsed_roles(*roles, _ParsedRole.BOARD_LEVEL),
+                roles=_normalize_parsed_roles(*roles, footprint_role),
                 data=PcbPolygon(points=points),
                 layers=(layer,),
                 net_number=_net_number(fill.net) if fill.layer in _COPPER_LAYERS else 0,
@@ -1804,6 +1815,7 @@ def _parse_fills(
                     native_type="FILL",
                     source_collection=source_collection,
                     native_index=index,
+                    native_component_index=component_index,
                 ),
             )
         )
@@ -2033,10 +2045,15 @@ def _parse_shape_based_regions(
     layer_map: dict[int, PcbLayer],
     ctx: ParseContext,
     pour_id_map: dict[int, str] | None = None,
+    pour_net_map: dict[int, int] | None = None,
 ) -> list[_ParsedPrimitive]:
     """Parse ShapeBasedRegions6/Data into polygon geometry.
 
     Uses the extended vertex format (37 bytes per vertex with arc support).
+
+    Net inheritance matches ``_parse_regions``: a copper region carrying the
+    unconnected sentinel (net == 0xFFFF) inherits the net of its parent polygon
+    pour via the (sub)polygon index.
     """
     records = _read_binary_records(data)
     polygons: list[_ParsedPrimitive] = []
@@ -2074,7 +2091,14 @@ def _parse_shape_based_regions(
         subpolygon_index = int(region.properties.get("subpolyindex", "-1") or "-1")
         pour_id = _resolve_pour_id(pour_id_map or {}, polygon_index, subpolygon_index)
 
-        net_num = _net_number(region.net) if resolved_num in _COPPER_LAYERS else 0
+        # Net resolution: use direct net if assigned, otherwise inherit from pour
+        if resolved_num in _COPPER_LAYERS:
+            if region.net == _NET_UNCONNECTED and pour_net_map:
+                net_num = _resolve_pour_net(pour_net_map, polygon_index, subpolygon_index)
+            else:
+                net_num = _net_number(region.net)
+        else:
+            net_num = 0
         net_obj = nets.get(net_num)
         net_name = net_obj.name if net_obj else ""
 
@@ -2135,18 +2159,21 @@ def _dedupe_shape_based_board_polygons(
     ]
 
 
-def _polygon_duplicate_key(poly: _ParsedPrimitive) -> tuple[str, float, float, float, float] | None:
+type _PolygonDuplicateKey = tuple[str, int, tuple[tuple[float, float], ...]]
+
+
+def _polygon_duplicate_key(poly: _ParsedPrimitive) -> _PolygonDuplicateKey | None:
+    # Key on layer + vertex count + the rounded vertices themselves. A bbox-only
+    # key dropped distinct polygons that merely share a bounding box (e.g. a
+    # board frame and an inscribed shape). The Regions6 and ShapeBasedRegions6
+    # representations of the same primitive differ only by an explicit closing
+    # vertex, so normalize that away before keying.
     if not isinstance(poly.data, PcbPolygon) or len(poly.data.points) < 3:
         return None
-    xs = [x for x, _y in poly.data.points]
-    ys = [y for _x, y in poly.data.points]
-    return (
-        poly.primary_layer,
-        round(min(xs), 3),
-        round(min(ys), 3),
-        round(max(xs), 3),
-        round(max(ys), 3),
-    )
+    vertices = [(round(x, 3), round(y, 3)) for x, y in poly.data.points]
+    if len(vertices) > 1 and vertices[0] == vertices[-1]:
+        vertices.pop()
+    return (poly.primary_layer, len(vertices), tuple(vertices))
 
 
 def _region_kind(properties: dict[str, str]) -> int | None:
@@ -3185,7 +3212,9 @@ def parse_altium_pcb(
     arc_geometry, arc_keepouts = _parse_arcs(arcs_data, layer_map, ctx, pour_id_map)
     fills, fill_keepouts = _parse_fills(fills_data, layer_map, ctx)
     regions = _parse_regions(regions_data, nets, layer_map, ctx, pour_id_map, pour_net_map)
-    shape_regions = _parse_shape_based_regions(sb_regions_data, nets, layer_map, ctx, pour_id_map)
+    shape_regions = _parse_shape_based_regions(
+        sb_regions_data, nets, layer_map, ctx, pour_id_map, pour_net_map
+    )
     comp_models = _parse_component_bodies(comp_bodies_data)
 
     geometry = [

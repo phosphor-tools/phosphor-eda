@@ -4,7 +4,7 @@ import math
 from pathlib import Path
 
 import pytest
-from shapely import Polygon
+from shapely import MultiPolygon, Polygon
 
 from phosphor_eda.pcb import (
     PcbArc,
@@ -210,6 +210,33 @@ def test_board_outline_polygon_subtracts_profile_cutouts() -> None:
 
     assert geom is not None
     assert geom.area == pytest.approx(19.0)
+
+
+def test_board_outline_polygon_keeps_all_panelized_outlines() -> None:
+    """Two disjoint outlines (a panel) must both survive, not just the largest."""
+    outline = PcbBoardProfile(
+        elements=(
+            PcbBoardProfileElement(
+                id="outline:big",
+                kind=PcbArtworkKind.POLYGON,
+                layer=None,
+                data=PcbPolygon(points=[(0.0, 0.0), (5.0, 0.0), (5.0, 4.0), (0.0, 4.0)]),
+            ),
+            PcbBoardProfileElement(
+                id="outline:small",
+                kind=PcbArtworkKind.POLYGON,
+                layer=None,
+                data=PcbPolygon(points=[(10.0, 0.0), (12.0, 0.0), (12.0, 2.0), (10.0, 2.0)]),
+            ),
+        )
+    )
+
+    geom = board_outline_polygon(outline)
+
+    assert geom is not None
+    assert isinstance(geom, MultiPolygon)
+    assert len(geom.geoms) == 2
+    assert geom.area == pytest.approx(24.0)
 
 
 def _pad(

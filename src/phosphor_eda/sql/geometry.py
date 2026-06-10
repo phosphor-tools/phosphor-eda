@@ -344,11 +344,13 @@ def _closed_path_points(path: PcbClosedPath) -> list[tuple[float, float]]:
 # ---------------------------------------------------------------------------
 
 
-def board_outline_polygon(profile: PcbBoardProfile) -> Polygon | None:
+def board_outline_polygon(profile: PcbBoardProfile) -> Polygon | MultiPolygon | None:
     """Assemble board outline from edge-cut lines and arcs into a polygon.
 
     Linearizes arcs, collects all segments, and uses shapely.ops.polygonize
-    to form a closed polygon. Returns None if the outline cannot be closed.
+    to form a closed polygon. Returns a MultiPolygon for panelized or
+    multi-outline boards so no material is dropped, or None if the outline
+    cannot be closed.
     """
     outline_segments: list[LineString] = []
     cutout_segments: list[LineString] = []
@@ -414,7 +416,7 @@ def board_outline_polygon(profile: PcbBoardProfile) -> Polygon | None:
     if isinstance(normalized, Polygon):
         return normalized
     if isinstance(normalized, MultiPolygon) and normalized.geoms:
-        return max(normalized.geoms, key=lambda polygon: polygon.area)
+        return normalized
     return None
 
 

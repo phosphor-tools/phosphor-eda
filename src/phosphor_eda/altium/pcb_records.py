@@ -157,6 +157,7 @@ class ViaRecord:
       [3:5]   net       u16
       [13:17] x         i32
       [17:21] y         i32
+      [7:9]   component u16
       [21:25] diameter  i32
       [25:29] hole_size i32
       [29]    start_layer u8
@@ -164,6 +165,7 @@ class ViaRecord:
     """
 
     net: int
+    component: int
     position: tuple[int, int]
     diameter: int
     hole_size: int
@@ -179,6 +181,7 @@ class ViaRecord:
             return None
         return cls(
             net=u16(body, 3),
+            component=u16(body, 7),
             position=(i32(body, 13), i32(body, 17)),
             diameter=i32(body, 21),
             hole_size=i32(body, 25),
@@ -196,6 +199,7 @@ class FillRecord:
       [1]     flags1 u8
       [2]     flags2 u8
       [3:5]   net    u16
+      [7:9]   component u16
       [13:17] x1     i32
       [17:21] y1     i32
       [21:25] x2     i32
@@ -208,6 +212,7 @@ class FillRecord:
     flags1: int
     flags2: int
     net: int
+    component: int
     pos1: tuple[int, int]
     pos2: tuple[int, int]
     rotation: float
@@ -230,6 +235,7 @@ class FillRecord:
             flags1=body[1] if len(body) > 1 else 0,
             flags2=body[2] if len(body) > 2 else 0,
             net=u16(body, 3),
+            component=u16(body, 7),
             pos1=(i32(body, 13), i32(body, 17)),
             pos2=(i32(body, 21), i32(body, 25)),
             rotation=f64(body, 29),

@@ -48,12 +48,22 @@ class PcbBuilder:
         self.pours: list[PcbPour] = []
         self.keepouts: list[PcbKeepout] = []
         self.board_profile: PcbBoardProfile | None = None
+        # Identity/name indexes so reference validation and name resolution are
+        # O(1) instead of scanning the collections on every add.
+        self._layer_ids: set[int] = set()
+        self._footprint_ids: set[int] = set()
+        self._drill_ids: set[int] = set()
+        self._drill_id_strs: set[str] = set()
+        self._layers_by_name: dict[str, PcbLayer] = {}
 
     def add_layer(self, layer: PcbLayer, *, source: str = "") -> PcbLayer:
         """Add a concrete source layer definition."""
         if self._is_layer_selector(layer.name):
             self._fail(f"Layer selector {layer.name!r} is not a concrete layer", source)
         self.layers.append(layer)
+        self._layer_ids.add(id(layer))
+        # First occurrence wins, matching the previous linear name scan.
+        self._layers_by_name.setdefault(layer.name, layer)
         return layer
 
     def add_net(self, net: PcbNet, *, source: str = "") -> PcbNet:
@@ -69,6 +79,7 @@ class PcbBuilder:
         """Add a footprint whose placement layer already belongs to the board."""
         self._validate_layer_ref(footprint.layer, source)
         self.footprints.append(footprint)
+        self._footprint_ids.add(id(footprint))
         return footprint
 
     def resolve_layer(self, layer: PcbLayer | str, *, source: str = "") -> PcbLayer:
@@ -78,9 +89,9 @@ class PcbBuilder:
             return layer
         if self._is_layer_selector(layer):
             self._fail(f"Layer selector {layer!r} must be resolved by the parser", source)
-        for candidate in self.layers:
-            if candidate.name == layer:
-                return candidate
+        resolved = self._layers_by_name.get(layer)
+        if resolved is not None:
+            return resolved
         self._fail(f"unknown layer {layer!r}", source)
 
     def resolve_layers(
@@ -166,9 +177,11 @@ class PcbBuilder:
     def add_drill_object(self, drill: PcbDrill, *, source: str = "") -> PcbDrill:
         """Add an already-constructed drill after validating references."""
         self._validate_layer_refs(drill.layers, source)
-        if any(existing.id == drill.id for existing in self.drills):
+        if drill.id in self._drill_id_strs:
             self._fail(f"duplicate drill {drill.id!r}", source)
         self.drills.append(drill)
+        self._drill_ids.add(id(drill))
+        self._drill_id_strs.add(drill.id)
         return drill
 
     def resolve_drill(self, drill: PcbDrill | str | None, *, source: str = "") -> PcbDrill | None:
@@ -290,11 +303,8 @@ class PcbBuilder:
             self.board_profile is None or not self.board_profile.elements
         ):
             self._fail("board profile is required")
-        for pad in self.pads:
-            if pad.drill is not None:
-                self._validate_drill_ref(pad.drill, f"pad {pad.id}")
-        for via in self.vias:
-            self._validate_drill_ref(via.drill, f"via {via.id}")
+        # Pad/via drill references were already validated at add time; no need
+        # to re-scan every object here.
         return Pcb(
             name=self.name,
             layers=list(self.layers),
@@ -316,7 +326,7 @@ class PcbBuilder:
             self._validate_layer_ref(layer, source)
 
     def _validate_layer_ref(self, layer: PcbLayer, source: str) -> None:
-        if not any(layer is candidate for candidate in self.layers):
+        if id(layer) not in self._layer_ids:
             self._fail(f"unknown layer {layer.name!r}", source)
 
     def _validate_net_ref(self, net: PcbNet, source: str) -> None:
@@ -330,7 +340,7 @@ class PcbBuilder:
             self._validate_net_ref(net, source)
 
     def _validate_footprint_ref(self, footprint: PcbFootprint, source: str) -> None:
-        if not any(footprint is candidate for candidate in self.footprints):
+        if id(footprint) not in self._footprint_ids:
             self._fail(f"unknown footprint {footprint.reference!r}", source)
 
     def _validate_optional_footprint_ref(self, footprint: PcbFootprint | None, source: str) -> None:
@@ -338,7 +348,7 @@ class PcbBuilder:
             self._validate_footprint_ref(footprint, source)
 
     def _validate_drill_ref(self, drill: PcbDrill, source: str) -> None:
-        if not any(drill is candidate for candidate in self.drills):
+        if id(drill) not in self._drill_ids:
             self._fail(f"unknown drill {drill.id!r}", source)
 
     @staticmethod

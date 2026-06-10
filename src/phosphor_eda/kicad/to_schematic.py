@@ -50,8 +50,19 @@ def kicad_to_source(path: Path, name: str = "") -> KiCadSourceDesign:
     sheet_symbols: list[KiCadSheetSymbol] = []
     sheet_pins: list[KiCadSheetPin] = []
 
+    # Sheet symbols/pins reference child scopes by UUID, but a child whose file
+    # was missing or formed a cycle is never loaded and so has no scope. Drop
+    # those dangling references so resolution does not see a sheet pin pointing
+    # at a non-existent child page.
+    loaded_scopes = {instance.scope_id for instance in sheet_tree.sheet_instances}
+
     for loaded in sheet_tree.sheets:
-        extracted = extract_sheet_sources(loaded, sheet_tree.lib_pins, sheet_tree.lib_descs)
+        extracted = extract_sheet_sources(
+            loaded,
+            sheet_tree.lib_pins,
+            sheet_tree.lib_descs,
+            loaded_scopes,
+        )
         local_nets.extend(extracted.local_nets)
         pin_occurrences.extend(extracted.pin_occurrences)
         local_labels.extend(extracted.local_labels)
