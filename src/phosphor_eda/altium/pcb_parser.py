@@ -2159,18 +2159,21 @@ def _dedupe_shape_based_board_polygons(
     ]
 
 
-def _polygon_duplicate_key(poly: _ParsedPrimitive) -> tuple[str, float, float, float, float] | None:
+type _PolygonDuplicateKey = tuple[str, int, tuple[tuple[float, float], ...]]
+
+
+def _polygon_duplicate_key(poly: _ParsedPrimitive) -> _PolygonDuplicateKey | None:
+    # Key on layer + vertex count + the rounded vertices themselves. A bbox-only
+    # key dropped distinct polygons that merely share a bounding box (e.g. a
+    # board frame and an inscribed shape). The Regions6 and ShapeBasedRegions6
+    # representations of the same primitive differ only by an explicit closing
+    # vertex, so normalize that away before keying.
     if not isinstance(poly.data, PcbPolygon) or len(poly.data.points) < 3:
         return None
-    xs = [x for x, _y in poly.data.points]
-    ys = [y for _x, y in poly.data.points]
-    return (
-        poly.primary_layer,
-        round(min(xs), 3),
-        round(min(ys), 3),
-        round(max(xs), 3),
-        round(max(ys), 3),
-    )
+    vertices = [(round(x, 3), round(y, 3)) for x, y in poly.data.points]
+    if len(vertices) > 1 and vertices[0] == vertices[-1]:
+        vertices.pop()
+    return (poly.primary_layer, len(vertices), tuple(vertices))
 
 
 def _region_kind(properties: dict[str, str]) -> int | None:
