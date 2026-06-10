@@ -4,7 +4,7 @@ from pathlib import Path
 
 from test_pcb_render import _board
 
-from phosphor_eda.kicad.pcb_parser import parse_kicad_pcb
+from phosphor_eda.formats.kicad.pcb_parser import parse_kicad_pcb
 from phosphor_eda.pcb_render_inventory import build_inventory
 from phosphor_eda.pcb_render_modes import (
     build_eda_layers,

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from phosphor_eda.convert import convert
-from phosphor_eda.eagle import eagle_to_design
+from phosphor_eda.formats.eagle import eagle_to_design
 from phosphor_eda.validate import Severity, validate_design
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"

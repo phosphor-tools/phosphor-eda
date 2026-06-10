@@ -1,6 +1,6 @@
 """Tests for Altium schematic record from_properties() classmethods and dispatch table."""
 
-from phosphor_eda.altium.enums import (
+from phosphor_eda.formats.altium.enums import (
     LabelJustification,
     PinElectrical,
     PortIOType,
@@ -9,8 +9,8 @@ from phosphor_eda.altium.enums import (
     RecordOrientation,
     SheetEntrySide,
 )
-from phosphor_eda.altium.record_factory import materialize_records
-from phosphor_eda.altium.records import (
+from phosphor_eda.formats.altium.record_factory import materialize_records
+from phosphor_eda.formats.altium.records import (
     ArcRec,
     BezierRec,
     BusEntryRec,
@@ -34,7 +34,7 @@ from phosphor_eda.altium.records import (
     UnknownRecord,
     WireRec,
 )
-from phosphor_eda.diagnostics import ParseContext
+from phosphor_eda.formats.common.diagnostics import ParseContext
 
 # ---------------------------------------------------------------------------
 # ComponentRec.from_properties

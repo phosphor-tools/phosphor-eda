@@ -7,12 +7,12 @@ known parent pour via its (sub)polygon index.
 
 import struct
 
-from phosphor_eda.altium.pcb_parser import (
+from phosphor_eda.formats.altium.pcb_parser import (
     _parse_regions,  # pyright: ignore[reportPrivateUsage]
     _parse_shape_based_regions,  # pyright: ignore[reportPrivateUsage]
 )
-from phosphor_eda.altium.pcb_records import EXTENDED_VERTEX_SIZE
-from phosphor_eda.diagnostics import ParseContext
+from phosphor_eda.formats.altium.pcb_records import EXTENDED_VERTEX_SIZE
+from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.domain.pcb import LayerRole, PcbLayer, PcbNet
 
 _NET_UNCONNECTED = 0xFFFF

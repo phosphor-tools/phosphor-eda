@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from phosphor_eda.dsn.parser import parse_dsn
-from phosphor_eda.dsn.to_schematic import dsn_to_design
+from phosphor_eda.formats.dsn.parser import parse_dsn
+from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
 from phosphor_eda.domain.schematic import Net
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"

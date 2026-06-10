@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from phosphor_eda.altium.pcb_parser import (
+from phosphor_eda.formats.altium.pcb_parser import (
     parse_altium_classes,
     parse_altium_diff_pairs,
     parse_altium_pcb,
@@ -18,20 +18,20 @@ from phosphor_eda.altium.pcb_parser import (
     parse_altium_stackup,
     read_text_records,
 )
-from phosphor_eda.altium.project import parse_prjpcb_file
-from phosphor_eda.altium.to_schematic import altium_to_design
-from phosphor_eda.diagnostics import ParseContext
-from phosphor_eda.dsn.parser import parse_dsn
-from phosphor_eda.dsn.to_schematic import dsn_to_design
-from phosphor_eda.eagle.to_schematic import eagle_to_design
-from phosphor_eda.kicad.dru_parser import parse_kicad_dru
-from phosphor_eda.kicad.pcb_parser import (
+from phosphor_eda.formats.altium.project import parse_prjpcb_file
+from phosphor_eda.formats.altium.to_schematic import altium_to_design
+from phosphor_eda.formats.common.diagnostics import ParseContext
+from phosphor_eda.formats.dsn.parser import parse_dsn
+from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
+from phosphor_eda.formats.eagle.to_schematic import eagle_to_design
+from phosphor_eda.formats.kicad.dru_parser import parse_kicad_dru
+from phosphor_eda.formats.kicad.pcb_parser import (
     parse_kicad_pcb_from_sexpr,
     parse_kicad_stackup,
     read_kicad_pcb_sexpr,
 )
-from phosphor_eda.kicad.pro_parser import parse_kicad_pro
-from phosphor_eda.kicad.to_schematic import kicad_to_design
+from phosphor_eda.formats.kicad.pro_parser import parse_kicad_pro
+from phosphor_eda.formats.kicad.to_schematic import kicad_to_design
 from phosphor_eda.domain.project import Project
 from phosphor_eda.serialize import serialize_design
 

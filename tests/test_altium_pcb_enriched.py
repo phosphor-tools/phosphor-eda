@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from phosphor_eda.altium.pcb_parser import (
+from phosphor_eda.formats.altium.pcb_parser import (
     parse_altium_classes,
     parse_altium_diff_pairs,
     parse_altium_pcb,

@@ -417,7 +417,7 @@ def test_cli_render_prjpcb_resolves_single_existing_pcbdoc(
         assert board is parsed_board
         return RenderResult(svg="<svg></svg>")
 
-    monkeypatch.setattr("phosphor_eda.altium.pcb_parser.parse_altium_pcb", fake_parse_altium_pcb)
+    monkeypatch.setattr("phosphor_eda.formats.altium.pcb_parser.parse_altium_pcb", fake_parse_altium_pcb)
     monkeypatch.setattr("phosphor_eda.pcb_render.render_pcb_svg", fake_render_pcb_svg)
 
     runner = CliRunner()

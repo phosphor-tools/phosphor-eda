@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import sexpdata
 
-from phosphor_eda.kicad.pcb_parser import (
+from phosphor_eda.formats.kicad.pcb_parser import (
     _extract_value,  # pyright: ignore[reportPrivateUsage]
     parse_kicad_pcb,
     parse_kicad_pcb_from_sexpr,

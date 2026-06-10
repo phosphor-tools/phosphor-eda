@@ -1,6 +1,6 @@
 """Board-polygon dedupe must not collapse distinct shapes sharing a bbox."""
 
-from phosphor_eda.altium.pcb_parser import (
+from phosphor_eda.formats.altium.pcb_parser import (
     _dedupe_shape_based_board_polygons,  # pyright: ignore[reportPrivateUsage]
     _ParsedObjectKind,  # pyright: ignore[reportPrivateUsage]
     _ParsedPrimitive,  # pyright: ignore[reportPrivateUsage]

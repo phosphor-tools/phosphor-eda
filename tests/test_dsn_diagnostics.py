@@ -6,11 +6,11 @@ ParseContext instead of printing to stdout or swallowing them.
 
 from pathlib import Path
 
-from phosphor_eda.diagnostics import ParseContext
-from phosphor_eda.dsn.netlist import build_netlist
-from phosphor_eda.dsn.parser import parse_dsn
-from phosphor_eda.dsn.to_schematic import dsn_to_design
-from phosphor_eda.models import ParsedDesign, PinConnection, PlacedInstance, SchematicPage
+from phosphor_eda.formats.common.diagnostics import ParseContext
+from phosphor_eda.formats.dsn.netlist import build_netlist
+from phosphor_eda.formats.dsn.parser import parse_dsn
+from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
+from phosphor_eda.formats.common.raw_models import ParsedDesign, PinConnection, PlacedInstance, SchematicPage
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 DSN_FILE = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"

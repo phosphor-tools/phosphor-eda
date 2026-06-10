@@ -2,8 +2,8 @@
 
 import pytest
 
-from phosphor_eda.dsn.resolver import resolve_dsn_source
-from phosphor_eda.dsn.source import (
+from phosphor_eda.formats.dsn.resolver import resolve_dsn_source
+from phosphor_eda.formats.dsn.source import (
     DsnGlobal,
     DsnOffPageConnector,
     DsnPageNet,
@@ -14,15 +14,15 @@ from phosphor_eda.dsn.source import (
     DsnWireAlias,
     dsn_name_key,
 )
-from phosphor_eda.dsn.to_schematic import dsn_to_design
-from phosphor_eda.models import (
+from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
+from phosphor_eda.formats.common.raw_models import (
     PageNetEntry,
     ParsedDesign,
     PinConnection,
     PlacedInstance,
     SchematicPage,
 )
-from phosphor_eda.resolved_graph import ResolutionInputError
+from phosphor_eda.formats.common.resolved_graph import ResolutionInputError
 from phosphor_eda.domain.schematic import Net, ScopeId
 
 

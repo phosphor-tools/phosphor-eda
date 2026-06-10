@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from phosphor_eda.kicad.dru_parser import parse_kicad_dru
+from phosphor_eda.formats.kicad.dru_parser import parse_kicad_dru
 
 FIXTURE = (
     Path(__file__).parent / "fixtures" / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_dru"

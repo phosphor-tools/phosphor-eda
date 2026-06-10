@@ -12,7 +12,7 @@ MINIMAL_SCH = FIXTURES / "kicad-minimal/RP2040_minimal_r2.kicad_sch"
 
 @pytest.fixture(scope="module")
 def design():
-    from phosphor_eda.kicad import kicad_to_design
+    from phosphor_eda.formats.kicad import kicad_to_design
 
     return kicad_to_design(MINIMAL_SCH)
 

@@ -2,9 +2,9 @@
 
 import pytest
 
-from phosphor_eda.altium.project import AltiumHierarchyMode, AltiumProject
-from phosphor_eda.altium.resolver import resolve_altium_source
-from phosphor_eda.altium.source import (
+from phosphor_eda.formats.altium.project import AltiumHierarchyMode, AltiumProject
+from phosphor_eda.formats.altium.resolver import resolve_altium_source
+from phosphor_eda.formats.altium.source import (
     AltiumLocalNet,
     AltiumNetLabel,
     AltiumPinOccurrence,
@@ -15,7 +15,7 @@ from phosphor_eda.altium.source import (
     AltiumSheetSymbol,
     AltiumSourceDesign,
 )
-from phosphor_eda.resolved_graph import ResolutionInputError
+from phosphor_eda.formats.common.resolved_graph import ResolutionInputError
 from phosphor_eda.domain.schematic import Net, ScopeId
 
 

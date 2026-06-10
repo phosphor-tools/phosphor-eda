@@ -6,14 +6,14 @@ warnings, and the truncated-stream detection in the record readers.
 
 import struct
 
-from phosphor_eda.altium.errors import AltiumPcbParseError
-from phosphor_eda.altium.pcb_parser import (
+from phosphor_eda.formats.altium.errors import AltiumPcbParseError
+from phosphor_eda.formats.altium.pcb_parser import (
     _read_binary_records,  # pyright: ignore[reportPrivateUsage]
     _region_kind,  # pyright: ignore[reportPrivateUsage]
     _v9_stack_layer_id_to_num,  # pyright: ignore[reportPrivateUsage]
     read_text_records,
 )
-from phosphor_eda.diagnostics import ParseContext
+from phosphor_eda.formats.common.diagnostics import ParseContext
 
 
 def test_altium_pcb_parse_error_is_value_error() -> None:

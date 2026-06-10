@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from phosphor_eda.altium.enums import PinElectrical, RecordOrientation
-from phosphor_eda.diagnostics import ParseContext, ParseIssue, ParseSeverity
+from phosphor_eda.formats.altium.enums import PinElectrical, RecordOrientation
+from phosphor_eda.formats.common.diagnostics import ParseContext, ParseIssue, ParseSeverity
 
 
 class TestParseSeverity:
