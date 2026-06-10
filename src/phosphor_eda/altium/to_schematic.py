@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from typing import TYPE_CHECKING
 
 from phosphor_eda.altium.project import parse_prjpcb_file
@@ -42,10 +41,6 @@ def load_project_sheets(
                 ctx.warn(
                     "missing_sheet",
                     f"Schematic sheet not found: {rel_path} (resolved to {schdoc})",
-                )
-                print(
-                    f"Warning: schematic sheet not found: {rel_path} (resolved to {schdoc})",
-                    file=sys.stderr,
                 )
         return sheets
 
