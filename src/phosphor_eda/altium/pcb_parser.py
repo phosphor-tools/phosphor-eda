@@ -254,6 +254,7 @@ def _pad_shape(value: int) -> PadShape:
     except ValueError:
         return PadShape.UNKNOWN
 
+
 _PAD_TEMPLATE_MASK_RE = re.compile(
     r"^r(?P<pad_w>\d+)_(?P<pad_h>\d+)hn(?P<drill>\d+)r(?P<rounding>\d+)"
     r"m(?P<mask_w>\d+)_(?P<mask_h>\d+)$"
@@ -1051,8 +1052,7 @@ def _parse_vias(
 
         roles = [_ParsedRole.CONDUCTOR]
         through_hole = (
-            via.start_layer == AltiumLayer.TOP_LAYER
-            and via.end_layer == AltiumLayer.BOTTOM_LAYER
+            via.start_layer == AltiumLayer.TOP_LAYER and via.end_layer == AltiumLayer.BOTTOM_LAYER
         )
         if not through_hole:
             if via.start_layer == via.end_layer:
