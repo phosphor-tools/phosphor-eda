@@ -108,62 +108,48 @@ def _layers(item: SExpNode | None) -> list[str]:
     return result
 
 
+_KICAD_TYPE_ROLES: dict[str, tuple[LayerRole, ...]] = {
+    "signal": (LayerRole.COPPER, LayerRole.SIGNAL),
+    "power": (LayerRole.COPPER, LayerRole.POWER),
+    "mixed": (LayerRole.COPPER, LayerRole.MIXED),
+    "jumper": (LayerRole.COPPER, LayerRole.JUMPER),
+    "front": (LayerRole.FRONT,),
+    "back": (LayerRole.BACK,),
+}
+
+
 def _kicad_type_roles(native_type: str) -> tuple[LayerRole, ...]:
-    normalized = native_type.strip().lower()
-    if normalized == "signal":
-        return (LayerRole.COPPER, LayerRole.SIGNAL)
-    if normalized == "power":
-        return (LayerRole.COPPER, LayerRole.POWER)
-    if normalized == "mixed":
-        return (LayerRole.COPPER, LayerRole.MIXED)
-    if normalized == "jumper":
-        return (LayerRole.COPPER, LayerRole.JUMPER)
-    if normalized == "front":
-        return (LayerRole.FRONT,)
-    if normalized == "back":
-        return (LayerRole.BACK,)
-    return ()
+    return _KICAD_TYPE_ROLES.get(native_type.strip().lower(), ())
+
+
+_KICAD_NAME_ROLES: dict[str, tuple[LayerRole, ...]] = {
+    "F.Cu": (LayerRole.COPPER, LayerRole.FRONT, LayerRole.OUTER),
+    "B.Cu": (LayerRole.COPPER, LayerRole.BACK, LayerRole.OUTER),
+    "F.Mask": (LayerRole.SOLDER_MASK, LayerRole.FRONT),
+    "B.Mask": (LayerRole.SOLDER_MASK, LayerRole.BACK),
+    "F.Paste": (LayerRole.SOLDER_PASTE, LayerRole.FRONT),
+    "B.Paste": (LayerRole.SOLDER_PASTE, LayerRole.BACK),
+    "F.SilkS": (LayerRole.SILKSCREEN, LayerRole.FRONT),
+    "B.SilkS": (LayerRole.SILKSCREEN, LayerRole.BACK),
+    "F.Adhes": (LayerRole.ADHESIVE, LayerRole.FRONT),
+    "B.Adhes": (LayerRole.ADHESIVE, LayerRole.BACK),
+    "F.Fab": (LayerRole.FABRICATION, LayerRole.FRONT),
+    "B.Fab": (LayerRole.FABRICATION, LayerRole.BACK),
+    "F.CrtYd": (LayerRole.FABRICATION, LayerRole.COURTYARD, LayerRole.FRONT),
+    "B.CrtYd": (LayerRole.FABRICATION, LayerRole.COURTYARD, LayerRole.BACK),
+    "Edge.Cuts": (LayerRole.EDGE,),
+    "Margin": (LayerRole.MARGIN,),
+    "Dwgs.User": (LayerRole.DRAWING,),
+    "Cmts.User": (LayerRole.COMMENT,),
+}
 
 
 def _kicad_name_roles(name: str) -> tuple[LayerRole, ...]:
-    if name == "F.Cu":
-        return (LayerRole.COPPER, LayerRole.FRONT, LayerRole.OUTER)
-    if name == "B.Cu":
-        return (LayerRole.COPPER, LayerRole.BACK, LayerRole.OUTER)
+    exact = _KICAD_NAME_ROLES.get(name)
+    if exact is not None:
+        return exact
     if name.startswith("In") and name.endswith(".Cu"):
         return (LayerRole.COPPER, LayerRole.INNER)
-    if name == "F.Mask":
-        return (LayerRole.SOLDER_MASK, LayerRole.FRONT)
-    if name == "B.Mask":
-        return (LayerRole.SOLDER_MASK, LayerRole.BACK)
-    if name == "F.Paste":
-        return (LayerRole.SOLDER_PASTE, LayerRole.FRONT)
-    if name == "B.Paste":
-        return (LayerRole.SOLDER_PASTE, LayerRole.BACK)
-    if name == "F.SilkS":
-        return (LayerRole.SILKSCREEN, LayerRole.FRONT)
-    if name == "B.SilkS":
-        return (LayerRole.SILKSCREEN, LayerRole.BACK)
-    if name == "F.Adhes":
-        return (LayerRole.ADHESIVE, LayerRole.FRONT)
-    if name == "B.Adhes":
-        return (LayerRole.ADHESIVE, LayerRole.BACK)
-    if name == "F.Fab":
-        return (LayerRole.FABRICATION, LayerRole.FRONT)
-    if name == "B.Fab":
-        return (LayerRole.FABRICATION, LayerRole.BACK)
-    if name == "F.CrtYd":
-        return (LayerRole.FABRICATION, LayerRole.COURTYARD, LayerRole.FRONT)
-    if name == "B.CrtYd":
-        return (LayerRole.FABRICATION, LayerRole.COURTYARD, LayerRole.BACK)
-    if name == "Edge.Cuts":
-        return (LayerRole.EDGE,)
-    if name == "Margin":
-        return (LayerRole.MARGIN,)
-    if name == "Dwgs.User":
-        return (LayerRole.DRAWING,)
-    if name == "Cmts.User":
-        return (LayerRole.COMMENT,)
     if name in {"Eco1.User", "Eco2.User"} or name.startswith("User."):
         return (LayerRole.USER,)
     return ()
@@ -266,34 +252,29 @@ def _sexp_bool(value: object, *, default: bool) -> bool:
     return default
 
 
+# KiCad layer-selector suffixes mapped to the domain role they expand to.
+# Used for ``*.<suffix>`` (all matching layers) and ``F&B.<suffix>`` (front/back).
+_SELECTOR_SUFFIX_ROLES: dict[str, LayerRole] = {
+    "Cu": LayerRole.COPPER,
+    "Mask": LayerRole.SOLDER_MASK,
+    "Paste": LayerRole.SOLDER_PASTE,
+    "SilkS": LayerRole.SILKSCREEN,
+    "Adhes": LayerRole.ADHESIVE,
+    "Fab": LayerRole.FABRICATION,
+    "CrtYd": LayerRole.COURTYARD,
+}
+
+
 def _resolve_layer_selector(builder: PcbBuilder, name: str, *, source: str) -> tuple[PcbLayer, ...]:
-    if name == "*.Cu":
-        return tuple(layer for layer in builder.layers if layer.has_role(LayerRole.COPPER))
-    if name == "*.Mask":
-        return tuple(layer for layer in builder.layers if layer.has_role(LayerRole.SOLDER_MASK))
-    if name == "*.Paste":
-        return tuple(layer for layer in builder.layers if layer.has_role(LayerRole.SOLDER_PASTE))
-    if name == "*.SilkS":
-        return tuple(layer for layer in builder.layers if layer.has_role(LayerRole.SILKSCREEN))
-    if name == "F&B.Cu":
+    prefix, _, suffix = name.partition(".")
+    role = _SELECTOR_SUFFIX_ROLES.get(suffix)
+    if role is not None and prefix == "*":
+        return tuple(layer for layer in builder.layers if layer.has_role(role))
+    if role is not None and prefix == "F&B":
         return tuple(
             layer
             for layer in builder.layers
-            if layer.has_role(LayerRole.COPPER)
-            and (layer.has_role(LayerRole.FRONT) or layer.has_role(LayerRole.BACK))
-        )
-    if name == "F&B.Mask":
-        return tuple(
-            layer
-            for layer in builder.layers
-            if layer.has_role(LayerRole.SOLDER_MASK)
-            and (layer.has_role(LayerRole.FRONT) or layer.has_role(LayerRole.BACK))
-        )
-    if name == "F&B.Paste":
-        return tuple(
-            layer
-            for layer in builder.layers
-            if layer.has_role(LayerRole.SOLDER_PASTE)
+            if layer.has_role(role)
             and (layer.has_role(LayerRole.FRONT) or layer.has_role(LayerRole.BACK))
         )
     return (builder.resolve_layer(name, source=source),)
@@ -367,6 +348,27 @@ def _fill_flag(item: SExpNode) -> bool:
     return fill_node is not None and sexp.val(fill_node) == "solid"
 
 
+# Layer-role → artwork-purpose, in priority order (first matching role wins).
+_ARTWORK_PURPOSE_BY_ROLE: tuple[tuple[LayerRole, PcbArtworkPurpose], ...] = (
+    (LayerRole.SILKSCREEN, PcbArtworkPurpose.SILKSCREEN),
+    (LayerRole.COURTYARD, PcbArtworkPurpose.COURTYARD),
+    (LayerRole.FABRICATION, PcbArtworkPurpose.FABRICATION),
+    (LayerRole.ASSEMBLY, PcbArtworkPurpose.ASSEMBLY),
+    (LayerRole.SOLDER_MASK, PcbArtworkPurpose.SOLDER_MASK),
+    (LayerRole.SOLDER_PASTE, PcbArtworkPurpose.SOLDER_PASTE),
+    (LayerRole.DIMENSION, PcbArtworkPurpose.DIMENSION),
+    (LayerRole.MECHANICAL, PcbArtworkPurpose.MECHANICAL),
+    (LayerRole.USER, PcbArtworkPurpose.USER),
+    (LayerRole.COMMENT, PcbArtworkPurpose.USER),
+)
+
+# Footprint-text kinds mapped to their artwork purpose (empty kind falls through).
+_TEXT_KIND_PURPOSES: dict[str, PcbArtworkPurpose] = {
+    "reference": PcbArtworkPurpose.DESIGNATOR,
+    "value": PcbArtworkPurpose.VALUE,
+}
+
+
 def _artwork_purpose(
     layer: PcbLayer | None,
     *,
@@ -375,32 +377,13 @@ def _artwork_purpose(
 ) -> PcbArtworkPurpose:
     if native_type == "model":
         return PcbArtworkPurpose.COMPONENT_BODY
-    if text_kind == "reference":
-        return PcbArtworkPurpose.DESIGNATOR
-    if text_kind == "value":
-        return PcbArtworkPurpose.VALUE
     if text_kind:
-        return PcbArtworkPurpose.USER_TEXT
+        return _TEXT_KIND_PURPOSES.get(text_kind, PcbArtworkPurpose.USER_TEXT)
     if layer is None:
         return PcbArtworkPurpose.UNKNOWN
-    if layer.has_role(LayerRole.SILKSCREEN):
-        return PcbArtworkPurpose.SILKSCREEN
-    if layer.has_role(LayerRole.COURTYARD):
-        return PcbArtworkPurpose.COURTYARD
-    if layer.has_role(LayerRole.FABRICATION):
-        return PcbArtworkPurpose.FABRICATION
-    if layer.has_role(LayerRole.ASSEMBLY):
-        return PcbArtworkPurpose.ASSEMBLY
-    if layer.has_role(LayerRole.SOLDER_MASK):
-        return PcbArtworkPurpose.SOLDER_MASK
-    if layer.has_role(LayerRole.SOLDER_PASTE):
-        return PcbArtworkPurpose.SOLDER_PASTE
-    if layer.has_role(LayerRole.DIMENSION):
-        return PcbArtworkPurpose.DIMENSION
-    if layer.has_role(LayerRole.MECHANICAL):
-        return PcbArtworkPurpose.MECHANICAL
-    if layer.has_role(LayerRole.USER) or layer.has_role(LayerRole.COMMENT):
-        return PcbArtworkPurpose.USER
+    for role, purpose in _ARTWORK_PURPOSE_BY_ROLE:
+        if layer.has_role(role):
+            return purpose
     return PcbArtworkPurpose.UNKNOWN
 
 
@@ -1094,14 +1077,15 @@ def _via_tenting(item: SExpNode) -> tuple[bool, bool]:
     return "front" in sides, "back" in sides
 
 
+_VIA_TYPES: dict[str, PcbViaType] = {
+    "blind": PcbViaType.BLIND,
+    "micro": PcbViaType.MICROVIA,
+    "free": PcbViaType.FREE,
+}
+
+
 def _via_type(native_kind: str) -> PcbViaType:
-    if native_kind == "blind":
-        return PcbViaType.BLIND
-    if native_kind == "micro":
-        return PcbViaType.MICROVIA
-    if native_kind == "free":
-        return PcbViaType.FREE
-    return PcbViaType.THROUGH
+    return _VIA_TYPES.get(native_kind, PcbViaType.THROUGH)
 
 
 def _parse_zone_keepout(

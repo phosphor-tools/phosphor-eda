@@ -359,6 +359,57 @@ def _parse_pcb_snippet(body: str, name: str = "test") -> Pcb:
     return parse_kicad_pcb_from_sexpr(list(parsed[1:]), default_name=name)
 
 
+def _keepout_with_layer_selector(selector: str) -> Pcb:
+    return _parse_pcb_snippet(
+        f"""
+        (layers
+          (0 "F.Cu" signal)
+          (31 "B.Cu" signal)
+          (34 "B.Paste" user)
+          (35 "F.Paste" user)
+          (36 "B.SilkS" user)
+          (37 "F.SilkS" user)
+          (38 "B.Mask" user)
+          (39 "F.Mask" user)
+          (40 "Dwgs.User" user)
+          (44 "Edge.Cuts" user)
+          (46 "B.CrtYd" user)
+          (47 "F.CrtYd" user)
+          (48 "B.Fab" user)
+          (49 "F.Fab" user)
+          (54 "F.Adhes" user)
+          (55 "B.Adhes" user)
+        )
+        (gr_line (start 0 0) (end 10 0) (layer "Edge.Cuts") (width 0.1))
+        (gr_line (start 10 0) (end 10 10) (layer "Edge.Cuts") (width 0.1))
+        (gr_line (start 10 10) (end 0 10) (layer "Edge.Cuts") (width 0.1))
+        (gr_line (start 0 10) (end 0 0) (layer "Edge.Cuts") (width 0.1))
+        (zone
+          (layers "{selector}")
+          (keepout (tracks not_allowed))
+          (polygon (pts (xy 1 1) (xy 2 1) (xy 2 2) (xy 1 2)))
+        )
+        """
+    )
+
+
+@pytest.mark.parametrize(
+    ("selector", "expected"),
+    [
+        # Courtyard layers also carry the FABRICATION role, so *.Fab includes them.
+        ("*.Fab", {"F.Fab", "B.Fab", "F.CrtYd", "B.CrtYd"}),
+        ("*.Adhes", {"F.Adhes", "B.Adhes"}),
+        ("*.CrtYd", {"F.CrtYd", "B.CrtYd"}),
+    ],
+)
+def test_wildcard_selector_expands_aux_layers(selector: str, expected: set[str]) -> None:
+    """``*.Fab``/``*.Adhes``/``*.CrtYd`` expand to all matching layers, not a single literal."""
+    board = _keepout_with_layer_selector(selector)
+    assert len(board.keepouts) == 1
+    names = {layer.name for layer in board.keepouts[0].layers}
+    assert names == expected
+
+
 def test_kicad_trace_arc_missing_mid_raises() -> None:
     """A trace arc without a mid point is malformed and must raise, not be dropped."""
     with pytest.raises(ValueError, match="Trace arc missing required"):
