@@ -29,7 +29,7 @@ from phosphor_eda.pcb_render_settings import (
     parse_render_settings,
     render_settings_schema,
 )
-from phosphor_eda.text_metrics import BASELINE_CENTER_OFFSET, INTER_REGULAR_BASE64
+from phosphor_eda.geometry.text_metrics import BASELINE_CENTER_OFFSET, INTER_REGULAR_BASE64
 
 __all__ = [
     "HighlightSpec",

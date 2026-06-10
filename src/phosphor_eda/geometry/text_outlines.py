@@ -12,7 +12,7 @@ from shapely import GeometryCollection, Polygon
 from shapely.affinity import rotate, scale, translate
 from shapely.ops import unary_union
 
-from phosphor_eda.fonts import INTER_REGULAR
+from phosphor_eda.geometry.fonts import INTER_REGULAR
 
 if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry

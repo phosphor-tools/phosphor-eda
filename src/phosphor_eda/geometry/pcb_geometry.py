@@ -14,7 +14,7 @@ from shapely.affinity import rotate
 from shapely.ops import unary_union
 
 from phosphor_eda.domain.pcb import PcbArc, PcbCircle, PcbLine, PcbPathSegmentKind, PcbPolygon
-from phosphor_eda.shapely_geometry import normalize_geometry, robust_polygonize
+from phosphor_eda.geometry.shapely_ops import normalize_geometry, robust_polygonize
 
 if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry

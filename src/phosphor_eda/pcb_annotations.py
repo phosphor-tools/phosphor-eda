@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from ortools.sat.python import cp_model
 
-from phosphor_eda.text_metrics import measure_text
+from phosphor_eda.geometry.text_metrics import measure_text
 
 if TYPE_CHECKING:
     from collections.abc import Callable

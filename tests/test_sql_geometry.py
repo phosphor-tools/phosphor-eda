@@ -18,7 +18,7 @@ from phosphor_eda.domain.pcb import (
     PcbPolygon,
     PcbVia,
 )
-from phosphor_eda.sql.geometry import (
+from phosphor_eda.geometry.pcb_geometry import (
     arc_center_from_three_points,
     arc_sweep_angle,
     arc_to_polyline,

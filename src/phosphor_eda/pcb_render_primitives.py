@@ -28,8 +28,8 @@ from phosphor_eda.domain.pcb import (
 )
 from phosphor_eda.pcb_render_drills import drill_geometry
 from phosphor_eda.pcb_render_inventory import InventoryItem, InventoryItemKind, InventoryPurpose
-from phosphor_eda.shapely_geometry import normalize_geometry
-from phosphor_eda.sql.geometry import (
+from phosphor_eda.geometry.shapely_ops import normalize_geometry
+from phosphor_eda.geometry.pcb_geometry import (
     arc_center_from_three_points,
     arc_sweep_angle,
     arc_to_polyline,
@@ -37,7 +37,7 @@ from phosphor_eda.sql.geometry import (
     closed_path_geometry,
     pad_polygon,
 )
-from phosphor_eda.text_outlines import text_outline_geometry
+from phosphor_eda.geometry.text_outlines import text_outline_geometry
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

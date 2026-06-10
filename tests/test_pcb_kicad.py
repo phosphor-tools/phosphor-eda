@@ -24,7 +24,7 @@ from phosphor_eda.domain.pcb import (
 from phosphor_eda.pcb_render_drills import drill_geometry
 from phosphor_eda.pcb_render_inventory import InventoryItemKind, build_inventory
 from phosphor_eda.domain.project import Stackup
-from phosphor_eda.sql.geometry import pad_polygon
+from phosphor_eda.geometry.pcb_geometry import pad_polygon
 
 FIXTURE = Path(__file__).parent / "fixtures" / "swd_switch.kicad_pcb"
 ORANGECRAB_FIXTURE = Path(__file__).parent / "fixtures" / "orangecrab.kicad_pcb"

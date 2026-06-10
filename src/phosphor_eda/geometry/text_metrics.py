@@ -16,7 +16,7 @@ import re
 from fontTools import subset as ft_subset  # pyright: ignore[reportMissingTypeStubs]
 from fontTools.ttLib import TTFont  # pyright: ignore[reportMissingTypeStubs]
 
-from phosphor_eda.fonts import INTER_REGULAR
+from phosphor_eda.geometry.fonts import INTER_REGULAR
 
 # Compile once: matches any HTML tag
 _HTML_TAG_RE = re.compile(r"<[^>]+>")

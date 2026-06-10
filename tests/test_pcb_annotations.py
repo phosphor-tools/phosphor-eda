@@ -446,7 +446,7 @@ class TestMeasureLabel:
 
     def test_includes_padding(self) -> None:
         """Label pill should be larger than raw text measurement."""
-        from phosphor_eda.text_metrics import measure_text
+        from phosphor_eda.geometry.text_metrics import measure_text
 
         text = "Hello"
         raw_w, raw_h = measure_text(text, 1.0)

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from shapely import LineString, Point
 from shapely.affinity import rotate
 
-from phosphor_eda.sql.geometry import VIA_DRILL_QUAD_SEGS
+from phosphor_eda.geometry.pcb_geometry import VIA_DRILL_QUAD_SEGS
 
 if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry

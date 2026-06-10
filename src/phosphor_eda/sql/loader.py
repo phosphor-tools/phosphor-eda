@@ -31,7 +31,7 @@ from phosphor_eda.domain.pcb import (
     PcbVia,
     normalize_roles,
 )
-from phosphor_eda.sql.geometry import (
+from phosphor_eda.geometry.pcb_geometry import (
     arc_center_from_three_points,
     arc_sweep_angle,
     arc_to_polyline,
@@ -46,7 +46,7 @@ from phosphor_eda.sql.geometry import (
     via_geometry,
 )
 from phosphor_eda.sql.schema import create_tables, create_views
-from phosphor_eda.text_outlines import text_outline_geometry
+from phosphor_eda.geometry.text_outlines import text_outline_geometry
 
 if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry
