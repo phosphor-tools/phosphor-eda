@@ -15,7 +15,7 @@ def _polygon(prim_id: str, points: list[tuple[float, float]]) -> _ParsedPrimitiv
         id=prim_id,
         object_type=_ParsedObjectKind.REGION,
         shape=_ParsedShapeKind.POLYGON,
-        roles=(_ParsedRole.BOARD_LEVEL,),
+        roles=(_ParsedRole.BOARD_OUTLINE,),
         data=PcbPolygon(points=points),
         layers=("Top Layer",),
     )

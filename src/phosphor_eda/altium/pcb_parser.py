@@ -93,8 +93,6 @@ _INT_TO_MM = 0.00000254
 # 1 mil = 0.001 inch = 0.0254 mm
 _MIL_TO_MM = 0.0254
 
-_NET_UNCONNECTED = NET_UNCONNECTED
-_COMPONENT_NONE = COMPONENT_NONE
 _POLYGON_NONE = 0xFFFF
 
 # Altium Board6/Data carries layer names and mechanical kinds. Numeric layer
@@ -270,38 +268,22 @@ class _DrillManagerRecord:
 class _ParsedRole(StrEnum):
     ASSEMBLY = "assembly"
     BLIND_VIA = "blind_via"
-    BOARD_LEVEL = "board_level"
     BOARD_OUTLINE = "board_outline"
-    COMMENT = "comment"
     COMPONENT_BODY = "component_body"
     CONDUCTOR = "conductor"
-    COPPER = "copper"
     COURTYARD = "courtyard"
     DESIGNATOR = "designator"
-    DRILL = "drill"
-    EDGE = "edge"
     FABRICATION = "fabrication"
-    FOOTPRINT_MEMBER = "footprint_member"
     FREE_VIA = "free_via"
     MECHANICAL = "mechanical"
     PLATED_HOLE = "plated_hole"
     POLYGON_CUTOUT = "polygon_cutout"
-    POUR = "pour"
-    POUR_FILL = "pour_fill"
-    ROUTE = "route"
-    ROUTE_TOOL_PATH = "route_tool_path"
     SILKSCREEN = "silkscreen"
-    SMD = "smd"
     SOLDER_MASK = "solder_mask"
     SOLDER_PASTE = "solder_paste"
     TEXT = "text"
-    THROUGH_HOLE = "through_hole"
-    TRACE = "trace"
-    UNKNOWN = "unknown"
-    USER = "user"
     USER_TEXT = "user_text"
     VALUE = "value"
-    V_CUT = "v_cut"
 
 
 class _ParsedObjectKind(StrEnum):
@@ -329,8 +311,6 @@ _PARSED_ROLE_ORDER: tuple[_ParsedRole, ...] = tuple(_ParsedRole)
 
 def _normalize_parsed_roles(*roles: _ParsedRole | str) -> tuple[_ParsedRole, ...]:
     role_set = {role if isinstance(role, _ParsedRole) else _ParsedRole(role) for role in roles}
-    if not role_set:
-        role_set.add(_ParsedRole.UNKNOWN)
     return tuple(role for role in _PARSED_ROLE_ORDER if role in role_set)
 
 
@@ -381,7 +361,7 @@ type _ParsedPayload = (
 )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class _ParsedPrimitive:
     id: str
     object_type: _ParsedObjectKind
@@ -395,34 +375,9 @@ class _ParsedPrimitive:
     pour_id: str = ""
     metadata: PcbObjectMetadata = field(default_factory=PcbObjectMetadata)
 
-    def __init__(
-        self,
-        *,
-        id: str,
-        object_type: _ParsedObjectKind,
-        shape: _ParsedShapeKind,
-        roles: tuple[_ParsedRole, ...],
-        data: _ParsedPayload,
-        layers: tuple[str, ...] = (),
-        net_number: int = 0,
-        net_name: str = "",
-        footprint_ref: str = "",
-        pour_id: str = "",
-        metadata: PcbObjectMetadata | None = None,
-    ) -> None:
-        object.__setattr__(self, "id", id)
-        object.__setattr__(self, "object_type", object_type)
-        object.__setattr__(self, "shape", shape)
-        object.__setattr__(self, "roles", _normalize_parsed_roles(*roles))
-        object.__setattr__(self, "data", data)
-        object.__setattr__(self, "layers", tuple(layers))
-        object.__setattr__(self, "net_number", net_number)
-        object.__setattr__(self, "net_name", net_name)
-        object.__setattr__(self, "footprint_ref", footprint_ref)
-        object.__setattr__(self, "pour_id", pour_id)
-        object.__setattr__(
-            self, "metadata", metadata if metadata is not None else PcbObjectMetadata()
-        )
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "layers", tuple(self.layers))
+        object.__setattr__(self, "roles", _normalize_parsed_roles(*self.roles))
 
     @property
     def primary_layer(self) -> str:
@@ -660,11 +615,10 @@ def _layer_ref(num: int, layer_map: dict[int, PcbLayer], *, source: str) -> PcbL
 
 def _net_number(raw: int) -> int:
     """Map Altium net index to domain net number (0 = unconnected)."""
-    return 0 if raw == _NET_UNCONNECTED else raw + 1
+    return 0 if raw == NET_UNCONNECTED else raw + 1
 
 
 _LAYER_TO_GEOMETRY_ROLES: dict[LayerRole, _ParsedRole] = {
-    LayerRole.COPPER: _ParsedRole.COPPER,
     LayerRole.SOLDER_MASK: _ParsedRole.SOLDER_MASK,
     LayerRole.SOLDER_PASTE: _ParsedRole.SOLDER_PASTE,
     LayerRole.SILKSCREEN: _ParsedRole.SILKSCREEN,
@@ -673,12 +627,7 @@ _LAYER_TO_GEOMETRY_ROLES: dict[LayerRole, _ParsedRole] = {
     LayerRole.COURTYARD: _ParsedRole.COURTYARD,
     LayerRole.DESIGNATOR: _ParsedRole.DESIGNATOR,
     LayerRole.VALUE: _ParsedRole.VALUE,
-    LayerRole.COMMENT: _ParsedRole.COMMENT,
-    LayerRole.EDGE: _ParsedRole.EDGE,
     LayerRole.MECHANICAL: _ParsedRole.MECHANICAL,
-    LayerRole.ROUTE_TOOL_PATH: _ParsedRole.ROUTE_TOOL_PATH,
-    LayerRole.V_CUT: _ParsedRole.V_CUT,
-    LayerRole.USER: _ParsedRole.USER,
 }
 
 
@@ -688,7 +637,7 @@ def _layer_geometry_roles(
 ) -> tuple[_ParsedRole, ...]:
     layer = layer_map.get(layer_num)
     if layer is None:
-        return (_ParsedRole.UNKNOWN,)
+        return ()
     return tuple(
         geometry_role
         for role in layer.roles
@@ -787,11 +736,7 @@ def _layered_geometry_roles(
 
 
 def _with_footprint_ref(item: _ParsedPrimitive, footprint_ref: str) -> _ParsedPrimitive:
-    return replace(
-        item,
-        footprint_ref=footprint_ref,
-        roles=_normalize_parsed_roles(*item.roles, _ParsedRole.FOOTPRINT_MEMBER),
-    )
+    return replace(item, footprint_ref=footprint_ref)
 
 
 # ---------------------------------------------------------------------------
@@ -1007,12 +952,11 @@ def _parse_tracks(
         y2 = -_int_to_mm(track.end[1])
         width = _int_to_mm(track.width)
 
-        component_index = None if track.component == _COMPONENT_NONE else track.component
+        component_index = None if track.component == COMPONENT_NONE else track.component
         if track.is_keepout:
             keepouts.append(
                 _keepout_from_line(
                     layer=layer_ref,
-                    layer_num=track.layer,
                     track=track,
                     x1=x1,
                     y1=y1,
@@ -1025,32 +969,15 @@ def _parse_tracks(
             )
             continue
 
-        footprint_role = (
-            _ParsedRole.FOOTPRINT_MEMBER if component_index is not None else _ParsedRole.BOARD_LEVEL
-        )
         pour_id = _resolve_pour_id(resolved_pour_id_map, track.polygon)
         if track.layer in _COPPER_LAYERS:
             object_type = _ParsedObjectKind.TRACK
-            if pour_id:
-                roles = _layered_geometry_roles(
-                    track.layer,
-                    layer_map,
-                    _ParsedRole.CONDUCTOR,
-                    _ParsedRole.POUR,
-                    _ParsedRole.POUR_FILL,
-                    footprint_role,
-                )
-                source_collection = "conductors"
-            else:
-                roles = _layered_geometry_roles(
-                    track.layer,
-                    layer_map,
-                    _ParsedRole.CONDUCTOR,
-                    _ParsedRole.ROUTE,
-                    _ParsedRole.TRACE,
-                    footprint_role,
-                )
-                source_collection = "conductors"
+            roles = _layered_geometry_roles(
+                track.layer,
+                layer_map,
+                _ParsedRole.CONDUCTOR,
+            )
+            source_collection = "conductors"
             net_number = _net_number(track.net)
         elif layer_map[track.layer].has_role(LayerRole.EDGE):
             object_type = _ParsedObjectKind.GRAPHIC
@@ -1058,13 +985,12 @@ def _parse_tracks(
                 track.layer,
                 layer_map,
                 _ParsedRole.BOARD_OUTLINE,
-                _ParsedRole.BOARD_LEVEL,
             )
             source_collection = "board_profile"
             net_number = 0
         else:
             object_type = _ParsedObjectKind.GRAPHIC
-            roles = _layered_geometry_roles(track.layer, layer_map, footprint_role)
+            roles = _layered_geometry_roles(track.layer, layer_map)
             source_collection = "footprint_artwork" if component_index is not None else "artwork"
             net_number = 0
 
@@ -1115,22 +1041,15 @@ def _parse_vias(
             if layer_ref.name not in layers:
                 layers.append(layer_ref.name)
 
-        roles = [
-            _ParsedRole.COPPER,
-            _ParsedRole.CONDUCTOR,
-            _ParsedRole.DRILL,
-        ]
-        if via.start_layer == 1 and via.end_layer == 32:
-            roles.append(_ParsedRole.THROUGH_HOLE)
-        elif via.start_layer == via.end_layer:
-            roles.append(_ParsedRole.FREE_VIA)
-        else:
-            roles.append(_ParsedRole.BLIND_VIA)
+        roles = [_ParsedRole.CONDUCTOR]
+        through_hole = via.start_layer == 1 and via.end_layer == 32
+        if not through_hole:
+            if via.start_layer == via.end_layer:
+                roles.append(_ParsedRole.FREE_VIA)
+            else:
+                roles.append(_ParsedRole.BLIND_VIA)
 
-        component_index = None if via.component == _COMPONENT_NONE else via.component
-        roles.append(
-            _ParsedRole.FOOTPRINT_MEMBER if component_index is not None else _ParsedRole.BOARD_LEVEL
-        )
+        component_index = None if via.component == COMPONENT_NONE else via.component
 
         vias.append(
             _ParsedPrimitive(
@@ -1193,7 +1112,7 @@ def _parse_arcs(
             cx, cy_orig, radius, width, arc.start_angle, arc.end_angle
         )
 
-        component_index = None if arc.component == _COMPONENT_NONE else arc.component
+        component_index = None if arc.component == COMPONENT_NONE else arc.component
         if arc.is_keepout:
             keepouts.append(
                 _keepout_from_arc(
@@ -1210,32 +1129,15 @@ def _parse_arcs(
             )
             continue
 
-        footprint_role = (
-            _ParsedRole.FOOTPRINT_MEMBER if component_index is not None else _ParsedRole.BOARD_LEVEL
-        )
         pour_id = _resolve_pour_id(resolved_pour_id_map, arc.polygon)
         if arc.layer in _COPPER_LAYERS:
             object_type = _ParsedObjectKind.TRACK
-            if pour_id:
-                roles = _layered_geometry_roles(
-                    arc.layer,
-                    layer_map,
-                    _ParsedRole.CONDUCTOR,
-                    _ParsedRole.POUR,
-                    _ParsedRole.POUR_FILL,
-                    footprint_role,
-                )
-                source_collection = "conductors"
-            else:
-                roles = _layered_geometry_roles(
-                    arc.layer,
-                    layer_map,
-                    _ParsedRole.CONDUCTOR,
-                    _ParsedRole.ROUTE,
-                    _ParsedRole.TRACE,
-                    footprint_role,
-                )
-                source_collection = "conductors"
+            roles = _layered_geometry_roles(
+                arc.layer,
+                layer_map,
+                _ParsedRole.CONDUCTOR,
+            )
+            source_collection = "conductors"
             net_number = _net_number(arc.net)
         elif layer_map[arc.layer].has_role(LayerRole.EDGE):
             object_type = _ParsedObjectKind.GRAPHIC
@@ -1243,13 +1145,12 @@ def _parse_arcs(
                 arc.layer,
                 layer_map,
                 _ParsedRole.BOARD_OUTLINE,
-                _ParsedRole.BOARD_LEVEL,
             )
             source_collection = "board_profile"
             net_number = 0
         else:
             object_type = _ParsedObjectKind.GRAPHIC
-            roles = _layered_geometry_roles(arc.layer, layer_map, footprint_role)
+            roles = _layered_geometry_roles(arc.layer, layer_map)
             source_collection = "footprint_artwork" if component_index is not None else "artwork"
             net_number = 0
 
@@ -1347,7 +1248,6 @@ def _keepout_from_arc(
 def _keepout_from_line(
     *,
     layer: PcbLayer,
-    layer_num: int,
     track: TrackRecord,
     x1: float,
     y1: float,
@@ -1357,7 +1257,6 @@ def _keepout_from_line(
     index: int,
     component_index: int | None,
 ) -> PcbKeepout:
-    _ = layer_num
     return PcbKeepout(
         id=f"keepout_track:{track.layer}:{index}",
         boundary=PcbClosedPath.from_points(_line_rect_points(x1, y1, x2, y2, width)),
@@ -1511,15 +1410,10 @@ def _parse_pads(
         net_name = net_obj.name if net_obj is not None else ""
 
         roles = [_ParsedRole.CONDUCTOR]
-        if pad.layer in _COPPER_LAYERS or pad.layer == 74:
-            roles.append(_ParsedRole.COPPER)
-        else:
+        if pad.layer not in _COPPER_LAYERS and pad.layer != 74:
             roles.extend(_layer_geometry_roles(pad.layer, layer_map))
         if pad.hole_size > 0:
-            roles.extend((_ParsedRole.DRILL, _ParsedRole.THROUGH_HOLE))
             roles.append(_ParsedRole.PLATED_HOLE)
-        else:
-            roles.append(_ParsedRole.SMD)
 
         geometry_shape = (
             _ParsedShapeKind.CIRCLE if shape == "circle" else _ParsedShapeKind.RECTANGLE
@@ -1553,7 +1447,7 @@ def _parse_pads(
                         source_collection="pads",
                         native_index=index,
                         native_component_index=None
-                        if pad.component == _COMPONENT_NONE
+                        if pad.component == COMPONENT_NONE
                         else pad.component,
                         properties={
                             "pad_mode": str(pad.layer),
@@ -1737,10 +1631,7 @@ def _parse_texts(
         else:
             roles.append(_ParsedRole.USER_TEXT)
 
-        component_index = None if text_rec.component == _COMPONENT_NONE else text_rec.component
-        roles.append(
-            _ParsedRole.FOOTPRINT_MEMBER if component_index is not None else _ParsedRole.BOARD_LEVEL
-        )
+        component_index = None if text_rec.component == COMPONENT_NONE else text_rec.component
 
         texts.append(
             (
@@ -1833,17 +1724,14 @@ def _parse_fills(
             object_type = _ParsedObjectKind.GRAPHIC
             source_collection = "artwork"
 
-        component_index = None if fill.component == _COMPONENT_NONE else fill.component
-        footprint_role = (
-            _ParsedRole.FOOTPRINT_MEMBER if component_index is not None else _ParsedRole.BOARD_LEVEL
-        )
+        component_index = None if fill.component == COMPONENT_NONE else fill.component
 
         fills.append(
             _ParsedPrimitive(
                 id=f"fill:{fill.layer}:{index}",
                 object_type=object_type,
                 shape=_ParsedShapeKind.POLYGON,
-                roles=_normalize_parsed_roles(*roles, footprint_role),
+                roles=_normalize_parsed_roles(*roles),
                 data=PcbPolygon(points=points),
                 layers=(layer,),
                 net_number=_net_number(fill.net) if fill.layer in _COPPER_LAYERS else 0,
@@ -1880,7 +1768,7 @@ def _parse_polygon_pours(
 
         # Resolve net: text records store 0-based Nets6 index,
         # apply _net_number() to convert to 1-based pcb.nets key
-        net_raw = int(rec.get("net", str(_NET_UNCONNECTED)) or str(_NET_UNCONNECTED))
+        net_raw = int(rec.get("net", str(NET_UNCONNECTED)) or str(NET_UNCONNECTED))
         net_num = _net_number(net_raw)
         net = None if net_num == 0 else nets.get(net_num)
         if net_num != 0 and net is None:
@@ -1962,14 +1850,6 @@ def _altium_pour_fill_mode(hatchstyle: str) -> PcbPourFillMode:
     return PcbPourFillMode.HATCH
 
 
-def _attach_pour_geometry_ids(
-    pours: list[PcbPour],
-    geometry: list[_ParsedPrimitive],
-) -> list[PcbPour]:
-    _ = geometry
-    return pours
-
-
 def _parse_regions(
     data: bytes,
     nets: dict[int, PcbNet],
@@ -2024,7 +1904,7 @@ def _parse_regions(
 
         # Net resolution: use direct net if assigned, otherwise inherit from pour
         if resolved_num in _COPPER_LAYERS:
-            if region.net == _NET_UNCONNECTED and pour_net_map:
+            if region.net == NET_UNCONNECTED and pour_net_map:
                 # Inherit from parent polygon pour via subpolyindex
                 net_num = _resolve_pour_net(pour_net_map, polygon_index, subpolygon_index)
             else:
@@ -2040,13 +1920,8 @@ def _parse_regions(
             roles.append(_ParsedRole.POLYGON_CUTOUT)
         elif resolved_num in _COPPER_LAYERS:
             roles.append(_ParsedRole.CONDUCTOR)
-            if pour_id:
-                roles.extend((_ParsedRole.POUR, _ParsedRole.POUR_FILL))
 
-        component_index = None if region.component == _COMPONENT_NONE else region.component
-        roles.append(
-            _ParsedRole.FOOTPRINT_MEMBER if component_index is not None else _ParsedRole.BOARD_LEVEL
-        )
+        component_index = None if region.component == COMPONENT_NONE else region.component
 
         polygons.append(
             _ParsedPrimitive(
@@ -2129,7 +2004,7 @@ def _parse_shape_based_regions(
 
         # Net resolution: use direct net if assigned, otherwise inherit from pour
         if resolved_num in _COPPER_LAYERS:
-            if region.net == _NET_UNCONNECTED and pour_net_map:
+            if region.net == NET_UNCONNECTED and pour_net_map:
                 net_num = _resolve_pour_net(pour_net_map, polygon_index, subpolygon_index)
             else:
                 net_num = _net_number(region.net)
@@ -2143,13 +2018,8 @@ def _parse_shape_based_regions(
             roles.append(_ParsedRole.POLYGON_CUTOUT)
         elif resolved_num in _COPPER_LAYERS:
             roles.append(_ParsedRole.CONDUCTOR)
-            if pour_id:
-                roles.extend((_ParsedRole.POUR, _ParsedRole.POUR_FILL))
 
-        component_index = None if region.component == _COMPONENT_NONE else region.component
-        roles.append(
-            _ParsedRole.FOOTPRINT_MEMBER if component_index is not None else _ParsedRole.BOARD_LEVEL
-        )
+        component_index = None if region.component == COMPONENT_NONE else region.component
 
         polygons.append(
             _ParsedPrimitive(
@@ -2271,7 +2141,7 @@ def _parse_board_outline(
             track = TrackRecord.from_bytes(body, ctx)
             if track is None or track.layer != target_layer:
                 continue
-            if track.component != _COMPONENT_NONE:
+            if track.component != COMPONENT_NONE:
                 continue
 
             outline.append(
@@ -2283,7 +2153,6 @@ def _parse_board_outline(
                         target_layer,
                         layer_map,
                         _ParsedRole.BOARD_OUTLINE,
-                        _ParsedRole.BOARD_LEVEL,
                     ),
                     data=PcbLine(
                         start_x=_int_to_mm(track.start[0]),
@@ -2310,7 +2179,7 @@ def _parse_board_outline(
             arc = ArcRecord.from_bytes(body, ctx)
             if arc is None or arc.layer != target_layer:
                 continue
-            if arc.component != _COMPONENT_NONE:
+            if arc.component != COMPONENT_NONE:
                 continue
 
             cx = _int_to_mm(arc.center[0])
@@ -2330,7 +2199,6 @@ def _parse_board_outline(
                         target_layer,
                         layer_map,
                         _ParsedRole.BOARD_OUTLINE,
-                        _ParsedRole.BOARD_LEVEL,
                     ),
                     data=payload,
                     layers=(edge_name,),
@@ -2368,7 +2236,7 @@ def _parse_component_bodies(data: bytes) -> dict[int, list[_ParsedPrimitive]]:
         if not comp_str:
             continue
         comp_idx = int(comp_str)
-        if comp_idx == _COMPONENT_NONE:
+        if comp_idx == COMPONENT_NONE:
             continue
 
         # 2D position (mil → mm)
@@ -2390,10 +2258,7 @@ def _parse_component_bodies(data: bytes) -> dict[int, list[_ParsedPrimitive]]:
             id=f"component_body:{comp_idx}:{index}",
             object_type=_ParsedObjectKind.MODEL_3D,
             shape=_ParsedShapeKind.MODEL,
-            roles=(
-                _ParsedRole.COMPONENT_BODY,
-                _ParsedRole.FOOTPRINT_MEMBER,
-            ),
+            roles=(_ParsedRole.COMPONENT_BODY,),
             data=PcbModel3D(
                 source=model_id,
                 offset=(offset_x, offset_y, offset_z),
@@ -3281,15 +3146,15 @@ def parse_altium_pcb(
         geometry.extend(_parse_board_outline(tracks_data, arcs_data, layer_map, ctx))
 
     for comp_idx, pad in raw_pads:
-        if comp_idx == _COMPONENT_NONE:
+        if comp_idx == COMPONENT_NONE:
             geometry.append(pad)
         elif comp_idx < len(footprints):
             geometry.append(_with_footprint_ref(pad, footprints[comp_idx].reference))
 
     for comp_idx, text in raw_texts:
-        if comp_idx != _COMPONENT_NONE and comp_idx < len(footprints):
+        if comp_idx != COMPONENT_NONE and comp_idx < len(footprints):
             geometry.append(_with_footprint_ref(text, footprints[comp_idx].reference))
-        elif comp_idx == _COMPONENT_NONE:
+        elif comp_idx == COMPONENT_NONE:
             geometry.append(text)
 
     for item in track_geometry + arc_geometry + shape_regions:
@@ -3334,7 +3199,6 @@ def parse_altium_pcb(
         board_name = board_name[:-4]
 
     keepouts = [*track_keepouts, *arc_keepouts, *fill_keepouts]
-    pours = _attach_pour_geometry_ids(pours, geometry)
 
     return _build_pcb_from_parsed_primitives(
         name=board_name,
