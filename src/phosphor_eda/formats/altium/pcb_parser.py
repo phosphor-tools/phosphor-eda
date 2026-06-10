@@ -733,6 +733,41 @@ def _layered_geometry_roles(
     return _normalize_parsed_roles(*_layer_geometry_roles(layer_num, layer_map), *roles)
 
 
+def _classify_copper_primitive(
+    layer_num: int,
+    layer_map: dict[int, PcbLayer],
+    component_index: int | None,
+    net: int,
+) -> tuple[_ParsedObjectKind, tuple[_ParsedRole, ...], str, int]:
+    """Classify a line/arc primitive by its layer.
+
+    Returns (object_type, roles, source_collection, net_number).  Copper
+    layers become conductors carrying their net; the board edge becomes a
+    board-outline graphic; everything else is silkscreen/paste artwork with
+    no net.  Shared verbatim by ``_parse_tracks`` and ``_parse_arcs``.
+    """
+    if layer_num in _COPPER_LAYERS:
+        return (
+            _ParsedObjectKind.TRACK,
+            _layered_geometry_roles(layer_num, layer_map, _ParsedRole.CONDUCTOR),
+            "conductors",
+            _net_number(net),
+        )
+    if layer_map[layer_num].has_role(LayerRole.EDGE):
+        return (
+            _ParsedObjectKind.GRAPHIC,
+            _layered_geometry_roles(layer_num, layer_map, _ParsedRole.BOARD_OUTLINE),
+            "board_profile",
+            0,
+        )
+    return (
+        _ParsedObjectKind.GRAPHIC,
+        _layered_geometry_roles(layer_num, layer_map),
+        "footprint_artwork" if component_index is not None else "artwork",
+        0,
+    )
+
+
 def _with_footprint_ref(item: _ParsedPrimitive, footprint_ref: str) -> _ParsedPrimitive:
     return replace(item, footprint_ref=footprint_ref)
 
@@ -968,29 +1003,9 @@ def _parse_tracks(
             continue
 
         pour_id = _resolve_pour_id(resolved_pour_id_map, track.polygon)
-        if track.layer in _COPPER_LAYERS:
-            object_type = _ParsedObjectKind.TRACK
-            roles = _layered_geometry_roles(
-                track.layer,
-                layer_map,
-                _ParsedRole.CONDUCTOR,
-            )
-            source_collection = "conductors"
-            net_number = _net_number(track.net)
-        elif layer_map[track.layer].has_role(LayerRole.EDGE):
-            object_type = _ParsedObjectKind.GRAPHIC
-            roles = _layered_geometry_roles(
-                track.layer,
-                layer_map,
-                _ParsedRole.BOARD_OUTLINE,
-            )
-            source_collection = "board_profile"
-            net_number = 0
-        else:
-            object_type = _ParsedObjectKind.GRAPHIC
-            roles = _layered_geometry_roles(track.layer, layer_map)
-            source_collection = "footprint_artwork" if component_index is not None else "artwork"
-            net_number = 0
+        object_type, roles, source_collection, net_number = _classify_copper_primitive(
+            track.layer, layer_map, component_index, track.net
+        )
 
         geometry.append(
             _ParsedPrimitive(
@@ -1130,29 +1145,9 @@ def _parse_arcs(
             continue
 
         pour_id = _resolve_pour_id(resolved_pour_id_map, arc.polygon)
-        if arc.layer in _COPPER_LAYERS:
-            object_type = _ParsedObjectKind.TRACK
-            roles = _layered_geometry_roles(
-                arc.layer,
-                layer_map,
-                _ParsedRole.CONDUCTOR,
-            )
-            source_collection = "conductors"
-            net_number = _net_number(arc.net)
-        elif layer_map[arc.layer].has_role(LayerRole.EDGE):
-            object_type = _ParsedObjectKind.GRAPHIC
-            roles = _layered_geometry_roles(
-                arc.layer,
-                layer_map,
-                _ParsedRole.BOARD_OUTLINE,
-            )
-            source_collection = "board_profile"
-            net_number = 0
-        else:
-            object_type = _ParsedObjectKind.GRAPHIC
-            roles = _layered_geometry_roles(arc.layer, layer_map)
-            source_collection = "footprint_artwork" if component_index is not None else "artwork"
-            net_number = 0
+        object_type, roles, source_collection, net_number = _classify_copper_primitive(
+            arc.layer, layer_map, component_index, arc.net
+        )
 
         geometry.append(
             _ParsedPrimitive(
@@ -1824,6 +1819,75 @@ def _altium_pour_fill_mode(hatchstyle: str) -> PcbPourFillMode:
     return PcbPourFillMode.HATCH
 
 
+def _region_primitive(
+    *,
+    id_prefix: str,
+    native_type: str,
+    region: RegionRecord | ShapeBasedRegionRecord,
+    points: list[tuple[float, float]],
+    holes: list[list[tuple[float, float]]],
+    resolved_num: int,
+    layer: str,
+    region_kind: int | None,
+    index: int,
+    nets: dict[int, PcbNet],
+    layer_map: dict[int, PcbLayer],
+    pour_id_map: dict[int, str] | None,
+    pour_net_map: dict[int, int] | None,
+) -> _ParsedPrimitive:
+    """Build a polygon primitive shared by Regions6 and ShapeBasedRegions6.
+
+    Both record streams resolve net, pour id, roles and metadata identically
+    once their vertices are decoded; only the id prefix, ``native_type`` and
+    the vertex-decoding step (raw f64 pairs vs arc-linearized extended
+    vertices) differ, and those are handled by the callers.
+    """
+    polygon_index = int(region.properties.get("polygonindex", "-1") or "-1")
+    subpolygon_index = int(region.properties.get("subpolyindex", "-1") or "-1")
+    pour_id = _resolve_pour_id(pour_id_map or {}, polygon_index, subpolygon_index)
+
+    # Net resolution: use direct net if assigned, otherwise inherit from pour.
+    if resolved_num in _COPPER_LAYERS:
+        if region.net == NET_UNCONNECTED and pour_net_map:
+            net_num = _resolve_pour_net(pour_net_map, polygon_index, subpolygon_index)
+        else:
+            net_num = _net_number(region.net)
+    else:
+        net_num = 0
+    net_obj = nets.get(net_num)
+    net_name = net_obj.name if net_obj else ""
+
+    roles = list(_layer_geometry_roles(resolved_num, layer_map))
+    if region_kind == RegionKind.POLYGON_CUTOUT:
+        roles.append(_ParsedRole.POLYGON_CUTOUT)
+    elif resolved_num in _COPPER_LAYERS:
+        roles.append(_ParsedRole.CONDUCTOR)
+
+    component_index = None if region.component == COMPONENT_NONE else region.component
+
+    return _ParsedPrimitive(
+        id=f"{id_prefix}:{resolved_num}:{index}",
+        object_type=_ParsedObjectKind.REGION,
+        shape=_ParsedShapeKind.POLYGON,
+        roles=tuple(roles),
+        data=PcbPolygon(points=points, holes=holes),
+        layers=(layer,),
+        net_number=net_num,
+        net_name=net_name,
+        pour_id=pour_id,
+        metadata=_geometry_metadata(
+            native_type=native_type,
+            native_kind="" if region_kind is None else str(region_kind),
+            source_collection="conductors" if _ParsedRole.CONDUCTOR in roles else "artwork",
+            native_index=index,
+            native_component_index=component_index,
+            native_polygon_index=polygon_index,
+            native_subpolygon_index=subpolygon_index,
+            properties=region.properties,
+        ),
+    )
+
+
 def _parse_regions(
     data: bytes,
     nets: dict[int, PcbNet],
@@ -1872,52 +1936,21 @@ def _parse_regions(
             if len(h_pts) >= 3:
                 holes.append(h_pts)
 
-        polygon_index = int(region.properties.get("polygonindex", "-1") or "-1")
-        subpolygon_index = int(region.properties.get("subpolyindex", "-1") or "-1")
-        pour_id = _resolve_pour_id(pour_id_map or {}, polygon_index, subpolygon_index)
-
-        # Net resolution: use direct net if assigned, otherwise inherit from pour
-        if resolved_num in _COPPER_LAYERS:
-            if region.net == NET_UNCONNECTED and pour_net_map:
-                # Inherit from parent polygon pour via subpolyindex
-                net_num = _resolve_pour_net(pour_net_map, polygon_index, subpolygon_index)
-            else:
-                net_num = _net_number(region.net)
-        else:
-            net_num = 0
-
-        net_obj = nets.get(net_num)
-        net_name = net_obj.name if net_obj else ""
-
-        roles = list(_layer_geometry_roles(resolved_num, layer_map))
-        if region_kind == RegionKind.POLYGON_CUTOUT:
-            roles.append(_ParsedRole.POLYGON_CUTOUT)
-        elif resolved_num in _COPPER_LAYERS:
-            roles.append(_ParsedRole.CONDUCTOR)
-
-        component_index = None if region.component == COMPONENT_NONE else region.component
-
         polygons.append(
-            _ParsedPrimitive(
-                id=f"region:{resolved_num}:{index}",
-                object_type=_ParsedObjectKind.REGION,
-                shape=_ParsedShapeKind.POLYGON,
-                roles=tuple(roles),
-                data=PcbPolygon(points=points, holes=holes),
-                layers=(layer,),
-                net_number=net_num,
-                net_name=net_name,
-                pour_id=pour_id,
-                metadata=_geometry_metadata(
-                    native_type="REGION",
-                    native_kind="" if region_kind is None else str(region_kind),
-                    source_collection="conductors" if _ParsedRole.CONDUCTOR in roles else "artwork",
-                    native_index=index,
-                    native_component_index=component_index,
-                    native_polygon_index=polygon_index,
-                    native_subpolygon_index=subpolygon_index,
-                    properties=region.properties,
-                ),
+            _region_primitive(
+                id_prefix="region",
+                native_type="REGION",
+                region=region,
+                points=points,
+                holes=holes,
+                resolved_num=resolved_num,
+                layer=layer,
+                region_kind=region_kind,
+                index=index,
+                nets=nets,
+                layer_map=layer_map,
+                pour_id_map=pour_id_map,
+                pour_net_map=pour_net_map,
             )
         )
 
@@ -1972,50 +2005,21 @@ def _parse_shape_based_regions(
             if len(h_pts) >= 3:
                 holes.append(h_pts)
 
-        polygon_index = int(region.properties.get("polygonindex", "-1") or "-1")
-        subpolygon_index = int(region.properties.get("subpolyindex", "-1") or "-1")
-        pour_id = _resolve_pour_id(pour_id_map or {}, polygon_index, subpolygon_index)
-
-        # Net resolution: use direct net if assigned, otherwise inherit from pour
-        if resolved_num in _COPPER_LAYERS:
-            if region.net == NET_UNCONNECTED and pour_net_map:
-                net_num = _resolve_pour_net(pour_net_map, polygon_index, subpolygon_index)
-            else:
-                net_num = _net_number(region.net)
-        else:
-            net_num = 0
-        net_obj = nets.get(net_num)
-        net_name = net_obj.name if net_obj else ""
-
-        roles = list(_layer_geometry_roles(resolved_num, layer_map))
-        if region_kind == RegionKind.POLYGON_CUTOUT:
-            roles.append(_ParsedRole.POLYGON_CUTOUT)
-        elif resolved_num in _COPPER_LAYERS:
-            roles.append(_ParsedRole.CONDUCTOR)
-
-        component_index = None if region.component == COMPONENT_NONE else region.component
-
         polygons.append(
-            _ParsedPrimitive(
-                id=f"shape_region:{resolved_num}:{index}",
-                object_type=_ParsedObjectKind.REGION,
-                shape=_ParsedShapeKind.POLYGON,
-                roles=tuple(roles),
-                data=PcbPolygon(points=points, holes=holes),
-                layers=(layer,),
-                net_number=net_num,
-                net_name=net_name,
-                pour_id=pour_id,
-                metadata=_geometry_metadata(
-                    native_type="SHAPE_BASED_REGION",
-                    native_kind="" if region_kind is None else str(region_kind),
-                    source_collection="conductors" if _ParsedRole.CONDUCTOR in roles else "artwork",
-                    native_index=index,
-                    native_component_index=component_index,
-                    native_polygon_index=polygon_index,
-                    native_subpolygon_index=subpolygon_index,
-                    properties=region.properties,
-                ),
+            _region_primitive(
+                id_prefix="shape_region",
+                native_type="SHAPE_BASED_REGION",
+                region=region,
+                points=points,
+                holes=holes,
+                resolved_num=resolved_num,
+                layer=layer,
+                region_kind=region_kind,
+                index=index,
+                nets=nets,
+                layer_map=layer_map,
+                pour_id_map=pour_id_map,
+                pour_net_map=pour_net_map,
             )
         )
 
