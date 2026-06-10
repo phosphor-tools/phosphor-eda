@@ -4,8 +4,8 @@ Replaces the raw-dict iteration in ``netlist.py`` and the inner loop of
 ``to_schematic.py`` with a structured pipeline:
 
 1. ``load_sheet()`` — parse + materialize + link + index
-2. ``resolve_nets()`` — wire connectivity → coord-to-net-name map
-3. ``build_page()`` — construct domain model objects (Page/Net/Component/Pin/Port)
+2. ``resolve_local_net_groups()`` — wire connectivity → Altium source local nets
+3. ``resolve_nets()`` — legacy coordinate → generated net-name map
 """
 
 from __future__ import annotations
@@ -41,7 +41,6 @@ from phosphor_eda.altium.records import (
     PinRec,
     PortRec,
     PowerPortRec,
-    RecordType,
     SheetEntryRec,
     SheetNameRec,
     SheetRec,
@@ -51,10 +50,11 @@ from phosphor_eda.altium.records import (
     WireRec,
 )
 from phosphor_eda.altium.spatial import UnionFind, WireIndex, point_on_segment
-from phosphor_eda.schematic import Component, Net, Page, Pin, Port
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    from phosphor_eda.schematic import Page
 
 # Pin electrical type names (Altium Electrical field values)
 _PIN_ELECTRICAL_NAMES = {
@@ -303,6 +303,30 @@ class SheetRecords:
                 yield rec
 
 
+@dataclass(slots=True)
+class LocalNetRecordGroup:
+    """One Altium sheet-local connectivity group before public net resolution."""
+
+    root: tuple[int, int]
+    wire_points: set[tuple[int, int]]
+    named_points: set[tuple[int, int]]
+    net_labels: list[NetLabelRec]
+    power_ports: list[PowerPortRec]
+    ports: list[tuple[PortRec, tuple[int, int]]]
+    sheet_entries: list[SheetEntryRec]
+    extra_named_coords: dict[tuple[int, int], str]
+    generated_name: str
+
+
+@dataclass(slots=True)
+class LocalNetResolution:
+    """Sheet-local net grouping plus coordinate lookup evidence."""
+
+    groups: list[LocalNetRecordGroup]
+    coord_to_root: dict[tuple[int, int], tuple[int, int]]
+    no_connect_wire_coords: set[tuple[int, int]]
+
+
 # ---------------------------------------------------------------------------
 # load_sheet
 # ---------------------------------------------------------------------------
@@ -334,22 +358,49 @@ def load_sheet(
 
 
 # ---------------------------------------------------------------------------
-# resolve_nets — wire connectivity → coord-to-net-name
+# resolve_local_net_groups — wire connectivity before public net resolution
 # ---------------------------------------------------------------------------
 
 
-def resolve_nets(
+def _connect_point_to_wire_group(
+    point: tuple[int, int],
+    sheet: SheetRecords,
+    uf: UnionFind[tuple[int, int]],
+) -> None:
+    touches = sheet.wire_index.segments_touching(point[0], point[1])
+    for wire, seg_idx in touches:
+        uf.union(point, wire.segments[seg_idx][0])
+        break
+
+
+def _first_generated_name(group: LocalNetRecordGroup, sheet_name: str, ordinal: int) -> str:
+    for label in group.net_labels:
+        if label.text:
+            return label.text
+    for power_port in group.power_ports:
+        if power_port.text:
+            return power_port.text
+    for port, _coord in group.ports:
+        if port.name and not port.harness_type and parse_bus_notation(port.name) is None:
+            return port.name
+    for entry in group.sheet_entries:
+        if entry.name and not entry.harness_type and parse_bus_notation(entry.name) is None:
+            return entry.name
+    for _coord, name in group.extra_named_coords.items():
+        if name:
+            return name
+    return f"__auto_{sheet_name}_{ordinal}"
+
+
+def resolve_local_net_groups(
     sheet: SheetRecords,
     extra_named_coords: dict[tuple[int, int], str] | None = None,
-) -> tuple[dict[tuple[int, int], str], set[tuple[int, int]]]:
-    """Build a coordinate → net name map from one sheet's typed records.
+) -> LocalNetResolution:
+    """Build Altium-native sheet-local connectivity groups.
 
-    Returns ``(coord_to_net, nc_wire_coords)`` where *nc_wire_coords* is
-    the set of all wire points reachable from a no-connect marker through
-    wire connectivity.
-
-    Same algorithm as the original ``_resolve_sheet_nets`` in netlist.py
-    but uses typed records and WireIndex for efficient spatial queries.
+    The returned groups preserve the distinct source record categories that
+    will later drive Altium project-level resolution. Group IDs are assigned
+    by the source extractor, not here.
     """
     uf: UnionFind[tuple[int, int]] = UnionFind()
 
@@ -387,15 +438,16 @@ def resolve_nets(
     # later identify which pin coordinates share a wire group with an NC.
     for nc in sheet.no_connects:
         nc_loc = nc.location
-        touches = sheet.wire_index.segments_touching(nc_loc[0], nc_loc[1])
-        for wire, seg_idx in touches:
-            uf.union(nc_loc, wire.segments[seg_idx][0])
-            break
+        _connect_point_to_wire_group(nc_loc, sheet, uf)
         all_wire_points.add(nc_loc)
 
-    # --- Step 4: Connect net labels, power ports, ports to wire groups ---
+    # --- Step 4: Connect net identifiers to wire groups ---
     all_named_points: set[tuple[int, int]] = set()
-    group_names: dict[tuple[int, int], str] = {}
+    label_points: list[tuple[NetLabelRec, tuple[int, int]]] = []
+    power_port_points: list[tuple[PowerPortRec, tuple[int, int]]] = []
+    port_points: list[tuple[PortRec, tuple[int, int]]] = []
+    sheet_entry_points: list[tuple[SheetEntryRec, tuple[int, int]]] = []
+    extra_points: dict[tuple[int, int], str] = {}
 
     # Net labels
     label_groups: dict[str, list[tuple[int, int]]] = {}
@@ -404,12 +456,8 @@ def resolve_nets(
             continue
         lp = label.location
         all_named_points.add(lp)
-        touches = sheet.wire_index.segments_touching(lp[0], lp[1])
-        for wire, seg_idx in touches:
-            uf.union(lp, wire.segments[seg_idx][0])
-            break
-        root = uf.find(lp)
-        group_names[root] = label.text
+        _connect_point_to_wire_group(lp, sheet, uf)
+        label_points.append((label, lp))
         label_groups.setdefault(label.text, []).append(lp)
 
     # Same-name net labels on the same sheet merge their groups
@@ -424,88 +472,65 @@ def resolve_nets(
             continue
         loc = pp.location
         all_named_points.add(loc)
-        touches = sheet.wire_index.segments_touching(loc[0], loc[1])
-        for wire, seg_idx in touches:
-            uf.union(loc, wire.segments[seg_idx][0])
-            break
-        root = uf.find(loc)
-        group_names[root] = pp.text
+        _connect_point_to_wire_group(loc, sheet, uf)
+        power_port_points.append((pp, loc))
 
-    # Ports (skip harness-type and bus-notation — those are expanded
-    # into individual member ports during build_page)
+    # Ports.
     for port in sheet.ports:
-        if port.harness_type or not port.name:
-            continue
-        if parse_bus_notation(port.name) is not None:
+        if not port.name:
             continue
         loc = _port_wire_coord(port, sheet.wire_index)
         all_named_points.add(loc)
-        touches = sheet.wire_index.segments_touching(loc[0], loc[1])
-        for wire, seg_idx in touches:
-            uf.union(loc, wire.segments[seg_idx][0])
-            break
-        root = uf.find(loc)
-        group_names[root] = port.name
+        _connect_point_to_wire_group(loc, sheet, uf)
+        port_points.append((port, loc))
 
-    # --- Step 4.6: Sheet entries as net name sources (low priority) ---
-    # Sheet entries that touch a wire group contribute their name only if
-    # no net label, power port, or port already names the group.  This
-    # ensures wire groups connecting only sheet entries (e.g. ADC1_IN3
-    # and SLIDE_POS wired together on the Top Level page) get named.
-    # Bus-notation entries (e.g. "D[0..7]") are skipped — they're
-    # expanded into individual member ports during build_page.
+    # Sheet entries.
     for entry in sheet.sheet_entries:
-        if entry.harness_type or not entry.name:
-            continue
-        if parse_bus_notation(entry.name) is not None:
+        if not entry.name:
             continue
         ep = entry.coord
         all_named_points.add(ep)
-        touches = sheet.wire_index.segments_touching(ep[0], ep[1])
-        for wire, seg_idx in touches:
-            uf.union(ep, wire.segments[seg_idx][0])
-            break
-        root = uf.find(ep)
-        if root not in group_names:
-            group_names[root] = entry.name
+        _connect_point_to_wire_group(ep, sheet, uf)
+        sheet_entry_points.append((entry, ep))
 
-    # --- Step 4.5: Fallback names for extra coordinates (lowest priority) ---
+    # Fallback source coordinates, primarily harness connector entries.
     if extra_named_coords:
         for (ex, ey), ename in extra_named_coords.items():
             ep = (ex, ey)
             all_named_points.add(ep)
-            touches = sheet.wire_index.segments_touching(ex, ey)
-            for wire, seg_idx in touches:
-                uf.union(ep, wire.segments[seg_idx][0])
-                break
-            root = uf.find(ep)
-            if root not in group_names:
-                group_names[root] = ename
+            _connect_point_to_wire_group(ep, sheet, uf)
+            extra_points[ep] = ename
 
-    # --- Step 5: Rebuild group_names after all unions ---
-    final_names: dict[tuple[int, int], str] = {}
-    for root, name in group_names.items():
-        final_root = uf.find(root)
-        final_names[final_root] = name
+    # --- Step 5: Build group records after all unions ---
+    coord_to_root = {pt: uf.find(pt) for pt in all_wire_points | all_named_points}
+    groups_by_root: dict[tuple[int, int], LocalNetRecordGroup] = {}
+    for root in sorted(set(coord_to_root.values())):
+        groups_by_root[root] = LocalNetRecordGroup(
+            root=root,
+            wire_points=set(),
+            named_points=set(),
+            net_labels=[],
+            power_ports=[],
+            ports=[],
+            sheet_entries=[],
+            extra_named_coords={},
+            generated_name="",
+        )
 
-    # --- Step 5.5: Auto-name remaining unnamed wire groups ---
-    # Altium auto-names all wire groups; we assign synthetic names to any
-    # group that has wire points but no net label/port/power port/sheet entry.
-    named_roots: set[tuple[int, int]] = set(final_names.keys())
-    auto_id = 0
-    for pt in sorted(all_wire_points):
-        root = uf.find(pt)
-        if root not in named_roots:
-            named_roots.add(root)
-            final_names[root] = f"__auto_{sheet.name}_{auto_id}"
-            auto_id += 1
-
-    # --- Step 6: Build coord → net name for all relevant points ---
-    coord_to_net: dict[tuple[int, int], str] = {}
-    for pt in all_wire_points | all_named_points:
-        root = uf.find(pt)
-        if root in final_names:
-            coord_to_net[pt] = final_names[root]
+    for point in all_wire_points:
+        groups_by_root[uf.find(point)].wire_points.add(point)
+    for point in all_named_points:
+        groups_by_root[uf.find(point)].named_points.add(point)
+    for label, point in label_points:
+        groups_by_root[uf.find(point)].net_labels.append(label)
+    for power_port, point in power_port_points:
+        groups_by_root[uf.find(point)].power_ports.append(power_port)
+    for port, point in port_points:
+        groups_by_root[uf.find(point)].ports.append((port, point))
+    for entry, point in sheet_entry_points:
+        groups_by_root[uf.find(point)].sheet_entries.append(entry)
+    for point, name in extra_points.items():
+        groups_by_root[uf.find(point)].extra_named_coords[point] = name
 
     # --- Step 7: Compute no-connect wire group coordinates ---
     # NC markers propagate through wire groups: any pin on the same wire
@@ -519,7 +544,30 @@ def resolve_nets(
             if uf.find(pt) in nc_roots:
                 nc_wire_coords.add(pt)
 
-    return coord_to_net, nc_wire_coords
+    groups = list(groups_by_root.values())
+    for ordinal, group in enumerate(groups):
+        group.generated_name = _first_generated_name(group, sheet.name, ordinal)
+
+    return LocalNetResolution(
+        groups=groups,
+        coord_to_root=coord_to_root,
+        no_connect_wire_coords=nc_wire_coords,
+    )
+
+
+def resolve_nets(
+    sheet: SheetRecords,
+    extra_named_coords: dict[tuple[int, int], str] | None = None,
+) -> tuple[dict[tuple[int, int], str], set[tuple[int, int]]]:
+    """Build the legacy coordinate → generated net name map for one sheet."""
+    resolution = resolve_local_net_groups(sheet, extra_named_coords=extra_named_coords)
+    name_by_root = {group.root: group.generated_name for group in resolution.groups}
+    coord_to_net = {
+        coord: name_by_root[root]
+        for coord, root in resolution.coord_to_root.items()
+        if root in name_by_root
+    }
+    return coord_to_net, resolution.no_connect_wire_coords
 
 
 # ---------------------------------------------------------------------------
@@ -719,528 +767,8 @@ def collect_harness_port_nets(
 
 
 # ---------------------------------------------------------------------------
-# build_page — construct domain model from typed records
+# build_page — legacy public conversion boundary
 # ---------------------------------------------------------------------------
-
-
-def _expand_bus_ports(
-    members: list[str],
-    bus_name: str,
-    page: Page,
-    nets_by_name: dict[str, Net],
-    io_type: int = 0,
-    has_overline: bool = False,
-) -> None:
-    """Create individual Port objects for each bus member.
-
-    For each member name (e.g. "D0"), looks up the net by name in
-    *nets_by_name* and creates a Port linking to it. Sets ``Net.bus``
-    to *bus_name* so the bus grouping is preserved in the domain model.
-    """
-    for member_name in members:
-        if member_name not in nets_by_name:
-            continue
-        net = nets_by_name[member_name]
-        if not net.bus:
-            net.bus = bus_name
-        port_meta: dict[str, str] = {}
-        if io_type:
-            port_meta["io_type"] = _IO_TYPE_NAMES.get(io_type, str(io_type))
-        if has_overline:
-            port_meta["active_low"] = "true"
-        port = Port(
-            name=member_name,
-            page=page,
-            net=net,
-            metadata=port_meta,
-        )
-        page.ports.append(port)
-
-
-def _collect_sheet_entry_ports(
-    sheet: SheetRecords,
-    page: Page,
-    nets_by_name: dict[str, Net],
-    coord_to_net_name: dict[tuple[int, int], str],
-) -> None:
-    """Add Port objects for non-harness sheet entries on this page.
-
-    Bus-notation entries (e.g. ``D[0..7]``) are expanded into individual
-    member ports (D0, D1, ...) by looking up each member's net by name.
-    """
-    for entry in sheet.sheet_entries:
-        if entry.harness_type:
-            continue
-        if not entry.name:
-            continue
-
-        # Bus-notation entry: expand to individual member ports
-        bus_members = parse_bus_notation(entry.name)
-        if bus_members is not None:
-            _expand_bus_ports(
-                bus_members,
-                entry.name,
-                page,
-                nets_by_name,
-                io_type=entry.io_type,
-                has_overline=entry.has_overline,
-            )
-            continue
-
-        net_name = coord_to_net_name.get(entry.coord)
-        if net_name and net_name in nets_by_name:
-            port_meta: dict[str, str] = {}
-            if entry.io_type:
-                port_meta["io_type"] = _IO_TYPE_NAMES.get(
-                    entry.io_type,
-                    str(entry.io_type),
-                )
-            if entry.has_overline:
-                port_meta["active_low"] = "true"
-            port = Port(
-                name=entry.name,
-                page=page,
-                net=nets_by_name[net_name],
-                metadata=port_meta,
-            )
-            page.ports.append(port)
-
-
-def _collect_harness_member_ports(
-    sheet: SheetRecords,
-    page: Page,
-    nets_by_name: dict[str, Net],
-    coord_to_net_name: dict[tuple[int, int], str],
-) -> None:
-    """Add ports for each harness connector entry member on child pages."""
-    for _ht, port_name, members in _parse_harness_groups(sheet):
-        for member_name, coord in members:
-            net_name = coord_to_net_name.get(coord)
-            if net_name and net_name in nets_by_name:
-                port = Port(
-                    name=f"{port_name}@{page.name}:{member_name}",
-                    page=page,
-                    net=nets_by_name[net_name],
-                )
-                page.ports.append(port)
-
-
-def _collect_harness_bridge_ports(
-    sheet: SheetRecords,
-    page: Page,
-    nets_by_name: dict[str, Net],
-    harness_port_nets: dict[str, list[tuple[str, dict[str, str]]]],
-    harness_members_by_type: dict[str, list[str]],
-) -> None:
-    """Create bridge ports for harness sheet entries connected by signal harness
-    wires."""
-    # Build signal harness wire connectivity
-    uf: UnionFind[tuple[int, int]] = UnionFind()
-    harness_wire_segments: list[tuple[tuple[int, int], tuple[int, int]]] = []
-
-    for sh in sheet.signal_harnesses:
-        for seg in sh.segments:
-            uf.union(seg[0], seg[1])
-            harness_wire_segments.append(seg)
-
-    if not harness_wire_segments:
-        return
-
-    # Map sheet symbol key → child page name from FileNameRec
-    child_page_for_symbol: dict[int, str] = {}
-    for fn in sheet.file_names:
-        if fn.owner_index >= 0 and fn.text.lower().endswith(".schdoc"):
-            child_page_for_symbol[fn.owner_index] = fn.text[: -len(".SchDoc")]
-
-    # Find harness-type sheet entries and compute their coordinates
-    harness_entries: list[tuple[str, str, str, tuple[int, int]]] = []
-    for entry in sheet.sheet_entries:
-        if not entry.harness_type or not entry.name:
-            continue
-
-        # Find parent sheet symbol
-        parent_key = entry.owner_index
-        child_page = child_page_for_symbol.get(parent_key, "")
-
-        # Connect to signal harness wire
-        for seg in harness_wire_segments:
-            if point_on_segment(
-                entry.coord[0],
-                entry.coord[1],
-                seg[0][0],
-                seg[0][1],
-                seg[1][0],
-                seg[1][1],
-            ):
-                uf.union(entry.coord, seg[0])
-                break
-
-        harness_entries.append((entry.name, entry.harness_type, child_page, entry.coord))
-
-    # Group connected entries
-    groups: dict[tuple[int, int], list[tuple[str, str, str]]] = {}
-    for entry_name, ht, child_page, coord in harness_entries:
-        root = uf.find(coord)
-        groups.setdefault(root, []).append((entry_name, ht, child_page))
-
-    # For each group with 2+ entries, create bridge ports
-    for group in groups.values():
-        if len(group) < 2:
-            continue
-
-        ht = group[0][1]
-        members = harness_members_by_type.get(ht, [])
-        if not members:
-            continue
-
-        # Look up port-net mapping, disambiguating by child page
-        entry_nets: dict[tuple[str, str], dict[str, str]] = {}
-        for entry_name, _, child_page in group:
-            port_net_list = harness_port_nets.get(entry_name, [])
-            for page_name, nets in port_net_list:
-                if page_name == child_page:
-                    entry_nets[(entry_name, child_page)] = nets
-                    break
-            else:
-                if len(port_net_list) == 1:
-                    entry_nets[(entry_name, child_page)] = port_net_list[0][1]
-
-        # Pick entry with real net names as canonical
-        canonical_nets: dict[str, str] | None = None
-        for entry_name, _, child_page in group:
-            nets = entry_nets.get((entry_name, child_page))
-            if nets:
-                has_real = any(":" not in n for n in nets.values())
-                if has_real and canonical_nets is None:
-                    canonical_nets = nets
-
-        if canonical_nets is None:
-            for entry_name, _, child_page in group:
-                nets = entry_nets.get((entry_name, child_page))
-                if nets:
-                    canonical_nets = nets
-                    break
-
-        if canonical_nets is None:
-            continue
-
-        # Create nets with canonical names and bridge ports for all entries
-        for member_name in members:
-            net_name = canonical_nets.get(member_name)
-            if not net_name:
-                continue
-
-            if net_name not in nets_by_name:
-                net = Net(name=net_name)
-                nets_by_name[net_name] = net
-                page.nets.append(net)
-            net = nets_by_name[net_name]
-
-            for entry_name, _, child_page in group:
-                port = Port(
-                    name=f"{entry_name}@{child_page}:{member_name}",
-                    page=page,
-                    net=net,
-                )
-                page.ports.append(port)
-
-
-def _find_footprint(
-    comp_key: int,
-    children: dict[int, list[AltiumRecord]],
-) -> str:
-    """Walk Component → ImplementationList → Implementation to find footprint."""
-    for child in children.get(comp_key, []):
-        if child.record_type == RecordType.IMPLEMENTATION_LIST:
-            impl_list_key = child.index - 1
-            for impl_child in children.get(impl_list_key, []):
-                if isinstance(impl_child, ImplementationRec) and impl_child.model_name:
-                    return impl_child.model_name
-    return ""
-
-
-def _resolve_net_metadata(
-    sheet: SheetRecords,
-    coord_to_net_name: dict[tuple[int, int], str],
-    nets_by_name: dict[str, Net],
-) -> None:
-    """Attach ParameterSet metadata to the nets they sit on."""
-    params_by_owner: dict[int, dict[str, str]] = {}
-    for param in sheet.parameters:
-        if param.owner_index >= 0 and param.name and param.text and param.text != "*":
-            params_by_owner.setdefault(param.owner_index, {})[param.name] = param.text
-
-    for pset in sheet.parameter_sets:
-        x, y = pset.location
-        touches = sheet.wire_index.segments_touching(x, y)
-        if not touches:
-            continue
-        # Find the net at this point
-        wire, seg_idx = touches[0]
-        seg = wire.segments[seg_idx]
-        net_name = coord_to_net_name.get(seg[0])
-        if not net_name:
-            net_name = coord_to_net_name.get(seg[1])
-        if not net_name:
-            continue
-        net = nets_by_name.get(net_name)
-        if net is None:
-            continue
-        # Attach child RECORD=41 params to net metadata
-        pset_key = pset.index - 1
-        pset_params = params_by_owner.get(pset_key, {})
-        net.metadata.update(pset_params)
-
-
-def _build_page_metadata(page: Page, sheet: SheetRecords) -> None:
-    """Populate page metadata from sheet properties and parameters."""
-    sr = sheet.sheet_rec
-    if sr is not None:
-        if sr.use_custom_sheet:
-            page.metadata["SheetSize"] = f"Custom ({sr.custom_x}x{sr.custom_y})"
-        else:
-            style_name = _SHEET_STYLE_NAMES.get(sr.sheet_style, str(sr.sheet_style))
-            page.metadata["SheetSize"] = style_name
-        if sr.template_file_name:
-            page.metadata["TemplateFile"] = sr.template_file_name
-
-    for param in sheet.sheet_level_parameters:
-        if param.name and param.text and param.text != "*":
-            page.metadata[param.name] = param.text
-
-    # Text frames carry revision notes, design rationale, and change history.
-    for frame in sheet.text_frames:
-        text = frame.text.replace("~1", "\n").strip()
-        if text:
-            page.annotations.append(text)
-
-
-def _mark_active_low_nets(
-    sheet: SheetRecords,
-    nets_by_name: dict[str, Net],
-    coord_to_net_name: dict[tuple[int, int], str],
-) -> None:
-    """Flag nets whose name originated from an overlined label/port/power port."""
-    for label in sheet.net_labels:
-        if label.has_overline and label.text in nets_by_name:
-            nets_by_name[label.text].metadata["active_low"] = "true"
-    for pp in sheet.power_ports:
-        if pp.has_overline and pp.text in nets_by_name:
-            nets_by_name[pp.text].metadata["active_low"] = "true"
-    for port_rec in sheet.ports:
-        if port_rec.has_overline and not port_rec.harness_type and port_rec.name:
-            wire_coord = _port_wire_coord(port_rec, sheet.wire_index)
-            net_name = coord_to_net_name.get(wire_coord)
-            if net_name and net_name in nets_by_name:
-                nets_by_name[net_name].metadata["active_low"] = "true"
-
-
-def _enrich_component_metadata(
-    comp: Component,
-    comp_rec: ComponentRec,
-    comp_owner_idx: int,
-    params_by_owner: dict[int, dict[str, str]],
-    children: dict[int, list[AltiumRecord]],
-) -> None:
-    """Apply parameters and ComponentRec fields to a Component's metadata."""
-    if comp_owner_idx in params_by_owner:
-        comp.metadata.update(params_by_owner[comp_owner_idx])
-
-    if "Description" in comp.metadata:
-        comp.description = comp.metadata.pop("Description")
-
-    if not comp.description and comp_rec.description:
-        comp.description = comp_rec.description
-
-    if comp_rec.unique_id:
-        comp.metadata["UniqueId"] = comp_rec.unique_id
-    if comp_rec.database_table:
-        comp.metadata["DatabaseTable"] = comp_rec.database_table
-    if comp_rec.design_item_id:
-        comp.metadata["DesignItemId"] = comp_rec.design_item_id
-    if comp_rec.part_count > 2:
-        comp.metadata["PartCount"] = str(comp_rec.part_count)
-        comp.metadata["CurrentPartId"] = str(comp_rec.current_part_id)
-    if comp_rec.display_mode_count > 1:
-        comp.metadata["DisplayModeCount"] = str(comp_rec.display_mode_count)
-        comp.metadata["DisplayMode"] = str(comp_rec.display_mode)
-    if comp_rec.orientation:
-        comp.metadata["Orientation"] = str(comp_rec.orientation)
-    if comp_rec.is_mirrored:
-        comp.metadata["IsMirrored"] = "True"
-
-    footprint = _find_footprint(comp_owner_idx, children)
-    if footprint:
-        comp.metadata["Footprint"] = footprint
-
-
-def _build_components(
-    sheet: SheetRecords,
-    page: Page,
-    coord_to_net_name: dict[tuple[int, int], str],
-    nets_by_name: dict[str, Net],
-    nc_coords: set[tuple[int, int]],
-) -> None:
-    """Build Component and Pin domain objects from typed records."""
-    # Index components by OwnerIndex-compatible key (index - 1)
-    comp_record_keys: dict[int, ComponentRec] = {}
-    for comp_rec in sheet.components:
-        comp_record_keys[comp_rec.index - 1] = comp_rec
-
-    # Designator text keyed by OwnerIndex
-    designator_by_owner: dict[int, str] = {}
-    for desig in sheet.designators:
-        if desig.owner_index >= 0:
-            designator_by_owner[desig.owner_index] = desig.text
-
-    # PinRec keyed by (OwnerIndex, Designator), filtered by display mode
-    pin_rec_by_key: dict[tuple[int, str], PinRec] = {}
-    for pin in sheet.pins:
-        if pin.owner_index >= 0 and pin.designator:
-            comp = comp_record_keys.get(pin.owner_index)
-            if comp is not None and pin.owner_part_display_mode != comp.display_mode:
-                continue
-            pin_rec_by_key[(pin.owner_index, pin.designator)] = pin
-
-    # Parameters keyed by OwnerIndex
-    params_by_owner: dict[int, dict[str, str]] = {}
-    for param in sheet.parameters:
-        if param.owner_index >= 0 and param.name and param.text and param.text != "*":
-            params_by_owner.setdefault(param.owner_index, {})[param.name] = param.text
-
-    # Group pin records by owner index for efficient per-component lookup
-    pins_by_owner: dict[int, list[PinRec]] = {}
-    for key, prec in pin_rec_by_key.items():
-        pins_by_owner.setdefault(key[0], []).append(prec)
-
-    for comp_owner_idx in sorted(comp_record_keys):
-        comp_rec = comp_record_keys[comp_owner_idx]
-        reference = designator_by_owner.get(comp_owner_idx, "")
-        if not reference:
-            continue
-
-        comp = Component(
-            reference=reference,
-            part=comp_rec.lib_reference,
-            description="",
-            pages=[page],
-            x=float(comp_rec.location[0]),
-            y=float(comp_rec.location[1]),
-            rotation=comp_rec.orientation * 90.0,
-            mirror=comp_rec.is_mirrored,
-        )
-        _enrich_component_metadata(
-            comp,
-            comp_rec,
-            comp_owner_idx,
-            params_by_owner,
-            sheet.children,
-        )
-
-        # Altium's PartCount is always actual_electrical_parts + 1.
-        # PartCount=2 means 1 part (every simple passive); true
-        # multi-part components (e.g. dual opamp, MCU sections) have
-        # PartCount > 2.
-        is_multipart = comp_rec.part_count > 2
-
-        for prec in pins_by_owner.get(comp_owner_idx, []):
-            # For multi-part components, skip pins belonging to
-            # other parts.  owner_part_id==0 means shared (e.g.
-            # power pins), which we keep on every part.
-            if (
-                is_multipart
-                and prec.owner_part_id != 0
-                and prec.owner_part_id != comp_rec.current_part_id
-            ):
-                continue
-
-            coord = prec.tip
-            net_name = coord_to_net_name.get(coord)
-            net = nets_by_name.get(net_name) if net_name else None
-            is_nc = coord in nc_coords
-
-            pin_meta: dict[str, str] = {}
-            if prec.electrical is not None:
-                pin_meta["electrical"] = _PIN_ELECTRICAL_NAMES.get(
-                    prec.electrical,
-                    str(prec.electrical),
-                )
-            if prec.has_overline:
-                pin_meta["active_low"] = "true"
-            if is_multipart and prec.owner_part_id:
-                pin_meta["owner_part_id"] = str(prec.owner_part_id)
-
-            pin = Pin(
-                designator=prec.designator,
-                name=prec.name,
-                component=comp,
-                net=net,
-                no_connect=is_nc,
-                metadata=pin_meta,
-            )
-            comp.pins.append(pin)
-            if net is not None:
-                net.pins.append(pin)
-
-        page.components.append(comp)
-
-
-def _collect_ports(
-    sheet: SheetRecords,
-    page: Page,
-    nets_by_name: dict[str, Net],
-    coord_to_net_name: dict[tuple[int, int], str],
-    harness_port_nets: dict[str, list[tuple[str, dict[str, str]]]],
-    harness_members_by_type: dict[str, list[str]],
-) -> None:
-    """Collect all port types (regular, sheet entry, harness) onto the page."""
-    # Non-harness ports (RECORD=18) with io_type metadata
-    for port_rec in sheet.ports:
-        if port_rec.harness_type or not port_rec.name:
-            continue
-
-        # Bus-notation port: expand to individual member ports
-        bus_members = parse_bus_notation(port_rec.name)
-        if bus_members is not None:
-            _expand_bus_ports(
-                bus_members,
-                port_rec.name,
-                page,
-                nets_by_name,
-                io_type=port_rec.io_type,
-                has_overline=port_rec.has_overline,
-            )
-            continue
-
-        wire_coord = _port_wire_coord(port_rec, sheet.wire_index)
-        net_name = coord_to_net_name.get(wire_coord)
-        if net_name and net_name in nets_by_name:
-            port_meta: dict[str, str] = {}
-            if port_rec.io_type:
-                port_meta["io_type"] = _IO_TYPE_NAMES.get(
-                    port_rec.io_type,
-                    str(port_rec.io_type),
-                )
-            if port_rec.has_overline:
-                port_meta["active_low"] = "true"
-            port = Port(
-                name=port_rec.name,
-                page=page,
-                net=nets_by_name[net_name],
-                harness=port_rec.harness_type or None,
-                metadata=port_meta,
-            )
-            page.ports.append(port)
-
-    _collect_sheet_entry_ports(sheet, page, nets_by_name, coord_to_net_name)
-    _collect_harness_member_ports(sheet, page, nets_by_name, coord_to_net_name)
-    _collect_harness_bridge_ports(
-        sheet,
-        page,
-        nets_by_name,
-        harness_port_nets,
-        harness_members_by_type,
-    )
 
 
 def build_page(
@@ -1250,34 +778,5 @@ def build_page(
     harness_members_by_type: dict[str, list[str]],
     nc_wire_coords: set[tuple[int, int]] | None = None,
 ) -> Page:
-    """Build a domain model Page from a sheet's typed records."""
-    page = Page(name=sheet.name)
-
-    _build_page_metadata(page, sheet)
-
-    # Build Net objects
-    nets_by_name: dict[str, Net] = {}
-    for nname in sorted(set(coord_to_net_name.values())):
-        net = Net(name=nname)
-        nets_by_name[nname] = net
-        page.nets.append(net)
-
-    _mark_active_low_nets(sheet, nets_by_name, coord_to_net_name)
-
-    # No-connect coordinates, expanded through wire groups
-    nc_coords: set[tuple[int, int]] = {nc.location for nc in sheet.no_connects}
-    if nc_wire_coords:
-        nc_coords |= nc_wire_coords
-
-    _build_components(sheet, page, coord_to_net_name, nets_by_name, nc_coords)
-    _resolve_net_metadata(sheet, coord_to_net_name, nets_by_name)
-    _collect_ports(
-        sheet,
-        page,
-        nets_by_name,
-        coord_to_net_name,
-        harness_port_nets,
-        harness_members_by_type,
-    )
-
-    return page
+    """Legacy public page builder removed with the old public Port model."""
+    raise NotImplementedError("Altium public conversion is handled by the source resolver")

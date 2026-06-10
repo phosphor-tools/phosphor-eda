@@ -1,18 +1,13 @@
-"""Tests for the schematic domain model."""
+"""Tests for schematic dataclass defaults and basic relationships."""
 
-from phosphor_eda.schematic import Component, Net, Page, Pin, Port, Schematic
+from phosphor_eda.schematic import Component, Net, Page, Pin, Schematic, ScopeId
 
 
-def test_pin_defaults():
-    comp = Component(reference="U1", part="MCU", description="", pins=[], pages=[], metadata={})
-    pin = Pin(
-        designator="1",
-        name="VCC",
-        component=comp,
-        net=None,
-        no_connect=False,
-        metadata={},
-    )
+def test_pin_defaults() -> None:
+    comp = Component(id="component-u1", reference="U1", part="MCU", description="")
+    pin = Pin(id="component-u1-1", designator="1", name="VCC", component=comp)
+
+    assert pin.id == "component-u1-1"
     assert pin.designator == "1"
     assert pin.name == "VCC"
     assert pin.component is comp
@@ -20,126 +15,81 @@ def test_pin_defaults():
     assert pin.no_connect is False
 
 
-def test_component_with_pins():
-    comp = Component(
-        reference="U7",
-        part="AD7768-1",
-        description="ADC",
-        pins=[],
-        pages=[],
-        metadata={},
-    )
-    pin = Pin(
-        designator="10",
-        name="SCLK",
-        component=comp,
-        net=None,
-        no_connect=False,
-        metadata={},
-    )
+def test_component_with_pins() -> None:
+    comp = Component(id="component-u7", reference="U7", part="AD7768-1", description="ADC")
+    pin = Pin(id="component-u7-10", designator="10", name="SCLK", component=comp)
+
     comp.pins.append(pin)
-    assert len(comp.pins) == 1
-    assert comp.pins[0].component is comp
+
+    assert comp.pins == [pin]
+    assert pin.component is comp
 
 
-def test_net_connects_pins():
-    comp_a = Component(reference="U1", part="MCU", description="", pins=[], pages=[], metadata={})
-    comp_b = Component(reference="U7", part="ADC", description="", pins=[], pages=[], metadata={})
-    net = Net(name="ADC_SCLK", pins=[], bus=None, metadata={})
+def test_net_connects_pins() -> None:
+    comp_a = Component(id="component-u1", reference="U1", part="MCU", description="")
+    comp_b = Component(id="component-u7", reference="U7", part="ADC", description="")
+    net = Net(id="net-adc-sclk", name="ADC_SCLK")
     pin_a = Pin(
+        id="component-u1-l3",
         designator="L3",
         name="LPSPI1_SCK",
         component=comp_a,
         net=net,
-        no_connect=False,
-        metadata={},
     )
     pin_b = Pin(
+        id="component-u7-10",
         designator="10",
         name="SCLK",
         component=comp_b,
         net=net,
-        no_connect=False,
-        metadata={},
     )
+
     net.pins.extend([pin_a, pin_b])
-    assert len(net.pins) == 2
+
+    assert net.pins == [pin_a, pin_b]
     assert net.pins[0].component.reference == "U1"
     assert net.pins[1].component.reference == "U7"
 
 
-def test_page_holds_components_and_nets():
-    page = Page(name="ADC", components=[], ports=[], nets=[], metadata={})
+def test_page_defaults() -> None:
+    page = Page(id="page-adc", name="ADC")
+
+    assert page.id == "page-adc"
     assert page.name == "ADC"
+    assert page.source_file == ""
+    assert page.scope_id == ScopeId(path=())
     assert page.components == []
+    assert page.nets == []
 
 
-def test_design_holds_pages():
-    design = Schematic(name="TEST", pages=[], nets=[], components=[], metadata={})
+def test_design_holds_pages() -> None:
+    page = Page(id="page-adc", name="ADC")
+    design = Schematic(name="TEST", pages=[page])
+
     assert design.name == "TEST"
-    assert design.pages == []
+    assert design.pages == [page]
 
 
-def test_port_bridges_net():
-    page = Page(name="ADC", components=[], ports=[], nets=[], metadata={})
-    net = Net(name="SPI_CLK", pins=[], bus=None, metadata={})
-    port = Port(name="SPI", page=page, net=net, harness="SPI")
-    assert port.harness == "SPI"
-    assert port.net is net
-
-
-def test_pin_no_connect():
-    comp = Component(reference="U7", part="ADC", description="", pins=[], pages=[], metadata={})
+def test_pin_no_connect() -> None:
+    comp = Component(id="component-u7", reference="U7", part="ADC", description="")
     pin = Pin(
+        id="component-u7-26",
         designator="26",
         name="AIN-",
         component=comp,
-        net=None,
         no_connect=True,
-        metadata={},
     )
+
     assert pin.no_connect is True
     assert pin.net is None
 
 
-def test_net_bus_property():
-    net = Net(name="DATA0", pins=[], bus="DATA[0..7]", metadata={})
+def test_net_bus_property() -> None:
+    net = Net(id="net-data0", name="DATA0", bus="DATA[0..7]")
+
     assert net.bus == "DATA[0..7]"
 
 
-def test_merge_pages_deduplicates_pins():
-    """merge_pages should keep one pin per designator, preferring connected."""
-    from phosphor_eda.schematic import merge_pages
-
-    net_a = Net(name="SIG")
-
-    # Page 1: U1 has pin "1" connected to SIG
-    page1 = Page(name="P1")
-    comp1 = Component(reference="U1", part="IC", description="", pages=[page1])
-    pin1_connected = Pin(designator="1", name="A", component=comp1, net=net_a)
-    pin1_unconnected = Pin(designator="2", name="B", component=comp1)
-    comp1.pins = [pin1_connected, pin1_unconnected]
-    net_a.pins = [pin1_connected]
-    page1.components = [comp1]
-    page1.nets = [net_a]
-
-    # Page 2: U1 has pin "1" unconnected, pin "2" connected
-    net_b = Net(name="SIG2")
-    page2 = Page(name="P2")
-    comp2 = Component(reference="U1", part="IC", description="", pages=[page2])
-    pin2_unconnected = Pin(designator="1", name="A", component=comp2)
-    pin2_connected = Pin(designator="2", name="B", component=comp2, net=net_b)
-    comp2.pins = [pin2_unconnected, pin2_connected]
-    net_b.pins = [pin2_connected]
-    page2.components = [comp2]
-    page2.nets = [net_b]
-
-    design = merge_pages("T", [page1, page2])
-    u1 = next(c for c in design.components if c.reference == "U1")
-
-    assert len(u1.pins) == 2, f"Expected 2 unique pins, got {len(u1.pins)}"
-    pin1 = next(p for p in u1.pins if p.designator == "1")
-    pin2 = next(p for p in u1.pins if p.designator == "2")
-    # Each should have the connected version
-    assert pin1.net is not None, "Pin 1 should keep its SIG connection"
-    assert pin2.net is not None, "Pin 2 should keep its SIG2 connection"
+def test_scope_id_string_is_path_like() -> None:
+    assert str(ScopeId(path=())) == "/"
+    assert str(ScopeId(path=("root", "sheet-a"))) == "/root/sheet-a"

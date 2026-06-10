@@ -566,3 +566,83 @@ def test_materialize_preserves_order():
     assert records[1].index == 1
     assert records[2].index == 2
     assert len(ctx.issues) == 0
+
+
+def test_materialize_component_display_mode_fields() -> None:
+    """ComponentRec should capture DisplayMode and DisplayModeCount from raw records."""
+    raw = [
+        {"record": "0"},
+        {
+            "record": "1",
+            "location.x": "100",
+            "location.y": "200",
+            "libreference": "CAP",
+            "partcount": "2",
+            "currentpartid": "1",
+            "displaymode": "0",
+            "displaymodecount": "2",
+        },
+    ]
+    records = materialize_records(raw)
+    comp = records[1]
+    assert isinstance(comp, ComponentRec)
+    assert comp.display_mode == 0
+    assert comp.display_mode_count == 2
+    assert comp.part_count == 2
+    assert comp.current_part_id == 1
+
+
+def test_materialize_component_display_mode_defaults() -> None:
+    """Missing DisplayMode/DisplayModeCount should default to 0/1."""
+    raw = [
+        {"record": "0"},
+        {"record": "1", "location.x": "0", "location.y": "0"},
+    ]
+    records = materialize_records(raw)
+    comp = records[1]
+    assert isinstance(comp, ComponentRec)
+    assert comp.display_mode == 0
+    assert comp.display_mode_count == 1
+
+
+def test_materialize_pin_owner_part_display_mode() -> None:
+    """PinRec should capture OwnerPartDisplayMode from raw records."""
+    raw = [
+        {"record": "0"},
+        {
+            "record": "2",
+            "location.x": "10",
+            "location.y": "20",
+            "pinlength": "30",
+            "pinconglomerate": "0",
+            "designator": "1",
+            "ownerpartid": "1",
+            "ownerpartdisplaymode": "1",
+            "ownerindex": "0",
+        },
+    ]
+    records = materialize_records(raw)
+    pin = records[1]
+    assert isinstance(pin, PinRec)
+    assert pin.owner_part_display_mode == 1
+    assert pin.owner_part_id == 1
+
+
+def test_materialize_pin_owner_part_display_mode_default() -> None:
+    """Missing OwnerPartDisplayMode should default to 0."""
+    raw = [
+        {"record": "0"},
+        {
+            "record": "2",
+            "location.x": "0",
+            "location.y": "0",
+            "pinlength": "10",
+            "pinconglomerate": "0",
+            "designator": "A",
+            "ownerindex": "0",
+        },
+    ]
+    records = materialize_records(raw)
+    pin = records[1]
+    assert isinstance(pin, PinRec)
+    assert pin.owner_part_display_mode == 0

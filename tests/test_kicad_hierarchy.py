@@ -65,13 +65,28 @@ def test_component_count(design):
 # --- Net bridging ---
 
 
-def test_sig_in_bridges_pages(design):
-    """SIG_IN net should contain pins from both root and child pages."""
-    net = _find_net(design, "SIG_IN")
-    assert net is not None
-    refs = {p.component.reference for p in net.pins}
-    assert "R1" in refs, "R1 (child) should be on SIG_IN"
-    assert "R2" in refs, "R2 (root) should be on SIG_IN"
+def test_unwired_same_name_sig_in_nets_stay_separate(design):
+    """The fixture has separate unwired root and child SIG_IN local nets."""
+    r1_net = next(
+        pin.net
+        for component in design.components
+        if component.reference == "R1"
+        for pin in component.pins
+        if pin.designator == "1"
+    )
+    r2_net = next(
+        pin.net
+        for component in design.components
+        if component.reference == "R2"
+        for pin in component.pins
+        if pin.designator == "2"
+    )
+
+    assert r1_net is not None
+    assert r2_net is not None
+    assert r1_net.id != r2_net.id
+    assert r1_net.name == "SIG_IN"
+    assert r2_net.name == "SIG_IN"
 
 
 def test_vcc_net(design):
@@ -87,7 +102,7 @@ def test_gnd_net(design):
 
 
 def test_three_nets(design):
-    assert len(design.nets) == 3
+    assert len(design.nets) == 4
 
 
 # --- Validation ---

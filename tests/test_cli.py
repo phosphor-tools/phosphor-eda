@@ -29,6 +29,24 @@ def test_cli_schematic_list_components():
     assert "PART" in result.output
 
 
+def test_cli_convert_writes_serialized_design(tmp_path):
+    output = tmp_path / "pico.txt"
+    runner = CliRunner()
+    result = runner.invoke(main, ["convert", DSN_FILE, str(output)])
+    assert result.exit_code == 0
+    text = output.read_text()
+    assert "NET: GND" in text
+
+
+def test_cli_convert_reports_output_write_errors(tmp_path):
+    missing_parent_output = tmp_path / "missing" / "pico.txt"
+    runner = CliRunner()
+    result = runner.invoke(main, ["convert", DSN_FILE, str(missing_parent_output)])
+    assert result.exit_code != 0
+    assert "Error:" in result.output
+    assert str(missing_parent_output) in result.output
+
+
 def test_cli_schematic_list_nets():
     runner = CliRunner()
     result = runner.invoke(main, ["list", "nets", DSN_FILE])

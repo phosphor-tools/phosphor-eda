@@ -29,8 +29,9 @@ class WireAlias:
     name: str = ""
 
 
-@dataclass
+@dataclass(kw_only=True)
 class Wire:
+    type_id: int = 0
     wire_id: int = 0
     color: int = 0
     start_x: int = 0
@@ -68,10 +69,11 @@ class PlacedInstance:
     props: dict[str, str] = field(default_factory=dict)
 
 
-@dataclass
+@dataclass(kw_only=True)
 class GraphicInst:
     """Base for Port, Global, OffPageConnector."""
 
+    type_id: int = 0
     name: str = ""
     db_id: int = 0
     loc_x: int = 0

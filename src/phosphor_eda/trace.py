@@ -54,6 +54,10 @@ def is_two_pin_passive(comp: Component) -> bool:
     return len(comp.pins) == 2 and ref_prefix(comp.reference) in PASSIVE_PREFIXES
 
 
+def _same_component(left: Component, right: Component) -> bool:
+    return left.id == right.id
+
+
 def trace_from_net(
     net: Net,
     origin_comp: Component | None = None,
@@ -77,7 +81,7 @@ def trace_from_net(
 
     for pin in net.pins:
         comp = pin.component
-        if comp is origin_comp:
+        if origin_comp is not None and _same_component(comp, origin_comp):
             continue
         if not is_two_pin_passive(comp):
             continue
@@ -96,7 +100,7 @@ def trace_from_net(
             entry_pin=pin,
             net=net,
             result=result,
-            visited={id(net)},
+            visited={net.id},
         )
         results.append(result)
 
@@ -108,7 +112,7 @@ def _walk(
     entry_pin: Pin,
     net: Net,
     result: TraceResult,
-    visited: set[int],
+    visited: set[str],
 ) -> None:
     """Recursive walk through a chain of 2-pin passives."""
     exit_pin = other_pin(passive, entry_pin)
@@ -130,12 +134,12 @@ def _walk(
     waypoint = Waypoint(passive, entry_pin, exit_pin, exit_net)
     result.series_path.append(waypoint)
 
-    if id(exit_net) in visited:
+    if exit_net.id in visited:
         # Cycle — stop here
         result.terminal_net = exit_net
         return
 
-    visited.add(id(exit_net))
+    visited.add(exit_net.id)
 
     # Look at what's on the other side of exit_net
     active_pins: list[Pin] = []
@@ -211,7 +215,7 @@ def find_paths(design: Schematic, ref_a: str, ref_b: str) -> list[ConnectionPath
 
         # Direct connection — comp_b is on the same net
         for pin_b in pin_a.net.pins:
-            if pin_b.component is comp_b:
+            if _same_component(pin_b.component, comp_b):
                 path = ConnectionPath(left_pin=pin_a, right_pin=pin_b)
                 # Collect shunts on this net
                 for p in pin_a.net.pins:
@@ -225,7 +229,7 @@ def find_paths(design: Schematic, ref_a: str, ref_b: str) -> list[ConnectionPath
         for trace_result in trace_from_net(pin_a.net, origin_comp=comp_a):
             if trace_result.terminal_pin is None:
                 continue
-            if trace_result.terminal_pin.component is not comp_b:
+            if not _same_component(trace_result.terminal_pin.component, comp_b):
                 continue
             paths.append(
                 ConnectionPath(
@@ -240,7 +244,16 @@ def find_paths(design: Schematic, ref_a: str, ref_b: str) -> list[ConnectionPath
 
 
 def _find_component(design: Schematic, ref: str) -> Component:
-    for c in design.components:
-        if c.reference == ref:
-            return c
-    raise ValueError(f"Component '{ref}' not found in design.")
+    matches = [comp for comp in design.components if comp.reference == ref]
+    if not matches:
+        raise ValueError(f"Component '{ref}' not found in design.")
+    if len(matches) > 1:
+        locations: list[str] = []
+        for comp in matches:
+            page_names = sorted({page.name for page in comp.pages})
+            location = ", ".join(page_names) if page_names else "unknown page"
+            locations.append(f"{comp.reference} on {location}")
+        raise ValueError(
+            f"Component reference '{ref}' is ambiguous; matches: {', '.join(locations)}."
+        )
+    return matches[0]
