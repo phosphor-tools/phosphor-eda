@@ -330,7 +330,7 @@ def _normalize_parsed_roles(*roles: _ParsedRole | str) -> tuple[_ParsedRole, ...
     return tuple(role for role in _PARSED_ROLE_ORDER if role in role_set)
 
 
-@dataclass
+@dataclass(frozen=True)
 class _ParsedPadPayload:
     number: str
     x: float
@@ -1372,39 +1372,54 @@ def _parse_pads(
 def _apply_drill_manager_mask_apertures(
     raw_pads: list[tuple[int, _ParsedPrimitive]],
     drill_manager_data: bytes,
-) -> None:
+    ctx: ParseContext,
+) -> list[tuple[int, _ParsedPrimitive]]:
     """Attach validated Altium pad-template solder-mask apertures to pads.
 
     Altium pad/via templates can carry mask opening data. This parser only
     uses a narrow, validated template-name encoding when richer template data
     is not present in the file streams.
+
+    Returns a new pad list; matched pads get fresh frozen payloads carrying
+    the mask aperture, the rest are passed through unchanged.
     """
     if not drill_manager_data:
-        return
-    for record in _parse_drill_manager_records(drill_manager_data):
+        return raw_pads
+    updated = list(raw_pads)
+    for record in _parse_drill_manager_records(drill_manager_data, ctx):
         aperture = _pad_mask_aperture_from_drill_manager_record(record)
         if aperture is None:
             continue
         for primitive_index in record.primitive_indices:
-            if primitive_index < 0 or primitive_index >= len(raw_pads):
+            if primitive_index < 0 or primitive_index >= len(updated):
                 continue
-            _component, pad_geometry = raw_pads[primitive_index]
+            component, pad_geometry = updated[primitive_index]
             if not isinstance(pad_geometry.data, _ParsedPadPayload):
                 continue
             pad = pad_geometry.data
             if not _pad_matches_template_aperture_source(pad, record.properties):
                 continue
-            pad.mask_aperture_width = aperture.width
-            pad.mask_aperture_height = aperture.height
-            pad.mask_aperture_source = aperture.source
+            new_pad = replace(
+                pad,
+                mask_aperture_width=aperture.width,
+                mask_aperture_height=aperture.height,
+                mask_aperture_source=aperture.source,
+            )
+            updated[primitive_index] = (component, replace(pad_geometry, data=new_pad))
+    return updated
 
 
-def _parse_drill_manager_records(data: bytes) -> tuple[_DrillManagerRecord, ...]:
+def _parse_drill_manager_records(data: bytes, ctx: ParseContext) -> tuple[_DrillManagerRecord, ...]:
     records: list[_DrillManagerRecord] = []
     pos = 0
     while pos < len(data):
         header_size = _drill_manager_header_size(data, pos)
         if header_size == 0:
+            if pos != 0:
+                ctx.warn(
+                    "drill_manager_truncated",
+                    f"DrillManager record header unrecognized at offset {pos}; stopping mid-stream",
+                )
             break
         prop_len = u32(data, pos + header_size - 4)
         prop_start = pos + header_size
@@ -1433,6 +1448,16 @@ def _parse_drill_manager_records(data: bytes) -> tuple[_DrillManagerRecord, ...]
 
 
 def _drill_manager_header_size(data: bytes, pos: int) -> int:
+    """Disambiguate the two DrillManager record-header layouts.
+
+    Altium writes DrillManager/Data with one of two fixed header sizes before
+    the pipe-delimited property payload: an 8-byte header (older
+    pre-flag-word format) and a 12-byte header (newer format with an extra
+    4-byte object/flag word). Both end in a u32 property length. The header is
+    valid only when the property payload begins with the ``b"|"`` field
+    separator, so probe each size and accept the first whose payload starts
+    with ``|``.
+    """
     for header_size in (8, 12):
         if pos + header_size > len(data):
             continue
@@ -3017,7 +3042,7 @@ def parse_altium_pcb(
     # Parse binary streams
     vias = _parse_vias(vias_data, layer_map, ctx)
     raw_pads = _parse_pads(pads_data, nets, layer_map, ctx)
-    _apply_drill_manager_mask_apertures(raw_pads, drill_manager_data)
+    raw_pads = _apply_drill_manager_mask_apertures(raw_pads, drill_manager_data, ctx)
     raw_texts = _parse_texts(texts_data, layer_map, ctx)
     pours, pour_id_map, pour_net_map = _parse_polygon_pours(polygons6_data, nets, layer_map)
     track_geometry, track_keepouts = _parse_tracks(tracks_data, layer_map, ctx, pour_id_map)
