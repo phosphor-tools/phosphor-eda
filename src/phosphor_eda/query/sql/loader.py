@@ -14,7 +14,6 @@ from shapely.affinity import rotate
 from phosphor_eda.domain.pcb import (
     LayerRole,
     PcbArc,
-    PcbArtwork,
     PcbCircle,
     PcbClosedPath,
     PcbDimension,
@@ -30,6 +29,7 @@ from phosphor_eda.domain.pcb import (
     PcbVia,
     normalize_roles,
 )
+from phosphor_eda.formats.common.electrical import ELECTRICAL_KEY
 from phosphor_eda.geometry.pcb_geometry import (
     arc_center_from_three_points,
     arc_sweep_angle,
@@ -213,8 +213,6 @@ def _drill_owner(drill: PcbDrill) -> tuple[str, str]:
         return "pad", owner.id
     if isinstance(owner, PcbVia):
         return "via", owner.id
-    if isinstance(owner, PcbArtwork):
-        return "artwork", owner.id
     return "mechanical", ""
 
 
@@ -239,6 +237,7 @@ def _load_pads(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
     _ = pcb
     for pad in pcb.pads:
         net_name, net_number = _net_fields(pad.net)
+        aperture = pad.mask_aperture
         _ = con.execute(
             """INSERT INTO pads VALUES
             (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))""",
@@ -261,9 +260,9 @@ def _load_pads(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
                 _layer_names(pad.layers),
                 pad.pin_function,
                 pad.pin_type,
-                pad.mask_aperture_width,
-                pad.mask_aperture_height,
-                pad.mask_aperture_source or None,
+                None if aperture is None else aperture.aperture_width,
+                None if aperture is None else aperture.aperture_height,
+                None if aperture is None else (aperture.source or None),
                 _wkb(pad_polygon(pad)),
             ],
         )
@@ -723,7 +722,7 @@ def _load_pins(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
         for pin in comp.pins:
             net_id = pin.net.id if pin.net else None
             net_name = pin.net.name if pin.net else None
-            electrical = pin.metadata.get("electrical")
+            electrical = pin.metadata.get(ELECTRICAL_KEY)
             _ = con.execute(
                 "INSERT INTO pins VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [

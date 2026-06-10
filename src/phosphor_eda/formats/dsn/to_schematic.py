@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.schematic import Schematic, ScopeId
-from phosphor_eda.formats.common.text import strip_overline
+from phosphor_eda.formats.dsn.pins import normalize_package_name, resolve_pin_name
 from phosphor_eda.formats.dsn.resolver import resolve_dsn_source
 from phosphor_eda.formats.dsn.source import (
     DsnGlobal,
@@ -38,27 +38,6 @@ def _page_scope_name(raw_page: RawPage) -> str:
 
 def _local_net_id(page_id: str, net_id: int) -> str:
     return f"{page_id}:net:{net_id}"
-
-
-def _pin_name(
-    pin_number: str,
-    symbol_pin_names: list[str],
-    ctx: ParseContext | None = None,
-    reference: str = "",
-) -> str:
-    try:
-        pn = int(pin_number)
-    except (ValueError, TypeError):
-        if ctx is not None:
-            ctx.warn(
-                "dsn_pin_number",
-                f"{reference}: non-numeric pin number {pin_number!r}; pin name left blank",
-            )
-        return ""
-    if not 1 <= pn <= len(symbol_pin_names):
-        return ""
-    pin_name, _overline = strip_overline(symbol_pin_names[pn - 1])
-    return pin_name
 
 
 def _source_net_ids_at(raw_page: RawPage, location: tuple[int, int]) -> list[int]:
@@ -238,8 +217,7 @@ def _source_page(
         page_net.wire_ids.append(wire.id)
 
     for instance_index, raw_inst in enumerate(raw_page.instances):
-        pkg = raw_inst.package_name.replace(".Normal", "")
-        sym_pins = raw.symbol_pin_names.get(pkg, [])
+        pkg = normalize_package_name(raw_inst.package_name)
         component_source_id = f"{page_id}:component:{raw_inst.db_id or instance_index}"
         for pin_index, raw_pin in enumerate(raw_inst.pin_connections):
             location = (raw_pin.pin_x, raw_pin.pin_y)
@@ -265,7 +243,13 @@ def _source_page(
                 component_reference=raw_inst.reference,
                 component_part=pkg,
                 pin_designator=raw_pin.pin_number,
-                pin_name=_pin_name(raw_pin.pin_number, sym_pins, ctx, raw_inst.reference),
+                pin_name=resolve_pin_name(
+                    raw_inst.package_name,
+                    raw_pin.pin_number,
+                    raw.symbol_pin_names,
+                    ctx,
+                    raw_inst.reference,
+                ),
                 location=location,
             )
             page_source.pin_occurrences.append(pin)

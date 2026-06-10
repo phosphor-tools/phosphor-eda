@@ -9,18 +9,23 @@ from phosphor_eda.domain.pcb import (
     PcbArtworkPurpose,
     PcbBoardProfile,
     PcbBoardProfileElement,
+    PcbClosedPath,
     PcbConductor,
     PcbConductorKind,
     PcbDrill,
     PcbDrillPlating,
     PcbDrillShape,
     PcbFootprint,
+    PcbKeepout,
     PcbLayer,
     PcbLine,
     PcbNet,
     PcbPad,
     PcbPadType,
+    PcbPathSegment,
+    PcbPathSegmentKind,
     PcbPolygon,
+    PcbPour,
     PcbVia,
     PcbViaType,
 )
@@ -145,6 +150,53 @@ def test_pcb_bbox_falls_back_to_pad_extents_when_profile_is_absent() -> None:
     )
 
     assert board.bbox() == (4.0, 5.0, 6.0, 9.0)
+
+
+def test_pcb_bbox_is_none_for_empty_board() -> None:
+    board = Pcb(
+        name="empty",
+        layers=[],
+        nets={},
+        footprints=[],
+        pads=[],
+        vias=[],
+        drills=[],
+        conductors=[],
+        artwork=[],
+        pours=[],
+        keepouts=[],
+    )
+
+    assert board.bbox() is None
+
+
+def _degenerate_boundary() -> PcbClosedPath:
+    # Two segments — below the 3-point minimum — built directly to bypass
+    # PcbClosedPath.from_points, which would reject it on its own.
+    return PcbClosedPath(
+        segments=(
+            PcbPathSegment(PcbPathSegmentKind.LINE, 0.0, 0.0, 1.0, 0.0),
+            PcbPathSegment(PcbPathSegmentKind.LINE, 1.0, 0.0, 0.0, 0.0),
+        )
+    )
+
+
+def test_pcb_builder_rejects_pour_with_degenerate_boundary() -> None:
+    layer = PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT))
+    builder = PcbBuilder("bad-pour")
+    builder.add_layer(layer)
+    pour = PcbPour(id="pour:1", boundary=_degenerate_boundary(), layers=(layer,))
+    with pytest.raises(PcbBuildError, match="at least 3 points"):
+        builder.add_pour_object(pour, source="pour:1")
+
+
+def test_pcb_builder_rejects_keepout_with_degenerate_boundary() -> None:
+    layer = PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT))
+    builder = PcbBuilder("bad-keepout")
+    builder.add_layer(layer)
+    keepout = PcbKeepout(id="keepout:1", boundary=_degenerate_boundary(), layers=(layer,))
+    with pytest.raises(PcbBuildError, match="at least 3 points"):
+        builder.add_keepout_object(keepout, source="keepout:1")
 
 
 def test_pcb_builder_rejects_unresolved_and_selector_references() -> None:

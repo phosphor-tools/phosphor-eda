@@ -6,33 +6,16 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import phosphor_eda.formats.kicad.sexp as sexp
+from phosphor_eda.formats.common.spatial import UnionFind, point_on_segment
 
 if TYPE_CHECKING:
     from phosphor_eda.formats.kicad.sexp import SExpNode
     from phosphor_eda.formats.kicad.source import KiCadPoint
 
 
-class UnionFind:
-    def __init__(self) -> None:
-        self._parent: dict[KiCadPoint, KiCadPoint] = {}
-
-    def find(self, p: KiCadPoint) -> KiCadPoint:
-        if p not in self._parent:
-            self._parent[p] = p
-        while self._parent[p] != p:
-            self._parent[p] = self._parent[self._parent[p]]
-            p = self._parent[p]
-        return p
-
-    def union(self, a: KiCadPoint, b: KiCadPoint) -> None:
-        ra, rb = self.find(a), self.find(b)
-        if ra != rb:
-            self._parent[ra] = rb
-
-
 @dataclass(slots=True)
 class WireGraph:
-    uf: UnionFind
+    uf: UnionFind[KiCadPoint]
     segments: list[tuple[KiCadPoint, KiCadPoint]]
     points: set[KiCadPoint]
 
@@ -80,27 +63,8 @@ def point_from_at(at_node: SExpNode) -> KiCadPoint:
     return round(sexp.num(at_node, 1), 4), round(sexp.num(at_node, 2), 4)
 
 
-def point_on_segment(
-    point: KiCadPoint,
-    seg_start: KiCadPoint,
-    seg_end: KiCadPoint,
-    tol: float = 0.01,
-) -> bool:
-    """Check if a point lies on a horizontal or vertical line segment."""
-    px, py = point
-    x1, y1 = seg_start
-    x2, y2 = seg_end
-    if abs(y1 - y2) < tol and abs(py - y1) < tol:
-        lo, hi = (min(x1, x2) - tol, max(x1, x2) + tol)
-        return lo <= px <= hi
-    if abs(x1 - x2) < tol and abs(px - x1) < tol:
-        lo, hi = (min(y1, y2) - tol, max(y1, y2) + tol)
-        return lo <= py <= hi
-    return False
-
-
 def connect_point(
-    uf: UnionFind,
+    uf: UnionFind[KiCadPoint],
     point: KiCadPoint,
     wire_segments: list[tuple[KiCadPoint, KiCadPoint]],
     wire_points: set[KiCadPoint],
@@ -115,14 +79,14 @@ def connect_point(
             if not merge_all:
                 return
     for seg_start, seg_end in wire_segments:
-        if point_on_segment(point, seg_start, seg_end):
+        if point_on_segment(point, seg_start, seg_end, tol=0.01):
             uf.union(point, seg_start)
             if not merge_all:
                 return
 
 
 def group_wire_points(
-    uf: UnionFind,
+    uf: UnionFind[KiCadPoint],
     wire_points: set[KiCadPoint],
 ) -> dict[KiCadPoint, set[KiCadPoint]]:
     root_to_points: dict[KiCadPoint, set[KiCadPoint]] = {}

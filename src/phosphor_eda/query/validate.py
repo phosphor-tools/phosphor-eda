@@ -20,6 +20,8 @@ import re
 from enum import StrEnum, auto
 from typing import TYPE_CHECKING, final, override
 
+from phosphor_eda.formats.common.electrical import ELECTRICAL_KEY, PinElectrical
+
 if TYPE_CHECKING:
     from phosphor_eda.domain.schematic import Net, Page, Pin, Schematic
 
@@ -456,8 +458,8 @@ def _check_components(design: Schematic, findings: list[Finding]) -> None:
 
         # Power pins with no net
         for pin in comp.pins:
-            elec = pin.metadata.get("electrical")
-            if elec == "power" and pin.net is None and not pin.no_connect:
+            elec = pin.metadata.get(ELECTRICAL_KEY)
+            if elec == PinElectrical.POWER and pin.net is None and not pin.no_connect:
                 message = (
                     f"{comp.reference}.{pin.designator} ({pin.name}) is a power pin "
                     + "with no net"

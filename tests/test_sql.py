@@ -15,11 +15,13 @@ from phosphor_eda.domain.pcb import (
     Pcb,
     PcbConductor,
     PcbConductorKind,
+    PcbDrill,
     PcbDrillPlating,
     PcbFootprint,
     PcbLayer,
     PcbLine,
     PcbNet,
+    PcbPad,
     PcbPadType,
     PcbVia,
     PcbViaType,
@@ -328,18 +330,20 @@ def _constructed_pcb() -> Pcb:
             layer=front,
         )
     )
-    builder.add_pad(
-        id="pad:J1:1",
-        number="1",
-        x=1.0,
-        y=1.0,
-        width=1.0,
-        height=1.0,
-        shape="rect",
-        pad_type=PcbPadType.SMD,
-        layers=(front,),
-        net=reset,
-        footprint=connector,
+    builder.add_pad_object(
+        PcbPad(
+            id="pad:J1:1",
+            number="1",
+            x=1.0,
+            y=1.0,
+            width=1.0,
+            height=1.0,
+            shape="rect",
+            pad_type=PcbPadType.SMD,
+            layers=(front,),
+            net=reset,
+            footprint=connector,
+        )
     )
     builder.add_conductor_object(
         PcbConductor(
@@ -350,13 +354,15 @@ def _constructed_pcb() -> Pcb:
             net=reset,
         )
     )
-    via_drill = builder.add_drill(
-        id="drill:via:1",
-        x=5.0,
-        y=0.0,
-        diameter=0.4,
-        plating=PcbDrillPlating.PLATED,
-        layers=(front, back),
+    via_drill = builder.add_drill_object(
+        PcbDrill(
+            id="drill:via:1",
+            x=5.0,
+            y=0.0,
+            diameter=0.4,
+            plating=PcbDrillPlating.PLATED,
+            layers=(front, back),
+        )
     )
     builder.add_via_object(
         PcbVia(

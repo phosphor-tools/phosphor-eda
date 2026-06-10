@@ -44,6 +44,7 @@ from phosphor_eda.domain.pcb import (
     PcbLayer,
     PcbLayerMetadata,
     PcbLine,
+    PcbMaskAperture,
     PcbMetadata,
     PcbModel3D,
     PcbNet,
@@ -2400,6 +2401,13 @@ def _add_parsed_pad(
             ),
             source=primitive.id,
         )
+    mask_aperture = None
+    if pad.mask_aperture_width is not None or pad.mask_aperture_height is not None:
+        mask_aperture = PcbMaskAperture(
+            aperture_width=pad.mask_aperture_width,
+            aperture_height=pad.mask_aperture_height,
+            source=pad.mask_aperture_source,
+        )
     builder.add_pad_object(
         PcbPad(
             id=primitive.id,
@@ -2415,9 +2423,7 @@ def _add_parsed_pad(
             footprint=_footprint_for_primitive(primitive, footprints),
             drill=drill,
             rotation=pad.rotation,
-            mask_aperture_width=pad.mask_aperture_width,
-            mask_aperture_height=pad.mask_aperture_height,
-            mask_aperture_source=pad.mask_aperture_source,
+            mask_aperture=mask_aperture,
             metadata=primitive.metadata,
         ),
         source=primitive.id,

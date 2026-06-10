@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from phosphor_eda.formats.common.electrical import (
+    KICAD_ELECTRICAL_MAP,
+    set_pin_electrical,
+)
 from phosphor_eda.formats.common.net_union import NetUnion
 from phosphor_eda.formats.common.resolved_graph import (
     ResolutionInputError,
@@ -26,25 +30,6 @@ if TYPE_CHECKING:
         KiCadPinOccurrence,
         KiCadSourceDesign,
     )
-
-
-# KiCad pin electrical types mapped to the canonical schematic vocabulary
-# shared with the Altium and Eagle backends. Passive is the default and is
-# omitted from pin metadata.
-_ELECTRICAL_MAP = {
-    "input": "input",
-    "output": "output",
-    "bidirectional": "IO",
-    "tri_state": "hi-Z",
-    "passive": "passive",
-    "free": "unspecified",
-    "unspecified": "unspecified",
-    "power_in": "power",
-    "power_out": "power",
-    "open_collector": "open-collector",
-    "open_emitter": "open-emitter",
-    "no_connect": "no-connect",
-}
 
 
 @dataclass(slots=True)
@@ -543,9 +528,7 @@ def _pin_inputs(
             continue
         seen_pin_occurrences.add(pin_occurrence_key)
         pin_metadata = {"kicad_pin_source_id": pin_occurrence.id}
-        electrical = _ELECTRICAL_MAP.get(pin_occurrence.pin_type, "")
-        if electrical and electrical != "passive":
-            pin_metadata["electrical"] = electrical
+        set_pin_electrical(pin_metadata, KICAD_ELECTRICAL_MAP.get(pin_occurrence.pin_type))
         result.append(
             ResolvedPinInput(
                 id=pin_occurrence.id,

@@ -2,6 +2,7 @@ import pytest
 
 from phosphor_eda.domain.pcb import (
     Pcb,
+    PcbBuildError,
     PcbClosedPath,
     PcbConductor,
     PcbConductorKind,
@@ -26,6 +27,11 @@ def test_closed_path_from_points_creates_closed_line_segments() -> None:
         PcbPathSegment(PcbPathSegmentKind.LINE, 10.0, 0.0, 10.0, 5.0),
         PcbPathSegment(PcbPathSegmentKind.LINE, 10.0, 5.0, 0.0, 0.0),
     )
+
+
+def test_closed_path_from_points_rejects_fewer_than_three_points() -> None:
+    with pytest.raises(PcbBuildError, match="at least 3 points"):
+        PcbClosedPath.from_points([(0.0, 0.0), (10.0, 0.0)])
 
 
 def test_pour_keepout_and_conductor_helpers() -> None:

@@ -14,6 +14,10 @@ from xml.etree import ElementTree as ET
 
 from phosphor_eda.domain.schematic import Schematic, ScopeId
 from phosphor_eda.formats.common.diagnostics import ParseContext
+from phosphor_eda.formats.common.electrical import (
+    EAGLE_DIRECTION_MAP,
+    set_pin_electrical,
+)
 from phosphor_eda.formats.common.net_union import NetUnion
 from phosphor_eda.formats.common.resolved_graph import (
     ResolvedComponentOccurrenceInput,
@@ -26,22 +30,6 @@ from phosphor_eda.formats.common.resolved_graph import (
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-# ---------------------------------------------------------------------------
-# Pin direction mapping (Eagle direction attr -> canonical electrical type)
-# ---------------------------------------------------------------------------
-
-_DIRECTION_MAP: dict[str, str] = {
-    "pas": "passive",
-    "in": "input",
-    "out": "output",
-    "io": "IO",
-    "sup": "power",
-    "nc": "no-connect",
-    "hiz": "hi-Z",
-    "oc": "open-collector",
-    "pwr": "power",
-}
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 
@@ -388,10 +376,8 @@ def _build_pages(
                     local_net_id = pinref_map.get((part_name, instance.gate_name, pin_def.name))
 
                     # Map pin direction to canonical electrical type
-                    electrical = _DIRECTION_MAP.get(pin_def.direction, "")
                     pin_meta: dict[str, str] = {}
-                    if electrical and electrical != "passive":
-                        pin_meta["electrical"] = electrical
+                    set_pin_electrical(pin_meta, EAGLE_DIRECTION_MAP.get(pin_def.direction))
 
                     is_nc = pin_def.direction == "nc"
 

@@ -1,4 +1,17 @@
+import pytest
+
 from phosphor_eda.domain.pcb import LayerRole, Pcb, PcbLayer, normalize_roles
+
+
+def test_normalize_roles_preserves_every_role() -> None:
+    # The canonical order is derived from the enum, so normalizing the full
+    # set returns every member — no role is silently dropped.
+    assert set(normalize_roles(*LayerRole)) == set(LayerRole)
+
+
+def test_normalize_roles_rejects_unknown_role() -> None:
+    with pytest.raises(ValueError, match="not-a-real-role"):
+        normalize_roles("not-a-real-role")
 
 
 def test_normalize_roles_removes_duplicates_and_uses_canonical_order() -> None:

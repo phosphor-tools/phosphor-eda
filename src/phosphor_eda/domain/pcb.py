@@ -17,8 +17,16 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
 
+class PcbBuildError(ValueError):
+    """Raised when parsed source data cannot form a strict PCB domain model."""
+
+
 class LayerRole(StrEnum):
-    """Normalized semantic role for a PCB source layer."""
+    """Normalized semantic role for a PCB source layer.
+
+    Members are declared in canonical order — :func:`normalize_roles` returns
+    roles in declaration order, so keep this list ordered intentionally.
+    """
 
     COPPER = "copper"
     DIELECTRIC = "dielectric"
@@ -34,18 +42,6 @@ class LayerRole(StrEnum):
     DRILL_GUIDE = "drill_guide"
     DRILL_DRAWING = "drill_drawing"
     MULTI_LAYER = "multi_layer"
-
-    FRONT = "front"
-    BACK = "back"
-    INNER = "inner"
-    OUTER = "outer"
-
-    SIGNAL = "signal"
-    POWER = "power"
-    MIXED = "mixed"
-    JUMPER = "jumper"
-    PLANE = "plane"
-    INTERNAL_PLANE = "internal_plane"
 
     FABRICATION = "fabrication"
     ASSEMBLY = "assembly"
@@ -70,59 +66,23 @@ class LayerRole(StrEnum):
     GOLD_PLATING = "gold_plating"
     THREE_D_BODY = "three_d_body"
 
+    FRONT = "front"
+    BACK = "back"
+    INNER = "inner"
+    OUTER = "outer"
+
+    SIGNAL = "signal"
+    POWER = "power"
+    MIXED = "mixed"
+    JUMPER = "jumper"
+    PLANE = "plane"
+    INTERNAL_PLANE = "internal_plane"
+
     USER = "user"
     UNKNOWN = "unknown"
 
 
-_ROLE_ORDER: tuple[LayerRole, ...] = (
-    LayerRole.COPPER,
-    LayerRole.DIELECTRIC,
-    LayerRole.SOLDER_MASK,
-    LayerRole.SOLDER_PASTE,
-    LayerRole.SILKSCREEN,
-    LayerRole.ADHESIVE,
-    LayerRole.EDGE,
-    LayerRole.MARGIN,
-    LayerRole.MECHANICAL,
-    LayerRole.KEEPOUT,
-    LayerRole.DRILL,
-    LayerRole.DRILL_GUIDE,
-    LayerRole.DRILL_DRAWING,
-    LayerRole.MULTI_LAYER,
-    LayerRole.FABRICATION,
-    LayerRole.ASSEMBLY,
-    LayerRole.COURTYARD,
-    LayerRole.DESIGNATOR,
-    LayerRole.VALUE,
-    LayerRole.COMPONENT_OUTLINE,
-    LayerRole.COMPONENT_CENTER,
-    LayerRole.DIMENSION,
-    LayerRole.BOARD,
-    LayerRole.BOARD_SHAPE,
-    LayerRole.V_CUT,
-    LayerRole.ROUTE_TOOL_PATH,
-    LayerRole.SHEET,
-    LayerRole.DRAWING,
-    LayerRole.COMMENT,
-    LayerRole.ASSEMBLY_NOTES,
-    LayerRole.FAB_NOTES,
-    LayerRole.COATING,
-    LayerRole.GLUE_POINTS,
-    LayerRole.GOLD_PLATING,
-    LayerRole.THREE_D_BODY,
-    LayerRole.FRONT,
-    LayerRole.BACK,
-    LayerRole.INNER,
-    LayerRole.OUTER,
-    LayerRole.SIGNAL,
-    LayerRole.POWER,
-    LayerRole.MIXED,
-    LayerRole.JUMPER,
-    LayerRole.PLANE,
-    LayerRole.INTERNAL_PLANE,
-    LayerRole.USER,
-    LayerRole.UNKNOWN,
-)
+_ROLE_ORDER: tuple[LayerRole, ...] = tuple(LayerRole)
 
 
 def _coerce_role(role: LayerRole | str) -> LayerRole:
@@ -154,11 +114,6 @@ class PcbMetadata:
 @dataclass
 class PcbLayerMetadata(PcbMetadata):
     native_user_name: str = ""
-
-
-@dataclass
-class PcbNetMetadata(PcbMetadata):
-    pass
 
 
 @dataclass
@@ -247,8 +202,9 @@ class PcbClosedPath:
     ) -> PcbClosedPath:
         """Create a closed line-segment path from polygon points."""
         point_tuple = tuple(points)
-        if len(point_tuple) < 2:
-            return cls(segments=(), holes=tuple(holes))
+        if len(point_tuple) < 3:
+            msg = f"closed path needs at least 3 points, got {len(point_tuple)}"
+            raise PcbBuildError(msg)
         segments: list[PcbPathSegment] = []
         for index, (start_x, start_y) in enumerate(point_tuple):
             end_x, end_y = point_tuple[(index + 1) % len(point_tuple)]
@@ -414,7 +370,7 @@ class PcbNet:
 
     number: int
     name: str
-    metadata: PcbNetMetadata = field(default_factory=PcbNetMetadata)
+    metadata: PcbMetadata = field(default_factory=PcbMetadata)
 
 
 @dataclass
@@ -432,7 +388,7 @@ class PcbDrill:
     rotation: float = 0.0
     layers: tuple[PcbLayer, ...] = ()
     metadata: PcbObjectMetadata = field(default_factory=PcbObjectMetadata)
-    _owner_ref: weakref.ReferenceType[object] | None = field(
+    _owner_ref: weakref.ReferenceType[PcbPad | PcbVia] | None = field(
         default=None,
         init=False,
         repr=False,
@@ -447,15 +403,43 @@ class PcbDrill:
             self.height = self.diameter
 
     @property
-    def owner(self) -> object | None:
-        """Return the pad/via/artwork that owns this drill, if any."""
+    def owner(self) -> PcbPad | PcbVia | None:
+        """Return the pad or via that owns this drill, if any."""
         if self._owner_ref is None:
             return None
         return self._owner_ref()
 
     @owner.setter
-    def owner(self, value: object | None) -> None:
+    def owner(self, value: PcbPad | PcbVia | None) -> None:
         self._owner_ref = None if value is None else weakref.ref(value)
+
+
+@dataclass(frozen=True)
+class PcbPadStack:
+    """Altium-only per-layer pad geometry (mid/bottom layers of a stack)."""
+
+    mid_width: float | None = None
+    mid_height: float | None = None
+    bot_width: float | None = None
+    bot_height: float | None = None
+    mid_shape: str = ""
+    bot_shape: str = ""
+
+
+@dataclass(frozen=True)
+class PcbMaskAperture:
+    """Altium-only solder-mask/paste expansion and explicit mask opening.
+
+    ``source`` records where the explicit mask opening came from; the only
+    current producer is the Altium drill-manager template parser, which emits
+    ``altium:drill-manager-template:<name>`` (the template name is dynamic).
+    """
+
+    mask_expansion: float | None = None
+    paste_expansion: float | None = None
+    aperture_width: float | None = None
+    aperture_height: float | None = None
+    source: str = ""
 
 
 @dataclass
@@ -478,17 +462,8 @@ class PcbPad:
     roundrect_rratio: float = 0.0
     pin_function: str = ""
     pin_type: str = ""
-    mid_width: float | None = None
-    mid_height: float | None = None
-    bot_width: float | None = None
-    bot_height: float | None = None
-    mid_shape: str = ""
-    bot_shape: str = ""
-    mask_expansion: float | None = None
-    paste_expansion: float | None = None
-    mask_aperture_width: float | None = None
-    mask_aperture_height: float | None = None
-    mask_aperture_source: str = ""
+    pad_stack: PcbPadStack | None = None
+    mask_aperture: PcbMaskAperture | None = None
     custom_shapes: tuple[PcbLine | PcbArc | PcbCircle | PcbPolygon, ...] = ()
     metadata: PcbObjectMetadata = field(default_factory=PcbObjectMetadata)
 
@@ -529,7 +504,7 @@ class PcbPourFillMode(StrEnum):
 
 @dataclass
 class PcbPourSettings:
-    fill_mode: PcbPourFillMode = field(default_factory=lambda: PcbPourFillMode.UNKNOWN)
+    fill_mode: PcbPourFillMode = PcbPourFillMode.UNKNOWN
     hatch_style: str = ""
     grid_mm: float = 0.0
     track_width_mm: float = 0.0
@@ -769,8 +744,12 @@ class Pcb:
             return []
         return [keepout for keepout in self.keepouts if keepout.footprint is footprint]
 
-    def bbox(self) -> tuple[float, float, float, float]:
-        """Board bounding box from profile, falling back to pad extents."""
+    def bbox(self) -> tuple[float, float, float, float] | None:
+        """Board bounding box from profile, falling back to pad extents.
+
+        Returns ``None`` for a board with no profile and no pads — callers
+        must handle the empty case rather than rely on a fabricated default.
+        """
         xs: list[float] = []
         ys: list[float] = []
         if self.board_profile is not None:
@@ -781,7 +760,7 @@ class Pcb:
                 xs.extend([pad.x - pad.width / 2, pad.x + pad.width / 2])
                 ys.extend([pad.y - pad.height / 2, pad.y + pad.height / 2])
         if not xs:
-            return (0.0, 0.0, 100.0, 100.0)
+            return None
         return (min(xs), min(ys), max(xs), max(ys))
 
     def _resolve_net_selector(self, net: PcbNet | str | int) -> PcbNet | None:

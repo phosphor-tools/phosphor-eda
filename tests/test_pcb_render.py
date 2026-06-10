@@ -20,6 +20,7 @@ from phosphor_eda.domain.pcb import (
     PcbFootprint,
     PcbLayer,
     PcbLine,
+    PcbMaskAperture,
     PcbNet,
     PcbObjectMetadata,
     PcbPad,
@@ -375,7 +376,7 @@ def _board() -> Pcb:
         net=net,
         footprint=footprint,
         drill=pad_drill,
-        mask_expansion=0.05,
+        mask_aperture=PcbMaskAperture(mask_expansion=0.05),
     )
     via = PcbVia(
         id="via:1",

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from phosphor_eda.formats.common.electrical import ELECTRICAL_KEY, PinElectrical
 from phosphor_eda.query.classify import PASSIVE_PREFIXES, is_power_net, ref_prefix
 from phosphor_eda.query.trace import find_paths, is_two_pin_passive, other_pin, trace_from_net
 from phosphor_eda.query.validate import Severity, validate_design
@@ -220,7 +221,9 @@ def _format_components(design: Schematic) -> list[str]:
             # Filter out default/noise metadata values:
             # - electrical=passive is the default for 88%+ of pins
             filtered = {
-                k: v for k, v in pin.metadata.items() if not (k == "electrical" and v == "passive")
+                k: v
+                for k, v in pin.metadata.items()
+                if not (k == ELECTRICAL_KEY and v == PinElectrical.PASSIVE)
             }
             if filtered:
                 meta_str = "  " + "  ".join(f"{k}={v}" for k, v in sorted(filtered.items()))
