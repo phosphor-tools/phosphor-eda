@@ -7,12 +7,12 @@ Based on the reverse-engineering work of the OpenOrCadParser C++ project:
 https://github.com/Werni2A/OpenOrCadParser
 """
 
-import logging
 import struct
 from pathlib import Path
 
 import olefile
 
+from phosphor_eda.diagnostics import ParseContext
 from phosphor_eda.dsn.binary_reader import (
     PAGE_SETTINGS_SIZE,
     PREAMBLE,
@@ -33,8 +33,6 @@ from phosphor_eda.dsn.models import (
     SchematicPage,
     Wire,
 )
-
-logger = logging.getLogger(__name__)
 
 # --- Structure parsers ---
 
@@ -188,7 +186,9 @@ def parse_library(data: bytes) -> tuple[list[str], list[str]]:
     return string_list, part_fields
 
 
-def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
+def parse_page(
+    data: bytes, string_list: list[str], ctx: ParseContext | None = None
+) -> SchematicPage:
     """Parse a Page stream into a SchematicPage.
 
     Uses skip-based approach: read the header and net list precisely,
@@ -251,8 +251,9 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
                 parsed_wire = True
                 wire_net_map.setdefault((wire.start_x, wire.start_y), set()).add(wire.wire_id)
                 wire_net_map.setdefault((wire.end_x, wire.end_y), set()).add(wire.wire_id)
-        except (struct.error, IndexError, ValueError):
-            pass
+        except (struct.error, IndexError, ValueError) as e:
+            if ctx is not None:
+                ctx.warn("dsn_wire", f"Wire parse error: {e}")
 
         if end_offset > 0:
             r.pos = end_offset
@@ -317,7 +318,8 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
             inst.source_package = r.read_string_len_zero()
             page.instances.append(inst)
         except (struct.error, IndexError, ValueError) as e:
-            logger.warning("PlacedInstance parse error: %s", e)
+            if ctx is not None:
+                ctx.warn("dsn_instance", f"PlacedInstance parse error: {e}")
 
         # Jump to end_offset for safety
         if end_offset > 0:
@@ -339,7 +341,8 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
                     has_name_indices=False,
                 )
             except (struct.error, IndexError, ValueError) as e:
-                logger.warning("Port parse error: %s", e)
+                if ctx is not None:
+                    ctx.warn("dsn_port", f"Port parse error: {e}")
         if end_offset > 0:
             r.pos = end_offset
         if port is not None:
@@ -364,7 +367,8 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
                 )
             r.skip(1)  # unknownFlag (0x21 for Global)
         except (struct.error, IndexError, ValueError) as e:
-            logger.warning("Global parse error: %s", e)
+            if ctx is not None:
+                ctx.warn("dsn_global", f"Global parse error: {e}")
 
         if end_offset > 0:
             r.pos = end_offset
@@ -389,7 +393,8 @@ def parse_page(data: bytes, string_list: list[str]) -> SchematicPage:
                 )
                 r.skip(1)  # unknownFlag, same trailing flag shape as globals
             except (struct.error, IndexError, ValueError) as e:
-                logger.warning("Off-page connector parse error: %s", e)
+                if ctx is not None:
+                    ctx.warn("dsn_off_page_connector", f"Off-page connector parse error: {e}")
         if end_offset > 0:
             r.pos = end_offset
         if connector is not None:
@@ -594,8 +599,14 @@ def _extract_pin_names(
 # --- Main entry point ---
 
 
-def parse_dsn(dsn_path: Path) -> ParsedDesign:
-    """Parse an OrCAD Capture .DSN file."""
+def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
+    """Parse an OrCAD Capture .DSN file.
+
+    Non-fatal parse issues (wire/instance/global decode errors) are recorded
+    on *ctx* when provided, mirroring the Altium parser API.
+    """
+    if ctx is None:
+        ctx = ParseContext()
     ole = olefile.OleFileIO(str(dsn_path))
 
     # 1. Parse Library stream first (needed for string list)
@@ -611,7 +622,7 @@ def parse_dsn(dsn_path: Path) -> ParsedDesign:
         path = "/".join(entry)
         if path.startswith("Views/") and "/Pages/" in path:
             page_data = ole.openstream(entry).read()
-            page = parse_page(page_data, string_list)
+            page = parse_page(page_data, string_list, ctx)
             design.pages.append(page)
 
     # 3. Parse Hierarchy stream

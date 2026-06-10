@@ -1,9 +1,12 @@
 """Netlist construction from parsed OrCAD DSN designs."""
 
+from phosphor_eda.diagnostics import ParseContext
 from phosphor_eda.dsn.models import NetlistEntry, ParsedDesign
 
 
-def build_netlist(design: ParsedDesign) -> dict[str, list[NetlistEntry]]:
+def build_netlist(
+    design: ParsedDesign, ctx: ParseContext | None = None
+) -> dict[str, list[NetlistEntry]]:
     """Build a netlist mapping net names to component pins.
 
     Merges data across all pages. Uses coordinate matching: each wire
@@ -32,7 +35,12 @@ def build_netlist(design: ParsedDesign) -> dict[str, list[NetlistEntry]]:
                     if 1 <= pn <= len(sym_pins):
                         pin_name = sym_pins[pn - 1]
                 except (ValueError, TypeError):
-                    pass
+                    if ctx is not None:
+                        ctx.warn(
+                            "dsn_pin_number",
+                            f"{inst.reference}: non-numeric pin number "
+                            f"{pin.pin_number!r}; pin name left blank",
+                        )
 
                 coord = (pin.pin_x, pin.pin_y)
                 net_ids = page.wire_net_map.get(coord, set())
