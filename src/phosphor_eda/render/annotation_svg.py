@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from phosphor_eda.render.annotations import (
         ResolvedAnnotations,
         ResolvedBox,
+        ResolvedCallout,
         ResolvedLabel,
         ResolvedLegend,
         ResolvedPointer,
@@ -278,24 +279,19 @@ def _render_box(
         box.height,
         attrs={"class": "annotation-box", "style": f"stroke: {box.color}; fill: {fill}"},
     )
-    if box.label_text:
+    if box.callout is not None:
         _render_connector(
             svg,
-            box.connector_path,
+            box.callout.connector_path,
             box.color,
             dot=False,
             connector_style=connector_style,
         )
-        _render_pill_label(
+        _render_callout_pill(
             svg,
-            box.label_x,
-            box.label_y,
-            box.label_width,
-            box.label_height,
-            box.label_text,
+            box.callout,
             font_size,
             color=box.color,
-            text_anchor=box.text_anchor,
             label_style=label_style,
         )
 
@@ -309,31 +305,19 @@ def _render_pointer(
     label_style: AnnotationLabelStyle,
 ) -> None:
     """Render a pointer with connector and margin label."""
-    if pointer.label_text:
+    if pointer.callout is not None:
         _render_connector(
             svg,
-            pointer.connector_path,
+            pointer.callout.connector_path,
             pointer.color,
             connector_style=connector_style,
         )
-        _render_pill_label(
+        _render_callout_pill(
             svg,
-            pointer.label_x,
-            pointer.label_y,
-            pointer.label_width,
-            pointer.label_height,
-            pointer.label_text,
+            pointer.callout,
             font_size,
             color=pointer.color,
-            text_anchor=pointer.text_anchor,
             label_style=label_style,
-        )
-    elif pointer.connector_path:
-        _render_connector(
-            svg,
-            pointer.connector_path,
-            pointer.color,
-            connector_style=connector_style,
         )
 
 
@@ -346,27 +330,47 @@ def _render_label(
     label_style: AnnotationLabelStyle,
 ) -> None:
     """Render a label with optional connector to its target."""
-    if label.connector_path:
+    if label.callout is None:
+        return
+    if label.callout.connector_path:
         _render_connector(
             svg,
-            label.connector_path,
+            label.callout.connector_path,
             "rgba(180,180,200,0.5)",
             connector_style=connector_style,
         )
-    if label.label_text:
-        _render_pill_label(
-            svg,
-            label.label_x,
-            label.label_y,
-            label.label_width,
-            label.label_height,
-            label.label_text,
-            font_size,
-            color="rgba(60,60,80,0.9)",
-            text_anchor=label.text_anchor,
-            css_class="annotation-pill annotation-pill--muted",
-            label_style=label_style,
-        )
+    _render_callout_pill(
+        svg,
+        label.callout,
+        font_size,
+        color="rgba(60,60,80,0.9)",
+        label_style=label_style,
+        css_class="annotation-pill annotation-pill--muted",
+    )
+
+
+def _render_callout_pill(
+    svg: Svg,
+    callout: ResolvedCallout,
+    font_size: float,
+    *,
+    color: str,
+    label_style: AnnotationLabelStyle,
+    css_class: str = "annotation-pill",
+) -> None:
+    _render_pill_label(
+        svg,
+        callout.x,
+        callout.y,
+        callout.width,
+        callout.height,
+        callout.text,
+        font_size,
+        color=color,
+        text_anchor=callout.text_anchor,
+        label_style=label_style,
+        css_class=css_class,
+    )
 
 
 def _render_legend(svg: Svg, legend: ResolvedLegend, font_size: float) -> None:
