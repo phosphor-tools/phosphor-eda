@@ -1,10 +1,16 @@
-"""Load a Project into an in-memory DuckDB database."""
+"""Load a Project into an in-memory DuckDB database.
+
+Every table is described by a declarative :class:`TableSpec` (DDL + named-column
+inserts generated from the same column list). The ``_load_*`` functions build
+per-row source objects and hand them to the spec, so column order and the
+on-disk schema can never drift apart.
+"""
 
 from __future__ import annotations
 
 import json
 import math
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
 import duckdb
@@ -15,7 +21,6 @@ from phosphor_eda.domain.pcb import (
     LayerRole,
     PcbArc,
     PcbCircle,
-    PcbClosedPath,
     PcbDimension,
     PcbDrill,
     PcbDrillShape,
@@ -25,6 +30,7 @@ from phosphor_eda.domain.pcb import (
     PcbModel3D,
     PcbPad,
     PcbPolygon,
+    PcbShape,
     PcbText,
     PcbVia,
     normalize_roles,
@@ -46,14 +52,929 @@ from phosphor_eda.geometry.pcb_geometry import (
 )
 from phosphor_eda.geometry.text_outlines import text_outline_geometry
 from phosphor_eda.query.classify import is_power_net
-from phosphor_eda.query.sql.schema import create_tables, create_views
+from phosphor_eda.query.sql.schema import (
+    GEOMETRY,
+    INDEX_DDL,
+    VIEW_DDL,
+    TableSpec,
+    col,
+    create_views,
+)
 
 if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry
 
-    from phosphor_eda.domain.pcb import Pcb, PcbNet
-    from phosphor_eda.domain.project import Project, Stackup
-    from phosphor_eda.domain.schematic import Page, Schematic
+    from phosphor_eda.domain.pcb import (
+        Pcb,
+        PcbArtwork,
+        PcbBoardProfileElement,
+        PcbConductor,
+        PcbFootprint,
+        PcbKeepout,
+        PcbNet,
+        PcbPour,
+    )
+    from phosphor_eda.domain.project import DesignRule, NetClass, Project, Stackup
+    from phosphor_eda.domain.schematic import (
+        Component,
+        ComponentOccurrence,
+        Net,
+        NetOccurrence,
+        Page,
+        Pin,
+        PinOccurrence,
+        Schematic,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Geometry helpers
+# ---------------------------------------------------------------------------
+
+_QUAD_SEGS_CIRCLE = 16
+_QUAD_SEGS_DRILL = 8
+_PROFILE_ARC_POINTS = 32
+
+
+def _wkb(geom: BaseGeometry | None) -> bytes | None:
+    return None if geom is None or geom.is_empty else geom.wkb
+
+
+def _metadata_json(metadata: PcbMetadata) -> str:
+    return json.dumps(asdict(metadata), separators=(",", ":"), sort_keys=True)
+
+
+def _net_fields(net: PcbNet | None) -> tuple[str | None, int | None]:
+    if net is None:
+        return None, None
+    return net.name, net.number
+
+
+def _layer_names(layers: tuple[PcbLayer, ...]) -> list[str]:
+    return [layer.name for layer in layers]
+
+
+def _primary_layer(layers: tuple[PcbLayer, ...]) -> str:
+    return layers[0].name if layers else ""
+
+
+def _pad_side(pad: PcbPad) -> str:
+    sides = {layer.side for layer in pad.layers if layer.side}
+    if len(sides) > 1:
+        return "through"
+    return next(iter(sides), "")
+
+
+def _shape_geometry(payload: PcbShape) -> BaseGeometry | None:
+    # Exhaustive over PcbShape: every member is handled and the final narrowing
+    # assignment makes a new member a type error rather than a silently-NULL
+    # geom column.
+    if isinstance(payload, PcbLine):
+        if payload.width > 0.0:
+            return segment_geometry(payload)[1]
+        return LineString(((payload.start_x, payload.start_y), (payload.end_x, payload.end_y)))
+    if isinstance(payload, PcbArc):
+        if payload.width > 0.0:
+            return trace_arc_geometry(payload)[1]
+        return LineString(
+            arc_to_polyline(
+                payload.start_x,
+                payload.start_y,
+                payload.mid_x,
+                payload.mid_y,
+                payload.end_x,
+                payload.end_y,
+            )
+        )
+    if isinstance(payload, PcbPolygon):
+        return polygon_geometry(payload)
+    if isinstance(payload, PcbCircle):
+        outer = Point(payload.cx, payload.cy).buffer(payload.radius, quad_segs=_QUAD_SEGS_CIRCLE)
+        if payload.fill:
+            return outer
+        return outer.boundary.buffer(max(payload.width, 0.01) / 2.0)
+    if isinstance(payload, PcbText):
+        return text_outline_geometry(payload)
+    if isinstance(payload, PcbDimension):
+        return LineString(((payload.start_x, payload.start_y), (payload.end_x, payload.end_y)))
+    # Only PcbModel3D remains, which carries no 2D board geometry. The explicit
+    # type annotation makes a new PcbShape member a type error here rather than a
+    # silently-NULL geom column (assert_never can't be used: PcbModel3D is a
+    # valid no-geometry case, not unreachable).
+    _: PcbModel3D = payload
+    return None
+
+
+def _profile_shape_geometry(
+    payload: PcbLine | PcbArc | PcbCircle | PcbPolygon,
+) -> BaseGeometry | None:
+    if isinstance(payload, PcbLine):
+        return LineString(((payload.start_x, payload.start_y), (payload.end_x, payload.end_y)))
+    if isinstance(payload, PcbArc):
+        return LineString(
+            arc_to_polyline(
+                payload.start_x,
+                payload.start_y,
+                payload.mid_x,
+                payload.mid_y,
+                payload.end_x,
+                payload.end_y,
+                num_points=_PROFILE_ARC_POINTS,
+            )
+        )
+    return _shape_geometry(payload)
+
+
+def _drill_geometry(drill: PcbDrill) -> BaseGeometry | None:
+    width = drill.width if drill.width > 0.0 else drill.diameter
+    height = drill.height if drill.height > 0.0 else drill.diameter
+    if width <= 0.0 or height <= 0.0:
+        return None
+    if drill.shape != PcbDrillShape.SLOT or math.isclose(width, height):
+        return Point(drill.x, drill.y).buffer(width / 2.0, quad_segs=_QUAD_SEGS_DRILL)
+    radius = min(width, height) / 2.0
+    if width > height:
+        half_span = (width - height) / 2.0
+        line = LineString(((drill.x - half_span, drill.y), (drill.x + half_span, drill.y)))
+    else:
+        half_span = (height - width) / 2.0
+        line = LineString(((drill.x, drill.y - half_span), (drill.x, drill.y + half_span)))
+    geometry = line.buffer(radius, quad_segs=_QUAD_SEGS_DRILL)
+    if not math.isclose(drill.rotation % 360.0, 0.0):
+        geometry = rotate(geometry, -drill.rotation, origin=(drill.x, drill.y))
+    return geometry
+
+
+def _drill_owner(drill: PcbDrill) -> tuple[str, str]:
+    owner = drill.owner
+    if isinstance(owner, PcbPad):
+        return "pad", owner.id
+    if isinstance(owner, PcbVia):
+        return "via", owner.id
+    return "mechanical", ""
+
+
+def _stackup_layer_as_pcb_layer(layer_type: str, side: str) -> PcbLayer:
+    roles: list[LayerRole] = []
+    if layer_type == "copper":
+        roles.append(LayerRole.COPPER)
+    elif layer_type in {"core", "prepreg", "dielectric"}:
+        roles.append(LayerRole.DIELECTRIC)
+    elif layer_type == "solder_mask":
+        roles.append(LayerRole.SOLDER_MASK)
+    else:
+        roles.append(LayerRole.UNKNOWN)
+    if side == "front":
+        roles.append(LayerRole.FRONT)
+    elif side == "back":
+        roles.append(LayerRole.BACK)
+    elif side == "inner":
+        roles.append(LayerRole.INNER)
+    return PcbLayer(name="", roles=normalize_roles(*roles))
+
+
+def _scope_path(page: Page) -> str:
+    return str(page.scope_id)
+
+
+def _page_names(pages: list[Page]) -> str | None:
+    names = sorted({page.name for page in pages})
+    return ",".join(names) if names else None
+
+
+def _page_ids(pages: list[Page]) -> str | None:
+    ids = sorted({page.id for page in pages})
+    return ",".join(ids) if ids else None
+
+
+def _csv(values: set[str]) -> str | None:
+    return ",".join(sorted(values)) if values else None
+
+
+def _null_if_unset[FalsyT: (float, str)](value: FalsyT) -> FalsyT | None:
+    """Map a falsy sentinel (0.0 / "") to SQL NULL.
+
+    Several domain fields use 0.0 or "" to mean "unset" because their parsers
+    cannot distinguish a genuine zero/empty from a missing value. Centralizing
+    that policy keeps the falsy→NULL decision in one documented place.
+    """
+    return value if value else None
+
+
+def _unique_pages(pages: list[Page]) -> list[Page]:
+    result: list[Page] = []
+    seen: set[str] = set()
+    for page in sorted(pages, key=lambda page: page.id):
+        if page.id in seen:
+            continue
+        seen.add(page.id)
+        result.append(page)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Row-context types for tables that need cross-row context or computed geometry
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _LayerRow:
+    position: int | None
+    name: str
+    roles: list[str]
+    side: str
+    number: int | None
+    thickness_mm: float | None
+    material: str | None
+    epsilon_r: float | None
+    loss_tangent: float | None
+    layer_type: str | None
+    copper_orientation: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _BoardRow:
+    pcb: Pcb
+    stackup: Stackup | None
+    geom: BaseGeometry | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ConductorRow:
+    conductor: PcbConductor
+    net_name: str | None
+    net_number: int | None
+    width: float | None
+    start_x: float | None
+    start_y: float | None
+    end_x: float | None
+    end_y: float | None
+    is_arc: bool
+    arc_center_x: float | None
+    arc_center_y: float | None
+    arc_angle: float | None
+    length: float | None
+    centerline: BaseGeometry | None
+    geom: BaseGeometry | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ViaRow:
+    via: PcbVia
+    net_name: str | None
+    net_number: int | None
+    start_layer: str
+    end_layer: str
+    geom: BaseGeometry | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ArtworkRow:
+    artwork: PcbArtwork
+    text: str | None
+    x: float | None
+    y: float | None
+    rotation: float | None
+    font_size: float | None
+    geom: BaseGeometry | None
+
+
+@dataclass(frozen=True, slots=True)
+class _NetRow:
+    net: Net
+    is_power: bool
+    net_class: str | None
+    diff_pair: str | None
+    diff_pair_polarity: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _CompPageRow:
+    component: Component
+    page: Page
+
+
+@dataclass(frozen=True, slots=True)
+class _NetPageRow:
+    net: Net
+    page: Page
+
+
+@dataclass(frozen=True, slots=True)
+class _KeyValueRow:
+    owner_id: str
+    ref: str
+    key: str
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
+class _OccKeyValueRow:
+    occurrence_id: str
+    owner_id: str
+    key: str
+    value: str
+
+
+@dataclass(frozen=True, slots=True)
+class _AliasRow:
+    net_id: str
+    net_name: str
+    alias: str
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceNameRow:
+    occurrence_id: str
+    net_id: str
+    source_name: str
+
+
+# ---------------------------------------------------------------------------
+# Table specs — DDL and inserts generated from one column list per table
+# ---------------------------------------------------------------------------
+
+_FOOTPRINTS: TableSpec[PcbFootprint] = TableSpec(
+    "footprints",
+    (
+        col("reference", "VARCHAR", lambda fp: fp.reference),
+        col("footprint_lib", "VARCHAR", lambda fp: fp.footprint_lib),
+        col("x", "DOUBLE", lambda fp: fp.x),
+        col("y", "DOUBLE", lambda fp: fp.y),
+        col("rotation", "DOUBLE", lambda fp: fp.rotation),
+        col("side", "VARCHAR", footprint_side),
+        col("value", "VARCHAR", lambda fp: fp.value),
+        col("geom", GEOMETRY, lambda fp: _wkb(footprint_bbox_polygon(fp))),
+    ),
+)
+
+_PADS: TableSpec[PcbPad] = TableSpec(
+    "pads",
+    (
+        col("id", "VARCHAR", lambda pad: pad.id),
+        col(
+            "reference",
+            "VARCHAR",
+            lambda pad: None if pad.footprint is None else pad.footprint.reference,
+        ),
+        col("pad_number", "VARCHAR", lambda pad: pad.number),
+        col("net_name", "VARCHAR", lambda pad: _net_fields(pad.net)[0]),
+        col("net_number", "INTEGER", lambda pad: _net_fields(pad.net)[1]),
+        col("x", "DOUBLE", lambda pad: pad.x),
+        col("y", "DOUBLE", lambda pad: pad.y),
+        col("width", "DOUBLE", lambda pad: pad.width),
+        col("height", "DOUBLE", lambda pad: pad.height),
+        col("shape", "VARCHAR", lambda pad: pad.shape),
+        col("pad_type", "VARCHAR", lambda pad: pad.pad_type.value),
+        col("drill_id", "VARCHAR", lambda pad: None if pad.drill is None else pad.drill.id),
+        col("drill", "DOUBLE", lambda pad: None if pad.drill is None else pad.drill.diameter),
+        col("side", "VARCHAR", _pad_side),
+        col("primary_layer", "VARCHAR", lambda pad: _primary_layer(pad.layers)),
+        col("layers", "VARCHAR[]", lambda pad: _layer_names(pad.layers)),
+        col("pin_function", "VARCHAR", lambda pad: pad.pin_function),
+        col("pin_type", "VARCHAR", lambda pad: pad.pin_type),
+        col(
+            "mask_aperture_width",
+            "DOUBLE",
+            lambda pad: None if pad.mask_aperture is None else pad.mask_aperture.aperture_width,
+        ),
+        col(
+            "mask_aperture_height",
+            "DOUBLE",
+            lambda pad: None if pad.mask_aperture is None else pad.mask_aperture.aperture_height,
+        ),
+        col(
+            "mask_aperture_source",
+            "VARCHAR",
+            lambda pad: (
+                None if pad.mask_aperture is None else _null_if_unset(pad.mask_aperture.source)
+            ),
+        ),
+        col("geom", GEOMETRY, lambda pad: _wkb(pad_polygon(pad))),
+    ),
+)
+
+_VIAS: TableSpec[_ViaRow] = TableSpec(
+    "vias",
+    (
+        col("id", "VARCHAR", lambda r: r.via.id),
+        col("net_name", "VARCHAR", lambda r: r.net_name),
+        col("net_number", "INTEGER", lambda r: r.net_number),
+        col("x", "DOUBLE", lambda r: r.via.x),
+        col("y", "DOUBLE", lambda r: r.via.y),
+        col("diameter_mm", "DOUBLE", lambda r: r.via.diameter),
+        col("drill_id", "VARCHAR", lambda r: r.via.drill.id),
+        col("via_type", "VARCHAR", lambda r: r.via.via_type.value),
+        col("start_layer", "VARCHAR", lambda r: r.start_layer),
+        col("end_layer", "VARCHAR", lambda r: r.end_layer),
+        col("layers", "VARCHAR[]", lambda r: _layer_names(r.via.layers)),
+        col("geom", GEOMETRY, lambda r: _wkb(r.geom)),
+    ),
+)
+
+_DRILLS: TableSpec[PcbDrill] = TableSpec(
+    "drills",
+    (
+        col("id", "VARCHAR", lambda drill: drill.id),
+        col("owner_kind", "VARCHAR", lambda drill: _drill_owner(drill)[0]),
+        col("owner_id", "VARCHAR", lambda drill: _drill_owner(drill)[1]),
+        col("plating", "VARCHAR", lambda drill: drill.plating.value),
+        col("shape", "VARCHAR", lambda drill: drill.shape.value),
+        col("x", "DOUBLE", lambda drill: drill.x),
+        col("y", "DOUBLE", lambda drill: drill.y),
+        col("diameter_mm", "DOUBLE", lambda drill: drill.diameter),
+        col("width_mm", "DOUBLE", lambda drill: drill.width),
+        col("height_mm", "DOUBLE", lambda drill: drill.height),
+        col("rotation", "DOUBLE", lambda drill: drill.rotation),
+        col("layers", "VARCHAR[]", lambda drill: _layer_names(drill.layers)),
+        col("geom", GEOMETRY, lambda drill: _wkb(_drill_geometry(drill))),
+    ),
+)
+
+_CONDUCTORS: TableSpec[_ConductorRow] = TableSpec(
+    "conductors",
+    (
+        col("id", "VARCHAR", lambda r: r.conductor.id),
+        col("kind", "VARCHAR", lambda r: r.conductor.kind.value),
+        col("net_name", "VARCHAR", lambda r: r.net_name),
+        col("net_number", "INTEGER", lambda r: r.net_number),
+        col("layer", "VARCHAR", lambda r: r.conductor.layer.name),
+        col("width_mm", "DOUBLE", lambda r: r.width),
+        col("start_x", "DOUBLE", lambda r: r.start_x),
+        col("start_y", "DOUBLE", lambda r: r.start_y),
+        col("end_x", "DOUBLE", lambda r: r.end_x),
+        col("end_y", "DOUBLE", lambda r: r.end_y),
+        col("is_arc", "BOOLEAN", lambda r: r.is_arc),
+        col("arc_center_x", "DOUBLE", lambda r: r.arc_center_x),
+        col("arc_center_y", "DOUBLE", lambda r: r.arc_center_y),
+        col("arc_angle", "DOUBLE", lambda r: r.arc_angle),
+        col("length_mm", "DOUBLE", lambda r: r.length),
+        col(
+            "footprint_ref",
+            "VARCHAR",
+            lambda r: None if r.conductor.footprint is None else r.conductor.footprint.reference,
+        ),
+        col(
+            "pour_id",
+            "VARCHAR",
+            lambda r: None if r.conductor.pour is None else r.conductor.pour.id,
+        ),
+        col("centerline", GEOMETRY, lambda r: _wkb(r.centerline)),
+        col("geom", GEOMETRY, lambda r: _wkb(r.geom)),
+    ),
+)
+
+_ARTWORK: TableSpec[_ArtworkRow] = TableSpec(
+    "artwork",
+    (
+        col("id", "VARCHAR", lambda r: r.artwork.id),
+        col("purpose", "VARCHAR", lambda r: r.artwork.purpose.value),
+        col("content_kind", "VARCHAR", lambda r: r.artwork.kind.value),
+        col(
+            "footprint_ref",
+            "VARCHAR",
+            lambda r: None if r.artwork.footprint is None else r.artwork.footprint.reference,
+        ),
+        col(
+            "layer", "VARCHAR", lambda r: None if r.artwork.layer is None else r.artwork.layer.name
+        ),
+        col("text", "VARCHAR", lambda r: r.text),
+        col("x", "DOUBLE", lambda r: r.x),
+        col("y", "DOUBLE", lambda r: r.y),
+        col("rotation", "DOUBLE", lambda r: r.rotation),
+        col("font_size", "DOUBLE", lambda r: r.font_size),
+        col("geom", GEOMETRY, lambda r: _wkb(r.geom)),
+    ),
+)
+
+_BOARD_PROFILE: TableSpec[PcbBoardProfileElement] = TableSpec(
+    "board_profile",
+    (
+        col("id", "VARCHAR", lambda el: el.id),
+        col("kind", "VARCHAR", lambda el: el.kind.value),
+        col("layer", "VARCHAR", lambda el: None if el.layer is None else el.layer.name),
+        col("is_cutout", "BOOLEAN", lambda el: el.is_cutout),
+        col("geom", GEOMETRY, lambda el: _wkb(_profile_shape_geometry(el.data))),
+    ),
+)
+
+_POURS: TableSpec[PcbPour] = TableSpec(
+    "pours",
+    (
+        col("id", "VARCHAR", lambda pour: pour.id),
+        col("name", "VARCHAR", lambda pour: pour.name),
+        col("net_name", "VARCHAR", lambda pour: _net_fields(pour.net)[0]),
+        col("net_number", "INTEGER", lambda pour: _net_fields(pour.net)[1]),
+        col("primary_layer", "VARCHAR", lambda pour: _primary_layer(pour.layers)),
+        col("layers", "VARCHAR[]", lambda pour: _layer_names(pour.layers)),
+        col("priority", "INTEGER", lambda pour: pour.priority),
+        col("fill_mode", "VARCHAR", lambda pour: pour.settings.fill_mode.value),
+        col("hatch_style", "VARCHAR", lambda pour: pour.settings.hatch_style),
+        col("grid_mm", "DOUBLE", lambda pour: pour.settings.grid_mm),
+        col("track_width_mm", "DOUBLE", lambda pour: pour.settings.track_width_mm),
+        col("min_thickness_mm", "DOUBLE", lambda pour: pour.settings.min_thickness_mm),
+        col("thermal_gap_mm", "DOUBLE", lambda pour: pour.settings.thermal_gap_mm),
+        col(
+            "thermal_bridge_width_mm", "DOUBLE", lambda pour: pour.settings.thermal_bridge_width_mm
+        ),
+        col(
+            "connect_pads_clearance_mm",
+            "DOUBLE",
+            lambda pour: pour.settings.connect_pads_clearance_mm,
+        ),
+        col("fill_conductor_ids", "VARCHAR[]", lambda pour: [fill.id for fill in pour.fills]),
+        col(
+            "footprint_ref",
+            "VARCHAR",
+            lambda pour: None if pour.footprint is None else pour.footprint.reference,
+        ),
+        col("source_format", "VARCHAR", lambda pour: pour.metadata.source_format),
+        col("native_type", "VARCHAR", lambda pour: pour.metadata.native_type),
+        col("native_kind", "VARCHAR", lambda pour: pour.metadata.native_kind),
+        col("native_id", "VARCHAR", lambda pour: pour.metadata.native_id),
+        col("native_index", "INTEGER", lambda pour: pour.metadata.native_index),
+        col("metadata", "JSON", lambda pour: _metadata_json(pour.metadata)),
+        col("boundary", GEOMETRY, lambda pour: _wkb(closed_path_geometry(pour.boundary))),
+    ),
+)
+
+_KEEPOUTS: TableSpec[PcbKeepout] = TableSpec(
+    "keepouts",
+    (
+        col("id", "VARCHAR", lambda ko: ko.id),
+        col("name", "VARCHAR", lambda ko: ko.name),
+        col(
+            "footprint_ref",
+            "VARCHAR",
+            lambda ko: None if ko.footprint is None else ko.footprint.reference,
+        ),
+        col("primary_layer", "VARCHAR", lambda ko: _primary_layer(ko.layers)),
+        col("layers", "VARCHAR[]", lambda ko: _layer_names(ko.layers)),
+        col("tracks", "VARCHAR", lambda ko: ko.rules.tracks.value),
+        col("vias", "VARCHAR", lambda ko: ko.rules.vias.value),
+        col("pads", "VARCHAR", lambda ko: ko.rules.pads.value),
+        col("copper_pours", "VARCHAR", lambda ko: ko.rules.copper_pours.value),
+        col("footprints", "VARCHAR", lambda ko: ko.rules.footprints.value),
+        col("source_format", "VARCHAR", lambda ko: ko.metadata.source_format),
+        col("native_type", "VARCHAR", lambda ko: ko.metadata.native_type),
+        col("native_kind", "VARCHAR", lambda ko: ko.metadata.native_kind),
+        col("native_id", "VARCHAR", lambda ko: ko.metadata.native_id),
+        col("native_index", "INTEGER", lambda ko: ko.metadata.native_index),
+        col("metadata", "JSON", lambda ko: _metadata_json(ko.metadata)),
+        col("boundary", GEOMETRY, lambda ko: _wkb(closed_path_geometry(ko.boundary))),
+    ),
+)
+
+_LAYERS: TableSpec[_LayerRow] = TableSpec(
+    "layers",
+    (
+        col("position", "INTEGER", lambda r: r.position),
+        col("name", "VARCHAR", lambda r: r.name),
+        col("roles", "VARCHAR[]", lambda r: r.roles),
+        col("side", "VARCHAR", lambda r: r.side),
+        col("number", "INTEGER", lambda r: r.number),
+        col("thickness_mm", "DOUBLE", lambda r: r.thickness_mm),
+        col("material", "VARCHAR", lambda r: r.material),
+        col("epsilon_r", "DOUBLE", lambda r: r.epsilon_r),
+        col("loss_tangent", "DOUBLE", lambda r: r.loss_tangent),
+        col("layer_type", "VARCHAR", lambda r: r.layer_type),
+        col("copper_orientation", "VARCHAR", lambda r: r.copper_orientation),
+    ),
+)
+
+_BOARD: TableSpec[_BoardRow] = TableSpec(
+    "board",
+    (
+        col("name", "VARCHAR", lambda r: r.pcb.name),
+        col(
+            "total_thickness_mm",
+            "DOUBLE",
+            lambda r: r.stackup.total_thickness_mm if r.stackup else None,
+        ),
+        col("copper_finish", "VARCHAR", lambda r: r.stackup.copper_finish if r.stackup else None),
+        col(
+            "layer_count",
+            "INTEGER",
+            lambda r: (
+                sum(1 for layer in r.stackup.layers if layer.layer_type == "copper")
+                if r.stackup
+                else 0
+            ),
+        ),
+        col("geom", GEOMETRY, lambda r: _wkb(r.geom)),
+    ),
+)
+
+_NET_CLASSES: TableSpec[NetClass] = TableSpec(
+    "net_classes",
+    (
+        col("name", "VARCHAR", lambda nc: nc.name),
+        col("kind", "INTEGER", lambda nc: nc.kind),
+        col("trace_width_mm", "DOUBLE", lambda nc: _null_if_unset(nc.trace_width_mm)),
+        col("clearance_mm", "DOUBLE", lambda nc: _null_if_unset(nc.clearance_mm)),
+        col("via_diameter_mm", "DOUBLE", lambda nc: _null_if_unset(nc.via_diameter_mm)),
+        col("via_drill_mm", "DOUBLE", lambda nc: _null_if_unset(nc.via_drill_mm)),
+        col("diff_pair_width_mm", "DOUBLE", lambda nc: _null_if_unset(nc.diff_pair_width_mm)),
+        col("diff_pair_gap_mm", "DOUBLE", lambda nc: _null_if_unset(nc.diff_pair_gap_mm)),
+    ),
+)
+
+_NET_CLASS_MEMBERS: TableSpec[tuple[str, str]] = TableSpec(
+    "net_class_members",
+    (
+        col("net_name", "VARCHAR", lambda r: r[0]),
+        col("net_class", "VARCHAR", lambda r: r[1]),
+    ),
+)
+
+_DESIGN_RULES: TableSpec[DesignRule] = TableSpec(
+    "design_rules",
+    (
+        col("name", "VARCHAR", lambda rule: rule.name),
+        col("kind", "VARCHAR", lambda rule: rule.kind),
+        col("enabled", "BOOLEAN", lambda rule: rule.enabled),
+        col("priority", "INTEGER", lambda rule: rule.priority),
+        col("scope1", "VARCHAR", lambda rule: _null_if_unset(rule.scope1)),
+        col("scope2", "VARCHAR", lambda rule: _null_if_unset(rule.scope2)),
+        col("layer_scope", "VARCHAR", lambda rule: _null_if_unset(rule.layer_scope)),
+        col("min_value_mm", "DOUBLE", lambda rule: rule.min_value_mm),
+        col("max_value_mm", "DOUBLE", lambda rule: rule.max_value_mm),
+        col("preferred_value_mm", "DOUBLE", lambda rule: rule.preferred_value_mm),
+    ),
+)
+
+_COMPONENTS: TableSpec[Component] = TableSpec(
+    "components",
+    (
+        col("component_id", "VARCHAR", lambda c: c.id, constraint="PRIMARY KEY"),
+        col("reference", "VARCHAR", lambda c: c.reference, constraint="NOT NULL"),
+        col("part", "VARCHAR", lambda c: c.part, constraint="NOT NULL"),
+        col("description", "VARCHAR", lambda c: c.description, constraint="NOT NULL"),
+        col("page_ids", "VARCHAR", lambda c: _page_ids(c.pages)),
+        col("page_names", "VARCHAR", lambda c: _page_names(c.pages)),
+    ),
+)
+
+_COMPONENT_OCCURRENCES: TableSpec[ComponentOccurrence] = TableSpec(
+    "component_occurrences",
+    (
+        col("occurrence_id", "VARCHAR", lambda o: o.id, constraint="PRIMARY KEY"),
+        col("component_id", "VARCHAR", lambda o: o.component.id, constraint="NOT NULL"),
+        col("reference", "VARCHAR", lambda o: o.component.reference, constraint="NOT NULL"),
+        col("page_id", "VARCHAR", lambda o: o.page.id, constraint="NOT NULL"),
+        col("page_name", "VARCHAR", lambda o: o.page.name, constraint="NOT NULL"),
+        col("scope_path", "VARCHAR", lambda o: str(o.scope_id), constraint="NOT NULL"),
+        col("source_id", "VARCHAR", lambda o: o.source_id, constraint="NOT NULL"),
+        col("part_id", "VARCHAR", lambda o: _null_if_unset(o.part_id)),
+        col("x", "DOUBLE", lambda o: o.x),
+        col("y", "DOUBLE", lambda o: o.y),
+        col("rotation", "DOUBLE", lambda o: o.rotation),
+        col("mirror", "BOOLEAN", lambda o: o.mirror),
+    ),
+)
+
+_COMPONENT_PAGES: TableSpec[_CompPageRow] = TableSpec(
+    "component_pages",
+    (
+        col("component_id", "VARCHAR", lambda r: r.component.id, constraint="NOT NULL"),
+        col("reference", "VARCHAR", lambda r: r.component.reference, constraint="NOT NULL"),
+        col("page_id", "VARCHAR", lambda r: r.page.id, constraint="NOT NULL"),
+        col("page_name", "VARCHAR", lambda r: r.page.name, constraint="NOT NULL"),
+    ),
+)
+
+_COMPONENT_METADATA: TableSpec[_KeyValueRow] = TableSpec(
+    "component_metadata",
+    (
+        col("component_id", "VARCHAR", lambda r: r.owner_id, constraint="NOT NULL"),
+        col("reference", "VARCHAR", lambda r: r.ref, constraint="NOT NULL"),
+        col("key", "VARCHAR", lambda r: r.key, constraint="NOT NULL"),
+        col("value", "VARCHAR", lambda r: r.value, constraint="NOT NULL"),
+    ),
+)
+
+_COMPONENT_OCCURRENCE_METADATA: TableSpec[_OccKeyValueRow] = TableSpec(
+    "component_occurrence_metadata",
+    (
+        col("occurrence_id", "VARCHAR", lambda r: r.occurrence_id, constraint="NOT NULL"),
+        col("component_id", "VARCHAR", lambda r: r.owner_id, constraint="NOT NULL"),
+        col("key", "VARCHAR", lambda r: r.key, constraint="NOT NULL"),
+        col("value", "VARCHAR", lambda r: r.value, constraint="NOT NULL"),
+    ),
+)
+
+_PINS: TableSpec[Pin] = TableSpec(
+    "pins",
+    (
+        col("pin_id", "VARCHAR", lambda pin: pin.id, constraint="PRIMARY KEY"),
+        col("component_id", "VARCHAR", lambda pin: pin.component.id, constraint="NOT NULL"),
+        col("reference", "VARCHAR", lambda pin: pin.component.reference, constraint="NOT NULL"),
+        col("designator", "VARCHAR", lambda pin: pin.designator, constraint="NOT NULL"),
+        col("name", "VARCHAR", lambda pin: pin.name, constraint="NOT NULL"),
+        col("net_id", "VARCHAR", lambda pin: pin.net.id if pin.net else None),
+        col("net_name", "VARCHAR", lambda pin: pin.net.name if pin.net else None),
+        col("electrical", "VARCHAR", lambda pin: pin.metadata.get(ELECTRICAL_KEY)),
+        col("no_connect", "BOOLEAN", lambda pin: pin.no_connect, constraint="NOT NULL"),
+    ),
+)
+
+_PIN_OCCURRENCES: TableSpec[PinOccurrence] = TableSpec(
+    "pin_occurrences",
+    (
+        col("occurrence_id", "VARCHAR", lambda o: o.id, constraint="PRIMARY KEY"),
+        col("pin_id", "VARCHAR", lambda o: o.pin.id, constraint="NOT NULL"),
+        col("component_id", "VARCHAR", lambda o: o.pin.component.id, constraint="NOT NULL"),
+        col("reference", "VARCHAR", lambda o: o.pin.component.reference, constraint="NOT NULL"),
+        col("designator", "VARCHAR", lambda o: o.pin.designator, constraint="NOT NULL"),
+        col("page_id", "VARCHAR", lambda o: o.page.id, constraint="NOT NULL"),
+        col("page_name", "VARCHAR", lambda o: o.page.name, constraint="NOT NULL"),
+        col("scope_path", "VARCHAR", lambda o: str(o.scope_id), constraint="NOT NULL"),
+        col("source_id", "VARCHAR", lambda o: o.source_id, constraint="NOT NULL"),
+    ),
+)
+
+_PIN_OCCURRENCE_METADATA: TableSpec[_OccKeyValueRow] = TableSpec(
+    "pin_occurrence_metadata",
+    (
+        col("occurrence_id", "VARCHAR", lambda r: r.occurrence_id, constraint="NOT NULL"),
+        col("pin_id", "VARCHAR", lambda r: r.owner_id, constraint="NOT NULL"),
+        col("key", "VARCHAR", lambda r: r.key, constraint="NOT NULL"),
+        col("value", "VARCHAR", lambda r: r.value, constraint="NOT NULL"),
+    ),
+)
+
+_NETS: TableSpec[_NetRow] = TableSpec(
+    "nets",
+    (
+        col("net_id", "VARCHAR", lambda r: r.net.id, constraint="PRIMARY KEY"),
+        col("name", "VARCHAR", lambda r: r.net.name, constraint="NOT NULL"),
+        col("pin_count", "INTEGER", lambda r: len(r.net.pins), constraint="NOT NULL"),
+        col("page_ids", "VARCHAR", lambda r: _page_ids(r.net.pages)),
+        col("page_names", "VARCHAR", lambda r: _page_names(r.net.pages)),
+        col("is_power", "BOOLEAN", lambda r: r.is_power, constraint="NOT NULL"),
+        col("net_class", "VARCHAR", lambda r: r.net_class),
+        col("diff_pair", "VARCHAR", lambda r: r.diff_pair),
+        col("diff_pair_polarity", "VARCHAR", lambda r: r.diff_pair_polarity),
+        col("aliases", "VARCHAR", lambda r: _csv(r.net.aliases)),
+    ),
+)
+
+_NET_PAGES: TableSpec[_NetPageRow] = TableSpec(
+    "net_pages",
+    (
+        col("net_id", "VARCHAR", lambda r: r.net.id, constraint="NOT NULL"),
+        col("name", "VARCHAR", lambda r: r.net.name, constraint="NOT NULL"),
+        col("page_id", "VARCHAR", lambda r: r.page.id, constraint="NOT NULL"),
+        col("page_name", "VARCHAR", lambda r: r.page.name, constraint="NOT NULL"),
+    ),
+)
+
+_NET_ALIASES: TableSpec[_AliasRow] = TableSpec(
+    "net_aliases",
+    (
+        col("net_id", "VARCHAR", lambda r: r.net_id, constraint="NOT NULL"),
+        col("name", "VARCHAR", lambda r: r.net_name, constraint="NOT NULL"),
+        col("alias", "VARCHAR", lambda r: r.alias, constraint="NOT NULL"),
+    ),
+)
+
+_NET_OCCURRENCES: TableSpec[NetOccurrence] = TableSpec(
+    "net_occurrences",
+    (
+        col("occurrence_id", "VARCHAR", lambda o: o.id, constraint="PRIMARY KEY"),
+        col("net_id", "VARCHAR", lambda o: o.net.id, constraint="NOT NULL"),
+        col("name", "VARCHAR", lambda o: o.net.name, constraint="NOT NULL"),
+        col("page_id", "VARCHAR", lambda o: o.page.id, constraint="NOT NULL"),
+        col("page_name", "VARCHAR", lambda o: o.page.name, constraint="NOT NULL"),
+        col("scope_path", "VARCHAR", lambda o: str(o.scope_id), constraint="NOT NULL"),
+        col(
+            "source_local_net_id", "VARCHAR", lambda o: o.source_local_net_id, constraint="NOT NULL"
+        ),
+        col("source_names", "VARCHAR", lambda o: _csv(o.source_names)),
+    ),
+)
+
+_NET_OCCURRENCE_SOURCE_NAMES: TableSpec[_SourceNameRow] = TableSpec(
+    "net_occurrence_source_names",
+    (
+        col("occurrence_id", "VARCHAR", lambda r: r.occurrence_id, constraint="NOT NULL"),
+        col("net_id", "VARCHAR", lambda r: r.net_id, constraint="NOT NULL"),
+        col("source_name", "VARCHAR", lambda r: r.source_name, constraint="NOT NULL"),
+    ),
+)
+
+_NET_METADATA: TableSpec[_KeyValueRow] = TableSpec(
+    "net_metadata",
+    (
+        col("net_id", "VARCHAR", lambda r: r.owner_id, constraint="NOT NULL"),
+        col("name", "VARCHAR", lambda r: r.ref, constraint="NOT NULL"),
+        col("key", "VARCHAR", lambda r: r.key, constraint="NOT NULL"),
+        col("value", "VARCHAR", lambda r: r.value, constraint="NOT NULL"),
+    ),
+)
+
+_NET_OCCURRENCE_METADATA: TableSpec[_OccKeyValueRow] = TableSpec(
+    "net_occurrence_metadata",
+    (
+        col("occurrence_id", "VARCHAR", lambda r: r.occurrence_id, constraint="NOT NULL"),
+        col("net_id", "VARCHAR", lambda r: r.owner_id, constraint="NOT NULL"),
+        col("key", "VARCHAR", lambda r: r.key, constraint="NOT NULL"),
+        col("value", "VARCHAR", lambda r: r.value, constraint="NOT NULL"),
+    ),
+)
+
+_PAGES: TableSpec[Page] = TableSpec(
+    "pages",
+    (
+        col("page_id", "VARCHAR", lambda page: page.id, constraint="PRIMARY KEY"),
+        col("name", "VARCHAR", lambda page: page.name, constraint="NOT NULL"),
+        col("source_file", "VARCHAR", lambda page: _null_if_unset(page.source_file)),
+        col("scope_path", "VARCHAR", _scope_path, constraint="NOT NULL"),
+        col("component_count", "INTEGER", lambda page: len(page.components), constraint="NOT NULL"),
+        col("net_count", "INTEGER", lambda page: len(page.nets), constraint="NOT NULL"),
+    ),
+)
+
+_PROJECT: TableSpec[tuple[str, str]] = TableSpec(
+    "project",
+    (
+        col("key", "VARCHAR", lambda r: r[0]),
+        col("value", "VARCHAR", lambda r: r[1]),
+    ),
+)
+
+
+# Table creation order. Only ``name``/``create_ddl()`` are read here — neither
+# depends on a spec's row type — so the specs can stay heterogeneously typed.
+_ORDERED_SPECS = (
+    _FOOTPRINTS,
+    _PADS,
+    _VIAS,
+    _DRILLS,
+    _CONDUCTORS,
+    _ARTWORK,
+    _BOARD_PROFILE,
+    _POURS,
+    _KEEPOUTS,
+    _LAYERS,
+    _BOARD,
+    _NET_CLASSES,
+    _NET_CLASS_MEMBERS,
+    _DESIGN_RULES,
+    _COMPONENTS,
+    _COMPONENT_OCCURRENCES,
+    _COMPONENT_PAGES,
+    _COMPONENT_METADATA,
+    _COMPONENT_OCCURRENCE_METADATA,
+    _PINS,
+    _PIN_OCCURRENCES,
+    _PIN_OCCURRENCE_METADATA,
+    _NETS,
+    _NET_PAGES,
+    _NET_ALIASES,
+    _NET_OCCURRENCES,
+    _NET_OCCURRENCE_SOURCE_NAMES,
+    _NET_METADATA,
+    _NET_OCCURRENCE_METADATA,
+    _PAGES,
+    _PROJECT,
+)
+
+TABLE_DDL: dict[str, str] = {spec.name: spec.create_ddl() for spec in _ORDERED_SPECS}
+
+
+def create_tables(con: duckdb.DuckDBPyConnection) -> None:
+    """Install spatial extension and create all tables."""
+    _ = con.execute("INSTALL spatial")
+    _ = con.execute("LOAD spatial")
+    for ddl in TABLE_DDL.values():
+        _ = con.execute(ddl)
+    for ddl in INDEX_DDL.values():
+        _ = con.execute(ddl)
+
+
+def schema_text() -> str:
+    """Return formatted DDL for all tables, indexes, and views."""
+    lines: list[str] = ["-- Tables\n"]
+    _append_ddl_block(lines, TABLE_DDL)
+    lines.append("-- Indexes\n")
+    _append_ddl_block(lines, INDEX_DDL)
+    lines.append("-- Views\n")
+    _append_ddl_block(lines, VIEW_DDL)
+    return "\n".join(lines)
+
+
+def _append_ddl_block(lines: list[str], ddls: dict[str, str]) -> None:
+    for name, ddl in ddls.items():
+        cleaned = "\n".join(line.strip() for line in ddl.strip().splitlines())
+        lines.append(f"-- {name}")
+        lines.append(cleaned)
+        lines.append("")
+
+
+# ---------------------------------------------------------------------------
+# Loaders
+# ---------------------------------------------------------------------------
 
 
 def load_database(project: Project) -> duckdb.DuckDBPyConnection:
@@ -100,172 +1021,14 @@ def load_database(project: Project) -> duckdb.DuckDBPyConnection:
     return con
 
 
-def _wkb(geom: BaseGeometry | None) -> bytes | None:
-    return None if geom is None or geom.is_empty else geom.wkb
-
-
-def _metadata_json(metadata: PcbMetadata) -> str:
-    return json.dumps(asdict(metadata), separators=(",", ":"), sort_keys=True)
-
-
-def _net_fields(net: PcbNet | None) -> tuple[str | None, int | None]:
-    if net is None:
-        return None, None
-    return net.name, net.number
-
-
-def _layer_names(layers: tuple[PcbLayer, ...]) -> list[str]:
-    return [layer.name for layer in layers]
-
-
-def _primary_layer(layers: tuple[PcbLayer, ...]) -> str:
-    return layers[0].name if layers else ""
-
-
-def _pad_side(pad: PcbPad) -> str:
-    sides = {layer.side for layer in pad.layers if layer.side}
-    if len(sides) > 1:
-        return "through"
-    return next(iter(sides), "")
-
-
-def _shape_geometry(payload: object) -> BaseGeometry | None:
-    if isinstance(payload, PcbLine):
-        return (
-            segment_geometry(payload)[1]
-            if payload.width > 0.0
-            else LineString(((payload.start_x, payload.start_y), (payload.end_x, payload.end_y)))
-        )
-    if isinstance(payload, PcbArc):
-        return (
-            trace_arc_geometry(payload)[1]
-            if payload.width > 0.0
-            else LineString(
-                arc_to_polyline(
-                    payload.start_x,
-                    payload.start_y,
-                    payload.mid_x,
-                    payload.mid_y,
-                    payload.end_x,
-                    payload.end_y,
-                )
-            )
-        )
-    if isinstance(payload, PcbPolygon):
-        return polygon_geometry(payload)
-    if isinstance(payload, PcbCircle):
-        outer = Point(payload.cx, payload.cy).buffer(payload.radius, quad_segs=16)
-        if payload.fill:
-            return outer
-        return outer.boundary.buffer(max(payload.width, 0.01) / 2.0)
-    if isinstance(payload, PcbText):
-        return text_outline_geometry(payload)
-    if isinstance(payload, PcbDimension):
-        return LineString(((payload.start_x, payload.start_y), (payload.end_x, payload.end_y)))
-    if isinstance(payload, PcbModel3D):
-        return None
-    if isinstance(payload, PcbClosedPath):
-        return closed_path_geometry(payload)
-    return None
-
-
-def _profile_shape_geometry(payload: object) -> BaseGeometry | None:
-    if isinstance(payload, PcbLine):
-        return LineString(((payload.start_x, payload.start_y), (payload.end_x, payload.end_y)))
-    if isinstance(payload, PcbArc):
-        return LineString(
-            arc_to_polyline(
-                payload.start_x,
-                payload.start_y,
-                payload.mid_x,
-                payload.mid_y,
-                payload.end_x,
-                payload.end_y,
-                num_points=32,
-            )
-        )
-    return _shape_geometry(payload)
-
-
-def _drill_geometry(drill: PcbDrill) -> BaseGeometry | None:
-    width = drill.width if drill.width > 0.0 else drill.diameter
-    height = drill.height if drill.height > 0.0 else drill.diameter
-    if width <= 0.0 or height <= 0.0:
-        return None
-    if drill.shape != PcbDrillShape.SLOT or math.isclose(width, height):
-        return Point(drill.x, drill.y).buffer(width / 2.0, quad_segs=8)
-    radius = min(width, height) / 2.0
-    if width > height:
-        half_span = (width - height) / 2.0
-        line = LineString(((drill.x - half_span, drill.y), (drill.x + half_span, drill.y)))
-    else:
-        half_span = (height - width) / 2.0
-        line = LineString(((drill.x, drill.y - half_span), (drill.x, drill.y + half_span)))
-    geometry = line.buffer(radius, quad_segs=8)
-    if not math.isclose(drill.rotation % 360.0, 0.0):
-        geometry = rotate(geometry, -drill.rotation, origin=(drill.x, drill.y))
-    return geometry
-
-
-def _drill_owner(drill: PcbDrill) -> tuple[str, str]:
-    owner = drill.owner
-    if isinstance(owner, PcbPad):
-        return "pad", owner.id
-    if isinstance(owner, PcbVia):
-        return "via", owner.id
-    return "mechanical", ""
-
-
 def _load_footprints(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
     for fp in pcb.footprints:
-        _ = con.execute(
-            "INSERT INTO footprints VALUES (?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))",
-            [
-                fp.reference,
-                fp.footprint_lib,
-                fp.x,
-                fp.y,
-                fp.rotation,
-                footprint_side(fp),
-                fp.value,
-                _wkb(footprint_bbox_polygon(fp)),
-            ],
-        )
+        _FOOTPRINTS.insert(con, fp)
 
 
 def _load_pads(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
-    _ = pcb
     for pad in pcb.pads:
-        net_name, net_number = _net_fields(pad.net)
-        aperture = pad.mask_aperture
-        _ = con.execute(
-            """INSERT INTO pads VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))""",
-            [
-                pad.id,
-                None if pad.footprint is None else pad.footprint.reference,
-                pad.number,
-                net_name,
-                net_number,
-                pad.x,
-                pad.y,
-                pad.width,
-                pad.height,
-                pad.shape,
-                pad.pad_type.value,
-                None if pad.drill is None else pad.drill.id,
-                None if pad.drill is None else pad.drill.diameter,
-                _pad_side(pad),
-                _primary_layer(pad.layers),
-                _layer_names(pad.layers),
-                pad.pin_function,
-                pad.pin_type,
-                None if aperture is None else aperture.aperture_width,
-                None if aperture is None else aperture.aperture_height,
-                None if aperture is None else (aperture.source or None),
-                _wkb(pad_polygon(pad)),
-            ],
-        )
+        _PADS.insert(con, pad)
 
 
 def _load_vias(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
@@ -273,126 +1036,104 @@ def _load_vias(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
         net_name, net_number = _net_fields(via.net)
         start_layer = via.layers[0].name if via.layers else ""
         end_layer = via.layers[-1].name if len(via.layers) > 1 else start_layer
-        _ = con.execute(
-            """INSERT INTO vias VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))""",
-            [
-                via.id,
-                net_name,
-                net_number,
-                via.x,
-                via.y,
-                via.diameter,
-                via.drill.id,
-                via.via_type.value,
-                start_layer,
-                end_layer,
-                _layer_names(via.layers),
-                _wkb(via_geometry(via)[0]),
-            ],
+        _VIAS.insert(
+            con,
+            _ViaRow(
+                via=via,
+                net_name=net_name,
+                net_number=net_number,
+                start_layer=start_layer,
+                end_layer=end_layer,
+                geom=via_geometry(via)[0],
+            ),
         )
 
 
 def _load_drills(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
     for drill in pcb.drills:
-        owner_kind, owner_id = _drill_owner(drill)
-        _ = con.execute(
-            """INSERT INTO drills VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))""",
-            [
-                drill.id,
-                owner_kind,
-                owner_id,
-                drill.plating.value,
-                drill.shape.value,
-                drill.x,
-                drill.y,
-                drill.diameter,
-                drill.width,
-                drill.height,
-                drill.rotation,
-                _layer_names(drill.layers),
-                _wkb(_drill_geometry(drill)),
-            ],
+        _DRILLS.insert(con, drill)
+
+
+def _conductor_row(conductor: PcbConductor) -> _ConductorRow:
+    net_name, net_number = _net_fields(conductor.net)
+    data = conductor.data
+    if isinstance(data, PcbLine):
+        centerline, geom = segment_geometry(data)
+        return _ConductorRow(
+            conductor=conductor,
+            net_name=net_name,
+            net_number=net_number,
+            width=data.width,
+            start_x=data.start_x,
+            start_y=data.start_y,
+            end_x=data.end_x,
+            end_y=data.end_y,
+            is_arc=False,
+            arc_center_x=None,
+            arc_center_y=None,
+            arc_angle=None,
+            length=centerline.length,
+            centerline=centerline,
+            geom=geom,
         )
+    if isinstance(data, PcbArc):
+        centerline, geom = trace_arc_geometry(data)
+        arc_center_x, arc_center_y, _radius = arc_center_from_three_points(
+            data.start_x, data.start_y, data.mid_x, data.mid_y, data.end_x, data.end_y
+        )
+        arc_angle = arc_sweep_angle(
+            data.start_x,
+            data.start_y,
+            data.mid_x,
+            data.mid_y,
+            data.end_x,
+            data.end_y,
+            arc_center_x,
+            arc_center_y,
+        )
+        return _ConductorRow(
+            conductor=conductor,
+            net_name=net_name,
+            net_number=net_number,
+            width=data.width,
+            start_x=data.start_x,
+            start_y=data.start_y,
+            end_x=data.end_x,
+            end_y=data.end_y,
+            is_arc=True,
+            arc_center_x=arc_center_x,
+            arc_center_y=arc_center_y,
+            arc_angle=arc_angle,
+            length=centerline.length,
+            centerline=centerline,
+            geom=geom,
+        )
+    geom = _shape_geometry(data)
+    if geom is None:
+        msg = f"unsupported conductor payload type {type(data).__name__}"
+        raise TypeError(msg)
+    return _ConductorRow(
+        conductor=conductor,
+        net_name=net_name,
+        net_number=net_number,
+        width=None,
+        start_x=None,
+        start_y=None,
+        end_x=None,
+        end_y=None,
+        is_arc=False,
+        arc_center_x=None,
+        arc_center_y=None,
+        arc_angle=None,
+        length=0.0,
+        centerline=None,
+        geom=geom,
+    )
 
 
 def _load_conductors(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
     for conductor in pcb.conductors:
-        net_name, net_number = _net_fields(conductor.net)
-        centerline: BaseGeometry | None = None
-        geom: BaseGeometry | None = None
-        width = None
-        start_x = start_y = end_x = end_y = None
-        is_arc = False
-        arc_center_x = arc_center_y = arc_angle = None
-        length = None
-        data = conductor.data
-        if isinstance(data, PcbLine):
-            centerline, geom = segment_geometry(data)
-            width = data.width
-            start_x, start_y = data.start_x, data.start_y
-            end_x, end_y = data.end_x, data.end_y
-            length = centerline.length
-        elif isinstance(data, PcbArc):
-            centerline, geom = trace_arc_geometry(data)
-            width = data.width
-            start_x, start_y = data.start_x, data.start_y
-            end_x, end_y = data.end_x, data.end_y
-            arc_center_x, arc_center_y, _radius = arc_center_from_three_points(
-                data.start_x,
-                data.start_y,
-                data.mid_x,
-                data.mid_y,
-                data.end_x,
-                data.end_y,
-            )
-            arc_angle = arc_sweep_angle(
-                data.start_x,
-                data.start_y,
-                data.mid_x,
-                data.mid_y,
-                data.end_x,
-                data.end_y,
-                arc_center_x,
-                arc_center_y,
-            )
-            is_arc = True
-            length = centerline.length
-        else:
-            geom = _shape_geometry(data)
-            if geom is None:
-                msg = f"unsupported conductor payload type {type(data).__name__}"
-                raise TypeError(msg)
-            length = 0.0
-        _ = con.execute(
-            """INSERT INTO conductors VALUES
-            (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                ST_GeomFromWKB(?), ST_GeomFromWKB(?)
-            )""",
-            [
-                conductor.id,
-                conductor.kind.value,
-                net_name,
-                net_number,
-                conductor.layer.name,
-                width,
-                start_x,
-                start_y,
-                end_x,
-                end_y,
-                is_arc,
-                arc_center_x,
-                arc_center_y,
-                arc_angle,
-                length,
-                None if conductor.footprint is None else conductor.footprint.reference,
-                None if conductor.pour is None else conductor.pour.id,
-                _wkb(centerline),
-                _wkb(geom),
-            ],
-        )
+        _CONDUCTORS.insert(con, _conductor_row(conductor))
 
 
 def _load_artwork(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
@@ -404,22 +1145,17 @@ def _load_artwork(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
             y = artwork.data.y
             rotation = artwork.data.rotation
             font_size = artwork.data.font_size
-        _ = con.execute(
-            """INSERT INTO artwork VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))""",
-            [
-                artwork.id,
-                artwork.purpose.value,
-                artwork.kind.value,
-                None if artwork.footprint is None else artwork.footprint.reference,
-                None if artwork.layer is None else artwork.layer.name,
-                text,
-                x,
-                y,
-                rotation,
-                font_size,
-                _wkb(_shape_geometry(artwork.data)),
-            ],
+        _ARTWORK.insert(
+            con,
+            _ArtworkRow(
+                artwork=artwork,
+                text=text,
+                x=x,
+                y=y,
+                rotation=rotation,
+                font_size=font_size,
+                geom=_shape_geometry(artwork.data),
+            ),
         )
 
 
@@ -427,273 +1163,98 @@ def _load_board_profile(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
     if pcb.board_profile is None:
         return
     for element in pcb.board_profile.elements:
-        _ = con.execute(
-            "INSERT INTO board_profile VALUES (?, ?, ?, ?, ST_GeomFromWKB(?))",
-            [
-                element.id,
-                element.kind.value,
-                None if element.layer is None else element.layer.name,
-                element.is_cutout,
-                _wkb(_profile_shape_geometry(element.data)),
-            ],
-        )
+        _BOARD_PROFILE.insert(con, element)
 
 
 def _load_pours(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
     for pour in pcb.pours:
-        net_name, net_number = _net_fields(pour.net)
-        boundary = closed_path_geometry(pour.boundary)
-        _ = con.execute(
-            """INSERT INTO pours VALUES
-            (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                ST_GeomFromWKB(?)
-            )""",
-            [
-                pour.id,
-                pour.name,
-                net_name,
-                net_number,
-                _primary_layer(pour.layers),
-                _layer_names(pour.layers),
-                pour.priority,
-                pour.settings.fill_mode.value,
-                pour.settings.hatch_style,
-                pour.settings.grid_mm,
-                pour.settings.track_width_mm,
-                pour.settings.min_thickness_mm,
-                pour.settings.thermal_gap_mm,
-                pour.settings.thermal_bridge_width_mm,
-                pour.settings.connect_pads_clearance_mm,
-                [fill.id for fill in pour.fills],
-                None if pour.footprint is None else pour.footprint.reference,
-                pour.metadata.source_format,
-                pour.metadata.native_type,
-                pour.metadata.native_kind,
-                pour.metadata.native_id,
-                pour.metadata.native_index,
-                _metadata_json(pour.metadata),
-                _wkb(boundary),
-            ],
-        )
+        _POURS.insert(con, pour)
 
 
 def _load_keepouts(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
     for keepout in pcb.keepouts:
-        boundary = closed_path_geometry(keepout.boundary)
-        _ = con.execute(
-            """INSERT INTO keepouts VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ST_GeomFromWKB(?))""",
-            [
-                keepout.id,
-                keepout.name,
-                None if keepout.footprint is None else keepout.footprint.reference,
-                _primary_layer(keepout.layers),
-                _layer_names(keepout.layers),
-                keepout.rules.tracks.value,
-                keepout.rules.vias.value,
-                keepout.rules.pads.value,
-                keepout.rules.copper_pours.value,
-                keepout.rules.footprints.value,
-                keepout.metadata.source_format,
-                keepout.metadata.native_type,
-                keepout.metadata.native_kind,
-                keepout.metadata.native_id,
-                keepout.metadata.native_index,
-                _metadata_json(keepout.metadata),
-                _wkb(boundary),
-            ],
-        )
+        _KEEPOUTS.insert(con, keepout)
 
 
 def _load_layers(con: duckdb.DuckDBPyConnection, pcb: Pcb, stackup: Stackup | None) -> None:
     stackup_map: dict[str, int] = {}
     if stackup:
-        for index, layer in enumerate(stackup.layers, start=1):
-            stackup_map[layer.name] = index
-            pcb_layer = pcb.layer_for(layer.name)
-            layer_info = pcb_layer or _stackup_layer_as_pcb_layer(layer.layer_type, layer.side)
-            _ = con.execute(
-                "INSERT INTO layers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    index,
-                    layer.name,
-                    list(layer_info.role_values),
-                    layer_info.side,
-                    None if pcb_layer is None else pcb_layer.number,
-                    layer.thickness_mm if layer.thickness_mm else None,
-                    layer.material or None,
-                    layer.epsilon_r if layer.epsilon_r else None,
-                    layer.loss_tangent if layer.loss_tangent else None,
-                    layer.layer_type,
-                    layer.copper_orientation or None,
-                ],
+        for index, stack_layer in enumerate(stackup.layers, start=1):
+            stackup_map[stack_layer.name] = index
+            pcb_layer = pcb.layer_for(stack_layer.name)
+            info = pcb_layer or _stackup_layer_as_pcb_layer(
+                stack_layer.layer_type, stack_layer.side
+            )
+            _LAYERS.insert(
+                con,
+                _LayerRow(
+                    position=index,
+                    name=stack_layer.name,
+                    roles=list(info.role_values),
+                    side=info.side,
+                    number=None if pcb_layer is None else pcb_layer.number,
+                    thickness_mm=_null_if_unset(stack_layer.thickness_mm),
+                    material=_null_if_unset(stack_layer.material),
+                    epsilon_r=_null_if_unset(stack_layer.epsilon_r),
+                    loss_tangent=_null_if_unset(stack_layer.loss_tangent),
+                    layer_type=stack_layer.layer_type,
+                    copper_orientation=_null_if_unset(stack_layer.copper_orientation),
+                ),
             )
 
     for layer in pcb.layers:
         if layer.name in stackup_map:
             continue
-        _ = con.execute(
-            "INSERT INTO layers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                None,
-                layer.name,
-                list(layer.role_values),
-                layer.side,
-                layer.number,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-            ],
+        _LAYERS.insert(
+            con,
+            _LayerRow(
+                position=None,
+                name=layer.name,
+                roles=list(layer.role_values),
+                side=layer.side,
+                number=layer.number,
+                thickness_mm=None,
+                material=None,
+                epsilon_r=None,
+                loss_tangent=None,
+                layer_type=None,
+                copper_orientation=None,
+            ),
         )
-
-
-def _stackup_layer_as_pcb_layer(layer_type: str, side: str) -> PcbLayer:
-    roles: list[LayerRole] = []
-    if layer_type == "copper":
-        roles.append(LayerRole.COPPER)
-    elif layer_type in {"core", "prepreg", "dielectric"}:
-        roles.append(LayerRole.DIELECTRIC)
-    elif layer_type == "solder_mask":
-        roles.append(LayerRole.SOLDER_MASK)
-    else:
-        roles.append(LayerRole.UNKNOWN)
-    if side == "front":
-        roles.append(LayerRole.FRONT)
-    elif side == "back":
-        roles.append(LayerRole.BACK)
-    elif side == "inner":
-        roles.append(LayerRole.INNER)
-    return PcbLayer(name="", roles=normalize_roles(*roles))
 
 
 def _load_board(con: duckdb.DuckDBPyConnection, pcb: Pcb, stackup: Stackup | None) -> None:
     outline = board_outline_polygon(pcb.board_profile) if pcb.board_profile is not None else None
-    total_thickness = stackup.total_thickness_mm if stackup else None
-    copper_finish = stackup.copper_finish if stackup else None
-    layer_count = 0
-    if stackup:
-        layer_count = sum(1 for layer in stackup.layers if layer.layer_type == "copper")
-    _ = con.execute(
-        "INSERT INTO board VALUES (?, ?, ?, ?, ?, ST_GeomFromWKB(?))",
-        [pcb.name, total_thickness, copper_finish, None, layer_count, _wkb(outline)],
-    )
+    _BOARD.insert(con, _BoardRow(pcb=pcb, stackup=stackup, geom=outline))
 
 
 def _load_net_classes(con: duckdb.DuckDBPyConnection, project: Project) -> None:
     for net_class in project.net_classes:
-        _ = con.execute(
-            "INSERT INTO net_classes VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                net_class.name,
-                net_class.kind,
-                net_class.trace_width_mm if net_class.trace_width_mm else None,
-                net_class.clearance_mm if net_class.clearance_mm else None,
-                net_class.via_diameter_mm if net_class.via_diameter_mm else None,
-                net_class.via_drill_mm if net_class.via_drill_mm else None,
-                net_class.diff_pair_width_mm if net_class.diff_pair_width_mm else None,
-                net_class.diff_pair_gap_mm if net_class.diff_pair_gap_mm else None,
-            ],
-        )
+        _NET_CLASSES.insert(con, net_class)
         for member in net_class.members:
-            _ = con.execute("INSERT INTO net_class_members VALUES (?, ?)", [member, net_class.name])
+            _NET_CLASS_MEMBERS.insert(con, (member, net_class.name))
 
 
 def _load_design_rules(con: duckdb.DuckDBPyConnection, project: Project) -> None:
     for rule in project.design_rules:
-        _ = con.execute(
-            "INSERT INTO design_rules VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                rule.name,
-                rule.kind,
-                rule.enabled,
-                rule.priority,
-                rule.scope1 or None,
-                rule.scope2 or None,
-                rule.layer_scope or None,
-                rule.min_value_mm,
-                rule.max_value_mm,
-                rule.preferred_value_mm,
-            ],
-        )
-
-
-def _scope_path(page: Page) -> str:
-    return str(page.scope_id)
-
-
-def _page_names(pages: list[Page]) -> str | None:
-    names = sorted({page.name for page in pages})
-    return ",".join(names) if names else None
-
-
-def _page_ids(pages: list[Page]) -> str | None:
-    ids = sorted({page.id for page in pages})
-    return ",".join(ids) if ids else None
-
-
-def _csv(values: set[str]) -> str | None:
-    return ",".join(sorted(values)) if values else None
-
-
-def _unique_pages(pages: list[Page]) -> list[Page]:
-    result: list[Page] = []
-    seen: set[str] = set()
-    for page in sorted(pages, key=lambda page: page.id):
-        if page.id in seen:
-            continue
-        seen.add(page.id)
-        result.append(page)
-    return result
+        _DESIGN_RULES.insert(con, rule)
 
 
 def _load_components(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
     for comp in schematic.components:
-        _ = con.execute(
-            "INSERT INTO components VALUES (?, ?, ?, ?, ?, ?)",
-            [
-                comp.id,
-                comp.reference,
-                comp.part,
-                comp.description,
-                _page_ids(comp.pages),
-                _page_names(comp.pages),
-            ],
-        )
+        _COMPONENTS.insert(con, comp)
 
 
 def _load_component_pages(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
     for comp in schematic.components:
         for page in _unique_pages(comp.pages):
-            _ = con.execute(
-                "INSERT INTO component_pages VALUES (?, ?, ?, ?)",
-                [comp.id, comp.reference, page.id, page.name],
-            )
+            _COMPONENT_PAGES.insert(con, _CompPageRow(component=comp, page=page))
 
 
 def _load_component_occurrences(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
     for comp in schematic.components:
         for occurrence in comp.occurrences:
-            _ = con.execute(
-                "INSERT INTO component_occurrences VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    occurrence.id,
-                    occurrence.component.id,
-                    occurrence.component.reference,
-                    occurrence.page.id,
-                    occurrence.page.name,
-                    str(occurrence.scope_id),
-                    occurrence.source_id,
-                    occurrence.part_id or None,
-                    occurrence.x,
-                    occurrence.y,
-                    occurrence.rotation,
-                    occurrence.mirror,
-                ],
-            )
+            _COMPONENT_OCCURRENCES.insert(con, occurrence)
 
 
 def _load_component_occurrence_metadata(
@@ -702,70 +1263,43 @@ def _load_component_occurrence_metadata(
     for comp in schematic.components:
         for occurrence in comp.occurrences:
             for key, value in occurrence.metadata.items():
-                _ = con.execute(
-                    "INSERT INTO component_occurrence_metadata VALUES (?, ?, ?, ?)",
-                    [occurrence.id, comp.id, key, value],
+                _COMPONENT_OCCURRENCE_METADATA.insert(
+                    con,
+                    _OccKeyValueRow(
+                        occurrence_id=occurrence.id, owner_id=comp.id, key=key, value=value
+                    ),
                 )
 
 
 def _load_component_metadata(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
     for comp in schematic.components:
         for key, value in comp.metadata.items():
-            _ = con.execute(
-                "INSERT INTO component_metadata VALUES (?, ?, ?, ?)",
-                [comp.id, comp.reference, key, value],
+            _COMPONENT_METADATA.insert(
+                con, _KeyValueRow(owner_id=comp.id, ref=comp.reference, key=key, value=value)
             )
 
 
 def _load_pins(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
     for comp in schematic.components:
         for pin in comp.pins:
-            net_id = pin.net.id if pin.net else None
-            net_name = pin.net.name if pin.net else None
-            electrical = pin.metadata.get(ELECTRICAL_KEY)
-            _ = con.execute(
-                "INSERT INTO pins VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    pin.id,
-                    comp.id,
-                    comp.reference,
-                    pin.designator,
-                    pin.name,
-                    net_id,
-                    net_name,
-                    electrical,
-                    pin.no_connect,
-                ],
-            )
+            _PINS.insert(con, pin)
 
 
 def _load_pin_occurrences(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
     for comp in schematic.components:
         for pin in comp.pins:
             for occurrence in pin.occurrences:
-                _ = con.execute(
-                    "INSERT INTO pin_occurrences VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    [
-                        occurrence.id,
-                        pin.id,
-                        comp.id,
-                        comp.reference,
-                        pin.designator,
-                        occurrence.page.id,
-                        occurrence.page.name,
-                        str(occurrence.scope_id),
-                        occurrence.source_id,
-                    ],
-                )
+                _PIN_OCCURRENCES.insert(con, occurrence)
                 for key, value in occurrence.metadata.items():
-                    _ = con.execute(
-                        "INSERT INTO pin_occurrence_metadata VALUES (?, ?, ?, ?)",
-                        [occurrence.id, pin.id, key, value],
+                    _PIN_OCCURRENCE_METADATA.insert(
+                        con,
+                        _OccKeyValueRow(
+                            occurrence_id=occurrence.id, owner_id=pin.id, key=key, value=value
+                        ),
                     )
 
 
 def _load_nets(con: duckdb.DuckDBPyConnection, schematic: Schematic, project: Project) -> None:
-    # Build lookup maps for net class membership and diff pairs
     net_to_class: dict[str, str] = {}
     for nc in project.net_classes:
         for member in nc.members:
@@ -777,72 +1311,46 @@ def _load_nets(con: duckdb.DuckDBPyConnection, schematic: Schematic, project: Pr
         net_to_diff_pair[dp.negative_net] = (dp.name, "-")
 
     for net in schematic.nets:
-        is_power = is_power_net(net.name, net)
-        net_class = net_to_class.get(net.name)
         dp_info = net_to_diff_pair.get(net.name)
-        diff_pair = dp_info[0] if dp_info else None
-        diff_pair_polarity = dp_info[1] if dp_info else None
-        aliases = _csv(net.aliases)
-        _ = con.execute(
-            "INSERT INTO nets VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                net.id,
-                net.name,
-                len(net.pins),
-                _page_ids(net.pages),
-                _page_names(net.pages),
-                is_power,
-                net_class,
-                diff_pair,
-                diff_pair_polarity,
-                aliases,
-            ],
+        _NETS.insert(
+            con,
+            _NetRow(
+                net=net,
+                is_power=is_power_net(net.name, net),
+                net_class=net_to_class.get(net.name),
+                diff_pair=dp_info[0] if dp_info else None,
+                diff_pair_polarity=dp_info[1] if dp_info else None,
+            ),
         )
 
 
 def _load_net_pages(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
     for net in schematic.nets:
         for page in _unique_pages(net.pages):
-            _ = con.execute(
-                "INSERT INTO net_pages VALUES (?, ?, ?, ?)",
-                [net.id, net.name, page.id, page.name],
-            )
+            _NET_PAGES.insert(con, _NetPageRow(net=net, page=page))
 
 
 def _load_net_aliases(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
     for net in schematic.nets:
         for alias in sorted(net.aliases):
-            _ = con.execute(
-                "INSERT INTO net_aliases VALUES (?, ?, ?)",
-                [net.id, net.name, alias],
-            )
+            _NET_ALIASES.insert(con, _AliasRow(net_id=net.id, net_name=net.name, alias=alias))
 
 
 def _load_net_occurrences(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
     for net in schematic.nets:
         for occurrence in net.occurrences:
-            _ = con.execute(
-                "INSERT INTO net_occurrences VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    occurrence.id,
-                    occurrence.net.id,
-                    occurrence.net.name,
-                    occurrence.page.id,
-                    occurrence.page.name,
-                    str(occurrence.scope_id),
-                    occurrence.source_local_net_id,
-                    _csv(occurrence.source_names),
-                ],
-            )
+            _NET_OCCURRENCES.insert(con, occurrence)
 
 
 def _load_net_occurrence_source_names(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
     for net in schematic.nets:
         for occurrence in net.occurrences:
             for source_name in sorted(occurrence.source_names):
-                _ = con.execute(
-                    "INSERT INTO net_occurrence_source_names VALUES (?, ?, ?)",
-                    [occurrence.id, net.id, source_name],
+                _NET_OCCURRENCE_SOURCE_NAMES.insert(
+                    con,
+                    _SourceNameRow(
+                        occurrence_id=occurrence.id, net_id=net.id, source_name=source_name
+                    ),
                 )
 
 
@@ -850,34 +1358,25 @@ def _load_net_occurrence_metadata(con: duckdb.DuckDBPyConnection, schematic: Sch
     for net in schematic.nets:
         for occurrence in net.occurrences:
             for key, value in occurrence.metadata.items():
-                _ = con.execute(
-                    "INSERT INTO net_occurrence_metadata VALUES (?, ?, ?, ?)",
-                    [occurrence.id, net.id, key, value],
+                _NET_OCCURRENCE_METADATA.insert(
+                    con,
+                    _OccKeyValueRow(
+                        occurrence_id=occurrence.id, owner_id=net.id, key=key, value=value
+                    ),
                 )
 
 
 def _load_net_metadata(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
     for net in schematic.nets:
         for key, value in net.metadata.items():
-            _ = con.execute(
-                "INSERT INTO net_metadata VALUES (?, ?, ?, ?)",
-                [net.id, net.name, key, value],
+            _NET_METADATA.insert(
+                con, _KeyValueRow(owner_id=net.id, ref=net.name, key=key, value=value)
             )
 
 
 def _load_pages(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
     for page in schematic.pages:
-        _ = con.execute(
-            "INSERT INTO pages VALUES (?, ?, ?, ?, ?, ?)",
-            [
-                page.id,
-                page.name,
-                page.source_file or None,
-                _scope_path(page),
-                len(page.components),
-                len(page.nets),
-            ],
-        )
+        _PAGES.insert(con, page)
 
 
 def _load_project_metadata(con: duckdb.DuckDBPyConnection, project: Project) -> None:
@@ -892,4 +1391,4 @@ def _load_project_metadata(con: duckdb.DuckDBPyConnection, project: Project) -> 
     ]
     for key, value in entries:
         if value:
-            _ = con.execute("INSERT INTO project VALUES (?, ?)", [key, value])
+            _PROJECT.insert(con, (key, value))
