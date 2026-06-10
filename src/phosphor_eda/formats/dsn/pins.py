@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 def normalize_package_name(package_name: str) -> str:
     """Drop the ``.Normal`` suffix used for the default symbol variant."""
-    return package_name.replace(".Normal", "")
+    return package_name.removesuffix(".Normal")
 
 
 def resolve_pin_name(

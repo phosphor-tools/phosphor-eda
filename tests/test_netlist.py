@@ -25,8 +25,8 @@ def test_build_netlist_gnd_has_many_pins():
 
 
 def test_build_netlist_strips_pin_name_overlines():
-    # The QSPI flash symbol has overlined pin names (e.g. C\S\). The netlist
-    # builder now strips overline markup, matching the schematic converter.
+    # The QSPI flash symbol has overlined pin names (e.g. C\S\). Netlist pin
+    # names use plain text, consistent with the schematic converter.
     design = parse_dsn(DSN_FILE)
     netlist = build_netlist(design)
     pin_names = {entry.pin_name for entries in netlist.values() for entry in entries}
