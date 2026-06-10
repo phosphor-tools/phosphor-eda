@@ -5,9 +5,9 @@ rather than crashes, and that parse issues propagate from leaf parsers
 up to the top-level entry points.
 """
 
-from phosphor_eda.altium.errors import ParseContext
 from phosphor_eda.altium.record_factory import materialize_records
 from phosphor_eda.altium.records import RecordType, UnknownRecord
+from phosphor_eda.diagnostics import ParseContext
 
 # ---------------------------------------------------------------------------
 # Schematic record materialization: invalid inputs

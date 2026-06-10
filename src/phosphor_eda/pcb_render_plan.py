@@ -66,6 +66,8 @@ def build_derived_render_plan(
         )
     height_px = int(width_px * vb_h / vb_w) if vb_w > 0 else width_px
     warnings: list[str] = []
+    if annotations is not None:
+        warnings.extend(annotations.warnings)
 
     if profiler is not None:
         profiler.metric(

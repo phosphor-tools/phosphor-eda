@@ -6,6 +6,7 @@ import pytest
 from click.testing import CliRunner
 
 from phosphor_eda.cli import main
+from phosphor_eda.pcb_render import RenderResult
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 DSN_FILE = str(FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN")
@@ -412,9 +413,9 @@ def test_cli_render_prjpcb_resolves_single_existing_pcbdoc(
         parsed_paths.append(path)
         return parsed_board
 
-    def fake_render_pcb_svg(board: object, **_kwargs: object) -> str:
+    def fake_render_pcb_svg(board: object, **_kwargs: object) -> RenderResult:
         assert board is parsed_board
-        return "<svg></svg>"
+        return RenderResult(svg="<svg></svg>")
 
     monkeypatch.setattr("phosphor_eda.altium.pcb_parser.parse_altium_pcb", fake_parse_altium_pcb)
     monkeypatch.setattr("phosphor_eda.pcb_render.render_pcb_svg", fake_render_pcb_svg)
@@ -709,3 +710,80 @@ def test_cli_render_settings_rejects_theme(tmp_path: Path) -> None:
     )
     assert result.exit_code != 0
     assert "Render settings error" in result.output
+
+
+# ---- error boundary + render warnings (plan 03) ----
+
+
+def test_cli_render_unknown_net_warns_on_stderr_and_exits_zero() -> None:
+    """An unresolved highlight target prints a warning to stderr but still renders."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["pcb", "render", "-n", "DOES_NOT_EXIST", PCB_FILE])
+
+    assert result.exit_code == 0, result.stderr
+    assert "Highlight target not found" in result.stderr
+    assert "DOES_NOT_EXIST" in result.stderr
+    # The SVG still goes to stdout.
+    assert "<svg" in result.stdout
+
+
+def test_cli_list_components_unknown_net_errors(tmp_path: Path) -> None:
+    """list components -n on an unknown net: one-line error, exit 1."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["list", "components", "-n", "NOPE_NET", DSN_FILE])
+
+    assert result.exit_code == 1
+    assert "Error:" in result.output
+    assert "NOPE_NET" in result.output
+    assert "not found" in result.output
+
+
+def test_cli_list_nets_unknown_component_errors() -> None:
+    """list nets -c on an unknown component: symmetrical error, exit 1.
+
+    Previously this silently printed an empty table.
+    """
+    runner = CliRunner()
+    result = runner.invoke(main, ["list", "nets", "-c", "NOPE_COMP", DSN_FILE])
+
+    assert result.exit_code == 1
+    assert "Error:" in result.output
+    assert "NOPE_COMP" in result.output
+    assert "not found" in result.output
+
+
+def test_cli_unknown_net_and_component_errors_are_symmetrical() -> None:
+    """Unknown net and unknown component both produce a one-line error + exit 1."""
+    runner = CliRunner()
+    net_result = runner.invoke(main, ["list", "components", "-n", "ZZZ", DSN_FILE])
+    comp_result = runner.invoke(main, ["list", "nets", "-c", "ZZZ", DSN_FILE])
+
+    assert net_result.exit_code == comp_result.exit_code == 1
+    assert "not found" in net_result.output
+    assert "not found" in comp_result.output
+
+
+def test_cli_corrupt_schematic_reports_one_line_error(tmp_path: Path) -> None:
+    """A corrupt schematic file produces a one-line parse error and exit 1, not a traceback."""
+    bad = tmp_path / "broken.kicad_sch"
+    bad.write_text("(this is not a valid kicad schematic")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["list", "components", str(bad)])
+
+    assert result.exit_code == 1
+    assert "failed to parse" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_cli_corrupt_pcb_reports_one_line_error(tmp_path: Path) -> None:
+    """A corrupt PCB file produces a one-line parse error and exit 1."""
+    bad = tmp_path / "broken.kicad_pcb"
+    bad.write_text("(this is not a valid kicad pcb")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["pcb", "render", str(bad)])
+
+    assert result.exit_code == 1
+    assert "failed to parse" in result.output
+    assert "Traceback" not in result.output

@@ -60,31 +60,43 @@ def test_altium_loads_schdoc_with_backslash_paths(tmp_path: Path):
 
 
 def test_altium_warns_on_missing_schdoc(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
-    """altium_to_design prints a warning for missing schematic sheets."""
+    """A missing sheet records a ParseContext warning (not a stdout/stderr print)."""
+    from phosphor_eda.altium.to_schematic import load_project_sheets
+    from phosphor_eda.diagnostics import ParseContext
+
     prjpcb = tmp_path / "Test.PrjPcb"
     prjpcb.write_text("[Design]\nHierarchyMode=1\n\n[Document1]\nDocumentPath=Missing.SchDoc\n")
 
+    ctx = ParseContext()
+    sheets = load_project_sheets(prjpcb, ctx=ctx)
+    assert sheets == {}
+    assert any("Missing.SchDoc" in issue.message for issue in ctx.issues)
+
+    # Library code must not print; only the CLI surfaces warnings.
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+    # The count is surfaced in design metadata for the CLI to report.
     design = altium_to_design(prjpcb)
     assert len(design.pages) == 0
-
-    captured = capsys.readouterr()
-    assert "Missing.SchDoc" in captured.err
+    assert design.metadata.get("parse_issue_count") == "1"
 
 
-def test_altium_warns_on_missing_backslash_schdoc(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-):
-    """Warning includes the original path when a backslash path is missing."""
+def test_altium_warns_on_missing_backslash_schdoc(tmp_path: Path) -> None:
+    """The recorded warning includes the original path when a backslash path is missing."""
+    from phosphor_eda.altium.to_schematic import load_project_sheets
+    from phosphor_eda.diagnostics import ParseContext
+
     prjpcb = tmp_path / "Test.PrjPcb"
     prjpcb.write_text(
         "[Design]\nHierarchyMode=1\n\n[Document1]\nDocumentPath=sub\\Missing.SchDoc\n"
     )
 
-    design = altium_to_design(prjpcb)
-    assert len(design.pages) == 0
-
-    captured = capsys.readouterr()
-    assert "Missing.SchDoc" in captured.err
+    ctx = ParseContext()
+    sheets = load_project_sheets(prjpcb, ctx=ctx)
+    assert sheets == {}
+    assert any("Missing.SchDoc" in issue.message for issue in ctx.issues)
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +184,7 @@ def test_kicad_loads_child_sheet_with_backslash_path(tmp_path: Path):
 
 
 def test_kicad_warns_on_missing_child_sheet(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
-    """kicad_to_design warns when a referenced child sheet doesn't exist."""
+    """A missing child sheet surfaces a parse-issue count, with no library print."""
     root_content = textwrap.dedent("""\
         (kicad_sch (version 20230121) (generator eeschema)
           (lib_symbols)
@@ -186,13 +198,15 @@ def test_kicad_warns_on_missing_child_sheet(tmp_path: Path, capsys: pytest.Captu
     design = kicad_to_design(root_file)
     # The root page still exists, but no child page
     assert len(design.pages) == 1
+    assert design.metadata.get("parse_issue_count") == "1"
 
     captured = capsys.readouterr()
-    assert "nonexistent.kicad_sch" in captured.err
+    assert captured.out == ""
+    assert captured.err == ""
 
 
-def test_kicad_warns_on_missing_backslash_sheet(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
-    """Warning includes original path when a backslash sheet ref is missing."""
+def test_kicad_warns_on_missing_backslash_sheet(tmp_path: Path) -> None:
+    """A missing backslash sheet ref still surfaces a parse-issue count."""
     root_content = textwrap.dedent("""\
         (kicad_sch (version 20230121) (generator eeschema)
           (lib_symbols)
@@ -205,9 +219,7 @@ def test_kicad_warns_on_missing_backslash_sheet(tmp_path: Path, capsys: pytest.C
 
     design = kicad_to_design(root_file)
     assert len(design.pages) == 1
-
-    captured = capsys.readouterr()
-    assert "gone.kicad_sch" in captured.err
+    assert design.metadata.get("parse_issue_count") == "1"
 
 
 # ---------------------------------------------------------------------------

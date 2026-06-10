@@ -19,6 +19,7 @@ from phosphor_eda.resolved_graph import (
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from phosphor_eda.diagnostics import ParseContext
     from phosphor_eda.kicad.source import (
         KiCadLocalNet,
         KiCadPinOccurrence,
@@ -56,8 +57,12 @@ class _NameEvidence:
     generated: list[str]
 
 
-def resolve_kicad_source(source: KiCadSourceDesign) -> Schematic:
-    """Resolve a KiCad source design into the public schematic graph."""
+def resolve_kicad_source(source: KiCadSourceDesign, ctx: ParseContext | None = None) -> Schematic:
+    """Resolve a KiCad source design into the public schematic graph.
+
+    Non-fatal issues accumulated on *ctx* are surfaced as
+    ``parse_issue_count`` in the resulting schematic metadata.
+    """
     pin_occurrences = list(source.pin_occurrences)
     component_ids_by_source_id = _component_ids_by_source_id(pin_occurrences)
     component_source_ids_by_component_id = _component_source_ids_by_component_id(
@@ -73,6 +78,10 @@ def resolve_kicad_source(source: KiCadSourceDesign) -> Schematic:
     _merge_global_labels(net_union, source.local_nets)
     _merge_power_symbols(net_union, source.local_nets)
     _merge_hierarchical_sheet_pins(source, net_union)
+
+    metadata = {"kicad_root_source_file": source.root_source_file}
+    if ctx is not None and ctx.issues:
+        metadata["parse_issue_count"] = str(len(ctx.issues))
 
     return build_resolved_schematic(
         name=source.name,
@@ -91,9 +100,7 @@ def resolve_kicad_source(source: KiCadSourceDesign) -> Schematic:
             group_local_nets,
         ),
         include_net=_include_kicad_net,
-        metadata={
-            "kicad_root_source_file": source.root_source_file,
-        },
+        metadata=metadata,
     )
 
 

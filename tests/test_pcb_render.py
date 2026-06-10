@@ -37,12 +37,35 @@ from phosphor_eda.pcb_render_inventory import (
 from phosphor_eda.pcb_render_settings import load_render_settings_file
 
 
+def test_render_result_carries_unknown_highlight_warning() -> None:
+    """render_pcb_svg returns warnings for an unresolved highlight target."""
+    result = render_pcb_svg(
+        _board(),
+        side="front",
+        highlight_nets=["DOES_NOT_EXIST"],
+        render_settings=load_render_settings_json('{"extends": "phosphor:design"}'),
+    )
+
+    assert "<svg" in result.svg
+    assert any("Highlight target not found" in w for w in result.warnings)
+    assert any("DOES_NOT_EXIST" in w for w in result.warnings)
+
+
+def test_render_result_no_warnings_on_clean_render() -> None:
+    result = render_pcb_svg(
+        _board(),
+        side="front",
+        render_settings=load_render_settings_json('{"extends": "phosphor:design"}'),
+    )
+    assert result.warnings == ()
+
+
 def test_render_svg_uses_typed_inventory_metadata() -> None:
     svg = render_pcb_svg(
         _board(),
         side="front",
         render_settings=load_render_settings_json('{"extends": "phosphor:design"}'),
-    )
+    ).svg
 
     assert 'data-kind="pad"' in svg
     assert 'data-kind="via"' in svg
@@ -63,7 +86,7 @@ def test_mask_viewports_cover_full_board_bbox() -> None:
         board,
         side="front",
         render_settings=load_render_settings_json('{"extends": "phosphor:design"}'),
-    )
+    ).svg
 
     min_x, min_y, max_x, max_y = board.bbox()
     masks = re.findall(r"<mask ([^>]*)>", svg)

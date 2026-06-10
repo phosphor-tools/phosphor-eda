@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import sys
 from typing import TYPE_CHECKING
 
-from phosphor_eda.altium.errors import ParseContext
 from phosphor_eda.altium.project import parse_prjpcb_file
 from phosphor_eda.altium.resolver import resolve_altium_source
 from phosphor_eda.altium.sheet_builder import SheetRecords, load_sheet
@@ -14,6 +12,7 @@ from phosphor_eda.altium.source import (
     altium_to_source,
     load_project_source_sheets,
 )
+from phosphor_eda.diagnostics import ParseContext
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -43,10 +42,6 @@ def load_project_sheets(
                     "missing_sheet",
                     f"Schematic sheet not found: {rel_path} (resolved to {schdoc})",
                 )
-                print(
-                    f"Warning: schematic sheet not found: {rel_path} (resolved to {schdoc})",
-                    file=sys.stderr,
-                )
         return sheets
 
     sheet = load_sheet(str(path), ctx=ctx)
@@ -73,5 +68,6 @@ def load_project_source(
 
 def altium_to_design(path: Path, name: str = "") -> Schematic:
     """Convert an Altium project into the public schematic domain model."""
-    source = altium_to_source(path, name=name)
-    return resolve_altium_source(source)
+    ctx = ParseContext()
+    source = altium_to_source(path, name=name, ctx=ctx)
+    return resolve_altium_source(source, ctx)

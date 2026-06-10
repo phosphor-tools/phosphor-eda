@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from phosphor_eda.altium.errors import ParseContext
+    from phosphor_eda.diagnostics import ParseContext
     from phosphor_eda.models import NetlistEntry
     from phosphor_eda.pcb import Pcb
     from phosphor_eda.schematic import Schematic

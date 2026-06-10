@@ -22,6 +22,7 @@ from phosphor_eda.schematic import Schematic, ScopeId
 from phosphor_eda.text import strip_overline
 
 if TYPE_CHECKING:
+    from phosphor_eda.diagnostics import ParseContext
     from phosphor_eda.models import GraphicInst
     from phosphor_eda.models import ParsedDesign as RawDesign
     from phosphor_eda.models import SchematicPage as RawPage
@@ -39,10 +40,20 @@ def _local_net_id(page_id: str, net_id: int) -> str:
     return f"{page_id}:net:{net_id}"
 
 
-def _pin_name(pin_number: str, symbol_pin_names: list[str]) -> str:
+def _pin_name(
+    pin_number: str,
+    symbol_pin_names: list[str],
+    ctx: ParseContext | None = None,
+    reference: str = "",
+) -> str:
     try:
         pn = int(pin_number)
     except (ValueError, TypeError):
+        if ctx is not None:
+            ctx.warn(
+                "dsn_pin_number",
+                f"{reference}: non-numeric pin number {pin_number!r}; pin name left blank",
+            )
         return ""
     if not 1 <= pn <= len(symbol_pin_names):
         return ""
@@ -161,7 +172,9 @@ def _graphic_sources(
                 page_net.off_page_connector_ids.append(connector.id)
 
 
-def _source_page(raw_page: RawPage, raw: RawDesign) -> DsnPageSource:
+def _source_page(
+    raw_page: RawPage, raw: RawDesign, ctx: ParseContext | None = None
+) -> DsnPageSource:
     page_id = _page_id(raw_page)
     scope_id = ScopeId(path=(_page_scope_name(raw_page),))
     page_source = DsnPageSource(
@@ -252,7 +265,7 @@ def _source_page(raw_page: RawPage, raw: RawDesign) -> DsnPageSource:
                 component_reference=raw_inst.reference,
                 component_part=pkg,
                 pin_designator=raw_pin.pin_number,
-                pin_name=_pin_name(raw_pin.pin_number, sym_pins),
+                pin_name=_pin_name(raw_pin.pin_number, sym_pins, ctx, raw_inst.reference),
                 location=location,
             )
             page_source.pin_occurrences.append(pin)
@@ -288,11 +301,13 @@ def _source_page(raw_page: RawPage, raw: RawDesign) -> DsnPageSource:
     return page_source
 
 
-def dsn_to_source(raw: RawDesign, name: str = "") -> DsnSourceDesign:
+def dsn_to_source(
+    raw: RawDesign, name: str = "", ctx: ParseContext | None = None
+) -> DsnSourceDesign:
     """Extract OrCAD DSN-native source connectivity from already parsed records."""
     return DsnSourceDesign(
         name=name,
-        pages=[_source_page(raw_page, raw) for raw_page in raw.pages],
+        pages=[_source_page(raw_page, raw, ctx) for raw_page in raw.pages],
         hierarchy_mappings=[
             DsnHierarchyMapping(
                 id=f"hierarchy:net:{index}",
@@ -305,6 +320,10 @@ def dsn_to_source(raw: RawDesign, name: str = "") -> DsnSourceDesign:
     )
 
 
-def dsn_to_design(raw: RawDesign, name: str = "") -> Schematic:
-    """Convert a raw DSN ParsedDesign to a Schematic."""
-    return resolve_dsn_source(dsn_to_source(raw, name=name))
+def dsn_to_design(raw: RawDesign, name: str = "", ctx: ParseContext | None = None) -> Schematic:
+    """Convert a raw DSN ParsedDesign to a Schematic.
+
+    Non-fatal pin-resolution issues are recorded on *ctx* when provided and
+    surfaced as ``parse_issue_count`` in the design metadata.
+    """
+    return resolve_dsn_source(dsn_to_source(raw, name=name, ctx=ctx), ctx=ctx)

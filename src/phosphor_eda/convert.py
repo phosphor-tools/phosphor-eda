@@ -20,6 +20,7 @@ from phosphor_eda.altium.pcb_parser import (
 )
 from phosphor_eda.altium.project import parse_prjpcb_file
 from phosphor_eda.altium.to_schematic import altium_to_design
+from phosphor_eda.diagnostics import ParseContext
 from phosphor_eda.dsn.parser import parse_dsn
 from phosphor_eda.dsn.to_schematic import dsn_to_design
 from phosphor_eda.eagle.to_schematic import eagle_to_design
@@ -49,8 +50,9 @@ def _load_altium(path: Path) -> Schematic:
 
 
 def _load_dsn(path: Path) -> Schematic:
-    raw = parse_dsn(path)
-    return dsn_to_design(raw, name=path.stem)
+    ctx = ParseContext()
+    raw = parse_dsn(path, ctx)
+    return dsn_to_design(raw, name=path.stem, ctx=ctx)
 
 
 def _load_eagle(path: Path) -> Schematic:
