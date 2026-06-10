@@ -66,6 +66,7 @@ class _PinCandidate:
     component_mirror: bool
     pin_designator: str
     pin_name: str
+    pin_type: str
     location: KiCadPoint
     no_connect: bool
 
@@ -362,6 +363,7 @@ def _pin_candidates(
                     component_mirror=mirrored,
                     pin_designator=pnum,
                     pin_name=pname,
+                    pin_type=ptype,
                     location=location,
                     no_connect=ptype == "no_connect"
                     or _matches_point(location, no_connect_positions),

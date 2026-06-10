@@ -146,6 +146,7 @@ def extract_sheet_sources(
             component_mirror=candidate.component_mirror,
             pin_designator=candidate.pin_designator,
             pin_name=candidate.pin_name,
+            pin_type=candidate.pin_type,
             location=candidate.location,
             no_connect=candidate.no_connect,
         )

@@ -28,6 +28,25 @@ if TYPE_CHECKING:
     from phosphor_eda.schematic import Schematic, ScopeId
 
 
+# KiCad pin electrical types mapped to the canonical schematic vocabulary
+# shared with the Altium and Eagle backends. Passive is the default and is
+# omitted from pin metadata.
+_ELECTRICAL_MAP = {
+    "input": "input",
+    "output": "output",
+    "bidirectional": "IO",
+    "tri_state": "hi-Z",
+    "passive": "passive",
+    "free": "unspecified",
+    "unspecified": "unspecified",
+    "power_in": "power",
+    "power_out": "power",
+    "open_collector": "open-collector",
+    "open_emitter": "open-emitter",
+    "no_connect": "no-connect",
+}
+
+
 @dataclass(slots=True)
 class _NameEvidence:
     global_labels: list[str]
@@ -523,6 +542,10 @@ def _pin_inputs(
         if pin_occurrence_key in seen_pin_occurrences:
             continue
         seen_pin_occurrences.add(pin_occurrence_key)
+        pin_metadata = {"kicad_pin_source_id": pin_occurrence.id}
+        electrical = _ELECTRICAL_MAP.get(pin_occurrence.pin_type, "")
+        if electrical and electrical != "passive":
+            pin_metadata["electrical"] = electrical
         result.append(
             ResolvedPinInput(
                 id=pin_occurrence.id,
@@ -544,9 +567,7 @@ def _pin_inputs(
                     rotation=pin_occurrence.component_rotation,
                     mirror=pin_occurrence.component_mirror,
                 ),
-                pin_metadata={
-                    "kicad_pin_source_id": pin_occurrence.id,
-                },
+                pin_metadata=pin_metadata,
                 pin_occurrence_metadata={
                     "kicad_component_source_id": pin_occurrence.component_source_id,
                 },

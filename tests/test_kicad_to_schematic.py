@@ -61,6 +61,37 @@ def test_rp2040_pins_have_names(design):
     assert len(named) > 40  # most pins should have names
 
 
+def _find_pin(component, designator: str):
+    for p in component.pins:
+        if p.designator == designator:
+            return p
+    return None
+
+
+def test_pin_electrical_metadata(design):
+    """Non-passive KiCad pin types map to canonical electrical strings."""
+    u3 = _find_component(design, "U3")
+    assert u3 is not None
+    # Pin 1 (IOVDD) is power_in -> "power".
+    power = _find_pin(u3, "1")
+    assert power is not None
+    assert power.metadata.get("electrical") == "power"
+    # Pin 11 (GPIO8) is bidirectional -> "IO".
+    io = _find_pin(u3, "11")
+    assert io is not None
+    assert io.metadata.get("electrical") == "IO"
+
+
+def test_passive_pin_omits_electrical_metadata(design):
+    """Passive is the default and is omitted from metadata."""
+    u3 = _find_component(design, "U3")
+    assert u3 is not None
+    # Pin 19 (TESTEN) is passive.
+    passive = _find_pin(u3, "19")
+    assert passive is not None
+    assert "electrical" not in passive.metadata
+
+
 def test_component_source_metadata(design):
     u3 = _find_component(design, "U3")
     assert u3 is not None
