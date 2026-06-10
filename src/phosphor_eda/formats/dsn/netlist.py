@@ -2,6 +2,7 @@
 
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.common.raw_models import NetlistEntry, ParsedDesign
+from phosphor_eda.formats.dsn.pins import resolve_pin_name
 
 
 def build_netlist(
@@ -23,24 +24,14 @@ def build_netlist(
         net_by_id = {n.net_id: n.name for n in page.nets}
 
         for inst in page.instances:
-            # Look up pin name list for this symbol
-            pkg = inst.package_name.replace(".Normal", "")
-            sym_pins = pin_names.get(pkg, [])
-
             for pin in inst.pin_connections:
-                # Resolve pin name (1-indexed: pin_number="1" -> index 0)
-                pin_name = ""
-                try:
-                    pn = int(pin.pin_number)
-                    if 1 <= pn <= len(sym_pins):
-                        pin_name = sym_pins[pn - 1]
-                except (ValueError, TypeError):
-                    if ctx is not None:
-                        ctx.warn(
-                            "dsn_pin_number",
-                            f"{inst.reference}: non-numeric pin number "
-                            f"{pin.pin_number!r}; pin name left blank",
-                        )
+                pin_name = resolve_pin_name(
+                    inst.package_name,
+                    pin.pin_number,
+                    pin_names,
+                    ctx,
+                    inst.reference,
+                )
 
                 coord = (pin.pin_x, pin.pin_y)
                 net_ids = page.wire_net_map.get(coord, set())
