@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field, replace
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from shapely import GeometryCollection, LineString, MultiLineString, MultiPolygon, Point, Polygon
@@ -59,6 +60,13 @@ def _empty_data() -> dict[str, str]:
 Bounds = tuple[float, float, float, float]
 
 
+class PaintMode(StrEnum):
+    """How a primitive's ``d`` is painted: filled region vs stroked centerline."""
+
+    FILL = "fill"
+    STROKE = "stroke"
+
+
 @dataclass(frozen=True)
 class SvgPrimitive:
     d: str
@@ -69,6 +77,9 @@ class SvgPrimitive:
     data: Mapping[str, str] = field(default_factory=_empty_data)
     style: Mapping[str, str] = field(default_factory=_empty_data)
     bbox: Bounds | None = None
+    paint: PaintMode = PaintMode.FILL
+    stroke_width: float | None = None
+    stroke_linecap: str | None = None
 
 
 def _union_bounds(primitives: tuple[SvgPrimitive, ...]) -> Bounds | None:

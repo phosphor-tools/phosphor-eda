@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from xml.sax.saxutils import escape as xml_escape
 
 from phosphor_eda.render.annotation_svg import annotation_css, render_annotations
+from phosphor_eda.render.primitives import PaintMode
 from phosphor_eda.render.svg import Svg
 
 if TYPE_CHECKING:
@@ -290,15 +291,40 @@ def _derived_layer_path_attrs(
     style: ResolvedStyle | None,
     primitive: SvgPrimitive,
 ) -> dict[str, str]:
-    attrs = _resolved_path_style_svg_attrs(style)
+    if primitive.paint is PaintMode.STROKE:
+        attrs = _stroke_primitive_style_attrs(style, primitive)
+    else:
+        attrs = _resolved_path_style_svg_attrs(style)
+        attrs["fill-rule"] = "evenodd"
     attrs.update(primitive.style)
-    attrs["fill-rule"] = "evenodd"
     attrs.update(_primitive_metadata_attrs(primitive))
     return attrs
 
 
+def _stroke_primitive_style_attrs(
+    style: ResolvedStyle | None,
+    primitive: SvgPrimitive,
+) -> dict[str, str]:
+    """Style attrs for a stroke-mode primitive: paint the layer color as stroke."""
+    declarations = ["fill: none"]
+    if style is not None and style.fill is not None:
+        declarations.append(f"stroke: {style.fill}")
+    if primitive.stroke_width is not None:
+        declarations.append(f"stroke-width: {primitive.stroke_width:.4f}")
+    if primitive.stroke_linecap is not None:
+        declarations.append(f"stroke-linecap: {primitive.stroke_linecap}")
+    return {"style": "; ".join(declarations)}
+
+
 def _layer_mask_path_attrs(primitive: SvgPrimitive, *, fill: str) -> dict[str, str]:
-    attrs = {"fill": fill, "fill-rule": "evenodd"}
+    if primitive.paint is PaintMode.STROKE:
+        attrs = {"fill": "none", "stroke": fill}
+        if primitive.stroke_width is not None:
+            attrs["stroke-width"] = f"{primitive.stroke_width:.4f}"
+        if primitive.stroke_linecap is not None:
+            attrs["stroke-linecap"] = primitive.stroke_linecap
+    else:
+        attrs = {"fill": fill, "fill-rule": "evenodd"}
     attrs.update(_primitive_metadata_attrs(primitive))
     return attrs
 
