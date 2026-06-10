@@ -1359,7 +1359,8 @@ def _parse_pads(
     """Parse Pads6/Data into component-indexed pad geometry.
 
     Each pad record has 6 subrecords: name, skip, skip, skip, geometry,
-    per-layer-overrides. PadRecord.from_bytes handles the subrecord chain.
+    per-layer-overrides. PadRecord.parse walks the chain once, returning the
+    record and the cursor past it.
     """
     pads: list[tuple[int, _ParsedPrimitive]] = []
     pos = 0
@@ -1368,24 +1369,7 @@ def _parse_pads(
     while pos < len(data):
         if data[pos] != 2:
             break
-        # Find end of this pad record by parsing subrecord chain
-        rec_data = data[pos:]
-        pad = PadRecord.from_bytes(rec_data, ctx)
-
-        # Advance past this record regardless of parse success.
-        # Re-parse subrecord lengths to advance the position.
-        pos += 1  # type byte
-        for _ in range(4):  # sub1-sub4
-            if pos + 4 > len(data):
-                break
-            sl = u32(data, pos)
-            pos += 4 + sl
-        for _ in range(2):  # sub5-sub6
-            if pos + 4 > len(data):
-                break
-            sl = u32(data, pos)
-            pos += 4 + sl
-
+        pad, pos = PadRecord.parse(data, pos, ctx)
         if pad is None:
             continue
 
@@ -1596,7 +1580,8 @@ def _parse_texts(
     """Parse Texts6/Data into component-indexed text geometry.
 
     Each text record has 2 subrecords: binary properties + Pascal string.
-    TextRecord.from_bytes handles both subrecords.
+    TextRecord.parse walks both subrecords once, returning the record and the
+    cursor past it.
     """
     texts: list[tuple[int, _ParsedPrimitive]] = []
     pos = 0
@@ -1605,18 +1590,7 @@ def _parse_texts(
     while pos < len(data):
         if data[pos] != 5:
             break
-
-        rec_data = data[pos:]
-        text_rec = TextRecord.from_bytes(rec_data, ctx)
-
-        # Advance past this record by re-parsing subrecord lengths
-        pos += 1  # type byte
-        for _ in range(2):  # sub1, sub2
-            if pos + 4 > len(data):
-                break
-            sl = u32(data, pos)
-            pos += 4 + sl
-
+        text_rec, pos = TextRecord.parse(data, pos, ctx)
         if text_rec is None:
             continue
 
