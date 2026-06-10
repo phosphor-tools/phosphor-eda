@@ -901,6 +901,10 @@ def _parse_components(data: bytes, layer_map: dict[int, PcbLayer]) -> list[PcbFo
                 metadata=PcbFootprintMetadata(
                     source_format="altium",
                     native_type="component",
+                    properties={
+                        "nameon": rec.get("nameon", "TRUE"),
+                        "commenton": rec.get("commenton", "FALSE"),
+                    },
                     source_designator=ref,
                     source_unique_id=rec.get("uniqueid", ""),
                     source_footprint_library=pattern,
@@ -2552,14 +2556,16 @@ def _parsed_artwork(
         if not primitive.layers
         else _primary_layer_ref(builder, primitive, source=primitive.id)
     )
+    footprint = _footprint_for_primitive(primitive, footprints)
+    metadata = _artwork_metadata_for_visibility(primitive, footprint)
     return PcbArtwork(
         id=primitive.id,
         kind=_artwork_kind(primitive),
         purpose=_artwork_purpose(primitive, layer),
         layer=layer,
         data=primitive.data,
-        footprint=_footprint_for_primitive(primitive, footprints),
-        metadata=primitive.metadata,
+        footprint=footprint,
+        metadata=metadata,
     )
 
 
@@ -2627,6 +2633,35 @@ def _footprint_for_primitive(
         if footprint.reference == primitive.footprint_ref:
             return footprint
     return None
+
+
+def _artwork_metadata_for_visibility(
+    primitive: _ParsedPrimitive,
+    footprint: PcbFootprint | None,
+) -> PcbObjectMetadata:
+    if primitive.metadata.hidden or footprint is None:
+        return primitive.metadata
+    if primitive.has_role(_ParsedRole.DESIGNATOR) and not _altium_component_text_visible(
+        footprint, "nameon", default=True
+    ):
+        return replace(primitive.metadata, hidden=True)
+    if primitive.has_role(_ParsedRole.VALUE) and not _altium_component_text_visible(
+        footprint, "commenton", default=False
+    ):
+        return replace(primitive.metadata, hidden=True)
+    return primitive.metadata
+
+
+def _altium_component_text_visible(
+    footprint: PcbFootprint,
+    key: str,
+    *,
+    default: bool,
+) -> bool:
+    raw = footprint.metadata.properties.get(key, "")
+    if not raw:
+        return default
+    return raw.upper() in {"T", "TRUE", "1", "YES"}
 
 
 def _pour_for_primitive(primitive: _ParsedPrimitive, pours: list[PcbPour]) -> PcbPour | None:

@@ -269,7 +269,24 @@ def build_inventory(board: Pcb, *, side: str = "") -> PcbRenderInventory:
                 )
             )
 
-    return PcbRenderInventory(items=tuple(items), side=side)
+    return PcbRenderInventory(
+        items=tuple(item for item in items if not _source_is_hidden(item.source)),
+        side=side,
+    )
+
+
+def _source_is_hidden(source: InventorySource) -> bool:
+    if isinstance(source, PcbDrill):
+        owner = source.owner
+        return source.metadata.hidden or (
+            isinstance(owner, PcbPad | PcbVia | PcbArtwork) and owner.metadata.hidden
+        )
+    if isinstance(
+        source,
+        PcbBoardProfileElement | PcbPad | PcbVia | PcbConductor | PcbArtwork | PcbKeepout,
+    ):
+        return source.metadata.hidden
+    return False
 
 
 def select_inventory_items(

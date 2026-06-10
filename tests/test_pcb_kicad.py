@@ -21,6 +21,7 @@ from phosphor_eda.pcb import (
     PcbPolygon,
     PcbText,
 )
+from phosphor_eda.pcb_render_inventory import InventoryItemKind, build_inventory
 from phosphor_eda.project import Stackup
 from phosphor_eda.sql.geometry import pad_polygon
 
@@ -207,6 +208,45 @@ def test_artwork_tracks_footprint_ownership_and_purpose(board: Pcb) -> None:
     assert designators
     assert all(item.footprint in board.footprints for item in footprint_artwork)
     assert any(isinstance(item.data, PcbText) for item in designators)
+
+
+def test_hidden_footprint_text_is_not_render_inventory() -> None:
+    parsed = sexpdata.loads(
+        """
+        (kicad_pcb
+          (layers
+            (0 "F.Cu" signal)
+            (37 "F.SilkS" user)
+            (44 "Edge.Cuts" user)
+          )
+          (footprint "Test:Part"
+            (layer "F.Cu")
+            (at 10 10)
+            (fp_text reference "U1" (at 0 0) (layer "F.SilkS") (hide yes))
+            (fp_text value "MCU" (at 0 1) (layer "F.SilkS"))
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu"))
+            (model "part.step" (hide yes))
+          )
+          (gr_line (start 0 0) (end 1 0) (layer "Edge.Cuts") (width 0.1))
+        )
+        """
+    )
+    board = parse_kicad_pcb_from_sexpr(list(parsed[1:]), default_name="hidden-text")
+
+    hidden = next(item for item in board.artwork if item.id == "fp_text:U1:0:reference")
+    visible = next(item for item in board.artwork if item.id == "fp_text:U1:1:value")
+    hidden_model = next(item for item in board.artwork if item.id == "model_3d:U1:0")
+    inventory = build_inventory(board, side="front")
+    inventory_ids = {
+        item.id for item in inventory.items if item.item_kind == InventoryItemKind.ARTWORK
+    }
+
+    assert hidden.metadata.hidden
+    assert not visible.metadata.hidden
+    assert hidden_model.metadata.hidden
+    assert hidden.id not in inventory_ids
+    assert hidden_model.id not in inventory_ids
+    assert visible.id in inventory_ids
 
 
 def test_board_profile_comes_from_edge_cuts(board: Pcb) -> None:

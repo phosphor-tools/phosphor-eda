@@ -247,6 +247,27 @@ def _item_locked(item: SExpNode) -> bool:
     return any(isinstance(node, sexpdata.Symbol) and node.value() == "locked" for node in item)
 
 
+def _item_hidden(item: SExpNode) -> bool:
+    for node in item:
+        if isinstance(node, sexpdata.Symbol) and node.value() == "hide":
+            return True
+        if isinstance(node, list) and sexp.tag(node) == "hide":
+            if len(node) < 2:
+                return True
+            return _sexp_bool(node[1], default=True)
+    return False
+
+
+def _sexp_bool(value: object, *, default: bool) -> bool:
+    raw = value.value() if isinstance(value, sexpdata.Symbol) else str(value)
+    normalized = raw.lower()
+    if normalized in {"yes", "true"}:
+        return True
+    if normalized in {"no", "false"}:
+        return False
+    return default
+
+
 def _resolve_layer_selector(builder: PcbBuilder, name: str, *, source: str) -> tuple[PcbLayer, ...]:
     if name == "*.Cu":
         return tuple(layer for layer in builder.layers if layer.has_role(LayerRole.COPPER))
@@ -844,9 +865,7 @@ def _parse_fp_text(
             native_kind=text_kind,
             native_id=_item_uuid(item),
             native_index=index,
-            hidden=any(
-                isinstance(value, sexpdata.Symbol) and value.value() == "hide" for value in item
-            ),
+            hidden=_item_hidden(item),
             locked=_item_locked(item),
         ),
     )
@@ -924,6 +943,7 @@ def _parse_model(item: SExpNode, footprint: PcbFootprint, index: int) -> PcbArtw
             source_collection="artwork",
             native_id=_item_uuid(item),
             native_index=index,
+            hidden=_item_hidden(item),
         ),
     )
 

@@ -21,6 +21,7 @@ from phosphor_eda.pcb import (
     PcbLayer,
     PcbLine,
     PcbNet,
+    PcbObjectMetadata,
     PcbPad,
     PcbPadType,
     PcbText,
@@ -83,6 +84,40 @@ def test_inventory_builder_emits_typed_items() -> None:
         and item.content_kind == PcbArtworkKind.TEXT
         for item in inventory.items
     )
+
+
+def test_inventory_builder_omits_hidden_domain_sources() -> None:
+    board = _board()
+    board.pads[0].metadata.hidden = True
+    board.vias[0].metadata.hidden = True
+    board.drills.append(
+        PcbDrill(
+            "drill:mounting:hidden",
+            2.0,
+            2.0,
+            0.8,
+            metadata=PcbObjectMetadata(hidden=True),
+        )
+    )
+    board.conductors[0].metadata.hidden = True
+    board.artwork[0].metadata.hidden = True
+    assert board.board_profile is not None
+    hidden_profile = board.board_profile.elements[0]
+    hidden_profile.metadata.hidden = True
+
+    inventory = build_inventory(board, side="front")
+    inventory_ids = {item.id for item in inventory.items}
+
+    assert "pad:U1:1:F.Cu:copper" not in inventory_ids
+    assert "pad:U1:1:F.Mask:solder_mask" not in inventory_ids
+    assert "via:1:F.Cu:copper" not in inventory_ids
+    assert "drill:pad:U1:1" not in inventory_ids
+    assert "drill:via:1" not in inventory_ids
+    assert "drill:mounting:hidden" not in inventory_ids
+    assert "trace:1" not in inventory_ids
+    assert "silk:1" not in inventory_ids
+    assert hidden_profile.id not in inventory_ids
+    assert "board:material" in inventory_ids
 
 
 def test_render_settings_accept_typed_source_filters() -> None:
