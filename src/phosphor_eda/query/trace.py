@@ -230,8 +230,12 @@ def find_paths(design: Schematic, ref_a: str, ref_b: str) -> list[ConnectionPath
     Returns one :class:`ConnectionPath` per signal-level connection between
     the components identified by *ref_a* and *ref_b*.
     """
-    comp_a = _find_component(design, ref_a)
-    comp_b = _find_component(design, ref_b)
+    # Function-level import: query imports trace_from_net at module scope, so a
+    # top-level `from query import find_component` would be a circular import.
+    from phosphor_eda.query.query import find_component
+
+    comp_a = find_component(design, ref_a)
+    comp_b = find_component(design, ref_b)
 
     paths: list[ConnectionPath] = []
 
@@ -269,19 +273,3 @@ def find_paths(design: Schematic, ref_a: str, ref_b: str) -> list[ConnectionPath
             )
 
     return sorted(paths, key=lambda p: p.left_pin.designator)
-
-
-def _find_component(design: Schematic, ref: str) -> Component:
-    matches = [comp for comp in design.components if comp.reference == ref]
-    if not matches:
-        raise ValueError(f"Component '{ref}' not found in design.")
-    if len(matches) > 1:
-        locations: list[str] = []
-        for comp in matches:
-            page_names = sorted({page.name for page in comp.pages})
-            location = ", ".join(page_names) if page_names else "unknown page"
-            locations.append(f"{comp.reference} on {location}")
-        raise ValueError(
-            f"Component reference '{ref}' is ambiguous; matches: {', '.join(locations)}."
-        )
-    return matches[0]

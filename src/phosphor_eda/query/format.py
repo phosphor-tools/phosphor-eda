@@ -1,7 +1,10 @@
-"""Text serializer for the schematic domain model.
+"""Text formatters for the schematic domain model.
 
-Produces grep-friendly, LLM-optimized text output in three sections:
-design summary, component-centric view, and net-centric view.
+Two output styles share the same labelling/ambiguity helpers:
+
+- ``serialize_design`` produces the grep-friendly, LLM-optimized full dump
+  (summary, components, nets, validation).
+- the ``format_*`` functions back the CLI ``list``/``show``/``trace`` commands.
 """
 
 from __future__ import annotations
@@ -10,11 +13,14 @@ from typing import TYPE_CHECKING
 
 from phosphor_eda.formats.common.electrical import ELECTRICAL_KEY, PinElectrical
 from phosphor_eda.query.classify import PASSIVE_PREFIXES, is_power_net, ref_prefix
-from phosphor_eda.query.trace import find_paths, is_two_pin_passive, other_pin, trace_from_net
+from phosphor_eda.query.query import find_component, find_net, net_page_names
+from phosphor_eda.query.trace import (
+    find_paths,
+    is_two_pin_passive,
+    other_pin,
+    trace_from_net,
+)
 from phosphor_eda.query.validate import Severity, validate_design
-
-# Re-export classify utilities so existing importers don't break
-__all__ = ["PASSIVE_PREFIXES", "is_power_net", "ref_prefix"]
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -114,12 +120,6 @@ def _page_label(design: Schematic, page: Page) -> str:
     return page.name
 
 
-def _net_page_names(net: Net) -> list[str]:
-    if net.pages:
-        return _page_names(net.pages)
-    return sorted({page.name for pin in net.pins for page in pin.component.pages})
-
-
 def _pin_context_page(design: Schematic, pin: Pin, net: Net | None = None) -> str:
     pages = pin.component.pages
     if net is not None and net.pages:
@@ -152,6 +152,27 @@ def _component_label(design: Schematic, comp: Component) -> str:
 
 def _net_name_is_ambiguous(design: Schematic, net: Net) -> bool:
     return sum(1 for candidate in design.nets if candidate.name == net.name) > 1
+
+
+def _format_pin_line(design: Schematic, pin: Pin, comp: Component, *, with_metadata: bool) -> str:
+    """Render one pin line for the components section / component detail.
+
+    ``with_metadata`` controls the inline ``key=value`` block shown in the full
+    dump but omitted from the single-component detail view.
+    """
+    net_str = _pin_net_str(pin)
+    meta_str = ""
+    if with_metadata:
+        # electrical=passive is the default for 88%+ of pins, so it is noise.
+        filtered = {
+            k: v
+            for k, v in pin.metadata.items()
+            if not (k == ELECTRICAL_KEY and v == PinElectrical.PASSIVE)
+        }
+        if filtered:
+            meta_str = "  " + "  ".join(f"{k}={v}" for k, v in sorted(filtered.items()))
+    dest_str = _trace_destinations(design, pin, comp)
+    return f"  Pin {pin.designator:<5s}  {pin.name:<15s} -> {net_str}{meta_str}{dest_str}"
 
 
 def _format_summary(design: Schematic) -> list[str]:
@@ -216,28 +237,7 @@ def _format_components(design: Schematic) -> list[str]:
             lines.append(f"  {key}: {value}")
 
         for pin in sorted(comp.pins, key=lambda p: p.designator):
-            net_str = _pin_net_str(pin)
-            meta_str = ""
-            # Filter out default/noise metadata values:
-            # - electrical=passive is the default for 88%+ of pins
-            filtered = {
-                k: v
-                for k, v in pin.metadata.items()
-                if not (k == ELECTRICAL_KEY and v == PinElectrical.PASSIVE)
-            }
-            if filtered:
-                meta_str = "  " + "  ".join(f"{k}={v}" for k, v in sorted(filtered.items()))
-
-            dest_str = _trace_destinations(design, pin, comp)
-
-            if pin.name:
-                lines.append(
-                    f"  Pin {pin.designator:<5s}  {pin.name:<15s} -> {net_str}{meta_str}{dest_str}"
-                )
-            else:
-                lines.append(
-                    f"  Pin {pin.designator:<5s}  {'':<15s} -> {net_str}{meta_str}{dest_str}"
-                )
+            lines.append(_format_pin_line(design, pin, comp, with_metadata=True))
 
         lines.append("")
 
@@ -247,7 +247,7 @@ def _format_components(design: Schematic) -> list[str]:
 def _format_nets(design: Schematic) -> list[str]:
     lines = ["=== NETS ===", ""]
     for net in sorted(design.nets, key=lambda n: n.name):
-        net_pages = _net_page_names(net)
+        net_pages = net_page_names(net)
         if len(net_pages) > 5:
             page_str = ", ".join(net_pages[:4]) + f", ... ({len(net_pages)} pages)"
         else:
@@ -316,156 +316,6 @@ def serialize_design(design: Schematic) -> str:
 def write_design(design: Schematic, output_path: Path) -> None:
     """Write a Schematic to a text file."""
     _ = output_path.write_text(serialize_design(design), encoding="utf-8")
-
-
-# ---- Filters ----
-
-
-def _net_pages(net: Net) -> set[str]:
-    """Page names a net spans."""
-    return set(_net_page_names(net))
-
-
-def _net_components(net: Net) -> set[str]:
-    """Component references on a net."""
-    return {pin.component.reference for pin in net.pins}
-
-
-def filter_nets(
-    design: Schematic,
-    *,
-    components: list[str] | None = None,
-    pages: list[str] | None = None,
-    power: bool | None = None,
-    min_pins: int | None = None,
-    multi_page: bool = False,
-    trace: bool = False,
-) -> list[Net]:
-    """Filter nets from a design.  All criteria are AND-composed."""
-    result = list(design.nets)
-
-    if power is True:
-        result = [n for n in result if is_power_net(n.name, n)]
-    elif power is False:
-        result = [n for n in result if not is_power_net(n.name, n)]
-
-    if pages:
-        page_set = set(pages)
-        result = [n for n in result if _net_pages(n) & page_set]
-
-    if min_pins is not None:
-        result = [n for n in result if len(n.pins) >= min_pins]
-
-    if multi_page:
-        result = [n for n in result if len(_net_pages(n)) > 1]
-
-    if components:
-        _require_components(design, components)
-        comp_set = set(components)
-        if trace:
-            # Expand each net's component reach through 2-pin passives
-            def _reaches(net: Net) -> set[str]:
-                refs = _net_components(net)
-                for tr in trace_from_net(net):
-                    if tr.terminal_pin is not None:
-                        refs.add(tr.terminal_pin.component.reference)
-                return refs
-
-            result = [n for n in result if comp_set <= _reaches(n)]
-        else:
-            result = [n for n in result if comp_set <= _net_components(n)]
-
-    return result
-
-
-def filter_components(
-    design: Schematic,
-    *,
-    pages: list[str] | None = None,
-    prefixes: list[str] | None = None,
-    passive: bool | None = None,
-    min_pins: int | None = None,
-    net: str | None = None,
-) -> list[Component]:
-    """Filter components from a design.  All criteria are AND-composed."""
-    result = list(design.components)
-
-    if pages:
-        page_set = set(pages)
-        result = [c for c in result if page_set & {p.name for p in c.pages}]
-
-    if prefixes:
-        prefix_set = set(prefixes)
-        result = [c for c in result if ref_prefix(c.reference) in prefix_set]
-
-    if passive is True:
-        result = [c for c in result if ref_prefix(c.reference) in PASSIVE_PREFIXES]
-    elif passive is False:
-        result = [c for c in result if ref_prefix(c.reference) not in PASSIVE_PREFIXES]
-
-    if min_pins is not None:
-        result = [c for c in result if len(c.pins) >= min_pins]
-
-    if net is not None:
-        net_obj = _find_net(design, net)
-        refs_on_net = {pin.component.reference for pin in net_obj.pins}
-        result = [c for c in result if c.reference in refs_on_net]
-
-    return result
-
-
-def filter_pages(
-    design: Schematic,
-    *,
-    nets: list[str] | None = None,
-    components: list[str] | None = None,
-) -> list[Page]:
-    """Filter pages from a design.  All criteria are AND-composed."""
-    result = list(design.pages)
-
-    if nets:
-        for name in nets:
-            _ = _find_net(design, name)
-        net_set = set(nets)
-        result = [p for p in result if net_set & {n.name for n in p.nets}]
-
-    if components:
-        _require_components(design, components)
-        comp_set = set(components)
-        result = [p for p in result if comp_set & {c.reference for c in p.components}]
-
-    return result
-
-
-def _find_net(design: Schematic, name: str) -> Net:
-    """Find a net by name or alias.  Raises ValueError if not found."""
-    id_matches = [net for net in design.nets if net.id == name]
-    if len(id_matches) == 1:
-        return id_matches[0]
-
-    matches = [net for net in design.nets if net.name == name]
-    if not matches:
-        matches = [net for net in design.nets if name in net.aliases]
-    if not matches:
-        raise ValueError(f"Net '{name}' not found in design.")
-    if len(matches) > 1:
-        page_parts = [
-            f"{net.id} ({net.name} on {', '.join(_net_page_names(net))})" for net in matches
-        ]
-        raise ValueError(f"Net '{name}' is ambiguous; matches: {', '.join(page_parts)}.")
-    return matches[0]
-
-
-def _require_components(design: Schematic, refs: list[str]) -> None:
-    """Validate that every requested component reference exists.
-
-    Mirrors ``_find_net`` so an unknown ``-c`` filter raises instead of
-    silently producing an empty result.
-    """
-    known = {c.reference for c in design.components}
-    for ref in refs:
-        if ref not in known:
-            raise ValueError(f"Component '{ref}' not found in design.")
 
 
 # ---- Trace-aware inline destinations ----
@@ -545,7 +395,7 @@ def format_trace(design: Schematic, ref_a: str, ref_b: str) -> str:
 # ---- List/show formatters for CLI ----
 
 
-def _tabulate(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> str:
+def tabulate(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> str:
     """Format rows as an aligned table."""
     widths = [len(h) for h in headers]
     for row in rows:
@@ -572,7 +422,7 @@ def format_component_table(
     ]
     if not rows:
         return "No components found."
-    return _tabulate(("REF", "PART", "DESCRIPTION", "PINS"), rows)
+    return tabulate(("REF", "PART", "DESCRIPTION", "PINS"), rows)
 
 
 def format_net_table(
@@ -584,11 +434,11 @@ def format_net_table(
     rows: list[tuple[str, ...]] = []
     for net in sorted(source, key=lambda n: n.name):
         aliases = ", ".join(sorted(net.aliases)) if net.aliases else ""
-        pages = _net_page_names(net)
+        pages = net_page_names(net)
         rows.append((net.name, aliases, str(len(net.pins)), ", ".join(pages)))
     if not rows:
         return "No nets found."
-    return _tabulate(("NET", "ALIASES", "PINS", "PAGES"), rows)
+    return tabulate(("NET", "ALIASES", "PINS", "PAGES"), rows)
 
 
 def format_page_table(
@@ -612,26 +462,17 @@ def format_page_table(
         ]
         if not rows:
             return "No pages found."
-        return _tabulate(("PAGE", "PAGE ID", "COMPONENTS", "NETS"), rows)
+        return tabulate(("PAGE", "PAGE ID", "COMPONENTS", "NETS"), rows)
 
     rows = [(p.name, str(len(p.components)), str(len(p.nets))) for p in source]
     if not rows:
         return "No pages found."
-    return _tabulate(("PAGE", "COMPONENTS", "NETS"), rows)
+    return tabulate(("PAGE", "COMPONENTS", "NETS"), rows)
 
 
 def format_component_detail(design: Schematic, ref: str) -> str:
     """Format full detail for a single component. Raises ValueError if not found."""
-    matches = [comp for comp in design.components if comp.reference == ref]
-    if not matches:
-        raise ValueError(f"Component '{ref}' not found in design.")
-    if len(matches) > 1:
-        page_parts = [
-            f"{_component_label(design, comp)} on {', '.join(_page_names(comp.pages))}"
-            for comp in matches
-        ]
-        raise ValueError(f"Component '{ref}' is ambiguous; matches: {', '.join(page_parts)}.")
-    comp = matches[0]
+    comp = find_component(design, ref)
 
     page_names = ", ".join(_page_names(comp.pages))
     lines = [
@@ -642,21 +483,16 @@ def format_component_detail(design: Schematic, ref: str) -> str:
         lines.append(f"  {key}: {value}")
 
     for pin in sorted(comp.pins, key=lambda p: p.designator):
-        net_str = _pin_net_str(pin)
-        dest_str = _trace_destinations(design, pin, comp)
-        if pin.name:
-            lines.append(f"  Pin {pin.designator:<5s}  {pin.name:<15s} -> {net_str}{dest_str}")
-        else:
-            lines.append(f"  Pin {pin.designator:<5s}  {'':<15s} -> {net_str}{dest_str}")
+        lines.append(_format_pin_line(design, pin, comp, with_metadata=False))
 
     return "\n".join(lines)
 
 
 def format_net_detail(design: Schematic, name: str) -> str:
     """Format full detail for a single net. Raises ValueError if not found."""
-    net = _find_net(design, name)
+    net = find_net(design, name)
 
-    net_pages = _net_page_names(net)
+    net_pages = net_page_names(net)
     alias_str = f" | Also: {', '.join(sorted(net.aliases))}" if net.aliases else ""
     lines = [f"NET: {net.name}{alias_str} | Pages: {', '.join(net_pages)}"]
 
