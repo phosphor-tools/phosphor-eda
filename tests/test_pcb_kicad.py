@@ -16,12 +16,10 @@ from phosphor_eda.domain.pcb import (
     PcbText,
 )
 from phosphor_eda.domain.project import Stackup
-from phosphor_eda.formats.kicad.pcb_parser import (
-    _extract_value,  # pyright: ignore[reportPrivateUsage]
-    parse_kicad_pcb,
-    parse_kicad_pcb_from_sexpr,
-    parse_kicad_stackup,
-)
+from phosphor_eda.formats.kicad.board import parse_kicad_pcb, parse_kicad_pcb_from_sexpr
+from phosphor_eda.formats.kicad.footprint import extract_value
+from phosphor_eda.formats.kicad.sexp import SExpNode
+from phosphor_eda.formats.kicad.stackup import parse_kicad_stackup
 from phosphor_eda.geometry.pcb_geometry import pad_polygon
 from phosphor_eda.render.drills import drill_geometry
 from phosphor_eda.render.inventory import InventoryItemKind, build_inventory
@@ -341,17 +339,17 @@ def test_board_name(board: Pcb) -> None:
 
 def test_extract_value_kicad8() -> None:
     fp = _make_fp_sexpr('(property "Value" "100nF" (at 0 0))')
-    assert _extract_value(fp) == "100nF"
+    assert extract_value(fp) == "100nF"
 
 
 def test_extract_value_kicad6() -> None:
     fp = _make_fp_sexpr('(fp_text value "100nF" (at 0 0))')
-    assert _extract_value(fp) == "100nF"
+    assert extract_value(fp) == "100nF"
 
 
 def test_extract_value_missing() -> None:
     fp = _make_fp_sexpr('(property "Reference" "U1" (at 0 0))')
-    assert _extract_value(fp) == ""
+    assert extract_value(fp) == ""
 
 
 def _parse_pcb_snippet(body: str, name: str = "test") -> Pcb:
@@ -521,6 +519,6 @@ def test_jetson_orin_stackup_prepreg(jetson_orin_stackup: Stackup) -> None:
     assert any(layer.epsilon_r > 0 for layer in prepreg)
 
 
-def _make_fp_sexpr(body: str) -> list[object]:
+def _make_fp_sexpr(body: str) -> SExpNode:
     parsed = sexpdata.loads(f'(footprint "test:Pkg" {body})')
     return list(parsed)

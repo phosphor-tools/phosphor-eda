@@ -1,7 +1,7 @@
 """Shared S-expression helpers for KiCad parsers.
 
-Used by both the schematic (to_schematic.py) and PCB (pcb_parser.py)
-parsers to navigate the nested-list structure returned by sexpdata.
+Used by both the schematic and PCB (board.py and friends) parsers to
+navigate the nested-list structure returned by sexpdata.
 """
 
 from __future__ import annotations
