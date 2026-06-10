@@ -25,11 +25,10 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING
 
 import pytest
 
-from phosphor_eda.domain.pcb import Pcb
 from phosphor_eda.formats.altium.pcb_parser import parse_altium_pcb
 from phosphor_eda.formats.kicad.pcb_parser import parse_kicad_pcb
 from phosphor_eda.render.api import render_pcb_svg
@@ -38,6 +37,11 @@ from phosphor_eda.render.settings import (
     load_render_settings_json,
     resolve_effective_settings,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from phosphor_eda.domain.pcb import Pcb
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 GOLDENS = Path(__file__).resolve().parent / "goldens"
@@ -73,9 +77,7 @@ def _assert_text_golden(svg: str, golden: Path) -> None:
         golden.parent.mkdir(parents=True, exist_ok=True)
         golden.write_text(svg, encoding="utf-8")
         pytest.skip(f"updated golden {golden.name}")
-    assert golden.exists(), (
-        f"missing golden {golden}; run PHOSPHOR_UPDATE_GOLDENS=1 to create it"
-    )
+    assert golden.exists(), f"missing golden {golden}; run PHOSPHOR_UPDATE_GOLDENS=1 to create it"
     assert svg == golden.read_text(encoding="utf-8"), (
         f"SVG output diverged from golden {golden.name}; if intended, "
         "regenerate with PHOSPHOR_UPDATE_GOLDENS=1 and review the diff"

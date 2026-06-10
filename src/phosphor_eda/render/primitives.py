@@ -30,9 +30,10 @@ from phosphor_eda.domain.pcb import (
 from phosphor_eda.geometry.pcb_geometry import (
     arc_center_from_three_points,
     arc_sweep_angle,
-    arc_to_polyline,
     board_outline_polygon,
+    circle_path_d,
     closed_path_geometry,
+    pad_path_d,
     pad_polygon,
 )
 from phosphor_eda.geometry.shapely_ops import normalize_geometry
@@ -120,8 +121,8 @@ def inventory_item_to_svg_primitive(
     target_layer_name: str = "",
 ) -> SvgPrimitive | None:
     """Convert one typed inventory item into SVG path data."""
-    d = _path_d_for_item(item)
-    if not d:
+    shape = _shape_render_for_item(item)
+    if not shape.d:
         return None
     source_layer = target_layer_name or ("" if item.layer is None else item.layer.name)
     data = {
@@ -131,13 +132,17 @@ def inventory_item_to_svg_primitive(
     if item.content_kind is not None:
         data["content-kind"] = item.content_kind.value
     return SvgPrimitive(
-        d=d,
+        d=shape.d,
         source_id=item.id,
         source_layer=source_layer,
         kind=item.item_kind.value,
         tags=item.tags,
         data=data,
+        style=shape.style,
         bbox=_bounds_for_item(item),
+        paint=shape.paint,
+        stroke_width=shape.stroke_width,
+        stroke_linecap=shape.stroke_linecap,
     )
 
 
@@ -197,7 +202,7 @@ def _geometry_bounds(geometry: BaseGeometry | None) -> Bounds | None:
 def _bounds_for_item(item: InventoryItem) -> Bounds | None:
     """Real-geometry bounds for an inventory item.
 
-    Mirrors the geometry sources used by :func:`_path_d_for_item` so mask/clip
+    Mirrors the geometry sources used by :func:`_shape_render_for_item` so mask/clip
     viewports can be sized from true extents rather than re-parsing path data.
     """
     if item.purpose == InventoryPurpose.BOARD_MATERIAL:
@@ -260,24 +265,61 @@ def _point_bounds(points: tuple[tuple[float, float], ...]) -> Bounds | None:
     return (min(xs), min(ys), max(xs), max(ys))
 
 
-def _path_d_for_item(item: InventoryItem) -> str:
+@dataclass(frozen=True)
+class _ShapeRender:
+    """Path data plus paint metadata for one rendered shape."""
+
+    d: str
+    paint: PaintMode = PaintMode.FILL
+    stroke_width: float | None = None
+    stroke_linecap: str | None = None
+    style: Mapping[str, str] = field(default_factory=_empty_data)
+
+
+_STROKE_LINECAP = "round"
+
+
+def _filled(d: str, style: Mapping[str, str] | None = None) -> _ShapeRender:
+    return _ShapeRender(d=d, style=style or {})
+
+
+def _stroked(d: str, width: float) -> _ShapeRender:
+    return _ShapeRender(
+        d=d,
+        paint=PaintMode.STROKE,
+        stroke_width=width,
+        stroke_linecap=_STROKE_LINECAP,
+    )
+
+
+def _shape_render_for_item(item: InventoryItem) -> _ShapeRender:
     if item.purpose == InventoryPurpose.BOARD_MATERIAL:
-        return _board_material_path_d(item)
+        return _filled(_board_material_path_d(item))
     if item.item_kind == InventoryItemKind.BOARD_PROFILE:
-        return _board_profile_item_path_d(item)
+        return _board_profile_item_shape(item)
     if item.item_kind == InventoryItemKind.PAD and isinstance(item.source, PcbPad):
+        pad = item.source
         if item.purpose == InventoryPurpose.SOLDER_MASK:
-            return _pad_solder_mask_opening_path_d(item.source)
-        return geometry_to_svg_path_d(pad_polygon(item.source))
+            return _filled(_pad_solder_mask_opening_path_d(pad), _pad_fill_rule(pad))
+        return _filled(pad_path_d(pad), _pad_fill_rule(pad))
     if item.item_kind == InventoryItemKind.VIA and isinstance(item.source, PcbVia):
-        return _circle_path_d(item.source.x, item.source.y, item.source.diameter / 2.0)
+        return _filled(circle_path_d(item.source.x, item.source.y, item.source.diameter / 2.0))
     if item.item_kind == InventoryItemKind.DRILL and isinstance(item.source, PcbDrill):
         geometry = drill_geometry(item.source)
-        return "" if geometry is None else geometry_to_svg_path_d(geometry)
+        return _filled("" if geometry is None else geometry_to_svg_path_d(geometry))
     if item.item_kind == InventoryItemKind.KEEPOUT and isinstance(item.payload, PcbClosedPath):
         geometry = closed_path_geometry(item.payload)
-        return "" if geometry is None else geometry_to_svg_path_d(geometry)
-    return shape_to_svg_path_d(item.payload, filled=item.purpose != InventoryPurpose.BOARD_PROFILE)
+        return _filled("" if geometry is None else geometry_to_svg_path_d(geometry))
+    return _shape_render_for_payload(
+        item.payload, filled=item.purpose != InventoryPurpose.BOARD_PROFILE
+    )
+
+
+def _pad_fill_rule(pad: PcbPad) -> Mapping[str, str]:
+    """Custom pads union sub-shapes; nonzero gives that union for free."""
+    if pad.shape == "custom" and pad.custom_shapes:
+        return {"fill-rule": "nonzero"}
+    return {}
 
 
 def _pad_solder_mask_opening_geometry(pad: PcbPad) -> BaseGeometry | None:
@@ -298,39 +340,47 @@ def _pad_solder_mask_opening_path_d(pad: PcbPad) -> str:
     return "" if geometry is None else geometry_to_svg_path_d(geometry)
 
 
-def shape_to_svg_path_d(payload: object, *, filled: bool = True) -> str:
-    """Convert a PCB primitive payload to SVG path data."""
+def _shape_render_for_payload(payload: object, *, filled: bool = True) -> _ShapeRender:
+    """Render a PCB primitive payload to path data with paint metadata.
+
+    Width-bearing lines/arcs become native stroked centerlines (round caps);
+    everything else stays filled.
+    """
     if isinstance(payload, PcbLine):
-        if filled:
-            return _stroke_geometry_path_d(payload)
-        return _line_path_d(payload)
+        width = max(payload.width, 0.0)
+        if filled and width > 0.0:
+            return _stroked(_line_path_d(payload), width)
+        return _filled(_line_path_d(payload))
     if isinstance(payload, PcbArc):
-        if filled:
-            return _stroke_geometry_path_d(payload)
-        return _arc_path_d(payload)
+        width = max(payload.width, 0.0)
+        if filled and width > 0.0:
+            return _stroked(_arc_path_d(payload), width)
+        return _filled(_arc_path_d(payload))
     if isinstance(payload, PcbCircle):
         if payload.fill or filled:
-            return _circle_path_d(payload.cx, payload.cy, payload.radius)
-        outer = _circle_path_d(payload.cx, payload.cy, payload.radius)
+            return _filled(circle_path_d(payload.cx, payload.cy, payload.radius))
+        outer = circle_path_d(payload.cx, payload.cy, payload.radius)
         inner_radius = max(payload.radius - payload.width, 0.0)
-        inner = _circle_path_d(payload.cx, payload.cy, inner_radius)
-        return f"{outer} {inner}"
+        inner = circle_path_d(payload.cx, payload.cy, inner_radius)
+        return _filled(f"{outer} {inner}")
     if isinstance(payload, PcbPolygon):
-        return geometry_to_svg_path_d(polygon_geometry(payload))
+        return _filled(geometry_to_svg_path_d(polygon_geometry(payload)))
     if isinstance(payload, PcbText):
-        return geometry_to_svg_path_d(text_outline_geometry(payload))
+        return _filled(geometry_to_svg_path_d(text_outline_geometry(payload)))
     if isinstance(payload, PcbDimension):
-        return _line_path_d(
-            PcbLine(payload.start_x, payload.start_y, payload.end_x, payload.end_y, 0.0)
+        return _filled(
+            _line_path_d(
+                PcbLine(payload.start_x, payload.start_y, payload.end_x, payload.end_y, 0.0)
+            )
         )
     if isinstance(payload, PcbModel3D):
-        return ""
+        return _filled("")
     if isinstance(payload, PcbClosedPath):
         geometry = closed_path_geometry(payload)
-        return "" if geometry is None else geometry_to_svg_path_d(geometry)
+        return _filled("" if geometry is None else geometry_to_svg_path_d(geometry))
     if isinstance(payload, BaseGeometry):
-        return geometry_to_svg_path_d(payload)
-    return ""
+        return _filled(geometry_to_svg_path_d(payload))
+    return _filled("")
 
 
 def polygon_geometry(poly: PcbPolygon) -> BaseGeometry:
@@ -338,27 +388,6 @@ def polygon_geometry(poly: PcbPolygon) -> BaseGeometry:
         return GeometryCollection()
     holes = [hole for hole in poly.holes if len(hole) >= 3]
     return normalize_geometry(Polygon(poly.points, holes=holes or None))
-
-
-def _stroke_geometry_path_d(payload: PcbLine | PcbArc) -> str:
-    width = max(payload.width, 0.0)
-    if width <= 0.0:
-        return _line_path_d(payload) if isinstance(payload, PcbLine) else _arc_path_d(payload)
-    if isinstance(payload, PcbLine):
-        line = LineString(((payload.start_x, payload.start_y), (payload.end_x, payload.end_y)))
-    else:
-        line = LineString(
-            arc_to_polyline(
-                payload.start_x,
-                payload.start_y,
-                payload.mid_x,
-                payload.mid_y,
-                payload.end_x,
-                payload.end_y,
-                num_points=32,
-            )
-        )
-    return geometry_to_svg_path_d(line.buffer(width / 2.0, cap_style="round"))
 
 
 def _board_material_path_d(item: InventoryItem) -> str:
@@ -374,12 +403,12 @@ def _board_material_path_d(item: InventoryItem) -> str:
     return ""
 
 
-def _board_profile_item_path_d(item: InventoryItem) -> str:
+def _board_profile_item_shape(item: InventoryItem) -> _ShapeRender:
     if item.content_kind == PcbArtworkKind.LINE and isinstance(item.payload, PcbLine):
-        return _line_path_d(item.payload)
+        return _filled(_line_path_d(item.payload))
     if item.content_kind == PcbArtworkKind.ARC and isinstance(item.payload, PcbArc):
-        return _arc_path_d(item.payload)
-    return shape_to_svg_path_d(item.payload, filled=False)
+        return _filled(_arc_path_d(item.payload))
+    return _shape_render_for_payload(item.payload, filled=False)
 
 
 def _line_path_d(line: PcbLine) -> str:
@@ -416,16 +445,6 @@ def _arc_path_d(arc: PcbArc) -> str:
     )
 
 
-def _circle_path_d(cx: float, cy: float, radius: float) -> str:
-    if radius <= 0.0:
-        return ""
-    return (
-        f"M {cx + radius:.4f} {cy:.4f} "
-        f"A {radius:.4f} {radius:.4f} 0 1 0 {cx - radius:.4f} {cy:.4f} "
-        f"A {radius:.4f} {radius:.4f} 0 1 0 {cx + radius:.4f} {cy:.4f} Z"
-    )
-
-
 def _closed_point_pairs_to_svg_path_d(points: tuple[tuple[float, float], ...]) -> str:
     if len(points) < 3:
         return ""
@@ -451,7 +470,7 @@ def geometry_to_svg_path_d(geometry: BaseGeometry) -> str:
     if isinstance(geometry, GeometryCollection):
         return ""
     if isinstance(geometry, Point):
-        return _circle_path_d(float(geometry.x), float(geometry.y), 0.05)
+        return circle_path_d(float(geometry.x), float(geometry.y), 0.05)
     return ""
 
 
