@@ -2033,10 +2033,15 @@ def _parse_shape_based_regions(
     layer_map: dict[int, PcbLayer],
     ctx: ParseContext,
     pour_id_map: dict[int, str] | None = None,
+    pour_net_map: dict[int, int] | None = None,
 ) -> list[_ParsedPrimitive]:
     """Parse ShapeBasedRegions6/Data into polygon geometry.
 
     Uses the extended vertex format (37 bytes per vertex with arc support).
+
+    Net inheritance matches ``_parse_regions``: a copper region carrying the
+    unconnected sentinel (net == 0xFFFF) inherits the net of its parent polygon
+    pour via the (sub)polygon index.
     """
     records = _read_binary_records(data)
     polygons: list[_ParsedPrimitive] = []
@@ -2074,7 +2079,14 @@ def _parse_shape_based_regions(
         subpolygon_index = int(region.properties.get("subpolyindex", "-1") or "-1")
         pour_id = _resolve_pour_id(pour_id_map or {}, polygon_index, subpolygon_index)
 
-        net_num = _net_number(region.net) if resolved_num in _COPPER_LAYERS else 0
+        # Net resolution: use direct net if assigned, otherwise inherit from pour
+        if resolved_num in _COPPER_LAYERS:
+            if region.net == _NET_UNCONNECTED and pour_net_map:
+                net_num = _resolve_pour_net(pour_net_map, polygon_index, subpolygon_index)
+            else:
+                net_num = _net_number(region.net)
+        else:
+            net_num = 0
         net_obj = nets.get(net_num)
         net_name = net_obj.name if net_obj else ""
 
@@ -3185,7 +3197,9 @@ def parse_altium_pcb(
     arc_geometry, arc_keepouts = _parse_arcs(arcs_data, layer_map, ctx, pour_id_map)
     fills, fill_keepouts = _parse_fills(fills_data, layer_map, ctx)
     regions = _parse_regions(regions_data, nets, layer_map, ctx, pour_id_map, pour_net_map)
-    shape_regions = _parse_shape_based_regions(sb_regions_data, nets, layer_map, ctx, pour_id_map)
+    shape_regions = _parse_shape_based_regions(
+        sb_regions_data, nets, layer_map, ctx, pour_id_map, pour_net_map
+    )
     comp_models = _parse_component_bodies(comp_bodies_data)
 
     geometry = [
