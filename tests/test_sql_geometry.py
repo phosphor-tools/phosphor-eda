@@ -103,12 +103,14 @@ def test_polygon_with_holes() -> None:
 
     geom = polygon_geometry(poly)
 
-    assert geom is not None
+    assert not geom.is_empty
     assert geom.area == pytest.approx(96.0, abs=0.01)
 
 
-def test_polygon_degenerate_returns_none() -> None:
-    assert polygon_geometry(PcbPolygon(points=[(0, 0), (1, 0)])) is None
+def test_polygon_degenerate_returns_empty() -> None:
+    # Never raw, possibly-invalid geometry: degenerate input yields an empty
+    # geometry (treated as "no shape" by both SQL WKB and SVG serialization).
+    assert polygon_geometry(PcbPolygon(points=[(0, 0), (1, 0)])).is_empty
 
 
 def test_board_outline_from_normalized_fixture_geometry() -> None:

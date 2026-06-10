@@ -35,8 +35,8 @@ from phosphor_eda.geometry.pcb_geometry import (
     closed_path_geometry,
     pad_path_d,
     pad_polygon,
+    polygon_geometry,
 )
-from phosphor_eda.geometry.shapely_ops import normalize_geometry
 from phosphor_eda.geometry.text_outlines import text_outline_geometry
 from phosphor_eda.render.drills import drill_geometry, drill_render
 from phosphor_eda.render.inventory import (
@@ -335,7 +335,8 @@ def _drill_bounds(drill: PcbDrill) -> Bounds | None:
     return _geometry_bounds(drill_geometry(drill))
 
 
-def _pad_solder_mask_opening_geometry(pad: PcbPad) -> BaseGeometry | None:
+def _pad_solder_mask_opening_dimensions(pad: PcbPad) -> tuple[float, float] | None:
+    """Width/height of a pad's mask opening (explicit aperture or expansion)."""
     aperture = pad.mask_aperture
     width = aperture.aperture_width if aperture is not None else None
     height = aperture.aperture_height if aperture is not None else None
@@ -345,12 +346,23 @@ def _pad_solder_mask_opening_geometry(pad: PcbPad) -> BaseGeometry | None:
         height = pad.height + 2.0 * expansion
     if width <= 0.0 or height <= 0.0:
         return None
+    return width, height
+
+
+def _pad_solder_mask_opening_geometry(pad: PcbPad) -> BaseGeometry | None:
+    dimensions = _pad_solder_mask_opening_dimensions(pad)
+    if dimensions is None:
+        return None
+    width, height = dimensions
     return pad_polygon(replace(pad, width=width, height=height))
 
 
 def _pad_solder_mask_opening_path_d(pad: PcbPad) -> str:
-    geometry = _pad_solder_mask_opening_geometry(pad)
-    return "" if geometry is None else geometry_to_svg_path_d(geometry)
+    dimensions = _pad_solder_mask_opening_dimensions(pad)
+    if dimensions is None:
+        return ""
+    width, height = dimensions
+    return pad_path_d(pad, width=width, height=height)
 
 
 def _shape_render_for_payload(payload: object, *, filled: bool = True) -> _ShapeRender:
@@ -394,13 +406,6 @@ def _shape_render_for_payload(payload: object, *, filled: bool = True) -> _Shape
     if isinstance(payload, BaseGeometry):
         return _filled(geometry_to_svg_path_d(payload))
     return _filled("")
-
-
-def polygon_geometry(poly: PcbPolygon) -> BaseGeometry:
-    if len(poly.points) < 3:
-        return GeometryCollection()
-    holes = [hole for hole in poly.holes if len(hole) >= 3]
-    return normalize_geometry(Polygon(poly.points, holes=holes or None))
 
 
 def _board_material_path_d(item: InventoryItem) -> str:

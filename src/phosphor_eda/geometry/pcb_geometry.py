@@ -215,8 +215,7 @@ def _custom_pad_shape_path_d(shape: PcbLine | PcbArc | PcbCircle | PcbPolygon) -
         if inner_radius <= 0.0:
             return outer
         return f"{outer} {circle_path_d(shape.cx, shape.cy, inner_radius)}"
-    polygon = polygon_geometry(shape)
-    return "" if polygon is None else _polygon_to_path_d(polygon)
+    return _polygon_to_path_d(polygon_geometry(shape))
 
 
 def _stroke_centerline_to_filled_path_d(
@@ -346,8 +345,7 @@ def _custom_pad_shape_geometry(
         if inner_radius <= 0.0:
             return outer
         return outer.difference(Point(shape.cx, shape.cy).buffer(inner_radius))
-    polygon = polygon_geometry(shape)
-    return GeometryCollection() if polygon is None else polygon
+    return polygon_geometry(shape)
 
 
 # ---------------------------------------------------------------------------
@@ -504,16 +502,17 @@ def via_geometry(via: PcbVia) -> tuple[Polygon, Polygon]:
 # ---------------------------------------------------------------------------
 
 
-def polygon_geometry(poly: PcbPolygon) -> Polygon | None:
-    """Convert polygon geometry to a Shapely Polygon, or None if degenerate."""
+def polygon_geometry(poly: PcbPolygon) -> BaseGeometry:
+    """Convert polygon geometry to normalized Shapely geometry.
+
+    Returns an empty ``GeometryCollection`` for degenerate or non-repairable
+    input — never raw, possibly-invalid geometry (invalid WKB corrupts spatial
+    queries and SVG serialization alike).
+    """
     if len(poly.points) < 3:
-        return None
+        return GeometryCollection()
     holes = [h for h in poly.holes if len(h) >= 3]
-    geometry = Polygon(poly.points, holes=holes or None)
-    normalized = normalize_geometry(geometry)
-    if not normalized.is_empty and isinstance(normalized, Polygon):
-        return normalized
-    return geometry
+    return normalize_geometry(Polygon(poly.points, holes=holes or None))
 
 
 def closed_path_geometry(path: PcbClosedPath) -> Polygon | None:
@@ -606,7 +605,7 @@ def board_outline_polygon(profile: PcbBoardProfile) -> Polygon | MultiPolygon | 
 
         else:
             polygon = polygon_geometry(item.data)
-            if polygon is None:
+            if polygon.is_empty or not isinstance(polygon, Polygon):
                 continue
             if item.is_cutout:
                 cutouts.append(polygon)
