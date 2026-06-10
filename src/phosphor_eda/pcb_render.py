@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import re
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 from xml.sax.saxutils import escape as xml_escape
 
@@ -33,6 +33,7 @@ from phosphor_eda.text_metrics import BASELINE_CENTER_OFFSET, INTER_REGULAR_BASE
 
 __all__ = [
     "HighlightSpec",
+    "RenderResult",
     "RenderSettings",
     "is_json_dict",
     "load_render_settings_file",
@@ -42,6 +43,20 @@ __all__ = [
     "render_pcb_svg_from_derived_plan",
     "render_settings_schema",
 ]
+
+
+@dataclass(frozen=True)
+class RenderResult:
+    """Result of rendering a PCB: the SVG plus any non-fatal warnings.
+
+    Warnings capture degradations the user should know about (an
+    unresolved highlight target, an unparseable color, a placement solver
+    fallback). The CLI prints them to stderr; the SVG is still valid.
+    """
+
+    svg: str
+    warnings: tuple[str, ...] = ()
+
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -1004,8 +1019,8 @@ def render_pcb_svg(
     annotations: ResolvedAnnotations | None = None,
     render_settings: RenderSettings | None = None,
     profiler: RenderProfiler | None = None,
-) -> str:
-    """Render a Pcb as a layered SVG string from structured render settings.
+) -> RenderResult:
+    """Render a Pcb as a layered SVG from structured render settings.
 
     Parameters
     ----------
@@ -1063,7 +1078,8 @@ def render_pcb_svg(
     with _profile_span(profiler, "render.serialize"):
         svg = render_pcb_svg_from_derived_plan(plan, profiler=profiler)
     with _profile_span(profiler, "render.metadata"):
-        return _append_pcb_metadata(svg, board)
+        svg = _append_pcb_metadata(svg, board)
+    return RenderResult(svg=svg, warnings=plan.warnings)
 
 
 @contextmanager
