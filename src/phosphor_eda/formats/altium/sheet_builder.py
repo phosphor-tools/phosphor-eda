@@ -23,29 +23,18 @@ from phosphor_eda.formats.altium.record_factory import (
 from phosphor_eda.formats.altium.record_parser import read_schematic_records
 from phosphor_eda.formats.altium.records import (
     AltiumRecord,
-    BlanketRec,
-    ComponentRec,
-    DesignatorRec,
-    FileNameRec,
     HarnessConnectorRec,
     HarnessEntryRec,
     HarnessTypeRec,
-    ImplementationRec,
     JunctionRec,
-    LabelRec,
     NetLabelRec,
     NoConnectRec,
     ParameterRec,
-    ParameterSetRec,
-    PinRec,
     PortRec,
     PowerPortRec,
     SheetEntryRec,
-    SheetNameRec,
     SheetRec,
-    SheetSymbolRec,
     SignalHarnessRec,
-    TextFrameRec,
     WireRec,
 )
 from phosphor_eda.formats.common.diagnostics import ParseContext
@@ -53,8 +42,6 @@ from phosphor_eda.formats.common.spatial import UnionFind, WireIndex, point_on_s
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-
-    from phosphor_eda.domain.schematic import Page
 
 
 # ---------------------------------------------------------------------------
@@ -102,162 +89,22 @@ class SheetRecords:
     wire_index: WireIndex
     name: str = ""
 
-    def by_type(self, cls: type[AltiumRecord]) -> Iterator[AltiumRecord]:
+    def by_type[R: AltiumRecord](self, cls: type[R]) -> Iterator[R]:
+        """Yield every record that is an instance of *cls*, narrowed to ``R``."""
         for rec in self.records:
             if isinstance(rec, cls):
                 yield rec
 
     @property
-    def components(self) -> Iterator[ComponentRec]:
-        for rec in self.records:
-            if isinstance(rec, ComponentRec):
-                yield rec
-
-    @property
-    def pins(self) -> Iterator[PinRec]:
-        for rec in self.records:
-            if isinstance(rec, PinRec):
-                yield rec
-
-    @property
-    def wires(self) -> Iterator[WireRec]:
-        for rec in self.records:
-            if isinstance(rec, WireRec):
-                yield rec
-
-    @property
-    def net_labels(self) -> Iterator[NetLabelRec]:
-        for rec in self.records:
-            if isinstance(rec, NetLabelRec):
-                yield rec
-
-    @property
-    def power_ports(self) -> Iterator[PowerPortRec]:
-        for rec in self.records:
-            if isinstance(rec, PowerPortRec):
-                yield rec
-
-    @property
-    def ports(self) -> Iterator[PortRec]:
-        for rec in self.records:
-            if isinstance(rec, PortRec):
-                yield rec
-
-    @property
-    def junctions(self) -> Iterator[JunctionRec]:
-        for rec in self.records:
-            if isinstance(rec, JunctionRec):
-                yield rec
-
-    @property
-    def no_connects(self) -> Iterator[NoConnectRec]:
-        for rec in self.records:
-            if isinstance(rec, NoConnectRec):
-                yield rec
-
-    @property
-    def sheet_symbols(self) -> Iterator[SheetSymbolRec]:
-        for rec in self.records:
-            if isinstance(rec, SheetSymbolRec):
-                yield rec
-
-    @property
-    def sheet_entries(self) -> Iterator[SheetEntryRec]:
-        for rec in self.records:
-            if isinstance(rec, SheetEntryRec):
-                yield rec
-
-    @property
-    def designators(self) -> Iterator[DesignatorRec]:
-        for rec in self.records:
-            if isinstance(rec, DesignatorRec):
-                yield rec
-
-    @property
-    def parameters(self) -> Iterator[ParameterRec]:
-        for rec in self.records:
-            if isinstance(rec, ParameterRec):
-                yield rec
-
-    @property
-    def file_names(self) -> Iterator[FileNameRec]:
-        for rec in self.records:
-            if isinstance(rec, FileNameRec):
-                yield rec
-
-    @property
-    def harness_connectors(self) -> Iterator[HarnessConnectorRec]:
-        for rec in self.records:
-            if isinstance(rec, HarnessConnectorRec):
-                yield rec
-
-    @property
-    def harness_entries(self) -> Iterator[HarnessEntryRec]:
-        for rec in self.records:
-            if isinstance(rec, HarnessEntryRec):
-                yield rec
-
-    @property
-    def harness_types(self) -> Iterator[HarnessTypeRec]:
-        for rec in self.records:
-            if isinstance(rec, HarnessTypeRec):
-                yield rec
-
-    @property
-    def signal_harnesses(self) -> Iterator[SignalHarnessRec]:
-        for rec in self.records:
-            if isinstance(rec, SignalHarnessRec):
-                yield rec
-
-    @property
     def sheet_rec(self) -> SheetRec | None:
         """Return the single RECORD=31 sheet properties record, if present."""
-        for rec in self.records:
-            if isinstance(rec, SheetRec):
-                return rec
-        return None
-
-    @property
-    def sheet_names(self) -> Iterator[SheetNameRec]:
-        for rec in self.records:
-            if isinstance(rec, SheetNameRec):
-                yield rec
-
-    @property
-    def implementations(self) -> Iterator[ImplementationRec]:
-        for rec in self.records:
-            if isinstance(rec, ImplementationRec):
-                yield rec
-
-    @property
-    def parameter_sets(self) -> Iterator[ParameterSetRec]:
-        for rec in self.records:
-            if isinstance(rec, ParameterSetRec):
-                yield rec
-
-    @property
-    def labels(self) -> Iterator[LabelRec]:
-        for rec in self.records:
-            if isinstance(rec, LabelRec):
-                yield rec
-
-    @property
-    def text_frames(self) -> Iterator[TextFrameRec]:
-        for rec in self.records:
-            if isinstance(rec, TextFrameRec):
-                yield rec
-
-    @property
-    def blankets(self) -> Iterator[BlanketRec]:
-        for rec in self.records:
-            if isinstance(rec, BlanketRec):
-                yield rec
+        return next(self.by_type(SheetRec), None)
 
     @property
     def sheet_level_parameters(self) -> Iterator[ParameterRec]:
         """RECORD=41 parameters with no owner (sheet-level title block data)."""
-        for rec in self.records:
-            if isinstance(rec, ParameterRec) and rec.owner_index == -1:
+        for rec in self.by_type(ParameterRec):
+            if rec.owner_index == -1:
                 yield rec
 
 
@@ -365,7 +212,7 @@ def resolve_local_net_groups(
     # --- Step 1: Collect wire segments and union consecutive points ---
     all_wire_points: set[tuple[int, int]] = set()
 
-    for wire in sheet.wires:
+    for wire in sheet.by_type(WireRec):
         all_wire_points.update(wire.points)
         for p1, p2 in wire.segments:
             uf.union(p1, p2)
@@ -383,7 +230,7 @@ def resolve_local_net_groups(
             break  # Only need to connect to one segment
 
     # --- Step 3: Add junctions (explicit connection markers) ---
-    for junc in sheet.junctions:
+    for junc in sheet.by_type(JunctionRec):
         jp = junc.location
         touches = sheet.wire_index.segments_touching(jp[0], jp[1])
         for wire, seg_idx in touches:
@@ -394,7 +241,7 @@ def resolve_local_net_groups(
     # --- Step 3.5: Connect no-connect markers to wire groups ---
     # NC markers are placed at wire endpoints; unioning them here lets us
     # later identify which pin coordinates share a wire group with an NC.
-    for nc in sheet.no_connects:
+    for nc in sheet.by_type(NoConnectRec):
         nc_loc = nc.location
         _connect_point_to_wire_group(nc_loc, sheet, uf)
         all_wire_points.add(nc_loc)
@@ -409,7 +256,7 @@ def resolve_local_net_groups(
 
     # Net labels
     label_groups: dict[str, list[tuple[int, int]]] = {}
-    for label in sheet.net_labels:
+    for label in sheet.by_type(NetLabelRec):
         if not label.text:
             continue
         lp = label.location
@@ -425,7 +272,7 @@ def resolve_local_net_groups(
                 uf.union(points[0], p)
 
     # Power ports
-    for pp in sheet.power_ports:
+    for pp in sheet.by_type(PowerPortRec):
         if not pp.text:
             continue
         loc = pp.location
@@ -434,7 +281,7 @@ def resolve_local_net_groups(
         power_port_points.append((pp, loc))
 
     # Ports.
-    for port in sheet.ports:
+    for port in sheet.by_type(PortRec):
         if not port.name:
             continue
         loc = _port_wire_coord(port, sheet.wire_index)
@@ -443,7 +290,7 @@ def resolve_local_net_groups(
         port_points.append((port, loc))
 
     # Sheet entries.
-    for entry in sheet.sheet_entries:
+    for entry in sheet.by_type(SheetEntryRec):
         if not entry.name:
             continue
         ep = entry.coord
@@ -495,7 +342,7 @@ def resolve_local_net_groups(
     # group as an NC marker should be flagged as intentionally unconnected.
     nc_wire_coords: set[tuple[int, int]] = set()
     nc_roots: set[tuple[int, int]] = set()
-    for nc in sheet.no_connects:
+    for nc in sheet.by_type(NoConnectRec):
         nc_roots.add(uf.find(nc.location))
     if nc_roots:
         for pt in all_wire_points | all_named_points:
@@ -574,7 +421,7 @@ def _parse_harness_groups(
     # which connector is spatially connected to which port.
     uf: UnionFind[tuple[int, int]] = UnionFind()
     harness_wire_segments: list[tuple[tuple[int, int], tuple[int, int]]] = []
-    for sh in sheet.signal_harnesses:
+    for sh in sheet.by_type(SignalHarnessRec):
         for seg in sh.segments:
             uf.union(seg[0], seg[1])
             harness_wire_segments.append(seg)
@@ -614,7 +461,7 @@ def _parse_harness_groups(
                         break
 
     # Connect each harness port location to signal harness wires
-    harness_ports: list[PortRec] = [p for p in sheet.ports if p.harness_type]
+    harness_ports: list[PortRec] = [p for p in sheet.by_type(PortRec) if p.harness_type]
     for port in harness_ports:
         for seg in harness_wire_segments:
             if point_on_segment(port.location, seg[0], seg[1]):
@@ -681,46 +528,3 @@ def compute_harness_entry_coords(
         for member_name, coord in members:
             result[coord] = f"{port_name}:{member_name}"
     return result
-
-
-def collect_harness_type_members(
-    sheet: SheetRecords,
-    members_by_type: dict[str, list[str]],
-) -> None:
-    """Collect harness member names from harness connectors on this page."""
-    for harness_type, _port_name, members in _parse_harness_groups(sheet):
-        if harness_type not in members_by_type:
-            members_by_type[harness_type] = [m[0] for m in members]
-
-
-def collect_harness_port_nets(
-    sheet: SheetRecords,
-    coord_to_net_name: dict[tuple[int, int], str],
-    harness_port_nets: dict[str, list[tuple[str, dict[str, str]]]],
-    page_name: str,
-) -> None:
-    """Collect harness port → [(page_name, {member → net_name}), ...]."""
-    for _ht, port_name, members in _parse_harness_groups(sheet):
-        nets: dict[str, str] = {}
-        for member_name, coord in members:
-            net_name = coord_to_net_name.get(coord)
-            if net_name:
-                nets[member_name] = net_name
-        if nets:
-            harness_port_nets.setdefault(port_name, []).append((page_name, nets))
-
-
-# ---------------------------------------------------------------------------
-# build_page — legacy public conversion boundary
-# ---------------------------------------------------------------------------
-
-
-def build_page(
-    sheet: SheetRecords,
-    coord_to_net_name: dict[tuple[int, int], str],
-    harness_port_nets: dict[str, list[tuple[str, dict[str, str]]]],
-    harness_members_by_type: dict[str, list[str]],
-    nc_wire_coords: set[tuple[int, int]] | None = None,
-) -> Page:
-    """Legacy public page builder removed with the old public Port model."""
-    raise NotImplementedError("Altium public conversion is handled by the source resolver")
