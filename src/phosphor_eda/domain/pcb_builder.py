@@ -8,17 +8,16 @@ from phosphor_eda.domain.pcb import (
     Pcb,
     PcbArtwork,
     PcbBoardProfile,
+    PcbBuildError,
+    PcbClosedPath,
     PcbConductor,
     PcbDrill,
-    PcbDrillPlating,
-    PcbDrillShape,
     PcbFootprint,
     PcbKeepout,
     PcbLayer,
     PcbMetadata,
     PcbNet,
     PcbPad,
-    PcbPadType,
     PcbPour,
     PcbVia,
 )
@@ -26,9 +25,8 @@ from phosphor_eda.domain.pcb import (
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-
-class PcbBuildError(ValueError):
-    """Raised when parsed source data cannot form a strict PCB domain model."""
+# Re-exported for callers that import it from the builder module.
+__all__ = ["PcbBuildError", "PcbBuilder"]
 
 
 class PcbBuilder:
@@ -114,66 +112,6 @@ class PcbBuilder:
             self._fail(f"unknown net number {number}", source)
         return net
 
-    def resolve_net(self, net: PcbNet | int | None, *, source: str = "") -> PcbNet | None:
-        """Resolve a concrete net reference."""
-        if net is None:
-            return None
-        if isinstance(net, int):
-            return self.resolve_net_number(net, source=source)
-        self._validate_net_ref(net, source)
-        return net
-
-    def resolve_footprint(
-        self,
-        footprint: PcbFootprint | str | None,
-        *,
-        source: str = "",
-        allow_none: bool = False,
-    ) -> PcbFootprint | None:
-        """Resolve a concrete footprint reference."""
-        if footprint is None:
-            if allow_none:
-                return None
-            self._fail("missing footprint reference", source)
-        if isinstance(footprint, PcbFootprint):
-            self._validate_footprint_ref(footprint, source)
-            return footprint
-        needle = footprint.upper()
-        for candidate in self.footprints:
-            if candidate.reference.upper() == needle:
-                return candidate
-        self._fail(f"unknown footprint {footprint!r}", source)
-
-    def add_drill(
-        self,
-        *,
-        id: str,
-        x: float,
-        y: float,
-        diameter: float,
-        shape: PcbDrillShape = PcbDrillShape.ROUND,
-        plating: PcbDrillPlating = PcbDrillPlating.UNKNOWN,
-        width: float = 0.0,
-        height: float = 0.0,
-        rotation: float = 0.0,
-        layers: Iterable[PcbLayer | str] = (),
-        source: str = "",
-    ) -> PcbDrill:
-        """Add a manufactured hole or slot."""
-        drill = PcbDrill(
-            id=id,
-            x=x,
-            y=y,
-            diameter=diameter,
-            shape=shape,
-            plating=plating,
-            width=width,
-            height=height,
-            rotation=rotation,
-            layers=self.resolve_layers(layers, source=source),
-        )
-        return self.add_drill_object(drill, source=source)
-
     def add_drill_object(self, drill: PcbDrill, *, source: str = "") -> PcbDrill:
         """Add an already-constructed drill after validating references."""
         self._validate_layer_refs(drill.layers, source)
@@ -183,54 +121,6 @@ class PcbBuilder:
         self._drill_ids.add(id(drill))
         self._drill_id_strs.add(drill.id)
         return drill
-
-    def resolve_drill(self, drill: PcbDrill | str | None, *, source: str = "") -> PcbDrill | None:
-        """Resolve a concrete drill reference."""
-        if drill is None:
-            return None
-        if isinstance(drill, PcbDrill):
-            self._validate_drill_ref(drill, source)
-            return drill
-        for candidate in self.drills:
-            if candidate.id == drill:
-                return candidate
-        self._fail(f"unknown drill {drill!r}", source)
-
-    def add_pad(
-        self,
-        *,
-        id: str,
-        number: str,
-        x: float,
-        y: float,
-        width: float,
-        height: float,
-        shape: str,
-        pad_type: PcbPadType,
-        layers: Iterable[PcbLayer | str],
-        net: PcbNet | int | None = None,
-        footprint: PcbFootprint | str | None = None,
-        drill: PcbDrill | str | None = None,
-        rotation: float = 0.0,
-        source: str = "",
-    ) -> PcbPad:
-        """Add a pad using concrete object references."""
-        pad = PcbPad(
-            id=id,
-            number=number,
-            x=x,
-            y=y,
-            width=width,
-            height=height,
-            shape=shape,
-            pad_type=pad_type,
-            layers=self.resolve_layers(layers, source=source),
-            net=self.resolve_net(net, source=source),
-            footprint=self.resolve_footprint(footprint, source=source, allow_none=True),
-            drill=self.resolve_drill(drill, source=source),
-            rotation=rotation,
-        )
-        return self.add_pad_object(pad, source=source)
 
     def add_pad_object(self, pad: PcbPad, *, source: str = "") -> PcbPad:
         """Add an already-constructed pad after validating references."""
@@ -272,6 +162,7 @@ class PcbBuilder:
 
     def add_pour_object(self, pour: PcbPour, *, source: str = "") -> PcbPour:
         """Add an already-constructed pour source after validating references."""
+        self._validate_boundary(pour.boundary, source)
         self._validate_layer_refs(pour.layers, source)
         self._validate_optional_net_ref(pour.net, source)
         self._validate_optional_footprint_ref(pour.footprint, source)
@@ -280,6 +171,7 @@ class PcbBuilder:
 
     def add_keepout_object(self, keepout: PcbKeepout, *, source: str = "") -> PcbKeepout:
         """Add an already-constructed keepout after validating references."""
+        self._validate_boundary(keepout.boundary, source)
         self._validate_layer_refs(keepout.layers, source)
         self._validate_optional_footprint_ref(keepout.footprint, source)
         self.keepouts.append(keepout)
@@ -320,6 +212,13 @@ class PcbBuilder:
             board_profile=self.board_profile,
             metadata=self.metadata,
         )
+
+    def _validate_boundary(self, boundary: PcbClosedPath, source: str) -> None:
+        if len(boundary.segments) < 3:
+            self._fail(
+                f"closed path needs at least 3 points, got {len(boundary.segments)}",
+                source,
+            )
 
     def _validate_layer_refs(self, layers: Iterable[PcbLayer], source: str) -> None:
         for layer in layers:

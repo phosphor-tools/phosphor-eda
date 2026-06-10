@@ -270,10 +270,11 @@ def _path_d_for_item(item: InventoryItem) -> str:
 
 
 def _pad_solder_mask_opening_geometry(pad: PcbPad) -> BaseGeometry | None:
-    width = pad.mask_aperture_width
-    height = pad.mask_aperture_height
+    aperture = pad.mask_aperture
+    width = aperture.aperture_width if aperture is not None else None
+    height = aperture.aperture_height if aperture is not None else None
     if width is None or height is None:
-        expansion = pad.mask_expansion or 0.0
+        expansion = (aperture.mask_expansion if aperture is not None else None) or 0.0
         width = pad.width + 2.0 * expansion
         height = pad.height + 2.0 * expansion
     if width <= 0.0 or height <= 0.0:

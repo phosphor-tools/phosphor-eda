@@ -50,7 +50,11 @@ def build_derived_render_plan(
     annotations: ResolvedAnnotations | None,
     profiler: RenderProfiler | None = None,
 ) -> DerivedRenderPlan:
-    bx0, by0, bx1, by1 = board.bbox()
+    board_bbox = board.bbox()
+    if board_bbox is None:
+        msg = "cannot render an empty board: no board profile and no pads to bound the view"
+        raise ValueError(msg)
+    bx0, by0, bx1, by1 = board_bbox
     pad_mm = 2.0
     vb_x = bx0 - pad_mm
     vb_y = by0 - pad_mm

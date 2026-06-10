@@ -270,9 +270,7 @@ def build_inventory(board: Pcb, *, side: str = "") -> PcbRenderInventory:
 def _source_is_hidden(source: InventorySource) -> bool:
     if isinstance(source, PcbDrill):
         owner = source.owner
-        return source.metadata.hidden or (
-            isinstance(owner, PcbPad | PcbVia | PcbArtwork) and owner.metadata.hidden
-        )
+        return source.metadata.hidden or (owner is not None and owner.metadata.hidden)
     if isinstance(
         source,
         PcbBoardProfileElement | PcbPad | PcbVia | PcbConductor | PcbArtwork | PcbKeepout,
@@ -371,12 +369,15 @@ def _pad_inventory_layers(board: Pcb, pad: PcbPad) -> tuple[tuple[InventoryPurpo
 
 
 def _pad_has_solder_mask_intent(pad: PcbPad) -> bool:
+    aperture = pad.mask_aperture
     return (
-        pad.mask_aperture_width is not None
-        or pad.mask_aperture_height is not None
-        or pad.mask_expansion is not None
-        or pad.drill is not None
-    )
+        aperture is not None
+        and (
+            aperture.aperture_width is not None
+            or aperture.aperture_height is not None
+            or aperture.mask_expansion is not None
+        )
+    ) or pad.drill is not None
 
 
 def _pad_solder_mask_sides(pad: PcbPad) -> set[str]:
@@ -449,16 +450,6 @@ def _tags_for_drill(drill: PcbDrill, index: int) -> InventoryTags:
         return _tags_for_pad(owner, index)
     if isinstance(owner, PcbVia):
         return _tags_for_via(owner, index)
-    if isinstance(owner, PcbArtwork):
-        footprint = owner.footprint
-        return InventoryTags(
-            source_collection="drills",
-            source_index=index,
-            component_ref="" if footprint is None else footprint.reference,
-            component_prefix="" if footprint is None else _component_prefix(footprint.reference),
-            footprint_lib="" if footprint is None else footprint.footprint_lib,
-            value="" if footprint is None else footprint.value,
-        )
     return InventoryTags(source_collection="drills", source_index=index)
 
 

@@ -860,6 +860,9 @@ def resolve_annotations(
     ``content_bbox`` is returned in board mm for viewBox expansion.
     """
     board_bbox = board.bbox()
+    if board_bbox is None:
+        msg = "cannot resolve annotations for an empty board: no geometry to bound the view"
+        raise ValueError(msg)
     scale = _px_scale(board_bbox, width_px)
     margin_gap = _MARGIN_GAP_PX
     box_pad = _BOX_PAD_PX
