@@ -70,11 +70,17 @@ from phosphor_eda.formats.altium.enums import (
     RegionKind,
 )
 from phosphor_eda.formats.altium.errors import AltiumPcbParseError
+from phosphor_eda.formats.altium.geometry import (
+    KEEPOUT_RING_SEGMENTS_PER_CIRCLE,
+    arc_sweep_degrees,
+    is_full_circle_arc,
+    linearize_arc_vertices,
+    sample_arc,
+)
 from phosphor_eda.formats.altium.pcb_records import (
     COMPONENT_NONE,
     NET_UNCONNECTED,
     ArcRecord,
-    ExtendedVertex,
     FillRecord,
     PadRecord,
     RegionRecord,
@@ -820,7 +826,7 @@ def _arc_shape_payload(
     start_deg: float,
     end_deg: float,
 ) -> tuple[_ParsedShapeKind, PcbArc | PcbCircle]:
-    if _is_full_circle_arc(start_deg, end_deg):
+    if is_full_circle_arc(start_deg, end_deg):
         # Altium stores the radius at the stroke centerline. Unfilled PcbCircle
         # payloads use the outer radius plus width to describe the annulus.
         return (
@@ -830,61 +836,6 @@ def _arc_shape_payload(
 
     sx, sy, mx, my, ex, ey = _arc_to_three_point(cx, cy_orig, radius, start_deg, end_deg)
     return _ParsedShapeKind.ARC, PcbArc(sx, -sy, mx, -my, ex, -ey, width)
-
-
-# ---------------------------------------------------------------------------
-# Arc linearization for ShapeBasedRegion extended vertices
-# ---------------------------------------------------------------------------
-
-# Number of line segments per full circle when linearizing arcs
-_ARC_SEGMENTS_PER_CIRCLE = 64
-
-
-def linearize_arc_vertices(
-    vertices: list[ExtendedVertex],
-    segments_per_circle: int = _ARC_SEGMENTS_PER_CIRCLE,
-) -> list[tuple[int, int]]:
-    """Convert extended vertices to a polyline, interpolating arc edges.
-
-    When a vertex has ``is_round=True``, the edge from that vertex to the
-    next is an arc defined by center/radius/angles. This function replaces
-    each arc edge with a sequence of line segments approximating the curve.
-
-    Coordinates remain in Altium internal units (0.1 µinch). The caller
-    handles mm conversion.
-    """
-    if not vertices:
-        return []
-
-    points: list[tuple[int, int]] = []
-
-    for v in vertices:
-        if not v.is_round:
-            points.append((v.x, v.y))
-            continue
-
-        # Arc edge: interpolate from start_angle to end_angle
-        cx, cy = v.center_x, v.center_y
-        radius = v.radius
-        start_deg = v.start_angle
-        end_deg = v.end_angle
-
-        # Compute sweep angle (always CCW in Altium)
-        sweep = end_deg - start_deg
-        if sweep <= 0:
-            sweep += 360.0
-
-        # Number of segments proportional to sweep angle
-        n_segs = max(2, round(segments_per_circle * sweep / 360.0))
-
-        for j in range(n_segs):
-            angle_deg = start_deg + sweep * j / n_segs
-            angle_rad = math.radians(angle_deg)
-            px = round(cx + radius * math.cos(angle_rad))
-            py = round(cy + radius * math.sin(angle_rad))
-            points.append((px, py))
-
-    return points
 
 
 # ---------------------------------------------------------------------------
@@ -1195,7 +1146,7 @@ def _keepout_from_arc(
         end_deg=arc.end_angle,
     )
     holes: list[list[tuple[float, float]]] = []
-    if _is_full_circle_arc(arc.start_angle, arc.end_angle) and inner_radius > 0:
+    if is_full_circle_arc(arc.start_angle, arc.end_angle) and inner_radius > 0:
         holes.append(
             list(
                 reversed(
@@ -1303,27 +1254,9 @@ def _arc_ring_points(
     start_deg: float,
     end_deg: float,
 ) -> list[tuple[float, float]]:
-    sweep = _arc_sweep_degrees(start_deg, end_deg)
-    segments = max(16, int(abs(sweep) / 360.0 * 96))
-    points: list[tuple[float, float]] = []
-    for index in range(segments):
-        t = index / segments
-        angle = math.radians(start_deg + sweep * t)
-        points.append((cx + radius * math.cos(angle), -(cy_orig + radius * math.sin(angle))))
-    return points
-
-
-def _arc_sweep_degrees(start_deg: float, end_deg: float) -> float:
-    sweep = end_deg - start_deg
-    if _is_full_circle_arc(start_deg, end_deg):
-        return 360.0 if sweep >= 0 else -360.0
-    if sweep < 0:
-        sweep += 360.0
-    return sweep
-
-
-def _is_full_circle_arc(start_deg: float, end_deg: float) -> bool:
-    return abs(end_deg - start_deg) >= 359.999
+    sweep = arc_sweep_degrees(start_deg, end_deg)
+    segments = max(16, int(abs(sweep) / 360.0 * KEEPOUT_RING_SEGMENTS_PER_CIRCLE))
+    return [(px, -py) for px, py in sample_arc(cx, cy_orig, radius, start_deg, sweep, segments)]
 
 
 def _altium_keepout_rules(mask: int) -> PcbKeepoutRules:
