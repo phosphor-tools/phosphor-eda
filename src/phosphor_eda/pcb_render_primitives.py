@@ -212,9 +212,7 @@ def _bounds_for_item(item: InventoryItem) -> Bounds | None:
 
 def _payload_bounds(payload: object) -> Bounds | None:
     if isinstance(payload, PcbLine):
-        return _point_bounds(
-            ((payload.start_x, payload.start_y), (payload.end_x, payload.end_y))
-        )
+        return _point_bounds(((payload.start_x, payload.start_y), (payload.end_x, payload.end_y)))
     if isinstance(payload, PcbArc):
         return _point_bounds(
             (
@@ -231,9 +229,7 @@ def _payload_bounds(payload: object) -> Bounds | None:
             payload.cy + payload.radius,
         )
     if isinstance(payload, PcbDimension):
-        return _point_bounds(
-            ((payload.start_x, payload.start_y), (payload.end_x, payload.end_y))
-        )
+        return _point_bounds(((payload.start_x, payload.start_y), (payload.end_x, payload.end_y)))
     if isinstance(payload, PcbPolygon):
         return _geometry_bounds(polygon_geometry(payload))
     if isinstance(payload, PcbText):

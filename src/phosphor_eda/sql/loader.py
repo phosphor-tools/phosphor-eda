@@ -55,6 +55,7 @@ if TYPE_CHECKING:
     from phosphor_eda.project import Project, Stackup
     from phosphor_eda.schematic import Page, Schematic
 
+
 def load_database(project: Project) -> duckdb.DuckDBPyConnection:
     """Create an in-memory DuckDB with spatial extension and load project data."""
     con = duckdb.connect(":memory:")
