@@ -1,0 +1,54 @@
+"""Diagnostics threading for the OrCAD DSN pipeline.
+
+Verifies that the parser/converter record non-fatal issues on a
+ParseContext instead of printing to stdout or swallowing them.
+"""
+
+from pathlib import Path
+
+from phosphor_eda.diagnostics import ParseContext
+from phosphor_eda.dsn.netlist import build_netlist
+from phosphor_eda.dsn.parser import parse_dsn
+from phosphor_eda.dsn.to_schematic import dsn_to_design
+from phosphor_eda.models import ParsedDesign, PinConnection, PlacedInstance, SchematicPage
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+DSN_FILE = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
+
+
+def _design_with_bad_pin() -> ParsedDesign:
+    inst = PlacedInstance(
+        package_name="PART",
+        reference="U1",
+        pin_connections=[PinConnection(pin_number="A", pin_x=0, pin_y=0, net_id=1)],
+    )
+    page = SchematicPage(name="PAGE1", instances=[inst])
+    design = ParsedDesign(pages=[page], symbol_pin_names={"PART": ["VCC"]})
+    return design
+
+
+def test_parse_dsn_accepts_parse_context() -> None:
+    """parse_dsn threads a caller-supplied ParseContext without error."""
+    ctx = ParseContext()
+    design = parse_dsn(DSN_FILE, ctx)
+    assert len(design.pages) == 1
+    # The real fixture parses cleanly; the context is simply available.
+    assert isinstance(ctx.issues, list)
+
+
+def test_dsn_to_design_warns_on_non_numeric_pin() -> None:
+    """A non-numeric pin number records a warning and surfaces parse_issue_count."""
+    ctx = ParseContext()
+    design = dsn_to_design(_design_with_bad_pin(), name="d", ctx=ctx)
+    assert any("non-numeric pin" in issue.message for issue in ctx.issues)
+    assert design.metadata.get("parse_issue_count") == str(len(ctx.issues))
+
+
+def test_build_netlist_warns_on_non_numeric_pin() -> None:
+    """build_netlist records the same non-numeric pin warning when given a ctx."""
+    ctx = ParseContext()
+    page = _design_with_bad_pin().pages[0]
+    page.wire_net_map = {(0, 0): {1}}
+    page.nets = []
+    _ = build_netlist(ParsedDesign(pages=[page], symbol_pin_names={"PART": ["VCC"]}), ctx)
+    assert any("non-numeric pin" in issue.message for issue in ctx.issues)

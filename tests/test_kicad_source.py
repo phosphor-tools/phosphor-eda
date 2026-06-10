@@ -2,8 +2,7 @@
 
 from pathlib import Path
 
-import pytest
-
+from phosphor_eda.diagnostics import ParseContext
 from phosphor_eda.kicad.resolver import resolve_kicad_source
 from phosphor_eda.kicad.source import (
     KiCadGlobalLabel,
@@ -181,7 +180,6 @@ def test_multi_pin_power_symbol_attaches_evidence_to_each_local_net(tmp_path: Pa
 
 def test_sheet_traversal_skips_ancestor_file_cycles(
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
     root = tmp_path / "root.kicad_sch"
     child = tmp_path / "child.kicad_sch"
@@ -208,10 +206,11 @@ def test_sheet_traversal_skips_ancestor_file_cycles(
         encoding="utf-8",
     )
 
-    source = kicad_to_source(root)
+    ctx = ParseContext()
+    source = kicad_to_source(root, ctx=ctx)
 
     assert [instance.sheet_name for instance in source.sheet_instances] == [
         "root",
         "Child",
     ]
-    assert "cycle" in capsys.readouterr().err
+    assert any("cycle" in issue.message for issue in ctx.issues)

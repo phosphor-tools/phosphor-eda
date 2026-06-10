@@ -26,6 +26,7 @@ CP-SAT solver from OR-Tools ensures labels never overlap within a margin.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
@@ -34,6 +35,8 @@ from ortools.sat.python import cp_model
 from phosphor_eda.text_metrics import measure_text
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from phosphor_eda.pcb import Pcb
 
 # JSON data from json.loads() is inherently untyped — Any is the correct
@@ -196,6 +199,7 @@ class ResolvedAnnotations:
     font_size: float = 10.0
     px_scale: float = 1.0
     content_bbox: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+    warnings: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -541,6 +545,7 @@ def _solve_margin_placement(
     items: list[_PlacementItem],
     board_bbox: tuple[float, float, float, float],
     margin_gap: float,
+    warn: Callable[[str], None] | None = None,
 ) -> list[_PlacedResult]:
     """Position all labels in their assigned margins using CP-SAT.
 
@@ -650,6 +655,11 @@ def _solve_margin_placement(
         return results
 
     # Fallback: greedy stacking sorted by target position
+    if warn is not None:
+        warn(
+            "Annotation label placement solver found no solution; "
+            "using greedy fallback (labels may overlap)"
+        )
     return _fallback_placement(items, board_bbox, margin_gap)
 
 
@@ -835,6 +845,17 @@ def _measure_legend(
 # ---------------------------------------------------------------------------
 
 
+_COLOR_RE = re.compile(
+    r"^(#[0-9a-fA-F]{3}|#[0-9a-fA-F]{6}|rgba?\(\s*\d+\s*,\s*\d+\s*,\s*\d+)",
+)
+
+
+def _warn_unparseable_color(color: str, context: str, warnings: list[str]) -> None:
+    """Record a warning when a user color string won't render as intended."""
+    if color and not _COLOR_RE.match(color):
+        warnings.append(f"{context}: unparseable color {color!r}; using fallback orange")
+
+
 def resolve_annotations(
     spec: AnnotationSpec,
     board: Pcb,
@@ -855,6 +876,7 @@ def resolve_annotations(
     scale = _px_scale(board_bbox, width_px)
     margin_gap = _MARGIN_GAP_PX
     box_pad = _BOX_PAD_PX
+    warnings: list[str] = []
 
     # Convert board bbox to pixel space for placement engine
     pbx1 = board_bbox[0] / scale
@@ -894,6 +916,7 @@ def resolve_annotations(
         box_y = min_y - box_pad
         box_w = (max_x - min_x) + 2 * box_pad
         box_h = (max_y - min_y) + 2 * box_pad
+        _warn_unparseable_color(box_spec.color, f"box {i}", warnings)
         color = box_spec.color or "rgba(255,107,53,0.9)"
         box_data.append((box_x, box_y, box_w, box_h, color))
 
@@ -922,6 +945,7 @@ def resolve_annotations(
         tx_mm = _to_rendered_view_x(tx_mm, board_bbox, side)
         tx = tx_mm / scale
         ty = ty_mm / scale
+        _warn_unparseable_color(ptr_spec.color, f"pointer {i}", warnings)
         color = ptr_spec.color or "rgba(255,107,53,0.9)"
         ptr_data.append((tx, ty, color))
 
@@ -980,7 +1004,9 @@ def resolve_annotations(
         placement_refs.append(("legend", 0))
 
     # Phase 2: Run placement solver (all in pixel space)
-    placed = _solve_margin_placement(placement_items, px_board_bbox, margin_gap)
+    placed = _solve_margin_placement(
+        placement_items, px_board_bbox, margin_gap, warn=warnings.append
+    )
 
     # Phase 3: Build resolved annotations from placement results
 
@@ -1183,4 +1209,5 @@ def resolve_annotations(
         font_size=font_size,
         px_scale=scale,
         content_bbox=content_bbox,
+        warnings=tuple(warnings),
     )

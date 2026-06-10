@@ -9,7 +9,6 @@ from phosphor_eda.altium.enums import (
     RecordOrientation,
     SheetEntrySide,
 )
-from phosphor_eda.altium.errors import ParseContext
 from phosphor_eda.altium.record_factory import materialize_records
 from phosphor_eda.altium.records import (
     ArcRec,
@@ -35,6 +34,7 @@ from phosphor_eda.altium.records import (
     UnknownRecord,
     WireRec,
 )
+from phosphor_eda.diagnostics import ParseContext
 
 # ---------------------------------------------------------------------------
 # ComponentRec.from_properties

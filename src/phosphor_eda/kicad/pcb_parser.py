@@ -179,9 +179,10 @@ def _parse_layer_defs(sexpr: SExpNode) -> list[PcbLayer]:
     layers: list[PcbLayer] = []
     for item in layers_section[1:]:
         if not isinstance(item, list) or len(item) < 3:
-            continue
+            msg = f"KiCad layer definition is malformed: {item!r}"
+            raise ValueError(msg)
         raw_num = item[0]
-        number = int(raw_num) if isinstance(raw_num, (int, float)) else 0
+        number = int(raw_num) if isinstance(raw_num, (int, float)) else None
         raw_name = item[1]
         name = raw_name.value() if isinstance(raw_name, sexpdata.Symbol) else str(raw_name)
         raw_type = item[2]
@@ -642,15 +643,14 @@ def _parse_footprint(builder: PcbBuilder, fp_sexpr: SExpNode) -> _FootprintParse
             )
             if isinstance(parsed, PcbBoardProfileElement):
                 profile_elements.append(parsed)
-            elif isinstance(parsed, PcbArtwork):
+            else:
                 builder.add_artwork_object(parsed, source=f"{tag} {reference}")
                 if parsed.layer is not None and parsed.layer.has_role(LayerRole.COURTYARD):
                     courtyard_artwork.append(parsed)
 
     for index, item in enumerate(sexp.find_all(fp_sexpr, "fp_text")):
         artwork = _parse_fp_text(builder, item, footprint, fp_x, fp_y, fp_rot, index)
-        if artwork is not None:
-            builder.add_artwork_object(artwork, source=f"fp_text {reference}")
+        builder.add_artwork_object(artwork, source=f"fp_text {reference}")
 
     for index, item in enumerate(sexp.find_all(fp_sexpr, "model")):
         builder.add_artwork_object(
@@ -680,14 +680,16 @@ def _parse_graphic_item(
     index: int,
     footprint: PcbFootprint | None = None,
     transform: tuple[float, float, float] | None = None,
-) -> PcbArtwork | PcbBoardProfileElement | None:
+) -> PcbArtwork | PcbBoardProfileElement:
     layer_node = sexp.find(item, "layer")
     if not layer_node:
-        return None
+        msg = f"{tag} graphic missing required layer"
+        raise ValueError(msg)
     layer = builder.resolve_layer(sexp.val(layer_node), source=tag)
     payload = _graphic_payload(item, tag=tag, transform=transform)
     if payload is None:
-        return None
+        msg = f"{tag} graphic has missing or malformed geometry"
+        raise ValueError(msg)
     kind = _artwork_kind_for_payload(payload)
     metadata = _object_metadata(
         native_type=tag,
@@ -833,15 +835,17 @@ def _parse_fp_text(
     fp_y: float,
     fp_rot: float,
     index: int,
-) -> PcbArtwork | None:
+) -> PcbArtwork:
     if len(item) < 3:
-        return None
+        msg = "fp_text missing required kind/text fields"
+        raise ValueError(msg)
     kind_node = item[1]
     text_kind = kind_node.value() if isinstance(kind_node, sexpdata.Symbol) else str(kind_node)
     text = str(item[2]).replace("${REFERENCE}", footprint.reference)
     layer_node = sexp.find(item, "layer")
     if not layer_node:
-        return None
+        msg = "fp_text missing required layer"
+        raise ValueError(msg)
     layer = builder.resolve_layer(sexp.val(layer_node), source=f"fp_text {footprint.reference}")
     at_node = sexp.find(item, "at")
     local_x, local_y, local_rotation = _at(at_node) if at_node else (0.0, 0.0, 0.0)
@@ -876,12 +880,14 @@ def _parse_fp_text(
     )
 
 
-def _parse_gr_text(builder: PcbBuilder, item: SExpNode, index: int) -> PcbArtwork | None:
+def _parse_gr_text(builder: PcbBuilder, item: SExpNode, index: int) -> PcbArtwork:
     if len(item) < 2:
-        return None
+        msg = "gr_text missing required text field"
+        raise ValueError(msg)
     layer_node = sexp.find(item, "layer")
     if not layer_node:
-        return None
+        msg = "gr_text missing required layer"
+        raise ValueError(msg)
     layer = builder.resolve_layer(sexp.val(layer_node), source="gr_text")
     at_node = sexp.find(item, "at")
     x, y, rotation = _at(at_node) if at_node else (0.0, 0.0, 0.0)
@@ -993,10 +999,18 @@ def _parse_segment(builder: PcbBuilder, item: SExpNode, index: int) -> None:
 
 
 def _parse_trace_arc(builder: PcbBuilder, item: SExpNode, index: int) -> None:
-    payload = _arc_payload(item, transform=None)
+    start_node = sexp.find(item, "start")
+    mid_node = sexp.find(item, "mid")
+    end_node = sexp.find(item, "end")
+    width_node = sexp.find(item, "width")
     layer_node = sexp.find(item, "layer")
-    if payload is None or not layer_node:
-        return
+    if not start_node or not mid_node or not end_node or not width_node or not layer_node:
+        msg = "Trace arc missing required start/mid/end/width/layer"
+        raise ValueError(msg)
+    payload = _arc_payload(item, transform=None)
+    if payload is None:
+        msg = "Trace arc has malformed geometry"
+        raise ValueError(msg)
     layer = builder.resolve_layer(sexp.val(layer_node), source="arc")
     builder.add_conductor_object(
         PcbConductor(
@@ -1394,12 +1408,11 @@ def parse_kicad_pcb_from_sexpr(sexpr: SExpNode, *, default_name: str = "") -> Pc
             parsed = _parse_graphic_item(builder, item, tag=tag, index=index)
             if isinstance(parsed, PcbBoardProfileElement):
                 profile_elements.append(parsed)
-            elif isinstance(parsed, PcbArtwork):
+            else:
                 builder.add_artwork_object(parsed, source=tag)
     for index, item in enumerate(sexp.find_all(sexpr, "gr_text")):
         artwork = _parse_gr_text(builder, item, index)
-        if artwork is not None:
-            builder.add_artwork_object(artwork, source="gr_text")
+        builder.add_artwork_object(artwork, source="gr_text")
     builder.set_board_profile(
         PcbBoardProfile(elements=tuple(profile_elements)), source="board profile"
     )

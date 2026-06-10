@@ -354,6 +354,52 @@ def test_extract_value_missing() -> None:
     assert _extract_value(fp) == ""
 
 
+def _parse_pcb_snippet(body: str, name: str = "test") -> Pcb:
+    parsed = sexpdata.loads(f"(kicad_pcb {body})")
+    return parse_kicad_pcb_from_sexpr(list(parsed[1:]), default_name=name)
+
+
+def test_kicad_trace_arc_missing_mid_raises() -> None:
+    """A trace arc without a mid point is malformed and must raise, not be dropped."""
+    with pytest.raises(ValueError, match="Trace arc missing required"):
+        _parse_pcb_snippet(
+            """
+            (layers (0 "F.Cu" signal))
+            (arc (start 0 0) (end 1 1) (width 0.1) (layer "F.Cu"))
+            """
+        )
+
+
+def test_kicad_malformed_layer_def_raises() -> None:
+    """A layer row with too few fields is malformed and must raise."""
+    with pytest.raises(ValueError, match="layer definition is malformed"):
+        _parse_pcb_snippet('(layers (0 "F.Cu"))')
+
+
+def test_kicad_layer_number_is_none_for_non_integer() -> None:
+    """A non-integer layer id yields number=None, not 0 (which collides with F.Cu)."""
+    board = _parse_pcb_snippet(
+        """
+        (layers (0 "F.Cu" signal) (bogus "User.1" user) (44 "Edge.Cuts" user))
+        (gr_line (start 0 0) (end 1 0) (layer "Edge.Cuts") (width 0.1))
+        """
+    )
+    user_layer = board.layer_for("User.1")
+    assert user_layer is not None
+    assert user_layer.number is None
+
+
+def test_kicad_gr_text_missing_layer_raises() -> None:
+    """Board text without a layer is malformed and must raise."""
+    with pytest.raises(ValueError, match="gr_text missing required layer"):
+        _parse_pcb_snippet(
+            """
+            (layers (0 "F.Cu" signal))
+            (gr_text "hi" (at 0 0))
+            """
+        )
+
+
 def test_parse_kicad_pcb_from_sexpr_rejects_unresolved_layers() -> None:
     parsed = sexpdata.loads(
         """

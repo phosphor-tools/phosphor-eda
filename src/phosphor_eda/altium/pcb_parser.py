@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 import olefile
 
 from phosphor_eda.altium._helpers import u32
-from phosphor_eda.altium.errors import ParseContext
+from phosphor_eda.altium.errors import AltiumPcbParseError
 from phosphor_eda.altium.pcb_records import (
     COMPONENT_NONE,
     NET_UNCONNECTED,
@@ -36,6 +36,7 @@ from phosphor_eda.altium.pcb_records import (
     ViaRecord,
 )
 from phosphor_eda.altium.record_parser import parse_record_payload
+from phosphor_eda.diagnostics import ParseContext
 from phosphor_eda.pcb import (
     LayerRole,
     Pcb,
@@ -437,7 +438,12 @@ class _ParsedPrimitive:
 # ---------------------------------------------------------------------------
 
 
-def read_text_records(data: bytes) -> list[dict[str, str]]:
+def read_text_records(
+    data: bytes,
+    ctx: ParseContext | None = None,
+    *,
+    source: str = "text records",
+) -> list[dict[str, str]]:
     """Read pipe-delimited text records with a 4-byte LE length prefix."""
     records: list[dict[str, str]] = []
     pos = 0
@@ -445,6 +451,12 @@ def read_text_records(data: bytes) -> list[dict[str, str]]:
         length = u32(data, pos)
         pos += 4
         if length == 0 or pos + length > len(data):
+            if ctx is not None and pos < len(data):
+                ctx.warn(
+                    "truncated_stream",
+                    f"{source}: record length runs past end of stream at byte {pos}; "
+                    f"{len(data) - pos} trailing bytes dropped",
+                )
             break
         payload = data[pos : pos + length]
         pos += length
@@ -454,7 +466,12 @@ def read_text_records(data: bytes) -> list[dict[str, str]]:
     return records
 
 
-def _read_binary_records(data: bytes) -> list[tuple[int, bytes]]:
+def _read_binary_records(
+    data: bytes,
+    ctx: ParseContext | None = None,
+    *,
+    source: str = "binary records",
+) -> list[tuple[int, bytes]]:
     """Read binary records with type(u8) + length(u32) + body framing."""
     records: list[tuple[int, bytes]] = []
     pos = 0
@@ -463,6 +480,12 @@ def _read_binary_records(data: bytes) -> list[tuple[int, bytes]]:
         rec_len = u32(data, pos + 1)
         pos += 5
         if pos + rec_len > len(data):
+            if ctx is not None:
+                ctx.warn(
+                    "truncated_stream",
+                    f"{source}: record body runs past end of stream at byte {pos}; "
+                    f"{len(data) - pos} trailing bytes dropped",
+                )
             break
         records.append((rec_type, data[pos : pos + rec_len]))
         pos += rec_len
@@ -489,7 +512,9 @@ def _parse_rotation(s: str) -> float:
     return float(s)
 
 
-def _build_layer_map(board_props: dict[str, str]) -> dict[int, PcbLayer]:
+def _build_layer_map(
+    board_props: dict[str, str], ctx: ParseContext | None = None
+) -> dict[int, PcbLayer]:
     """Build layer definitions from Board6 metadata and Altium layer IDs."""
     layers: dict[int, PcbLayer] = {}
     for num in _ALTIUM_LAYER_NUMBERS:
@@ -508,7 +533,7 @@ def _build_layer_map(board_props: dict[str, str]) -> dict[int, PcbLayer]:
             metadata=PcbLayerMetadata(source_format="altium", native_kind=native_kind),
         )
 
-    _apply_v9_stack_layer_names(layers, board_props)
+    _apply_v9_stack_layer_names(layers, board_props, ctx)
     return layers
 
 
@@ -574,7 +599,11 @@ def _altium_name_roles(num: int, name: str, native_kind: str) -> tuple[LayerRole
     return tuple(roles)
 
 
-def _apply_v9_stack_layer_names(layers: dict[int, PcbLayer], board_props: dict[str, str]) -> None:
+def _apply_v9_stack_layer_names(
+    layers: dict[int, PcbLayer],
+    board_props: dict[str, str],
+    ctx: ParseContext | None = None,
+) -> None:
     """Use Altium v9 stackup layer IDs to preserve file-defined physical layer names."""
     for key, raw_layer_id in board_props.items():
         if not key.startswith("v9_stack_layer") or not key.endswith("_layerid"):
@@ -585,7 +614,7 @@ def _apply_v9_stack_layer_names(layers: dict[int, PcbLayer], board_props: dict[s
         if not layer_name:
             continue
 
-        layer_num = _v9_stack_layer_id_to_num(raw_layer_id)
+        layer_num = _v9_stack_layer_id_to_num(raw_layer_id, ctx, key=key)
         if layer_num is None:
             continue
 
@@ -600,10 +629,17 @@ def _apply_v9_stack_layer_names(layers: dict[int, PcbLayer], board_props: dict[s
         )
 
 
-def _v9_stack_layer_id_to_num(raw_layer_id: str) -> int | None:
+def _v9_stack_layer_id_to_num(
+    raw_layer_id: str, ctx: ParseContext | None = None, *, key: str = ""
+) -> int | None:
     try:
         layer_id = int(raw_layer_id)
     except ValueError:
+        if ctx is not None:
+            ctx.warn(
+                "malformed_layer_id",
+                f"non-integer v9 stack layer id {raw_layer_id!r} for {key or 'layer'}; skipped",
+            )
         return None
     return _V9_STACK_LAYER_ID_TO_NUM.get(layer_id)
 
@@ -618,7 +654,7 @@ def _layer_ref(num: int, layer_map: dict[int, PcbLayer], *, source: str) -> PcbL
     layer = layer_map.get(num)
     if layer is None:
         msg = f"{source}: unknown Altium layer {num}; Board6/Data has no concrete layer name"
-        raise ValueError(msg)
+        raise AltiumPcbParseError(msg)
     return layer
 
 
@@ -950,7 +986,7 @@ def _parse_tracks(
     pour_id_map: dict[int, str] | None = None,
 ) -> tuple[list[_ParsedPrimitive], list[PcbKeepout]]:
     """Parse Tracks6/Data into normalized line geometry."""
-    records = _read_binary_records(data)
+    records = _read_binary_records(data, ctx, source="Tracks6/Data")
     geometry: list[_ParsedPrimitive] = []
     keepouts: list[PcbKeepout] = []
     resolved_pour_id_map = pour_id_map or {}
@@ -1060,7 +1096,7 @@ def _parse_vias(
     data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext
 ) -> list[_ParsedPrimitive]:
     """Parse Vias6/Data into normalized via geometry."""
-    records = _read_binary_records(data)
+    records = _read_binary_records(data, ctx, source="Vias6/Data")
     vias: list[_ParsedPrimitive] = []
 
     for index, (rec_type, body) in enumerate(records):
@@ -1133,7 +1169,7 @@ def _parse_arcs(
     pour_id_map: dict[int, str] | None = None,
 ) -> tuple[list[_ParsedPrimitive], list[PcbKeepout]]:
     """Parse Arcs6/Data into normalized arc and keepout geometry."""
-    records = _read_binary_records(data)
+    records = _read_binary_records(data, ctx, source="Arcs6/Data")
     geometry: list[_ParsedPrimitive] = []
     keepouts: list[PcbKeepout] = []
     resolved_pour_id_map = pour_id_map or {}
@@ -1471,7 +1507,7 @@ def _parse_pads(
         net_obj = None if net_num == 0 else nets.get(net_num)
         if net_num != 0 and net_obj is None:
             msg = f"pad {index}: unknown Altium net index {pad.net}"
-            raise ValueError(msg)
+            raise AltiumPcbParseError(msg)
         net_name = net_obj.name if net_obj is not None else ""
 
         roles = [_ParsedRole.CONDUCTOR]
@@ -1742,7 +1778,7 @@ def _parse_fills(
     data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext
 ) -> tuple[list[_ParsedPrimitive], list[PcbKeepout]]:
     """Parse Fills6/Data into rectangular source-layer geometry."""
-    records = _read_binary_records(data)
+    records = _read_binary_records(data, ctx, source="Fills6/Data")
     fills: list[_ParsedPrimitive] = []
     keepouts: list[PcbKeepout] = []
 
@@ -1849,7 +1885,7 @@ def _parse_polygon_pours(
         net = None if net_num == 0 else nets.get(net_num)
         if net_num != 0 and net is None:
             msg = f"polygon pour {index}: unknown Altium net index {net_raw}"
-            raise ValueError(msg)
+            raise AltiumPcbParseError(msg)
 
         # Resolve layer from V7 layer name
         layer_id = rec.get("layer", "").upper()
@@ -1952,7 +1988,7 @@ def _parse_regions(
     When pour_net_map is provided, regions with net=0xFFFF (inherit) and
     a valid subpolyindex will inherit the net from their parent polygon pour.
     """
-    records = _read_binary_records(data)
+    records = _read_binary_records(data, ctx, source="Regions6/Data")
     polygons: list[_ParsedPrimitive] = []
 
     for index, (rec_type, body) in enumerate(records):
@@ -1969,7 +2005,7 @@ def _parse_regions(
         )
 
         layer = _layer_ref(resolved_num, layer_map, source=f"region {index}").name
-        region_kind = _region_kind(region.properties)
+        region_kind = _region_kind(region.properties, ctx)
 
         points = [(_int_to_mm(int(vx)), -_int_to_mm(int(vy))) for vx, vy in region.vertices]
         if len(points) < 3:
@@ -2055,7 +2091,7 @@ def _parse_shape_based_regions(
     unconnected sentinel (net == 0xFFFF) inherits the net of its parent polygon
     pour via the (sub)polygon index.
     """
-    records = _read_binary_records(data)
+    records = _read_binary_records(data, ctx, source="ShapeBasedRegions6/Data")
     polygons: list[_ParsedPrimitive] = []
 
     for index, (rec_type, body) in enumerate(records):
@@ -2072,7 +2108,7 @@ def _parse_shape_based_regions(
         )
 
         layer = _layer_ref(resolved_num, layer_map, source=f"shape region {index}").name
-        region_kind = _region_kind(region.properties)
+        region_kind = _region_kind(region.properties, ctx)
 
         # Linearize arc edges, then convert to mm with Y negated
         raw_pts = linearize_arc_vertices(region.vertices)
@@ -2176,13 +2212,18 @@ def _polygon_duplicate_key(poly: _ParsedPrimitive) -> _PolygonDuplicateKey | Non
     return (poly.primary_layer, len(vertices), tuple(vertices))
 
 
-def _region_kind(properties: dict[str, str]) -> int | None:
+def _region_kind(properties: dict[str, str], ctx: ParseContext | None = None) -> int | None:
     raw_kind = properties.get("kind")
     if raw_kind is None:
         return None
     try:
         return int(raw_kind)
     except ValueError:
+        if ctx is not None:
+            ctx.warn(
+                "malformed_region_kind",
+                f"non-integer region kind {raw_kind!r}; treated as default region",
+            )
         return None
 
 
@@ -2222,7 +2263,9 @@ def _parse_board_outline(
         if not edge_name:
             continue
 
-        for index, (rec_type, body) in enumerate(_read_binary_records(tracks_data)):
+        for index, (rec_type, body) in enumerate(
+            _read_binary_records(tracks_data, ctx, source="Tracks6/Data (board outline)")
+        ):
             if rec_type != 4:
                 continue
             track = TrackRecord.from_bytes(body, ctx)
@@ -2259,7 +2302,9 @@ def _parse_board_outline(
                 )
             )
 
-        for index, (rec_type, body) in enumerate(_read_binary_records(arcs_data)):
+        for index, (rec_type, body) in enumerate(
+            _read_binary_records(arcs_data, ctx, source="Arcs6/Data (board outline)")
+        ):
             if rec_type != 1:
                 continue
             arc = ArcRecord.from_bytes(body, ctx)
@@ -2389,8 +2434,12 @@ def _build_pcb_from_parsed_primitives(
     pours: list[PcbPour],
     keepouts: list[PcbKeepout],
     primitives: list[_ParsedPrimitive],
+    ctx: ParseContext,
 ) -> Pcb:
-    builder = PcbBuilder(name, metadata=PcbMetadata(source_format="altium"))
+    metadata = PcbMetadata(source_format="altium")
+    if ctx.issues:
+        metadata.properties["parse_issue_count"] = str(len(ctx.issues))
+    builder = PcbBuilder(name, metadata=metadata)
     for layer in layer_map.values():
         builder.add_layer(layer, source="Board6/Data")
     for net in nets.values():
@@ -2664,7 +2713,7 @@ def _primary_layer_ref(
     layers = _parsed_layer_refs(builder, primitive.layers, source=source)
     if not layers:
         msg = f"{source}: primitive has no layer"
-        raise ValueError(msg)
+        raise AltiumPcbParseError(msg)
     return layers[0]
 
 
@@ -3196,7 +3245,7 @@ def parse_altium_pcb(
         board_records = read_text_records(board_data)
         if board_records:
             board_props = board_records[0]
-    layer_map = _build_layer_map(board_props)
+    layer_map = _build_layer_map(board_props, ctx)
 
     # Parse text streams
     nets = _parse_nets(nets_data)
@@ -3295,4 +3344,5 @@ def parse_altium_pcb(
         pours=pours,
         keepouts=keepouts,
         primitives=geometry,
+        ctx=ctx,
     )

@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from phosphor_eda.altium._helpers import parse_bus_notation
-from phosphor_eda.altium.errors import ParseContext
 from phosphor_eda.altium.record_factory import (
     compute_entry_coord,
     link_children,
@@ -50,6 +49,7 @@ from phosphor_eda.altium.records import (
     WireRec,
 )
 from phosphor_eda.altium.spatial import UnionFind, WireIndex, point_on_segment
+from phosphor_eda.diagnostics import ParseContext
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

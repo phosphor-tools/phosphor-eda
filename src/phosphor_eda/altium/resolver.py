@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         AltiumSheetSymbol,
         AltiumSourceDesign,
     )
+    from phosphor_eda.diagnostics import ParseContext
     from phosphor_eda.schematic import Schematic, ScopeId
 
 
@@ -48,8 +49,12 @@ class _NameEvidence:
     generated: str
 
 
-def resolve_altium_source(source: AltiumSourceDesign) -> Schematic:
-    """Resolve an Altium source design into the public schematic graph."""
+def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None = None) -> Schematic:
+    """Resolve an Altium source design into the public schematic graph.
+
+    Non-fatal issues accumulated on *ctx* are surfaced as
+    ``parse_issue_count`` in the resulting schematic metadata.
+    """
     local_refs = _collect_local_refs(source)
     net_union = NetUnion(ref.local_net.id for ref in local_refs)
     local_net_by_id = {ref.local_net.id: ref for ref in local_refs}
@@ -62,6 +67,13 @@ def resolve_altium_source(source: AltiumSourceDesign) -> Schematic:
     _merge_hierarchy(source, local_refs, local_net_by_id, net_union, effective_mode)
 
     component_source_ids_by_component_id = _component_source_ids_by_component_id(pin_occurrences)
+
+    metadata = {
+        "altium_hierarchy_mode": source.project.hierarchy_mode.name,
+        "altium_effective_hierarchy_mode": effective_mode.name,
+    }
+    if ctx is not None and ctx.issues:
+        metadata["parse_issue_count"] = str(len(ctx.issues))
 
     return build_resolved_schematic(
         name=source.name,
@@ -77,10 +89,7 @@ def resolve_altium_source(source: AltiumSourceDesign) -> Schematic:
             group_local_nets,
         ),
         include_net=_include_altium_net,
-        metadata={
-            "altium_hierarchy_mode": source.project.hierarchy_mode.name,
-            "altium_effective_hierarchy_mode": effective_mode.name,
-        },
+        metadata=metadata,
     )
 
 

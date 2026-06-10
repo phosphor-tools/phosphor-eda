@@ -10,7 +10,6 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from phosphor_eda.altium._helpers import prop_int
-from phosphor_eda.altium.errors import ParseContext
 from phosphor_eda.altium.records import (
     AltiumRecord,
     ArcRec,
@@ -63,6 +62,7 @@ from phosphor_eda.altium.records import (
     UnknownRecord,
     WireRec,
 )
+from phosphor_eda.diagnostics import ParseContext
 
 # Factory callable: (index, props, ctx) → typed record.
 _RecordFactory = Callable[[int, dict[str, str], ParseContext], AltiumRecord]

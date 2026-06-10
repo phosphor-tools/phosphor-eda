@@ -19,6 +19,7 @@ from phosphor_eda.resolved_graph import (
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from phosphor_eda.diagnostics import ParseContext
     from phosphor_eda.dsn.source import (
         DsnPageNet,
         DsnPageSource,
@@ -42,8 +43,12 @@ class _NameEvidence:
     aliases: list[str] = field(default_factory=list)
 
 
-def resolve_dsn_source(source: DsnSourceDesign) -> Schematic:
-    """Resolve an OrCAD DSN source design into the public schematic graph."""
+def resolve_dsn_source(source: DsnSourceDesign, ctx: ParseContext | None = None) -> Schematic:
+    """Resolve an OrCAD DSN source design into the public schematic graph.
+
+    Non-fatal issues accumulated on *ctx* are surfaced as
+    ``parse_issue_count`` in the resulting schematic metadata.
+    """
     local_refs = _collect_local_refs(source.pages)
     local_net_ids = {ref.local_net.id for ref in local_refs}
     local_nets_by_id = {ref.local_net.id: ref.local_net for ref in local_refs}
@@ -56,6 +61,9 @@ def resolve_dsn_source(source: DsnSourceDesign) -> Schematic:
     _merge_known_scope_off_page_connectors(source.pages, net_union, local_net_ids)
 
     name_evidence = _collect_name_evidence(source.pages)
+    metadata = {"dsn_resolver": "source"}
+    if ctx is not None and ctx.issues:
+        metadata["parse_issue_count"] = str(len(ctx.issues))
     return build_resolved_schematic(
         name=source.name,
         pages=_page_inputs(source.pages),
@@ -70,9 +78,7 @@ def resolve_dsn_source(source: DsnSourceDesign) -> Schematic:
         ),
         include_net=_include_dsn_net,
         net_ordering=_order_dsn_nets,
-        metadata={
-            "dsn_resolver": "source",
-        },
+        metadata=metadata,
     )
 
 

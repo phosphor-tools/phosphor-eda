@@ -357,6 +357,7 @@ def filter_nets(
         result = [n for n in result if len(_net_pages(n)) > 1]
 
     if components:
+        _require_components(design, components)
         comp_set = set(components)
         if trace:
             # Expand each net's component reach through 2-pin passives
@@ -420,10 +421,13 @@ def filter_pages(
     result = list(design.pages)
 
     if nets:
+        for name in nets:
+            _ = _find_net(design, name)
         net_set = set(nets)
         result = [p for p in result if net_set & {n.name for n in p.nets}]
 
     if components:
+        _require_components(design, components)
         comp_set = set(components)
         result = [p for p in result if comp_set & {c.reference for c in p.components}]
 
@@ -447,6 +451,18 @@ def _find_net(design: Schematic, name: str) -> Net:
         ]
         raise ValueError(f"Net '{name}' is ambiguous; matches: {', '.join(page_parts)}.")
     return matches[0]
+
+
+def _require_components(design: Schematic, refs: list[str]) -> None:
+    """Validate that every requested component reference exists.
+
+    Mirrors ``_find_net`` so an unknown ``-c`` filter raises instead of
+    silently producing an empty result.
+    """
+    known = {c.reference for c in design.components}
+    for ref in refs:
+        if ref not in known:
+            raise ValueError(f"Component '{ref}' not found in design.")
 
 
 # ---- Trace-aware inline destinations ----

@@ -40,7 +40,7 @@ from phosphor_eda.altium.enums import (
 from phosphor_eda.text import strip_overline
 
 if TYPE_CHECKING:
-    from phosphor_eda.altium.errors import ParseContext
+    from phosphor_eda.diagnostics import ParseContext
 
 
 class RecordType(IntEnum):
