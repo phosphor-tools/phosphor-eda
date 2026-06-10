@@ -28,11 +28,11 @@ from phosphor_eda.pcb import (
     PcbVia,
 )
 from phosphor_eda.pcb_render import load_render_settings_json, render_pcb_svg
-from phosphor_eda.pcb_render_artwork import select_source_artwork
 from phosphor_eda.pcb_render_inventory import (
     InventoryItemKind,
     InventoryPurpose,
     build_inventory,
+    select_inventory_items,
 )
 from phosphor_eda.pcb_render_settings import load_render_settings_file
 
@@ -288,7 +288,7 @@ def test_builtin_render_settings_hide_non_silkscreen_footprint_text(name: str) -
     with as_file(settings_file) as path:
         settings = load_render_settings_file(path)
 
-    selected = select_source_artwork(
+    selected = select_inventory_items(
         build_inventory(board, side="front"),
         settings.source.layers,
         active_side="front",
@@ -329,7 +329,7 @@ def test_high_contrast_presets_hide_mechanical_artwork_by_default(name: str) -> 
     with as_file(settings_file) as path:
         settings = load_render_settings_file(path)
 
-    selected = select_source_artwork(
+    selected = select_inventory_items(
         build_inventory(board, side="front"),
         settings.source.layers,
         active_side="front",
