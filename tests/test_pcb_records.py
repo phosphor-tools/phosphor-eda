@@ -364,6 +364,7 @@ def _make_pad_record(
     top_sy: int = 500,
     hole_size: int = 250,
     shape: int = 1,
+    rotation: float = 0.0,
     pad_name: str = "1",
 ) -> bytes:
     """Build a minimal pad record with subrecords."""
@@ -391,6 +392,7 @@ def _make_pad_record(
     sub5[25:29] = _pack_i32(top_sy)
     sub5[45:49] = _pack_u32(hole_size)
     sub5[49] = shape
+    sub5[52:60] = _pack_f64(rotation)
     result.extend(_pack_u32(len(sub5)))
     result.extend(bytes(sub5))
 
@@ -412,6 +414,7 @@ def test_pad_from_bytes():
         top_sy=500,
         hole_size=250,
         shape=1,
+        rotation=30.0,
         pad_name="A1",
     )
     rec = PadRecord.from_bytes(data, ctx)
@@ -424,6 +427,7 @@ def test_pad_from_bytes():
     assert rec.top_size == (500, 500)
     assert rec.hole_size == 250
     assert rec.shape == 1  # circle
+    assert rec.rotation == 30.0
 
 
 def test_pad_truncated():

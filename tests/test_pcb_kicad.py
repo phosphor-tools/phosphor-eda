@@ -123,9 +123,9 @@ def test_kicad_pad_rotation_uses_board_coordinate_orientation() -> None:
           )
           (footprint "Test:Part"
             (layer "F.Cu")
-            (at 10 10)
+            (at 10 10 90)
             (property "Reference" "U1")
-            (pad "1" smd rect (at 0 0 45) (size 2 1) (layers "F.Cu" "F.Mask"))
+            (pad "1" smd rect (at -1 0 90) (size 0.5 2.0) (layers "F.Cu" "F.Mask"))
           )
           (gr_line (start 0 0) (end 1 0) (layer "Edge.Cuts") (width 0.1))
         )
@@ -134,16 +134,13 @@ def test_kicad_pad_rotation_uses_board_coordinate_orientation() -> None:
     board = parse_kicad_pcb_from_sexpr(list(parsed[1:]), default_name="rotated-pad")
     pad = board.pads[0]
 
-    coords = list(pad_polygon(pad).exterior.coords)
-    edges = [
-        (end[0] - start[0], end[1] - start[1])
-        for start, end in zip(coords, coords[1:], strict=False)
-    ]
-    long_edges = [(dx, dy) for dx, dy in edges if (dx * dx + dy * dy) ** 0.5 > 1.5]
-    normalized = [(-dx, -dy) if dx < 0 else (dx, dy) for dx, dy in long_edges]
+    min_x, min_y, max_x, max_y = pad_polygon(pad).bounds
 
-    assert normalized
-    assert all(dy < 0 for _dx, dy in normalized)
+    assert pad.x == pytest.approx(10.0)
+    assert pad.y == pytest.approx(11.0)
+    assert pad.rotation == pytest.approx(90.0)
+    assert max_x - min_x == pytest.approx(2.0)
+    assert max_y - min_y == pytest.approx(0.5)
 
 
 def test_kicad_layer_selectors_resolve_to_concrete_layer_references(board: Pcb) -> None:

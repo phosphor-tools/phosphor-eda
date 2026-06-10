@@ -1500,6 +1500,7 @@ def _parse_pads(
                         width=_int_to_mm(pad.top_size[0]),
                         height=_int_to_mm(pad.top_size[1]),
                         shape=shape,
+                        rotation=pad.rotation,
                         drill=_int_to_mm(pad.hole_size),
                     ),
                     layers=tuple(layers),

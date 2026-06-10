@@ -427,7 +427,9 @@ def _parse_pad(
     at_node = sexp.find(pad_sexpr, "at")
     local_x, local_y, pad_rotation = _at(at_node) if at_node else (0.0, 0.0, 0.0)
     abs_x, abs_y = _transform_point(local_x, local_y, fp_x, fp_y, fp_rot)
-    pad_board_rotation = _transform_rotation(pad_rotation, fp_rot)
+    # KiCad placed-board pad positions are footprint-local, but pad angles are
+    # already board-space orientations. Adding footprint rotation rotates pads twice.
+    pad_board_rotation = pad_rotation
     size_node = sexp.find(pad_sexpr, "size")
     width = sexp.num(size_node, 1) if size_node else 0.0
     height = sexp.num(size_node, 2) if size_node and len(size_node) > 2 else width

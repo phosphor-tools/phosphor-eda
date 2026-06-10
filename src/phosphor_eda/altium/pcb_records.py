@@ -333,6 +333,7 @@ class PadRecord:
       [25:29] top_sy   i32
       [45:49] hole_size u32
       [49]    shape    u8
+      [52:60] rotation f64
     """
 
     name: str
@@ -343,6 +344,7 @@ class PadRecord:
     top_size: tuple[int, int]
     hole_size: int
     shape: int
+    rotation: float
     shape_alt: int | None = None  # from sub6 per-layer override
 
     @classmethod
@@ -408,6 +410,7 @@ class PadRecord:
             top_size=(i32(sub5, 21), i32(sub5, 25)),
             hole_size=u32(sub5, 45),
             shape=shape_byte,
+            rotation=f64(sub5, 52),
             shape_alt=shape_alt_val,
         )
 
