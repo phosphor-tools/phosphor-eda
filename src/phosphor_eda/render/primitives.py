@@ -38,7 +38,7 @@ from phosphor_eda.geometry.pcb_geometry import (
 )
 from phosphor_eda.geometry.shapely_ops import normalize_geometry
 from phosphor_eda.geometry.text_outlines import text_outline_geometry
-from phosphor_eda.render.drills import drill_geometry
+from phosphor_eda.render.drills import drill_geometry, drill_render
 from phosphor_eda.render.inventory import (
     InventoryItem,
     InventoryItemKind,
@@ -150,20 +150,21 @@ def drill_to_svg_primitive(item: InventoryItem) -> SvgPrimitive | None:
     """Convert a drill inventory item into a subtractive mask primitive."""
     if item.item_kind != InventoryItemKind.DRILL or not isinstance(item.source, PcbDrill):
         return None
-    geometry = drill_geometry(item.source)
-    if geometry is None:
+    render = drill_render(item.source)
+    if render is None or not render.d:
         return None
-    d = geometry_to_svg_path_d(geometry)
-    if not d:
-        return None
+    is_slot = render.stroke_width is not None
     return SvgPrimitive(
-        d=d,
+        d=render.d,
         source_id=item.id,
         source_layer="drills",
         kind=InventoryItemKind.DRILL.value,
         tags=item.tags,
         data={"purpose": InventoryPurpose.DRILL.value, "item-kind": InventoryItemKind.DRILL.value},
-        bbox=_geometry_bounds(geometry),
+        bbox=_drill_bounds(item.source),
+        paint=PaintMode.STROKE if is_slot else PaintMode.FILL,
+        stroke_width=render.stroke_width,
+        stroke_linecap=_STROKE_LINECAP if is_slot else None,
     )
 
 
@@ -220,7 +221,7 @@ def _bounds_for_item(item: InventoryItem) -> Bounds | None:
         radius = via.diameter / 2.0
         return (via.x - radius, via.y - radius, via.x + radius, via.y + radius)
     if item.item_kind == InventoryItemKind.DRILL and isinstance(item.source, PcbDrill):
-        return _geometry_bounds(drill_geometry(item.source))
+        return _drill_bounds(item.source)
     if item.item_kind == InventoryItemKind.KEEPOUT and isinstance(item.payload, PcbClosedPath):
         return _geometry_bounds(closed_path_geometry(item.payload))
     return _payload_bounds(item.payload)
@@ -305,8 +306,7 @@ def _shape_render_for_item(item: InventoryItem) -> _ShapeRender:
     if item.item_kind == InventoryItemKind.VIA and isinstance(item.source, PcbVia):
         return _filled(circle_path_d(item.source.x, item.source.y, item.source.diameter / 2.0))
     if item.item_kind == InventoryItemKind.DRILL and isinstance(item.source, PcbDrill):
-        geometry = drill_geometry(item.source)
-        return _filled("" if geometry is None else geometry_to_svg_path_d(geometry))
+        return _drill_shape(item.source)
     if item.item_kind == InventoryItemKind.KEEPOUT and isinstance(item.payload, PcbClosedPath):
         geometry = closed_path_geometry(item.payload)
         return _filled("" if geometry is None else geometry_to_svg_path_d(geometry))
@@ -320,6 +320,19 @@ def _pad_fill_rule(pad: PcbPad) -> Mapping[str, str]:
     if pad.shape == "custom" and pad.custom_shapes:
         return {"fill-rule": "nonzero"}
     return {}
+
+
+def _drill_shape(drill: PcbDrill) -> _ShapeRender:
+    render = drill_render(drill)
+    if render is None or not render.d:
+        return _filled("")
+    if render.stroke_width is not None:
+        return _stroked(render.d, render.stroke_width)
+    return _filled(render.d)
+
+
+def _drill_bounds(drill: PcbDrill) -> Bounds | None:
+    return _geometry_bounds(drill_geometry(drill))
 
 
 def _pad_solder_mask_opening_geometry(pad: PcbPad) -> BaseGeometry | None:
