@@ -46,6 +46,7 @@ from phosphor_eda.domain.pcb import (
     PcbText,
     PcbVia,
     PcbViaType,
+    extend_shape_bounds,
 )
 from phosphor_eda.domain.pcb_builder import PcbBuilder
 from phosphor_eda.domain.project import Stackup, StackupLayer
@@ -560,6 +561,10 @@ def _parse_pad_drill(
     )
 
 
+# Padding around bare-pad footprint extents when no courtyard is present.
+_PAD_BBOX_MARGIN_MM = 0.5
+
+
 def _compute_bbox(
     pads: list[PcbPad], courtyard_artwork: list[PcbArtwork]
 ) -> tuple[float, float, float, float] | None:
@@ -567,30 +572,24 @@ def _compute_bbox(
     ys: list[float] = []
     if courtyard_artwork:
         for artwork in courtyard_artwork:
-            _extend_payload_bounds(xs, ys, artwork.data)
+            extend_shape_bounds(xs, ys, artwork.data)
     elif pads:
-        margin = 0.5
         for pad in pads:
-            xs.extend([pad.x - pad.width / 2 - margin, pad.x + pad.width / 2 + margin])
-            ys.extend([pad.y - pad.height / 2 - margin, pad.y + pad.height / 2 + margin])
+            xs.extend(
+                [
+                    pad.x - pad.width / 2 - _PAD_BBOX_MARGIN_MM,
+                    pad.x + pad.width / 2 + _PAD_BBOX_MARGIN_MM,
+                ]
+            )
+            ys.extend(
+                [
+                    pad.y - pad.height / 2 - _PAD_BBOX_MARGIN_MM,
+                    pad.y + pad.height / 2 + _PAD_BBOX_MARGIN_MM,
+                ]
+            )
     if not xs:
         return None
     return (min(xs), min(ys), max(xs), max(ys))
-
-
-def _extend_payload_bounds(xs: list[float], ys: list[float], payload: object) -> None:
-    if isinstance(payload, PcbLine):
-        xs.extend([payload.start_x, payload.end_x])
-        ys.extend([payload.start_y, payload.end_y])
-    elif isinstance(payload, PcbArc):
-        xs.extend([payload.start_x, payload.mid_x, payload.end_x])
-        ys.extend([payload.start_y, payload.mid_y, payload.end_y])
-    elif isinstance(payload, PcbCircle):
-        xs.extend([payload.cx - payload.radius, payload.cx + payload.radius])
-        ys.extend([payload.cy - payload.radius, payload.cy + payload.radius])
-    elif isinstance(payload, PcbPolygon):
-        xs.extend(x for x, _y in payload.points)
-        ys.extend(y for _x, y in payload.points)
 
 
 def _parse_footprint(builder: PcbBuilder, fp_sexpr: SExpNode) -> _FootprintParseResult:
