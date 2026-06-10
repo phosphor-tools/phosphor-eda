@@ -273,9 +273,9 @@ def _power_symbol_candidates(
 
         unit_pins = resolve_lib_pins(lib_id, lib_pins)
         pin_locations = [
-            transform_pin(px, py, comp_x, comp_y, comp_rot, mirror)
+            transform_pin(pin.x, pin.y, comp_x, comp_y, comp_rot, mirror)
             for pins in unit_pins.values()
-            for _pnum, _pname, _ptype, px, py in pins
+            for pin in pins
         ]
         if not pin_locations:
             pin_locations = [(round(comp_x, 4), round(comp_y, 4))]
@@ -340,10 +340,10 @@ def _pin_candidates(
 
         unit_pins = resolve_lib_pins(lib_id, lib_pins)
         sym_pins = unit_pins.get(inst_unit, []) + unit_pins.get(0, [])
-        for pnum, pname, ptype, px, py in sym_pins:
-            location = transform_pin(px, py, comp_x, comp_y, comp_rot, mirror)
+        for pin in sym_pins:
+            location = transform_pin(pin.x, pin.y, comp_x, comp_y, comp_rot, mirror)
             wire_graph.connect_point(location)
-            pin_uuid = pin_uuids.get(pnum, f"{symbol_uuid}:pin:{pnum}")
+            pin_uuid = pin_uuids.get(pin.number, f"{symbol_uuid}:pin:{pin.number}")
             candidates.append(
                 _PinCandidate(
                     id=_source_id(scope_id, "pin", pin_uuid),
@@ -361,11 +361,11 @@ def _pin_candidates(
                     component_y=comp_y,
                     component_rotation=comp_rot,
                     component_mirror=mirrored,
-                    pin_designator=pnum,
-                    pin_name=pname,
-                    pin_type=ptype,
+                    pin_designator=pin.number,
+                    pin_name=pin.name,
+                    pin_type=pin.pin_type,
                     location=location,
-                    no_connect=ptype == "no_connect"
+                    no_connect=pin.pin_type == "no_connect"
                     or _matches_point(location, no_connect_positions),
                 ),
             )
