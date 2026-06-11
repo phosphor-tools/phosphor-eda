@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import phosphor_eda.formats.kicad.sexp as sexp
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.kicad.resolver import resolve_kicad_source
 from phosphor_eda.formats.kicad.sheet_loader import (
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from phosphor_eda.domain.schematic import Schematic
+    from phosphor_eda.formats.kicad.sheet_loader import LoadedSheetTree
 
 
 def kicad_to_design(path: Path, name: str = "") -> Schematic:
@@ -67,6 +69,7 @@ def kicad_to_source(
     # those dangling references so resolution does not see a sheet pin pointing
     # at a non-existent child page.
     loaded_scopes = {instance.scope_id for instance in sheet_tree.sheet_instances}
+    root_uuid = _root_uuid(sheet_tree)
 
     for loaded in sheet_tree.sheets:
         extracted = extract_sheet_sources(
@@ -74,6 +77,7 @@ def kicad_to_source(
             sheet_tree.lib_pins,
             sheet_tree.lib_descs,
             loaded_scopes,
+            root_uuid,
         )
         local_nets.extend(extracted.local_nets)
         pin_occurrences.extend(extracted.pin_occurrences)
@@ -98,3 +102,12 @@ def kicad_to_source(
         sheet_symbols=sheet_symbols,
         sheet_pins=sheet_pins,
     )
+
+
+def _root_uuid(sheet_tree: LoadedSheetTree) -> str:
+    """The root schematic's uuid — the first segment of every instance path."""
+    for loaded in sheet_tree.sheets:
+        if loaded.instance.scope_id == sheet_tree.root_scope_id:
+            uuid_node = sexp.find(list(loaded.data[1:]), "uuid")
+            return sexp.val(uuid_node) if uuid_node is not None else ""
+    return ""

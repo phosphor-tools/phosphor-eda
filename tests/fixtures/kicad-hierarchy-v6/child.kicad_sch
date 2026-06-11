@@ -1,0 +1,54 @@
+(kicad_sch (version 20211123) (generator eeschema)
+
+  (uuid 66666666-0000-0000-0001-000000000001)
+
+  (paper "A4")
+
+  (lib_symbols
+    (symbol "Device:R" (pin_names (offset 0)) (in_bom yes) (on_board yes)
+      (property "Reference" "R" (id 0) (at 2.032 0 90)
+        (effects (font (size 1.27 1.27)))
+      )
+      (property "Value" "R" (id 1) (at 0 0 90)
+        (effects (font (size 1.27 1.27)))
+      )
+      (symbol "R_1_1"
+        (pin passive line (at 0 3.81 270) (length 1.27)
+          (name "~" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27))))
+        )
+        (pin passive line (at 0 -3.81 90) (length 1.27)
+          (name "~" (effects (font (size 1.27 1.27))))
+          (number "2" (effects (font (size 1.27 1.27))))
+        )
+      )
+    )
+  )
+
+  (hierarchical_label "SIG_IN" (shape input) (at 25.4 25.4 180)
+    (effects (font (size 1.27 1.27)) (justify right))
+    (uuid 66666666-0000-0000-0001-000000000002)
+  )
+
+  (symbol (lib_id "Device:R") (at 38.1 29.21 0) (unit 1)
+    (in_bom yes) (on_board yes)
+    (uuid 66666666-0000-0000-0001-0000000000a1)
+    (property "Reference" "R2" (id 0) (at 40.132 29.21 90)
+      (effects (font (size 1.27 1.27)))
+    )
+    (property "Value" "10k" (id 1) (at 38.1 29.21 90)
+      (effects (font (size 1.27 1.27)))
+    )
+    (pin "1" (uuid 66666666-0000-0000-0001-0000000000a2))
+    (pin "2" (uuid 66666666-0000-0000-0001-0000000000a3))
+  )
+
+  (wire (pts (xy 25.4 25.4) (xy 38.1 25.4))
+    (stroke (width 0) (type default))
+    (uuid 66666666-0000-0000-0001-0000000000a4)
+  )
+
+  (sheet_instances
+    (path "/" (page "2"))
+  )
+)

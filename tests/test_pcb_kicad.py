@@ -29,6 +29,7 @@ ORANGECRAB_FIXTURE = Path(__file__).parent / "fixtures" / "orangecrab.kicad_pcb"
 JETSON_ORIN_FIXTURE = (
     Path(__file__).parent / "fixtures" / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pcb"
 )
+V10_FIXTURE = Path(__file__).parent / "fixtures" / "kicad_v10_nets.kicad_pcb"
 
 
 @pytest.fixture(scope="module")
@@ -335,6 +336,30 @@ def test_board_profile_comes_from_edge_cuts(board: Pcb) -> None:
 
 def test_board_name(board: Pcb) -> None:
     assert board.name == "Debugotron SWD Switch"
+
+
+def test_kicad_v10_string_net_references_resolve() -> None:
+    # KiCad 10 (version 20260206) writes no net table; every net reference
+    # is a name string like (net "GND"). Fixture is hand-written, structure
+    # derived from the KiCad 10 demo boards.
+    board = parse_kicad_pcb(V10_FIXTURE)
+
+    names = {net.name for net in board.nets.values()}
+    assert names == {"Net-(D1-DOUT)", "+3V3", "GND"}
+
+    pad_nets = {pad.number: pad.net.name for pad in board.pads if pad.net is not None}
+    assert pad_nets == {"1": "Net-(D1-DOUT)", "2": "+3V3"}
+
+    segment = next(c for c in board.conductors if c.kind == PcbConductorKind.TRACE)
+    assert segment.net is not None
+    assert segment.net.name == "+3V3"
+
+    via = board.vias[0]
+    assert via.net is not None
+    assert via.net.name == "GND"
+
+    # Same-named references resolve to one net object
+    assert via.net is board.nets[{n.name: k for k, n in board.nets.items()}["GND"]]
 
 
 def test_extract_value_kicad8() -> None:

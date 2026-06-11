@@ -132,6 +132,9 @@ def resolve_net_node(builder: PcbBuilder, item: SExpNode, *, source: str) -> Pcb
     net_node = sexp.find(item, "net")
     if not net_node or len(net_node) < 2:
         return None
+    if isinstance(net_node[1], str):
+        # KiCad 10 references nets by name string instead of table number.
+        return builder.resolve_net_name(net_node[1], source=source)
     number = int(sexp.num(net_node, 1))
     if number == 0:
         return None

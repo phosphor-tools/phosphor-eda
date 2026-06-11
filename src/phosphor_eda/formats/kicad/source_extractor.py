@@ -46,6 +46,7 @@ def extract_sheet_sources(
     lib_pins: LibPins,
     lib_descs: dict[str, str],
     loaded_scopes: set[ScopeId],
+    root_uuid: str = "",
 ) -> _ExtractedSheet:
     scope_id = loaded.instance.scope_id
     data = loaded.data
@@ -57,6 +58,7 @@ def extract_sheet_sources(
         lib_pins,
         lib_descs,
         wire_graph,
+        root_uuid,
     )
 
     root_to_points = wire_graph.root_to_points()

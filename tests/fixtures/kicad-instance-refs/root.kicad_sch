@@ -1,0 +1,36 @@
+(kicad_sch (version 20250114) (generator eeschema)
+
+  (uuid eeee0000-0000-0000-0000-000000000001)
+
+  (paper "A4")
+
+  (lib_symbols)
+
+  (sheet (at 20.32 30.48) (size 12.7 10.16)
+    (stroke (width 0.1524) (type solid))
+    (fill (type none) (color 0 0 0 0.0000))
+    (uuid aaaa0000-0000-0000-0000-000000000001)
+    (property "Sheetname" "AmpA" (at 20.32 29.7686 0)
+      (effects (font (size 1.27 1.27)) (justify left bottom))
+    )
+    (property "Sheetfile" "child.kicad_sch" (at 20.32 41.3514 0)
+      (effects (font (size 1.27 1.27)) (justify left top))
+    )
+  )
+
+  (sheet (at 20.32 50.8) (size 12.7 10.16)
+    (stroke (width 0.1524) (type solid))
+    (fill (type none) (color 0 0 0 0.0000))
+    (uuid bbbb0000-0000-0000-0000-000000000001)
+    (property "Sheetname" "AmpB" (at 20.32 50.0886 0)
+      (effects (font (size 1.27 1.27)) (justify left bottom))
+    )
+    (property "Sheetfile" "child.kicad_sch" (at 20.32 61.6714 0)
+      (effects (font (size 1.27 1.27)) (justify left top))
+    )
+  )
+
+  (sheet_instances
+    (path "/" (page "1"))
+  )
+)

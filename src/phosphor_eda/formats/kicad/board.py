@@ -45,7 +45,38 @@ def parse_nets(sexpr: SExpNode) -> dict[int, PcbNet]:
         if number == 0:
             continue
         nets[number] = PcbNet(number=number, name=str(item[2]))
+    known_names = {net.name for net in nets.values()}
+    for name in _string_net_names(sexpr):
+        if name not in known_names:
+            known_names.add(name)
+            number = max(nets, default=0) + 1
+            nets[number] = PcbNet(number=number, name=name)
     return nets
+
+
+def _string_net_names(sexpr: SExpNode) -> list[str]:
+    """Collect net names referenced as ``(net "NAME")`` anywhere in the board.
+
+    KiCad 10 (version 20260206) dropped the numbered net table; nets exist
+    only as name-string references on pads, segments, vias, and zones. Walk
+    the whole tree and synthesize the table from first-appearance order.
+    """
+    names: list[str] = []
+    seen: set[str] = set()
+
+    def walk(node: SExpNode) -> None:
+        for item in node:
+            if not isinstance(item, list):
+                continue
+            if sexp.tag(item) == "net" and len(item) == 2 and isinstance(item[1], str):
+                if item[1] and item[1] not in seen:
+                    seen.add(item[1])
+                    names.append(item[1])
+            else:
+                walk(item)
+
+    walk(sexpr)
+    return names
 
 
 def _parse_segment(builder: PcbBuilder, item: SExpNode, index: int) -> None:
