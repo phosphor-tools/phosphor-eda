@@ -96,6 +96,39 @@ def _component_reference_is_ambiguous(design: Schematic, comp: Component) -> boo
     return sum(1 for candidate in design.components if candidate.reference == comp.reference) > 1
 
 
+def _component_physical_designator(comp: Component) -> str:
+    """The per-instance physical designator for a component, or ``""``.
+
+    Repeated/multi-channel instances carry a distinct physical designator (e.g.
+    ``U1.3``) on their occurrences. Returns the first non-empty one. Empty for
+    single-instance and un-annotated components.
+    """
+    for occurrence in comp.occurrences:
+        if occurrence.physical_designator:
+            return occurrence.physical_designator
+    return ""
+
+
+def _designator_suffix(comp: Component) -> str:
+    """`` [U1.3]`` when the component carries a physical designator, else ``""``."""
+    designator = _component_physical_designator(comp)
+    return f" [{designator}]" if designator else ""
+
+
+def _component_block_label(design: Schematic, comp: Component) -> str:
+    """Component header reference, qualified by physical designator when needed.
+
+    For a logical reference that is ambiguous across instances (Case B/C), append
+    the physical designator (``U1 [U1.3]``) so each instance block is
+    distinguishable. Unambiguous references and un-annotated designs show no
+    suffix.
+    """
+    designator = _component_physical_designator(comp)
+    if designator and _component_reference_is_ambiguous(design, comp):
+        return f"{comp.reference} [{designator}]"
+    return comp.reference
+
+
 def _same_component(left: Component, right: Component) -> bool:
     return left.id == right.id
 
@@ -208,9 +241,8 @@ def _format_components(design: Schematic) -> list[str]:
     lines = ["=== COMPONENTS ===", ""]
     for comp in sorted(design.components, key=lambda c: c.reference):
         page_names = ", ".join(_page_names(comp.pages))
-        lines.append(
-            f"COMPONENT: {comp.reference} | {comp.part} | {comp.description} | Pages: {page_names}"
-        )
+        label = _component_block_label(design, comp)
+        lines.append(f"COMPONENT: {label} | {comp.part} | {comp.description} | Pages: {page_names}")
 
         for key, value in sorted(_filter_metadata(comp).items()):
             lines.append(f"  {key}: {value}")
@@ -621,22 +653,38 @@ def format_page_table(
 
 
 def format_component_detail(design: Schematic, ref: str) -> str:
-    """Format full detail for a single component. Raises ValueError if not found."""
+    """Format full detail for a single component. Raises ValueError if not found.
+
+    ``ref`` may be a logical reference (``U1``) or an exact per-instance physical
+    designator (``U1.3``). A physical designator resolves to that specific
+    occurrence's component; an ambiguous logical reference raises, naming the
+    physical designators so the caller can disambiguate.
+    """
     matches = [comp for comp in design.components if comp.reference == ref]
     if not matches:
-        raise ValueError(f"Component '{ref}' not found in design.")
+        designator_matches = [
+            comp for comp in design.components if _component_physical_designator(comp) == ref
+        ]
+        if not designator_matches:
+            raise ValueError(f"Component '{ref}' not found in design.")
+        matches = designator_matches
     if len(matches) > 1:
-        page_parts = [
-            f"{_component_label(design, comp)} on {', '.join(_page_names(comp.pages))}"
+        match_parts = [
+            (
+                f"{_component_label(design, comp)}{_designator_suffix(comp)}"
+                f" on {', '.join(_page_names(comp.pages))}"
+            )
             for comp in matches
         ]
-        raise ValueError(f"Component '{ref}' is ambiguous; matches: {', '.join(page_parts)}.")
+        raise ValueError(f"Component '{ref}' is ambiguous; matches: {', '.join(match_parts)}.")
     comp = matches[0]
 
     page_names = ", ".join(_page_names(comp.pages))
-    lines = [
-        f"COMPONENT: {comp.reference} | {comp.part} | {comp.description} | Pages: {page_names}"
-    ]
+    header = (
+        f"COMPONENT: {_component_block_label(design, comp)} | {comp.part} |"
+        f" {comp.description} | Pages: {page_names}"
+    )
+    lines = [header]
 
     for key, value in sorted(_filter_metadata(comp).items()):
         lines.append(f"  {key}: {value}")

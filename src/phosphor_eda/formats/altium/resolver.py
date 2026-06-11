@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from phosphor_eda.formats.altium._helpers import parse_bus_notation
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode
 from phosphor_eda.formats.common.net_union import NetUnion
+from phosphor_eda.formats.common.paths import resolve_document_reference
 from phosphor_eda.formats.common.resolved_graph import (
     ResolutionInputError,
     ResolvedComponentOccurrenceInput,
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from phosphor_eda.domain.schematic import Schematic, ScopeId
+    from phosphor_eda.formats.altium.annotation import AnnotationDesignator
     from phosphor_eda.formats.altium.source import (
         AltiumLocalNet,
         AltiumPinOccurrence,
@@ -64,7 +66,7 @@ def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None =
 
     _merge_repeated_logical_pins(net_union, pin_occurrences)
     _merge_source_names(source, local_refs, net_union, effective_mode)
-    _merge_hierarchy(source, local_refs, local_net_by_id, net_union, effective_mode)
+    _merge_hierarchy(source, local_refs, local_net_by_id, net_union, effective_mode, ctx)
 
     component_source_ids_by_component_id = _component_source_ids_by_component_id(pin_occurrences)
 
@@ -75,11 +77,23 @@ def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None =
     if ctx is not None and ctx.issues:
         metadata["parse_issue_count"] = str(len(ctx.issues))
 
+    symbol_uid_by_id = {
+        symbol.id: symbol.unique_id
+        for sheet in source.sheets.values()
+        for symbol in sheet.sheet_symbols
+        if symbol.unique_id
+    }
+
     return build_resolved_schematic(
         name=source.name,
         pages=_page_inputs(source),
         local_nets=_local_net_inputs(local_refs),
-        pins=_pin_inputs(pin_occurrences, component_source_ids_by_component_id),
+        pins=_pin_inputs(
+            pin_occurrences,
+            component_source_ids_by_component_id,
+            source.physical_designators,
+            symbol_uid_by_id,
+        ),
         net_union=net_union,
         net_factory=lambda net_index, root_id, group_local_nets: _altium_net_input_for_group(
             source,
@@ -173,6 +187,7 @@ def _merge_hierarchy(
     local_net_by_id: dict[str, _LocalNetRef],
     net_union: NetUnion,
     effective_mode: AltiumHierarchyMode,
+    ctx: ParseContext | None,
 ) -> None:
     if effective_mode not in (
         AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
@@ -180,10 +195,12 @@ def _merge_hierarchy(
     ):
         return
 
+    known_source_files = _known_source_files(source)
     child_sheets_by_file = _child_sheets_by_source_file(source)
-    repeated_child_files = _repeated_child_source_files(source)
+    repeated_child_files = _repeated_child_source_files(source, known_source_files, ctx)
     child_port_nets = _child_port_net_ids(source)
     for ref in local_refs:
+        referencing_dir = _parent_dir(_source_file_key(ref.sheet.source_file))
         for entry in ref.local_net.sheet_entries:
             entry_name = _mergeable_name(entry.name)
             if entry_name is None:
@@ -202,11 +219,49 @@ def _merge_hierarchy(
                 child_sheets_by_file,
                 repeated_child_files,
                 sheet_symbol,
+                known_source_files,
+                referencing_dir,
+                ctx,
             )
             for child_sheet in child_sheets:
                 for child_net_id in child_port_nets.get((child_sheet.id, entry_name), []):
                     if child_net_id in local_net_by_id:
                         _ = net_union.union(ref.local_net.id, child_net_id)
+
+
+def _known_source_files(source: AltiumSourceDesign) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for sheet in source.sheets.values():
+        key = _source_file_key(sheet.source_file)
+        if key and key not in seen:
+            seen.add(key)
+            result.append(key)
+    return result
+
+
+def _canonical_child_key(
+    sheet_symbol: AltiumSheetSymbol,
+    known_source_files: list[str],
+    referencing_dir: str,
+    ctx: ParseContext | None,
+) -> str:
+    """Resolve a sheet symbol's child reference to a canonical source-file key.
+
+    Sheet symbols reference a child by bare filename while the project lists
+    documents with a directory prefix; reconcile the two spellings so the
+    canonical key matches the resolved child sheets' source files. Basename
+    collisions warn on *ctx* as ``ambiguous_document_reference``.
+    """
+    resolved = resolve_document_reference(
+        sheet_symbol.child_source_file,
+        referencing_dir=referencing_dir,
+        known_documents=known_source_files,
+        ctx=ctx,
+    )
+    if resolved is not None:
+        return resolved
+    return _source_file_key(sheet_symbol.child_source_file)
 
 
 def _child_sheets_by_source_file(
@@ -219,12 +274,22 @@ def _child_sheets_by_source_file(
     return result
 
 
-def _repeated_child_source_files(source: AltiumSourceDesign) -> set[str]:
+def _repeated_child_source_files(
+    source: AltiumSourceDesign,
+    known_source_files: list[str],
+    ctx: ParseContext | None,
+) -> set[str]:
     symbol_counts: dict[str, int] = {}
     for sheet in source.sheets.values():
+        referencing_dir = _parent_dir(_source_file_key(sheet.source_file))
         for symbol in sheet.sheet_symbols:
             if symbol.child_source_file:
-                child_source_file = _source_file_key(symbol.child_source_file)
+                child_source_file = _canonical_child_key(
+                    symbol,
+                    known_source_files,
+                    referencing_dir,
+                    ctx,
+                )
                 symbol_counts[child_source_file] = symbol_counts.get(child_source_file, 0) + 1
     return {child_source_file for child_source_file, count in symbol_counts.items() if count > 1}
 
@@ -233,8 +298,12 @@ def _child_sheets_for_symbol(
     child_sheets_by_file: dict[str, list[AltiumSheetSource]],
     repeated_child_files: set[str],
     sheet_symbol: AltiumSheetSymbol,
+    known_source_files: list[str],
+    referencing_dir: str,
+    ctx: ParseContext | None,
 ) -> list[AltiumSheetSource]:
-    child_sheets = child_sheets_by_file.get(_source_file_key(sheet_symbol.child_source_file), [])
+    canonical = _canonical_child_key(sheet_symbol, known_source_files, referencing_dir, ctx)
+    child_sheets = child_sheets_by_file.get(canonical, [])
     instance_scoped = [
         sheet
         for sheet in child_sheets
@@ -242,7 +311,7 @@ def _child_sheets_for_symbol(
     ]
     if instance_scoped:
         return instance_scoped
-    if _source_file_key(sheet_symbol.child_source_file) in repeated_child_files:
+    if canonical in repeated_child_files:
         return []
     return child_sheets
 
@@ -460,6 +529,8 @@ def _include_altium_net(
 def _pin_inputs(
     pin_occurrences: Iterable[AltiumPinOccurrence],
     component_source_ids_by_component_id: dict[str, list[str]],
+    physical_designators: dict[str, AnnotationDesignator],
+    symbol_uid_by_id: dict[str, str],
 ) -> list[ResolvedPinInput]:
     result: list[ResolvedPinInput] = []
     seen_pin_occurrences: set[tuple[str, str]] = set()
@@ -486,6 +557,11 @@ def _pin_inputs(
                 component_occurrence=ResolvedComponentOccurrenceInput(
                     source_id=_component_occurrence_source_id(pin_occurrence),
                     part_id=pin_occurrence.component_part_id,
+                    physical_designator=_physical_designator(
+                        pin_occurrence,
+                        physical_designators,
+                        symbol_uid_by_id,
+                    ),
                     metadata=_component_occurrence_metadata(pin_occurrence),
                 ),
                 pin_metadata={
@@ -501,8 +577,43 @@ def _pin_inputs(
     return result
 
 
+def _physical_designator(
+    pin_occurrence: AltiumPinOccurrence,
+    physical_designators: dict[str, AnnotationDesignator],
+    symbol_uid_by_id: dict[str, str],
+) -> str:
+    """Resolve a pin occurrence's per-instance physical designator, or ``""``.
+
+    For components inside repeated/multi-channel sheets the logical designator
+    (e.g. ``U1``) collides across instances. The ``.Annotation`` file assigns a
+    distinct physical designator keyed by the component's hierarchical unique-id
+    path ``\\<sheet-symbol-uid>...\\<component-uid>``. The logical reference is
+    never substituted — the physical designator is occurrence-level metadata.
+    Empty when no entry resolves (single-instance / un-annotated components).
+    """
+    if not physical_designators:
+        return ""
+    component_uid = pin_occurrence.component_metadata.get("altium_component_unique_id")
+    if not component_uid:
+        return ""
+    symbol_uids = [
+        symbol_uid_by_id[element]
+        for element in pin_occurrence.scope_id.path
+        if element in symbol_uid_by_id
+    ]
+    unique_id_path = "\\" + "\\".join([*symbol_uids, component_uid])
+    entry = physical_designators.get(unique_id_path)
+    return entry.physical_designator if entry is not None else ""
+
+
 def _source_file_key(source_file: str) -> str:
     return source_file.replace("\\", "/")
+
+
+def _parent_dir(source_file_key: str) -> str:
+    """Return the directory portion of a normalized source-file key, or ``""``."""
+    head, sep, _ = source_file_key.rpartition("/")
+    return head if sep else ""
 
 
 def _select_net_name(source: AltiumSourceDesign, refs: Iterable[_LocalNetRef]) -> str:

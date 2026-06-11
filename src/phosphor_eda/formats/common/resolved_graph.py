@@ -59,6 +59,7 @@ class ResolvedComponentOccurrenceInput:
     y: float | None = None
     rotation: float = 0.0
     mirror: bool = False
+    physical_designator: str = ""
     metadata: dict[str, str] = field(default_factory=dict)
 
 
@@ -163,7 +164,7 @@ def _build_local_nets(
         if local_net.scope_id not in pages_by_scope:
             msg = f"local net {local_net.id!r} references unknown scope {local_net.scope_id}"
             raise ResolutionInputError(msg)
-        _require_union_id(net_union, local_net.id)
+        _ = _require_union_id(net_union, local_net.id)
         result[local_net.id] = local_net
     return result
 
@@ -325,6 +326,7 @@ def _build_components(
                     y=pin_input.component_occurrence.y,
                     rotation=pin_input.component_occurrence.rotation,
                     mirror=pin_input.component_occurrence.mirror,
+                    physical_designator=pin_input.component_occurrence.physical_designator,
                     metadata=dict(pin_input.component_occurrence.metadata),
                 )
             )

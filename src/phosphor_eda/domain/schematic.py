@@ -85,6 +85,11 @@ class ComponentOccurrence:
     y: float | None = None
     rotation: float = 0.0
     mirror: bool = False
+    # Per-instance physical reference designator (e.g. "U1.3") from an Altium
+    # .Annotation file. Empty for single-instance components and formats/designs
+    # without per-instance annotation. The logical ``component.reference`` stays
+    # the identity; this is occurrence-level metadata, never a substitute.
+    physical_designator: str = ""
     metadata: dict[str, str] = field(default_factory=dict)
 
 

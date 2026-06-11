@@ -31,6 +31,7 @@ from phosphor_eda.formats.altium.records import (
     RoundRectangleRec,
     SheetEntryRec,
     SheetRec,
+    SheetSymbolRec,
     UnknownRecord,
     WireRec,
 )
@@ -179,6 +180,30 @@ def test_sheet_entry_from_properties():
     # distance = 4*10 + 50000/100000 = 40.5 → round = 40 (Python banker's)
     assert rec.distance_from_top == 40
     assert rec.io_type == PortIOType.INPUT
+    assert len(ctx.issues) == 0
+
+
+# ---------------------------------------------------------------------------
+# SheetSymbolRec.from_properties
+# ---------------------------------------------------------------------------
+
+
+def test_sheet_symbol_captures_unique_id():
+    ctx = ParseContext()
+    props = {
+        "record": "15",
+        "ownerindex": "0",
+        "location.x": "100",
+        "location.y": "200",
+        "xsize": "50",
+        "ysize": "30",
+        "uniqueid": "FEHIXTLT",
+    }
+    rec = SheetSymbolRec.from_properties(7, props, ctx)
+    assert rec.location == (100, 200)
+    assert rec.x_size == 50
+    assert rec.y_size == 30
+    assert rec.unique_id == "FEHIXTLT"
     assert len(ctx.issues) == 0
 
 
