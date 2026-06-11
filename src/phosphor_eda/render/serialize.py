@@ -13,17 +13,21 @@ import re
 from typing import TYPE_CHECKING
 from xml.sax.saxutils import escape as xml_escape
 
+from phosphor_eda.geometry.text_metrics import EMBEDDED_FONT_FAMILY, embedded_font_css
 from phosphor_eda.render.annotation_svg import annotation_css, render_annotations
-from phosphor_eda.render.svg import Svg
+from phosphor_eda.render.primitives import PaintMode
+from phosphor_eda.render.svg import Svg, fmt_attrs
 
 if TYPE_CHECKING:
     from phosphor_eda.domain.pcb import Pcb
     from phosphor_eda.render.inventory import InventoryTags
     from phosphor_eda.render.modes import DerivedLayer
     from phosphor_eda.render.plan import DerivedRenderPlan
-    from phosphor_eda.render.primitives import LayerClip, LayerMask, SvgPrimitive
+    from phosphor_eda.render.primitives import LayerClip, LayerMask, SvgPrimitive, SvgText
     from phosphor_eda.render.profiler import RenderProfiler
     from phosphor_eda.render.tokens import ResolvedStyle, VisualRole
+
+_BOARD_TEXT_FONT_FAMILY = f"{EMBEDDED_FONT_FAMILY}, Inter, system-ui, sans-serif"
 
 _STYLE_BLOCK_TERMINATOR_RE = re.compile(r"</\s*style\s*>", re.IGNORECASE)
 _LayerClipSignature = tuple[str, ...]
@@ -44,6 +48,11 @@ def render_pcb_svg_from_derived_plan(
         + f'{view_box.width:.4f} {view_box.height:.4f}">'
     )
     svg.raw(svg_open)
+    charset = _plan_text_charset(plan)
+    if charset:
+        svg.raw('<style id="fonts">')
+        svg.raw(_escape_style_block_text(embedded_font_css(frozenset(charset))))
+        svg.raw("</style>")
     if plan.annotations is not None:
         svg.raw('<style id="annotations">')
         svg.raw(
@@ -198,8 +207,92 @@ def _render_derived_layers(
             attrs["mask"] = f"url(#{mask_id})"
         svg.group_start(attrs=attrs)
         for primitive in layer.primitives:
-            svg.path(primitive.d, attrs=_derived_layer_path_attrs(layer.style, primitive))
+            if primitive.text is not None:
+                _render_text_primitive(svg, layer.style, primitive, primitive.text)
+            else:
+                svg.path(primitive.d, attrs=_derived_layer_path_attrs(layer.style, primitive))
         svg.group_end()
+
+
+def _plan_text_charset(plan: DerivedRenderPlan) -> set[str]:
+    """Collect every character that will be rendered as ``<text>``.
+
+    Drives the lazy font subset: board text from all layers plus annotation
+    label/legend strings, so one embedded face covers the whole document.
+    """
+    chars: set[str] = set()
+    layer_groups = [plan.base_layers, *(group.layers for group in plan.highlight_groups)]
+    for layers in layer_groups:
+        for layer in layers:
+            for primitive in layer.primitives:
+                if primitive.text is not None:
+                    chars.update(primitive.text.content)
+    annotations = plan.annotations
+    if annotations is not None:
+        for callout in (
+            *(box.callout for box in annotations.boxes),
+            *(pointer.callout for pointer in annotations.pointers),
+            *(label.callout for label in annotations.labels),
+        ):
+            if callout is not None:
+                chars.update(callout.text)
+        legend = annotations.legend
+        if legend is not None:
+            # .legend-title-text renders with `text-transform: uppercase`,
+            # so the subset needs the uppercased glyphs too.
+            chars.update(legend.title)
+            chars.update(legend.title.upper())
+            for entry in legend.entries:
+                chars.update(entry.label)
+    return chars
+
+
+def _render_text_primitive(
+    svg: Svg,
+    style: ResolvedStyle | None,
+    primitive: SvgPrimitive,
+    text: SvgText,
+) -> None:
+    """Emit a board-text primitive as a native ``<text>`` element."""
+    attrs: dict[str, str] = {
+        "x": f"{text.x:.4f}",
+        "y": f"{text.y:.4f}",
+        "font-size": f"{text.font_size:.4f}",
+        "font-family": _BOARD_TEXT_FONT_FAMILY,
+        "text-anchor": text.text_anchor,
+    }
+    fill = style.fill if style is not None and style.fill is not None else None
+    if fill is not None:
+        attrs["fill"] = fill
+    transform = _text_transform(text)
+    if transform:
+        attrs["transform"] = transform
+    attrs.update(_primitive_metadata_attrs(primitive))
+    svg.raw(f"<text{fmt_attrs(attrs)}>{xml_escape(text.content)}</text>")
+
+
+def _text_transform(text: SvgText) -> str:
+    """Compose rotation about the text center with back-side mirroring.
+
+    Both rotation and the mirror turn about the authored center
+    ``(pivot_x, pivot_y)`` so they're independent of the baseline shift.
+    Non-mirrored text is a plain ``rotate(θ pivot)``. Mirrored (back-side)
+    text flips horizontally across the vertical line through the pivot, then
+    rotates — written as ``translate(p) rotate(θ) scale(-1 1)
+    translate(-p)`` so the pivot stays fixed under the flip.
+    """
+    px = text.pivot_x
+    py = text.pivot_y
+    if text.mirrored:
+        return (
+            f"translate({px:.4f} {py:.4f}) "
+            f"rotate({text.rotation:.4f}) "
+            "scale(-1 1) "
+            f"translate({-px:.4f} {-py:.4f})"
+        )
+    if text.rotation:
+        return f"rotate({text.rotation:.4f} {px:.4f} {py:.4f})"
+    return ""
 
 
 def _render_layer_clip(
@@ -293,15 +386,40 @@ def _derived_layer_path_attrs(
     style: ResolvedStyle | None,
     primitive: SvgPrimitive,
 ) -> dict[str, str]:
-    attrs = _resolved_path_style_svg_attrs(style)
+    if primitive.paint is PaintMode.STROKE:
+        attrs = _stroke_primitive_style_attrs(style, primitive)
+    else:
+        attrs = _resolved_path_style_svg_attrs(style)
+        attrs["fill-rule"] = "evenodd"
     attrs.update(primitive.style)
-    attrs["fill-rule"] = "evenodd"
     attrs.update(_primitive_metadata_attrs(primitive))
     return attrs
 
 
+def _stroke_primitive_style_attrs(
+    style: ResolvedStyle | None,
+    primitive: SvgPrimitive,
+) -> dict[str, str]:
+    """Style attrs for a stroke-mode primitive: paint the layer color as stroke."""
+    declarations = ["fill: none"]
+    if style is not None and style.fill is not None:
+        declarations.append(f"stroke: {style.fill}")
+    if primitive.stroke_width is not None:
+        declarations.append(f"stroke-width: {primitive.stroke_width:.4f}")
+    if primitive.stroke_linecap is not None:
+        declarations.append(f"stroke-linecap: {primitive.stroke_linecap}")
+    return {"style": "; ".join(declarations)}
+
+
 def _layer_mask_path_attrs(primitive: SvgPrimitive, *, fill: str) -> dict[str, str]:
-    attrs = {"fill": fill, "fill-rule": "evenodd"}
+    if primitive.paint is PaintMode.STROKE:
+        attrs = {"fill": "none", "stroke": fill}
+        if primitive.stroke_width is not None:
+            attrs["stroke-width"] = f"{primitive.stroke_width:.4f}"
+        if primitive.stroke_linecap is not None:
+            attrs["stroke-linecap"] = primitive.stroke_linecap
+    else:
+        attrs = {"fill": fill, "fill-rule": "evenodd"}
     attrs.update(_primitive_metadata_attrs(primitive))
     return attrs
 

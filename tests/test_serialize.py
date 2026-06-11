@@ -25,10 +25,7 @@ from phosphor_eda.domain.schematic import (
 from phosphor_eda.domain.schematic import (
     Pin as DomainPin,
 )
-from phosphor_eda.query.serialize import (
-    filter_components,
-    filter_nets,
-    filter_pages,
+from phosphor_eda.query.format import (
     format_component_detail,
     format_component_table,
     format_net_detail,
@@ -37,6 +34,11 @@ from phosphor_eda.query.serialize import (
     format_page_table,
     format_trace,
     serialize_design,
+)
+from phosphor_eda.query.query import (
+    filter_components,
+    filter_nets,
+    filter_pages,
 )
 
 if TYPE_CHECKING:
@@ -366,7 +368,7 @@ def test_serialize_grep_friendly():
 
 
 def test_serialize_to_file(tmp_path: Path):
-    from phosphor_eda.query.serialize import write_design
+    from phosphor_eda.query.format import write_design
 
     design = _simple_design()
     out = tmp_path / "test.txt"
@@ -667,7 +669,7 @@ def test_inline_destinations_power_net_excluded():
 
 def test_is_power_net_classname():
     """ClassName=PWR metadata should mark a net as power."""
-    from phosphor_eda.query.serialize import is_power_net
+    from phosphor_eda.query.classify import is_power_net
 
     net = Net(name="CUSTOM_RAIL", metadata={"ClassName": "PWR"})
     assert is_power_net("CUSTOM_RAIL", net)
@@ -716,6 +718,91 @@ def test_format_page_table_includes_ids_for_duplicate_page_names():
 
 
 # ---- Detail formatter tests ----
+
+
+def _repeated_instance_design() -> Schematic:
+    """Two physically distinct U1 instances (same logical reference, Case B)."""
+    page_a = Page(name="CH_A", id="page:ch-a", scope_id=ScopeId(path=("root", "ch_a")))
+    page_b = Page(name="CH_B", id="page:ch-b", scope_id=ScopeId(path=("root", "ch_b")))
+    comp_a = Component(id="component:ch-a:u1", reference="U1", part="BUF", description="Buffer")
+    comp_b = Component(id="component:ch-b:u1", reference="U1", part="BUF", description="Buffer")
+    comp_a.pages = [page_a]
+    comp_b.pages = [page_b]
+    net_a = Net(id="net:ch-a:out", name="OUT_A", pages=[page_a])
+    net_b = Net(id="net:ch-b:out", name="OUT_B", pages=[page_b])
+    pin_a = Pin(id="pin:ch-a:u1:1", designator="1", name="Y", component=comp_a, net=net_a)
+    pin_b = Pin(id="pin:ch-b:u1:1", designator="1", name="Y", component=comp_b, net=net_b)
+    comp_a.pins = [pin_a]
+    comp_b.pins = [pin_b]
+    net_a.pins = [pin_a]
+    net_b.pins = [pin_b]
+    comp_a.occurrences = [
+        ComponentOccurrence(
+            id="occ:ch-a:u1",
+            component=comp_a,
+            page=page_a,
+            scope_id=page_a.scope_id,
+            source_id="source-ch-a-u1",
+            physical_designator="U1.1",
+        )
+    ]
+    comp_b.occurrences = [
+        ComponentOccurrence(
+            id="occ:ch-b:u1",
+            component=comp_b,
+            page=page_b,
+            scope_id=page_b.scope_id,
+            source_id="source-ch-b-u1",
+            physical_designator="U1.3",
+        )
+    ]
+    page_a.components = [comp_a]
+    page_b.components = [comp_b]
+    page_a.nets = [net_a]
+    page_b.nets = [net_b]
+    return Schematic(
+        name="REPEATED",
+        pages=[page_a, page_b],
+        nets=[net_a, net_b],
+        components=[comp_a, comp_b],
+    )
+
+
+def test_component_detail_resolves_by_physical_designator():
+    """A physical designator (U1.3) resolves to that specific occurrence."""
+    design = _repeated_instance_design()
+    detail = format_component_detail(design, "U1.3")
+    assert "COMPONENT: U1" in detail
+    assert "U1.3" in detail
+    assert "CH_B" in detail
+    assert "CH_A" not in detail
+
+
+def test_component_detail_ambiguous_logical_reference_lists_physical_designators():
+    """Looking up an ambiguous logical reference names the physical designators."""
+    design = _repeated_instance_design()
+    with pytest.raises(ValueError, match=r"ambiguous.*U1\.1.*U1\.3"):
+        _ = format_component_detail(design, "U1")
+
+
+def test_component_block_qualifies_ambiguous_reference_with_physical_designator():
+    """The component block header qualifies ambiguous instances by designator."""
+    design = _repeated_instance_design()
+    out = serialize_design(design)
+    assert "U1 [U1.1]" in out
+    assert "U1 [U1.3]" in out
+
+
+def test_single_instance_design_shows_no_physical_designator_suffix():
+    """An un-annotated design shows no designator suffixes in component output."""
+    design = _simple_design()
+    out = serialize_design(design)
+    component_lines = [line for line in out.splitlines() if line.startswith("COMPONENT:")]
+    assert component_lines
+    for line in component_lines:
+        assert "[" not in line
+    detail = format_component_detail(design, "U7")
+    assert detail.splitlines()[0] == "COMPONENT: U7 | AD7768-1 | IC - ADC - Single | Pages: ADC"
 
 
 def test_format_component_detail():
@@ -1149,6 +1236,18 @@ def test_filter_pages_by_net():
     assert "Power" in names
 
 
+def test_filter_pages_by_net_scoped_id_and_alias():
+    design = _filterable_design()
+
+    by_id = filter_pages(design, nets=["net:P3V3"])
+    assert "Power" in {p.name for p in by_id}
+
+    p3v3 = next(n for n in design.nets if n.name == "P3V3")
+    p3v3.aliases.add("+3V3")
+    by_alias = filter_pages(design, nets=["+3V3"])
+    assert "Power" in {p.name for p in by_alias}
+
+
 def test_filter_pages_by_component():
     design = _filterable_design()
     result = filter_pages(design, components=["U1"])
@@ -1207,8 +1306,6 @@ def test_format_component_detail_trace_through():
 
 def test_inline_destinations_fan_out_lists_each_endpoint():
     """A series passive feeding two ICs renders one destination per endpoint."""
-    from phosphor_eda.query.serialize import _trace_destinations
-
     page = Page(name="P")
     u1 = Component(reference="U1", part="MCU", description="", pages=[page])
     r1 = Component(reference="R1", part="100R", description="", pages=[page])
@@ -1239,6 +1336,6 @@ def test_inline_destinations_fan_out_lists_each_endpoint():
         components=[u1, r1, u2, u3],
     )
 
-    rendered = _trace_destinations(design, pin_u1, u1)
+    rendered = format_component_detail(design, "U1")
     assert "R1 -> U2.1" in rendered
     assert "R1 -> U3.1" in rendered

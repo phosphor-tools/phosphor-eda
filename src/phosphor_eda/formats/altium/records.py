@@ -548,6 +548,7 @@ class SheetSymbolRec(AltiumRecord):
     location: tuple[int, int] = (0, 0)
     x_size: int = 0
     y_size: int = 0
+    unique_id: str = ""
 
     @classmethod
     def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
@@ -558,6 +559,7 @@ class SheetSymbolRec(AltiumRecord):
             location=prop_location(props),
             x_size=prop_int(props, "xsize"),
             y_size=prop_int(props, "ysize"),
+            unique_id=prop_str(props, "uniqueid"),
         )
 
 

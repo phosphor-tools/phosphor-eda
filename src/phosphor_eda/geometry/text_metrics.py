@@ -1,15 +1,20 @@
-"""Text measurement and font embedding for SVG annotations.
+"""Text measurement and font embedding for SVG annotations and board text.
 
 Uses the bundled Inter-Regular.ttf font to compute text dimensions,
-giving the SVG annotation renderer accurate bounding boxes for label
-placement.  Also provides a base64-encoded subset of the font for
-embedding in SVG ``@font-face`` rules, guaranteeing the rendered font
-matches what we measure.
+giving the SVG renderer accurate bounding boxes for label placement.
+Also provides a base64-encoded subset of the font for embedding in SVG
+``@font-face`` rules, guaranteeing the rendered font matches what we
+measure.
+
+Font loading and subsetting are lazy (``functools.cache``): the font
+file is only parsed when text actually needs measuring or embedding, and
+each distinct glyph set is subset once.
 """
 
 from __future__ import annotations
 
 import base64
+import functools
 import io
 import re
 
@@ -23,63 +28,173 @@ HTML_TAG_RE = re.compile(r"<[^>]+>")
 # Matches <br> in any form: <br>, <br/>, <br />
 BR_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
 
-# Load font metrics once at import time.
-# fontTools has no type stubs — all table access returns untyped objects.
-# We extract typed constants at startup and use those throughout.
-_font = TTFont(INTER_REGULAR)
-_cmap: dict[int, str] = _font.getBestCmap() or {}  # pyright: ignore[reportAny]
-_hmtx = _font["hmtx"]  # pyright: ignore[reportAny]
+# Codepoints always present in the embedded subset, regardless of the
+# glyphs actually rendered: printable ASCII, Latin Extended-A, and the
+# symbols annotations commonly use.
+_BASE_SUBSET_CHARS: frozenset[str] = frozenset(
+    [chr(cp) for cp in range(0x20, 0x7F)]  # Basic ASCII
+    + [chr(cp) for cp in range(0x00C0, 0x0100)]  # Latin Extended-A
+    + list("°µΩ±×÷≤≥≠←→↑↓•–—''")
+)
 
-_head = _font["head"]  # pyright: ignore[reportAny]
-_units_per_em: int = int(_head.unitsPerEm)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
-
-_os2 = _font["OS/2"]  # pyright: ignore[reportAny]
-_ascender: int = int(_os2.sTypoAscender)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
-_descender: int = abs(int(_os2.sTypoDescender))  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
-_line_gap: int = int(_os2.sTypoLineGap)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
-_LINE_HEIGHT_RATIO: float = (_ascender + _descender + _line_gap) / _units_per_em
-
-# Vertical offset from the center of the text block to the baseline,
-# as a fraction of font_size.  Used to vertically center a single line
-# of text: baseline_y = center_y + BASELINE_CENTER_OFFSET * font_size
-BASELINE_CENTER_OFFSET: float = (_ascender - _descender) / (2 * _units_per_em)
+# Above this many distinct codepoints the subsetter's value (small output,
+# fast build) breaks down — e.g. a board labeled in CJK would pull in
+# thousands of glyphs. Past the cap we embed the full face once instead of
+# repeatedly subsetting huge glyph sets.
+_FULL_FACE_CHAR_CAP = 512
 
 
-def _build_embedded_font() -> str:
-    """Subset Inter-Regular to printable ASCII + Latin Extended, return base64.
+@functools.cache
+def _load_font() -> TTFont:
+    """Load the bundled Inter-Regular face once, lazily.
 
-    The subset is small (~50KB TTF, ~67KB base64) and is embedded in the
-    SVG via @font-face so the rendered font exactly matches our metrics.
+    fontTools has no type stubs — all table access returns untyped objects.
+    Callers extract typed constants via the metric helpers below.
     """
+    return TTFont(INTER_REGULAR)
+
+
+@functools.cache
+def _cmap() -> dict[int, str]:
+    return _load_font().getBestCmap() or {}  # pyright: ignore[reportAny]
+
+
+@functools.cache
+def _units_per_em() -> int:
+    head = _load_font()["head"]  # pyright: ignore[reportAny]
+    return int(head.unitsPerEm)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
+
+
+@functools.cache
+def _vertical_metrics() -> tuple[int, int, int]:
+    """Return ``(ascender, descender, line_gap)`` in font design units."""
+    os2 = _load_font()["OS/2"]  # pyright: ignore[reportAny]
+    ascender = int(os2.sTypoAscender)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
+    descender = abs(int(os2.sTypoDescender))  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
+    line_gap = int(os2.sTypoLineGap)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
+    return ascender, descender, line_gap
+
+
+def _line_height_ratio() -> float:
+    ascender, descender, line_gap = _vertical_metrics()
+    return (ascender + descender + line_gap) / _units_per_em()
+
+
+def baseline_center_offset() -> float:
+    """Vertical offset from the center of a single text line to its baseline.
+
+    Expressed as a fraction of ``font_size``: ``baseline_y = center_y +
+    baseline_center_offset() * font_size`` vertically centers one line.
+    Lazy so importers don't trigger font loading at import time.
+    """
+    ascender, descender, _ = _vertical_metrics()
+    return (ascender - descender) / (2 * _units_per_em())
+
+
+EMBEDDED_FONT_FAMILY = "InterEmbed"
+"""``font-family`` name of the embedded face, shared by all SVG text."""
+
+
+def embedded_font_base64(charset: frozenset[str] = frozenset()) -> str:
+    """Return base64 of an Inter-Regular subset covering *charset*.
+
+    The base subset (printable ASCII + Latin Extended + common symbols) is
+    always included; *charset* adds any extra glyphs board text or labels
+    actually use. Results are cached per glyph set, so repeated renders with
+    the same characters reuse one subset.
+    """
+    chars = _BASE_SUBSET_CHARS | charset
+    # Past the cap, every distinct large charset would memoize its own copy
+    # of the same payload — route them all to the single cached full face.
+    if len(chars) > _FULL_FACE_CHAR_CAP:
+        return _full_face_base64()
+    return _embedded_font_base64(chars)
+
+
+def embedded_font_css(charset: frozenset[str] = frozenset()) -> str:
+    """Return an ``@font-face`` rule embedding the subset for *charset*.
+
+    One rule serves every ``<text>`` element in the document — annotations
+    and board text alike all reference :data:`EMBEDDED_FONT_FAMILY`.
+    """
+    data = embedded_font_base64(charset)
+    return (
+        f'@font-face {{ font-family: "{EMBEDDED_FONT_FAMILY}"; font-weight: 400;\n'
+        f'  src: url("data:font/truetype;base64,{data}") format("truetype"); }}'
+    )
+
+
+@functools.cache
+def _embedded_font_base64(chars: frozenset[str]) -> str:
+    return _subset_font_base64(chars)
+
+
+def _subset_font_base64(chars: frozenset[str]) -> str:
+    """Subset the face to *chars* and return base64 (uncached).
+
+    Callers cap the charset at :data:`_FULL_FACE_CHAR_CAP` before reaching
+    here. ``recalcTimestamp=False`` keeps the output stable across builds so
+    the embedded data is deterministic; the cached wrapper avoids re-running
+    this per render.
+    """
+    codepoints = {ord(c) for c in chars}
     font = TTFont(INTER_REGULAR, recalcTimestamp=False)
-    chars = set(range(0x20, 0x7F))  # Basic ASCII
-    chars.update(range(0x00C0, 0x0100))  # Latin Extended-A
-    chars.update(ord(c) for c in "°µΩ±×÷≤≥≠←→↑↓•–—''")
     subsetter = ft_subset.Subsetter()  # pyright: ignore[reportUnknownMemberType]
-    subsetter.populate(unicodes=sorted(chars))  # pyright: ignore[reportUnknownMemberType]
+    subsetter.populate(unicodes=sorted(codepoints))  # pyright: ignore[reportUnknownMemberType]
     subsetter.subset(font)  # pyright: ignore[reportUnknownMemberType]
     buf = io.BytesIO()
     font.save(buf)
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-INTER_REGULAR_BASE64: str = _build_embedded_font()
-"""Base64-encoded subset of Inter-Regular.ttf for SVG @font-face embedding."""
+@functools.cache
+def _full_face_base64() -> str:
+    return base64.b64encode(INTER_REGULAR.read_bytes()).decode("ascii")
+
+
+GLYPH_FALLBACK_CHAR = "□"
+"""Replacement for characters Inter-Regular has no glyph for (□ WHITE SQUARE).
+
+Renderers normalize text through :func:`normalize_glyphs` before serializing,
+and :func:`measure_text` advances missing glyphs by this character's width, so
+measured layout always matches the glyphs the SVG actually contains instead of
+depending on viewer-specific font fallback.
+"""
+
+
+def normalize_glyphs(text: str) -> str:
+    """Replace characters the embedded face cannot render with the fallback.
+
+    Whitespace is kept as-is — SVG collapses it rather than drawing tofu.
+    Keeps measurement and serialization in agreement: a normalized string
+    contains only codepoints Inter-Regular has glyphs for (plus whitespace),
+    so the rendered SVG shows exactly what :func:`measure_text` measured.
+    """
+    cmap = _cmap()
+    return "".join(
+        char if char.isspace() or ord(char) in cmap else GLYPH_FALLBACK_CHAR for char in text
+    )
 
 
 def _measure_line_width(text: str) -> int:
-    """Measure a single line of plain text in font design units."""
+    """Measure a single line of plain text in font design units.
+
+    Mirrors :func:`normalize_glyphs`: glyphless whitespace advances like a
+    space, any other character without a glyph advances by
+    :data:`GLYPH_FALLBACK_CHAR`'s width — the width it renders at after
+    normalization.
+    """
+    cmap = _cmap()
+    hmtx = _load_font()["hmtx"]  # pyright: ignore[reportAny]
+    space_id = cmap[ord(" ")]
+    fallback_id = cmap[ord(GLYPH_FALLBACK_CHAR)]
     total: int = 0
     for char in text:
-        glyph_id = _cmap.get(ord(char))
-        if glyph_id is not None:
-            advance: int = int(_hmtx[glyph_id][0])  # pyright: ignore[reportUnknownArgumentType]
-            total += advance
-        else:
-            # Fallback: use space width for unknown glyphs
-            space_id = _cmap.get(ord(" "))
-            if space_id is not None:
-                total += int(_hmtx[space_id][0])  # pyright: ignore[reportUnknownArgumentType]
+        glyph_id = cmap.get(ord(char))
+        if glyph_id is None:
+            glyph_id = space_id if char.isspace() else fallback_id
+        advance: int = int(hmtx[glyph_id][0])  # pyright: ignore[reportUnknownArgumentType]
+        total += advance
     return total
 
 
@@ -108,7 +223,7 @@ def measure_text(text: str, font_size: float) -> tuple[float, float]:
         width_units = _measure_line_width(plain)
         max_width_units = max(max_width_units, width_units)
 
-    width = max_width_units * font_size / _units_per_em
-    height = num_lines * _LINE_HEIGHT_RATIO * font_size
+    width = max_width_units * font_size / _units_per_em()
+    height = num_lines * _line_height_ratio() * font_size
 
     return (width, height)

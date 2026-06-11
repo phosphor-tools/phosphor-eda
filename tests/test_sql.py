@@ -225,6 +225,7 @@ def _constructed_schematic() -> Schematic:
             y=20.0,
             rotation=90.0,
             mirror=False,
+            physical_designator="U1.1",
             metadata={"source_block": "U1A", "sheet_symbol": "power-mcu"},
         ),
         ComponentOccurrence(
@@ -413,7 +414,8 @@ class TestConstructedSchematicSql:
 
         occurrence_rows = constructed_db.execute(
             """
-            SELECT component_id, reference, page_id, page_name, scope_path, source_id, part_id
+            SELECT component_id, reference, page_id, page_name, scope_path, source_id,
+                   part_id, physical_designator
             FROM component_occurrences
             WHERE component_id = 'component:u1'
             ORDER BY occurrence_id
@@ -428,6 +430,7 @@ class TestConstructedSchematicSql:
                 "/root/control",
                 "control/U1B",
                 "B",
+                None,
             ),
             (
                 "component:u1",
@@ -437,6 +440,7 @@ class TestConstructedSchematicSql:
                 "/root/power",
                 "power/U1A",
                 "A",
+                "U1.1",
             ),
         ]
         assert _count(constructed_db, "SELECT count(*) FROM component_occurrences") == 4
@@ -1203,6 +1207,15 @@ class TestBoard:
         assert row is not None
         assert row[0] is not None
         assert row[1] > 0
+
+    def test_layer_count_without_stackup_uses_pcb_layers(
+        self, constructed_db: duckdb.DuckDBPyConnection
+    ) -> None:
+        # The constructed project has no stackup metadata; layer_count must
+        # still reflect the two copper layers on the Pcb itself.
+        row = constructed_db.execute("SELECT layer_count FROM board").fetchone()
+        assert row is not None
+        assert row[0] == 2
 
 
 class TestViews:

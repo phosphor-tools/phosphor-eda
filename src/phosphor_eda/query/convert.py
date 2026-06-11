@@ -28,7 +28,7 @@ from phosphor_eda.formats.kicad.dru_parser import parse_kicad_dru
 from phosphor_eda.formats.kicad.pro_parser import parse_kicad_pro
 from phosphor_eda.formats.kicad.stackup import parse_kicad_stackup
 from phosphor_eda.formats.kicad.to_schematic import kicad_to_design
-from phosphor_eda.query.serialize import serialize_design
+from phosphor_eda.query.format import serialize_design
 
 if TYPE_CHECKING:
     from collections.abc import Callable

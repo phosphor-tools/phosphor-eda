@@ -31,16 +31,16 @@ def test_layer_mask_bounds_from_real_geometry_not_path_pairing() -> None:
     ``d`` string drops the true vertical extremes. ``LayerMask.bounds()`` reads
     the primitive's real geometry bbox instead.
     """
+    from phosphor_eda.geometry.pcb_geometry import circle_path_d
     from phosphor_eda.render.inventory import InventoryTags
     from phosphor_eda.render.primitives import (
         LayerMask,
         SvgPrimitive,
-        _circle_path_d,
     )
 
     cx, cy, radius = 50.0, 50.0, 20.0
     board = SvgPrimitive(
-        d=_circle_path_d(cx, cy, radius),
+        d=circle_path_d(cx, cy, radius),
         source_id="board",
         source_layer="edge",
         kind="board_profile",

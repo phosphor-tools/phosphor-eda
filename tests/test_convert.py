@@ -6,10 +6,12 @@ from phosphor_eda.query.convert import (
     SCHEMATIC_EXTENSIONS,
     convert,
     find_project_root,
+    resolve_prjpcb_pcbdoc,
 )
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 DSN_FILE = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
+PIMX8_PRJPCB = FIXTURES / "altium/pi-mx8/PiMX8MP_r0.3_release.PrjPcb"
 
 
 def test_convert_dsn():
@@ -32,6 +34,26 @@ def test_schematic_extensions():
     assert ".schdoc" in SCHEMATIC_EXTENSIONS
     assert ".kicad_sch" in SCHEMATIC_EXTENSIONS
     assert ".prjpcb" in SCHEMATIC_EXTENSIONS
+
+
+def test_resolve_prjpcb_pcbdoc_subfolder_prefix():
+    """A PcbDoc listed under a PCB/ subfolder resolves relative to the project."""
+    pcbdoc = resolve_prjpcb_pcbdoc(PIMX8_PRJPCB)
+    assert pcbdoc.parent.name == "PCB"
+    assert pcbdoc.name == "PiMX8MP_r0.3.PcbDoc"
+    assert pcbdoc.is_file()
+
+
+def test_resolve_prjpcb_pcbdoc_windows_separators(tmp_path):
+    """A DocumentPath with backslash subfolder separators resolves correctly."""
+    prjpcb = tmp_path / "Board.PrjPcb"
+    prjpcb.write_text("[Design]\nHierarchyMode=1\n[Document1]\nDocumentPath=PCB\\Board.PcbDoc\n")
+    pcb_dir = tmp_path / "PCB"
+    pcb_dir.mkdir()
+    (pcb_dir / "Board.PcbDoc").write_text("")
+
+    resolved = resolve_prjpcb_pcbdoc(prjpcb)
+    assert resolved == pcb_dir / "Board.PcbDoc"
 
 
 def test_find_project_root_case_insensitive_prjpcb(tmp_path):

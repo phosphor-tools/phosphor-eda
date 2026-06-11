@@ -81,6 +81,32 @@ def test_render_svg_uses_typed_inventory_metadata() -> None:
     assert "display_role" not in svg
 
 
+def test_render_traces_use_native_stroked_centerlines() -> None:
+    """Width-bearing copper traces emit stroked centerlines, not polygons."""
+    import re
+
+    svg = render_pcb_svg(_board(), _design_settings()).svg
+
+    conductor_paths = re.findall(
+        r'<path d="([^"]*)"[^>]*stroke-linecap: round[^>]*data-kind="conductor"', svg
+    )
+    assert conductor_paths, "expected at least one stroked conductor path"
+    assert "fill: none" in svg
+    for d in conductor_paths:
+        # A stroked centerline is short: a move plus a line/arc, no polygon ring.
+        assert d.startswith("M ")
+
+
+def test_render_pads_use_native_arcs() -> None:
+    """Circular pads render as two-arc native circles rather than polygons."""
+    import re
+
+    svg = render_pcb_svg(_board(), _design_settings()).svg
+    pad_paths = re.findall(r'<path d="([^"]*)"[^>]*data-kind="pad"', svg)
+    assert pad_paths
+    assert any(d.count(" A ") == 2 and d.endswith("Z") for d in pad_paths)
+
+
 def test_mask_viewports_cover_full_board_bbox() -> None:
     import re
 
