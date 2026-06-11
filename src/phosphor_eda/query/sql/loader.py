@@ -658,7 +658,7 @@ _BOARD: TableSpec[_BoardRow] = TableSpec(
             lambda r: (
                 sum(1 for layer in r.stackup.layers if layer.layer_type == "copper")
                 if r.stackup
-                else 0
+                else len(r.pcb.layers_by_role(LayerRole.COPPER))
             ),
         ),
         col("geom", GEOMETRY, lambda r: _wkb(r.geom)),

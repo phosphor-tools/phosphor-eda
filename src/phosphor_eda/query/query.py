@@ -127,10 +127,10 @@ def filter_pages(
     result = list(design.pages)
 
     if nets:
-        for name in nets:
-            _ = find_net(design, name)
-        net_set = set(nets)
-        result = [p for p in result if net_set & {n.name for n in p.nets}]
+        # Resolve each input through find_net so scoped ids and aliases match
+        # the same nets they resolve to, not just literal name equality.
+        requested_ids = {find_net(design, name).id for name in nets}
+        result = [p for p in result if requested_ids & {n.id for n in p.nets}]
 
     if components:
         _require_components(design, components)

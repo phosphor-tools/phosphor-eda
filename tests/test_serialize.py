@@ -1151,6 +1151,18 @@ def test_filter_pages_by_net():
     assert "Power" in names
 
 
+def test_filter_pages_by_net_scoped_id_and_alias():
+    design = _filterable_design()
+
+    by_id = filter_pages(design, nets=["net:P3V3"])
+    assert "Power" in {p.name for p in by_id}
+
+    p3v3 = next(n for n in design.nets if n.name == "P3V3")
+    p3v3.aliases.add("+3V3")
+    by_alias = filter_pages(design, nets=["+3V3"])
+    assert "Power" in {p.name for p in by_alias}
+
+
 def test_filter_pages_by_component():
     design = _filterable_design()
     result = filter_pages(design, components=["U1"])
