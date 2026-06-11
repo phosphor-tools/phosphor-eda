@@ -17,6 +17,7 @@ Usage::
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from enum import StrEnum, auto
 from typing import TYPE_CHECKING, final, override
 
@@ -52,34 +53,16 @@ class Category(StrEnum):
 
 
 @final
+@dataclass(slots=True, frozen=True)
 class Finding:
     """A single validation finding."""
-
-    __slots__: tuple[str, ...] = ("category", "component", "message", "net", "pin", "severity")
 
     severity: Severity
     category: Category
     message: str
-    component: str
-    net: str
-    pin: str
-
-    def __init__(
-        self,
-        severity: Severity,
-        category: Category,
-        message: str,
-        *,
-        component: str = "",
-        net: str = "",
-        pin: str = "",
-    ) -> None:
-        self.severity = severity
-        self.category = category
-        self.message = message
-        self.component = component
-        self.net = net
-        self.pin = pin
+    component: str = ""
+    net: str = ""
+    pin: str = ""
 
     @override
     def __repr__(self) -> str:

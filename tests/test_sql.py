@@ -1208,6 +1208,15 @@ class TestBoard:
         assert row[0] is not None
         assert row[1] > 0
 
+    def test_layer_count_without_stackup_uses_pcb_layers(
+        self, constructed_db: duckdb.DuckDBPyConnection
+    ) -> None:
+        # The constructed project has no stackup metadata; layer_count must
+        # still reflect the two copper layers on the Pcb itself.
+        row = constructed_db.execute("SELECT layer_count FROM board").fetchone()
+        assert row is not None
+        assert row[0] == 2
+
 
 class TestViews:
     def test_net_routes_reads_conductors(self, db: duckdb.DuckDBPyConnection) -> None:
