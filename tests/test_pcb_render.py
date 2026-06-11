@@ -388,6 +388,81 @@ _REJECTED_SETTINGS_DOCUMENTS: list[dict[str, object]] = [
 ]
 
 
+def _documentation_settings(
+    *,
+    highlights: tuple[HighlightSpec, ...],
+    tokens: dict[str, object] | None = None,
+) -> RenderSettings:
+    payload: dict[str, object] = {"extends": "phosphor:documentation"}
+    if tokens:
+        payload["tokens"] = tokens
+    base = load_render_settings_json(json.dumps(payload))
+    return resolve_effective_settings(base, CliOverrides(side="front", highlights=highlights))
+
+
+def _marker_paths(svg: str) -> list[str]:
+    import re
+
+    return re.findall(r'<g[^>]*data-role="highlight\.marker"[^>]*>(.*?)</g>', svg, re.S)
+
+
+def test_pad_highlight_draws_marker_ring_when_enabled() -> None:
+    settings = _documentation_settings(highlights=(HighlightSpec(pad="U1.1"),))
+    svg = render_pcb_svg(_board(), settings).svg
+
+    markers = _marker_paths(svg)
+    assert len(markers) == 1
+    assert "A " in markers[0]
+
+
+def test_marker_ring_enforces_minimum_screen_diameter() -> None:
+    import re
+
+    settings = _documentation_settings(
+        highlights=(HighlightSpec(pad="U1.1"),),
+        tokens={"highlight.marker.minDiameterPx": 200},
+    )
+    svg = render_pcb_svg(_board(), settings).svg
+
+    (marker,) = _marker_paths(svg)
+    radii = [float(value) for value in re.findall(r"A ([\d.]+)", marker)]
+    assert radii
+    view_box = re.search(r'viewBox="[\d.\-]+ [\d.\-]+ ([\d.]+)', svg)
+    assert view_box is not None
+    px_per_mm = float(re.search(r'width="(\d+)"', svg).group(1)) / float(view_box.group(1))
+    assert radii[0] * px_per_mm >= 100  # half of minDiameterPx
+
+    # The ring must not collapse to the pad's own size when the minimum is large.
+    assert radii[0] > 1.0
+
+
+def test_marker_ring_absent_for_net_and_component_highlights() -> None:
+    settings = _documentation_settings(
+        highlights=(HighlightSpec(net="VCC"), HighlightSpec(component="U1")),
+    )
+    svg = render_pcb_svg(_board(), settings).svg
+    assert not _marker_paths(svg)
+
+
+def test_marker_ring_disabled_in_realistic_preset() -> None:
+    base = load_render_settings_json(json.dumps({"extends": "phosphor:realistic"}))
+    settings = resolve_effective_settings(
+        base,
+        CliOverrides(side="front", highlights=(HighlightSpec(pad="U1.1"),)),
+    )
+    svg = render_pcb_svg(_board(), settings).svg
+    assert not _marker_paths(svg)
+
+
+def test_marker_ring_uses_highlight_color() -> None:
+    settings = _documentation_settings(
+        highlights=(HighlightSpec(pad="U1.1", color="#00aa11"),),
+    )
+    svg = render_pcb_svg(_board(), settings).svg
+    (marker,) = _marker_paths(svg)
+    assert "#00aa11" in marker
+
+
 def test_hidden_pill_label_text_defaults_to_dark_fill() -> None:
     """With the pill hidden, text must not keep the white-on-pill contrast color."""
     from phosphor_eda.render.annotations import parse_annotations, resolve_annotations

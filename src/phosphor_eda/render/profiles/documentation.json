@@ -53,6 +53,7 @@
     "annotation.connector.stroke": "#333333",
     "annotation.label.textHalo": "#ffffff",
     "annotation.label.textHaloWidthPx": 4,
-    "annotation.label.fontWeight": 650
+    "annotation.label.fontWeight": 650,
+    "highlight.marker.enabled": true
   }
 }
