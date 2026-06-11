@@ -235,7 +235,10 @@ def _plan_text_charset(plan: DerivedRenderPlan) -> set[str]:
                 chars.update(callout.text)
         legend = annotations.legend
         if legend is not None:
+            # .legend-title-text renders with `text-transform: uppercase`,
+            # so the subset needs the uppercased glyphs too.
             chars.update(legend.title)
+            chars.update(legend.title.upper())
             for entry in legend.entries:
                 chars.update(entry.label)
     return chars

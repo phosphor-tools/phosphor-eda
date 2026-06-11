@@ -37,7 +37,11 @@ from phosphor_eda.geometry.pcb_geometry import (
     pad_polygon,
     polygon_geometry,
 )
-from phosphor_eda.geometry.text_metrics import baseline_center_offset, measure_text
+from phosphor_eda.geometry.text_metrics import (
+    baseline_center_offset,
+    measure_text,
+    normalize_glyphs,
+)
 from phosphor_eda.render.drills import drill_geometry, drill_render
 from phosphor_eda.render.inventory import (
     InventoryItem,
@@ -451,13 +455,16 @@ def _text_render_for_payload(text: PcbText, *, mirrored: bool) -> _ShapeRender:
     """
     if not text.text or text.font_size <= 0:
         return _filled("")
-    width, height = measure_text(text.text, text.font_size)
+    # Normalize before measuring and serializing so the emitted glyphs are
+    # exactly the ones the layout was computed from.
+    content = normalize_glyphs(text.text)
+    width, height = measure_text(content, text.font_size)
     anchor, anchor_x = _text_horizontal_anchor(text, width)
     baseline_y = _text_baseline_y(text, height)
     return _ShapeRender(
         d="",
         text=SvgText(
-            content=text.text,
+            content=content,
             x=anchor_x,
             y=baseline_y,
             pivot_x=text.x,
@@ -488,34 +495,42 @@ def _text_horizontal_anchor(text: PcbText, width: float) -> tuple[str, float]:
     return "middle", text.x
 
 
+def _text_center_y(text: PcbText, height: float) -> float:
+    """Pre-rotation visual center y for the requested vertical justification.
+
+    Default (and explicit center) keeps the center on ``text.y``;
+    ``top``/``bottom`` put that block edge on ``text.y`` instead, shifting
+    the center half the block height away.
+    """
+    tokens = _justify_tokens(text)
+    if "top" in tokens:
+        return text.y + height / 2.0
+    if "bottom" in tokens:
+        return text.y - height / 2.0
+    return text.y
+
+
 def _text_baseline_y(text: PcbText, height: float) -> float:
     """Baseline y for the requested vertical justification.
 
-    Default (and explicit center) vertically centers the line on ``text.y``
-    using the font's center-to-baseline offset. ``top``/``bottom`` move the
-    block edge onto ``text.y`` first, then offset to the baseline.
+    Offsets the justified visual center (:func:`_text_center_y`) to the
+    baseline using the font's center-to-baseline offset.
     """
-    offset = baseline_center_offset() * text.font_size
-    tokens = _justify_tokens(text)
-    if "top" in tokens:
-        center_y = text.y + height / 2.0
-    elif "bottom" in tokens:
-        center_y = text.y - height / 2.0
-    else:
-        center_y = text.y
-    return center_y + offset
+    return _text_center_y(text, height) + baseline_center_offset() * text.font_size
 
 
 def _text_bounds(text: PcbText) -> Bounds | None:
     """Axis-aligned bounds of rendered text, accounting for rotation.
 
-    Sized from the measured glyph box centered on ``(x, y)`` (matching the
-    legacy outline extents closely enough for viewport sizing) and expanded
-    to the rotated box's footprint.
+    Sized from the measured glyph box centered on the justified center
+    (:func:`_text_center_y`, matching the renderer's vertical shift) and
+    rotated about the authored pivot ``(x, y)`` — the same pivot
+    ``_text_transform`` rotates the ``<text>`` element around.
     """
     if not text.text or text.font_size <= 0:
         return None
-    width, height = measure_text(text.text, text.font_size)
+    width, height = measure_text(normalize_glyphs(text.text), text.font_size)
+    center_offset = _text_center_y(text, height) - text.y
     half_w = width / 2.0
     half_h = height / 2.0
     corners = ((-half_w, -half_h), (half_w, -half_h), (half_w, half_h), (-half_w, half_h))
@@ -525,8 +540,9 @@ def _text_bounds(text: PcbText) -> Bounds | None:
     xs: list[float] = []
     ys: list[float] = []
     for dx, dy in corners:
-        xs.append(text.x + dx * cos_a - dy * sin_a)
-        ys.append(text.y + dx * sin_a + dy * cos_a)
+        oy = dy + center_offset
+        xs.append(text.x + dx * cos_a - oy * sin_a)
+        ys.append(text.y + dx * sin_a + oy * cos_a)
     return (min(xs), min(ys), max(xs), max(ys))
 
 

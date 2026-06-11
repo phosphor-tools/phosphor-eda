@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 
+import pytest
 from conftest import build_render_test_board
 
 from phosphor_eda.domain.pcb import (
@@ -215,3 +216,96 @@ def test_non_subsettable_charset_falls_back_to_full_face() -> None:
 
     big_charset = frozenset(chr(0x4E00 + i) for i in range(600))
     assert embedded_font_base64(big_charset) == _full_face_base64()
+
+
+def test_unsupported_glyph_is_normalized_in_svg_output() -> None:
+    """Glyphs Inter cannot render are replaced, so layout matches rendering."""
+    board = build_render_test_board()
+    svg = _render_with_text(
+        PcbText("X中Y", 5.0, 5.0, 0.0, 1.0),
+        layer=_front_silk(board.layers),
+    )
+    assert "中" not in svg
+    assert ">X□Y<" in svg
+
+
+class TestTextBoundsVerticalJustify:
+    """_text_bounds must use the same vertical center the renderer shifts to."""
+
+    def test_top_justified_bounds_extend_downward(self) -> None:
+        from phosphor_eda.geometry.text_metrics import measure_text
+        from phosphor_eda.render.primitives import _text_bounds
+
+        text = PcbText("R12", 0.0, 0.0, 0.0, 1.0, justify="top")
+        _, height = measure_text(text.text, text.font_size)
+        bounds = _text_bounds(text)
+        assert bounds is not None
+        _, min_y, _, max_y = bounds
+        assert min_y == pytest.approx(0.0)
+        assert max_y == pytest.approx(height)
+
+    def test_bottom_justified_bounds_extend_upward(self) -> None:
+        from phosphor_eda.geometry.text_metrics import measure_text
+        from phosphor_eda.render.primitives import _text_bounds
+
+        text = PcbText("R12", 0.0, 0.0, 0.0, 1.0, justify="bottom")
+        _, height = measure_text(text.text, text.font_size)
+        bounds = _text_bounds(text)
+        assert bounds is not None
+        _, min_y, _, max_y = bounds
+        assert min_y == pytest.approx(-height)
+        assert max_y == pytest.approx(0.0)
+
+    def test_rotated_top_justified_bounds_rotate_about_anchor(self) -> None:
+        """Rotation pivots on (x, y) — the shifted box swings around it."""
+        from phosphor_eda.geometry.text_metrics import measure_text
+        from phosphor_eda.render.primitives import _text_bounds
+
+        text = PcbText("R12", 0.0, 0.0, 180.0, 1.0, justify="top")
+        _, height = measure_text(text.text, text.font_size)
+        bounds = _text_bounds(text)
+        assert bounds is not None
+        _, min_y, _, max_y = bounds
+        # Top-justified box spans [0, h]; rotated 180° about (0, 0) → [-h, 0].
+        assert min_y == pytest.approx(-height)
+        assert max_y == pytest.approx(0.0)
+
+    def test_center_justified_bounds_unchanged(self) -> None:
+        from phosphor_eda.geometry.text_metrics import measure_text
+        from phosphor_eda.render.primitives import _text_bounds
+
+        text = PcbText("R12", 0.0, 0.0, 0.0, 1.0)
+        _, height = measure_text(text.text, text.font_size)
+        bounds = _text_bounds(text)
+        assert bounds is not None
+        _, min_y, _, max_y = bounds
+        assert min_y == pytest.approx(-height / 2.0)
+        assert max_y == pytest.approx(height / 2.0)
+
+
+def test_plan_text_charset_covers_uppercased_legend_title() -> None:
+    """CSS uppercases legend titles, so the subset needs the uppercase glyphs."""
+    from phosphor_eda.render.annotation_spec import LegendEntry
+    from phosphor_eda.render.annotations import ResolvedAnnotations, ResolvedLegend
+    from phosphor_eda.render.plan import DerivedRenderPlan, ViewBox
+    from phosphor_eda.render.serialize import _plan_text_charset
+
+    legend = ResolvedLegend(
+        title="spi signals",
+        entries=[LegendEntry(color="#f00", label="MOSI")],
+        x=0.0,
+        y=0.0,
+        width=10.0,
+        height=10.0,
+    )
+    plan = DerivedRenderPlan(
+        view_box=ViewBox(0.0, 0.0, 10.0, 10.0),
+        width_px=100,
+        height_px=100,
+        base_layers=(),
+        highlight_groups=(),
+        annotations=ResolvedAnnotations(legend=legend),
+        warnings=(),
+    )
+    chars = _plan_text_charset(plan)
+    assert set("SPI SIGNALS") <= chars
