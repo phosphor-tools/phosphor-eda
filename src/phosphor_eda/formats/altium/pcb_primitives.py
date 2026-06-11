@@ -126,6 +126,11 @@ class ParsedPadPayload:
     shape: str
     rotation: float = 0.0
     drill: float = 0.0
+    roundrect_rratio: float = 0.0
+    hole_plated: bool | None = None
+    hole_is_slot: bool = False
+    slot_length: float = 0.0
+    slot_rotation: float = 0.0
     mask_aperture_width: float | None = None
     mask_aperture_height: float | None = None
     mask_aperture_source: str = ""

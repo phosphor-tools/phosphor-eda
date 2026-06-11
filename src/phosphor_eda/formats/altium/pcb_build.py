@@ -168,19 +168,23 @@ def _add_parsed_pad(
     layers = _parsed_layer_refs(builder, primitive.layers, source=primitive.id)
     drill = None
     if pad.drill > 0:
+        if primitive.has_role(ParsedRole.PLATED_HOLE):
+            plating = PcbDrillPlating.PLATED
+        elif pad.hole_plated is False:
+            plating = PcbDrillPlating.NON_PLATED
+        else:
+            plating = PcbDrillPlating.UNKNOWN
         drill = builder.add_drill_object(
             PcbDrill(
                 id=f"drill:{primitive.id}",
                 x=pad.x,
                 y=pad.y,
                 diameter=pad.drill,
-                shape=PcbDrillShape.ROUND,
-                plating=(
-                    PcbDrillPlating.PLATED
-                    if primitive.has_role(ParsedRole.PLATED_HOLE)
-                    else PcbDrillPlating.UNKNOWN
-                ),
-                rotation=pad.rotation,
+                shape=PcbDrillShape.SLOT if pad.hole_is_slot else PcbDrillShape.ROUND,
+                plating=plating,
+                width=pad.slot_length if pad.hole_is_slot else 0.0,
+                height=pad.drill if pad.hole_is_slot else 0.0,
+                rotation=pad.slot_rotation if pad.hole_is_slot else pad.rotation,
                 layers=layers,
                 metadata=primitive.metadata,
             ),
@@ -208,6 +212,7 @@ def _add_parsed_pad(
             footprint=_footprint_for_primitive(primitive, footprints_by_index),
             drill=drill,
             rotation=pad.rotation,
+            roundrect_rratio=pad.roundrect_rratio,
             mask_aperture=mask_aperture,
             metadata=primitive.metadata,
         ),

@@ -345,7 +345,10 @@ def _shape_render_for_item(item: InventoryItem) -> _ShapeRender:
         geometry = closed_path_geometry(item.payload)
         return _filled("" if geometry is None else geometry_to_svg_path_d(geometry))
     if isinstance(item.payload, PcbText):
-        mirrored = item.layer is not None and item.layer.side == "back"
+        if item.payload.mirrored is not None:
+            mirrored = item.payload.mirrored
+        else:
+            mirrored = item.layer is not None and item.layer.side == "back"
         return _text_render_for_payload(item.payload, mirrored=mirrored)
     return _shape_render_for_payload(
         item.payload, filled=item.purpose != InventoryPurpose.BOARD_PROFILE

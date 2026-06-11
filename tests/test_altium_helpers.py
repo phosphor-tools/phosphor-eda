@@ -94,6 +94,23 @@ class TestPropPoints:
         props = {"x1": "5", "y1": "6", "x2": "7", "y2": "8"}
         assert prop_points(props) == [(5, 6), (7, 8)]
 
+    def test_extra_locations_beyond_fifty(self) -> None:
+        # Altium caps LocationCount at 50 and stores vertices 51+ as
+        # ExtraLocationCount / EX{i},EY{i} (seen on 4 wires in the pi-mx8
+        # fixture).
+        props = {"locationcount": "50", "extralocationcount": "10"}
+        for i in range(1, 51):
+            props[f"x{i}"] = str(i)
+            props[f"y{i}"] = str(-i)
+        for i in range(51, 61):
+            props[f"ex{i}"] = str(i)
+            props[f"ey{i}"] = str(-i)
+
+        points = prop_points(props)
+
+        assert len(points) == 60
+        assert points == [(i, -i) for i in range(1, 61)]
+
 
 class TestDistanceFromTop:
     def test_basic(self) -> None:

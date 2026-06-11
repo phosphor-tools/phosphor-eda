@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 import olefile
 
 from phosphor_eda.domain.pcb import PcbText
+from phosphor_eda.formats.altium.errors import require_ole_file
 from phosphor_eda.formats.altium.pcb_build import (
     build_pcb_from_parsed_primitives,
     compute_bbox,
@@ -28,6 +29,7 @@ from phosphor_eda.formats.altium.pcb_primitives import (
     ParsedObjectKind,
     ParsedPrimitive,
     ParsedRole,
+    parse_mil,
     read_text_records,
 )
 from phosphor_eda.formats.altium.pcb_records import COMPONENT_NONE
@@ -35,6 +37,7 @@ from phosphor_eda.formats.altium.pcb_streams import (
     apply_drill_manager_mask_apertures,
     dedupe_shape_based_board_polygons,
     parse_arcs,
+    parse_board6_outline,
     parse_board_outline,
     parse_component_bodies,
     parse_components,
@@ -76,6 +79,7 @@ def parse_altium_pcb(
     """Parse an Altium .PcbDoc file into the PCB domain model."""
     if ctx is None:
         ctx = ParseContext()
+    require_ole_file(path)
     ole = olefile.OleFileIO(str(path))
     try:
         # Read all streams
@@ -136,6 +140,9 @@ def parse_altium_pcb(
     ]
     if not any(item.has_role(ParsedRole.BOARD_OUTLINE) for item in geometry):
         geometry.extend(parse_board_outline(tracks_data, arcs_data, layer_map, ctx))
+    if not any(item.has_role(ParsedRole.BOARD_OUTLINE) for item in geometry):
+        # Older files keep the board shape only as Board6 vertex keys.
+        geometry.extend(parse_board6_outline(board_props, layer_map, ctx))
 
     # Component-owned primitives carry their owner index in
     # metadata.native_component_index; board-level primitives carry None.
@@ -187,7 +194,7 @@ def parse_altium_pcb(
 
     keepouts = [*track_keepouts, *arc_keepouts, *fill_keepouts]
 
-    return build_pcb_from_parsed_primitives(
+    pcb = build_pcb_from_parsed_primitives(
         name=board_name,
         layer_map=layer_map,
         nets=nets,
@@ -197,3 +204,10 @@ def parse_altium_pcb(
         primitives=geometry,
         ctx=ctx,
     )
+    # Board origin (Board6 ORIGINX/ORIGINY) aligns coordinates with
+    # manufacturing outputs (gerber/pick-and-place). Stored in model
+    # coordinates (mm, y negated like all parsed geometry).
+    if "originx" in board_props and "originy" in board_props:
+        pcb.metadata.properties["origin_x_mm"] = f"{parse_mil(board_props['originx']):.6f}"
+        pcb.metadata.properties["origin_y_mm"] = f"{-parse_mil(board_props['originy']):.6f}"
+    return pcb

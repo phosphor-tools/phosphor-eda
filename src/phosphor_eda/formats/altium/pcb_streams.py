@@ -36,6 +36,7 @@ from phosphor_eda.domain.pcb import (
 from phosphor_eda.formats.altium._helpers import u32
 from phosphor_eda.formats.altium.enums import (
     AltiumLayer,
+    PadHoleShape,
     PadShape,
     PadShapeAlt,
     PcbRecordType,
@@ -82,6 +83,7 @@ from phosphor_eda.formats.altium.pcb_records import (
     COMPONENT_NONE,
     NET_UNCONNECTED,
     ArcRecord,
+    ExtendedVertex,
     FillRecord,
     PadRecord,
     RegionRecord,
@@ -513,8 +515,29 @@ def parse_pads(
 
         # Determine shape string
         shape = _PAD_SHAPES.get(_pad_shape(pad.shape), "rect")
+        roundrect_rratio = 0.0
         if pad.shape_alt == PadShapeAlt.ROUNDRECT:
             shape = "roundrect"
+            # Altium stores percent where 100 = fully round; the ratio is
+            # radius / min(width, height), so 100% maps to 0.5.
+            roundrect_rratio = (pad.corner_radius_pct or 0) / 200.0
+
+        # Hole shape: slots carry their length/rotation in sub6; square
+        # holes have no domain model and degrade to round with a diagnostic.
+        hole_is_slot = False
+        slot_length = 0.0
+        slot_rotation = 0.0
+        if pad.hole_size > 0 and pad.hole_shape is not None:
+            if pad.hole_shape == PadHoleShape.SLOT and pad.slot_size > 0:
+                hole_is_slot = True
+                slot_length = int_to_mm(pad.slot_size)
+                slot_rotation = pad.slot_rotation
+            elif pad.hole_shape == PadHoleShape.SQUARE:
+                ctx.warn(
+                    "unsupported_geometry",
+                    f"pad {index} ({pad.name}): square hole has no domain model; treated as round",
+                    record_index=index,
+                )
 
         # Determine layers (multi-layer pad = layer 74 = through-hole)
         if pad.layer == AltiumLayer.MULTI_LAYER:
@@ -534,7 +557,7 @@ def parse_pads(
         roles = [ParsedRole.CONDUCTOR]
         if pad.layer not in COPPER_LAYERS and pad.layer != AltiumLayer.MULTI_LAYER:
             roles.extend(layer_geometry_roles(pad.layer, layer_map))
-        if pad.hole_size > 0:
+        if pad.hole_size > 0 and pad.plated:
             roles.append(ParsedRole.PLATED_HOLE)
 
         geometry_shape = ParsedShapeKind.CIRCLE if shape == "circle" else ParsedShapeKind.RECTANGLE
@@ -558,6 +581,11 @@ def parse_pads(
                         shape=shape,
                         rotation=pad.rotation,
                         drill=int_to_mm(pad.hole_size),
+                        roundrect_rratio=roundrect_rratio,
+                        hole_plated=pad.plated if pad.hole_size > 0 else None,
+                        hole_is_slot=hole_is_slot,
+                        slot_length=slot_length,
+                        slot_rotation=slot_rotation,
                     ),
                     layers=tuple(layers),
                     net_number=net_num,
@@ -782,6 +810,7 @@ def parse_texts(
                         y=-int_to_mm(text_rec.position[1]),
                         rotation=text_rec.rotation,
                         font_size=int_to_mm(text_rec.height),
+                        mirrored=text_rec.is_mirrored,
                     ),
                     layers=(layer,),
                     metadata=geometry_metadata(
@@ -1239,6 +1268,68 @@ def parse_region_kind(properties: dict[str, str], ctx: ParseContext | None = Non
                 f"non-integer region kind {raw_kind!r}; treated as default region",
             )
         return None
+
+
+def parse_board6_outline(
+    board_props: dict[str, str],
+    layer_map: dict[int, PcbLayer],
+    ctx: ParseContext,
+) -> list[ParsedPrimitive]:
+    """Synthesize the board profile from Board6 ``KIND{i}/VX{i}/VY{i}`` vertices.
+
+    Older Altium files keep the board shape only as Board6 vertex keys —
+    they have no outline-layer primitives at all. Arc edges (``kind != 0``)
+    are defined by ``CX/CY/SA/EA/R`` and linearized like region outlines.
+    """
+    vertices: list[ExtendedVertex] = []
+    i = 0
+    while f"vx{i}" in board_props and f"vy{i}" in board_props:
+        is_round = board_props.get(f"kind{i}", "0").strip() != "0"
+        vertices.append(
+            ExtendedVertex(
+                x=_mil_str_to_internal(board_props[f"vx{i}"]),
+                y=_mil_str_to_internal(board_props[f"vy{i}"]),
+                is_round=is_round,
+                center_x=_mil_str_to_internal(board_props.get(f"cx{i}", "0mil")),
+                center_y=_mil_str_to_internal(board_props.get(f"cy{i}", "0mil")),
+                radius=_mil_str_to_internal(board_props.get(f"r{i}", "0mil")),
+                start_angle=float(board_props.get(f"sa{i}", "0")),
+                end_angle=float(board_props.get(f"ea{i}", "0")),
+            )
+        )
+        i += 1
+    if len(vertices) < 3:
+        if vertices:
+            ctx.warn(
+                "board_outline",
+                f"Board6 outline has only {len(vertices)} vertices; ignored",
+            )
+        return []
+
+    points = linearize_arc_vertices(vertices)
+    polygon = PcbPolygon(points=[(int_to_mm(x), -int_to_mm(y)) for x, y in points])
+    layer_name = altium_layer_name(int(AltiumLayer.MECHANICAL_1), layer_map)
+    return [
+        ParsedPrimitive(
+            id="outline_board6:0",
+            object_type=ParsedObjectKind.GRAPHIC,
+            shape=ParsedShapeKind.POLYGON,
+            roles=normalize_parsed_roles(ParsedRole.BOARD_OUTLINE),
+            data=polygon,
+            layers=(layer_name,) if layer_name else (),
+            metadata=geometry_metadata(
+                native_type="BOARD6_OUTLINE",
+                native_kind="board_outline",
+                source_collection="board_profile",
+                native_index=0,
+            ),
+        )
+    ]
+
+
+def _mil_str_to_internal(value: str) -> int:
+    """Convert a Board6 mil-string to Altium internal units (0.1 µinch)."""
+    return round(parse_mil(value) / int_to_mm(1))
 
 
 def parse_board_outline(
