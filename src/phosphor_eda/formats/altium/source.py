@@ -10,6 +10,10 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.schematic import ScopeId
+from phosphor_eda.formats.altium.annotation import (
+    AnnotationDesignator,
+    load_annotation_designators,
+)
 from phosphor_eda.formats.altium.project import AltiumProject, parse_prjpcb_file
 from phosphor_eda.formats.altium.records import (
     AltiumRecord,
@@ -85,6 +89,7 @@ class AltiumSheetSymbol:
     location: tuple[int, int]
     x_size: int
     y_size: int
+    unique_id: str = ""
 
 
 @dataclass(slots=True)
@@ -181,6 +186,10 @@ class AltiumSourceDesign:
     project: AltiumProject
     sheets: dict[str, AltiumSheetSource]
     root_sheet_name: str = ""
+    # Hierarchical unique-id path -> per-instance designator entry, from the
+    # project's ``.Annotation`` file. Empty for single sheets and un-annotated
+    # projects.
+    physical_designators: dict[str, AnnotationDesignator] = field(default_factory=dict)
 
 
 def _source_id(sheet_id: str, kind: str, source_index: int) -> str:
@@ -232,6 +241,7 @@ def _sheet_symbol_sources(
                 location=symbol.location,
                 x_size=symbol.x_size,
                 y_size=symbol.y_size,
+                unique_id=symbol.unique_id,
             ),
         )
 
@@ -726,4 +736,5 @@ def altium_to_source(
         project=project,
         sheets=sheets,
         root_sheet_name=root_sheet_name,
+        physical_designators=load_annotation_designators(path, ctx=ctx),
     )

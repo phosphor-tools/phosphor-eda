@@ -3,6 +3,7 @@
 import pytest
 
 from phosphor_eda.domain.schematic import Net, ScopeId
+from phosphor_eda.formats.altium.annotation import AnnotationDesignator
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode, AltiumProject
 from phosphor_eda.formats.altium.resolver import resolve_altium_source
 from phosphor_eda.formats.altium.source import (
@@ -816,3 +817,128 @@ def test_repeated_logical_pin_preserves_first_no_connect_state_and_dedupes_sourc
     [pin] = component.pins
     assert pin.no_connect is False
     assert [occurrence.source_id for occurrence in pin.occurrences] == ["A:pin:U1:1:shared"]
+
+
+def _instance_pin(
+    sheet: str,
+    scope_path: tuple[str, ...],
+    component_uid: str,
+    reference: str = "U1",
+) -> AltiumPinOccurrence:
+    return AltiumPinOccurrence(
+        id=f"{sheet}:pin:{reference}:{component_uid}",
+        scope_id=ScopeId(path=scope_path),
+        source_index=1,
+        local_net_id=f"{sheet}:local:net",
+        component_source_id=f"comp:{sheet}:{component_uid}",
+        component_reference=reference,
+        pin_designator="2",
+        pin_name="A",
+        location=(0, 0),
+        tip=(0, 1),
+        component_metadata={"altium_component_unique_id": component_uid},
+    )
+
+
+def _instance_sheet(
+    sheet: str,
+    scope_path: tuple[str, ...],
+    pin: AltiumPinOccurrence,
+    sheet_symbols: list[AltiumSheetSymbol] | None = None,
+) -> AltiumSheetSource:
+    scope = ScopeId(path=scope_path)
+    local_net = AltiumLocalNet(
+        id=pin.local_net_id,
+        scope_id=scope,
+        wire_points=set(),
+        pin_ids=[pin.id],
+        net_labels=[
+            AltiumNetLabel(
+                id=f"{sheet}:label:1",
+                scope_id=scope,
+                source_index=1,
+                name=f"{sheet}_NET",
+                location=(1, 10),
+            )
+        ],
+        power_ports=[],
+        ports=[],
+        sheet_entries=[],
+        harness_members=[],
+        generated_name=f"__auto_{sheet}",
+    )
+    return AltiumSheetSource(
+        id=f"sheet:{sheet}",
+        name=sheet,
+        source_file=f"{sheet}.SchDoc",
+        scope_id=scope,
+        local_nets=[local_net],
+        sheet_symbols=sheet_symbols or [],
+        sheet_entries=[],
+        harness_connectors=[],
+        harness_members=[],
+        pin_occurrences=[pin],
+    )
+
+
+def _symbol_with_uid(symbol_id: str, unique_id: str) -> AltiumSheetSymbol:
+    return AltiumSheetSymbol(
+        id=symbol_id,
+        scope_id=ScopeId(path=("Title",)),
+        source_index=1,
+        name=symbol_id,
+        child_source_file="child.SchDoc",
+        location=(0, 0),
+        x_size=100,
+        y_size=100,
+        unique_id=unique_id,
+    )
+
+
+def test_repeated_instance_occurrence_carries_physical_designator():
+    """Two instances of the same logical U1 get their own physical designators.
+
+    The logical reference stays U1; each occurrence carries the .Annotation
+    physical designator resolved from its hierarchical unique-id path. The path
+    is built from the sheet-symbol unique IDs of the scope's symbol ids.
+    """
+    sym_a = _symbol_with_uid("sym_a", "FEHIXTLT")
+    sym_b = _symbol_with_uid("sym_b", "TPZRYUFR")
+    parent = _instance_sheet(
+        "Title",
+        ("Title",),
+        _instance_pin("Title", ("Title",), "PARENT", reference="J1"),
+        sheet_symbols=[sym_a, sym_b],
+    )
+    pin_a = _instance_pin("A", ("Title", "sym_a", "child"), "VIIQXJDH")
+    pin_b = _instance_pin("B", ("Title", "sym_b", "child"), "VIIQXJDH")
+    sheet_a = _instance_sheet("A", ("Title", "sym_a", "child"), pin_a)
+    sheet_b = _instance_sheet("B", ("Title", "sym_b", "child"), pin_b)
+
+    source = _source([parent, sheet_a, sheet_b])
+    source.physical_designators = {
+        "\\FEHIXTLT\\VIIQXJDH": AnnotationDesignator(physical_designator="U1.1"),
+        "\\TPZRYUFR\\VIIQXJDH": AnnotationDesignator(physical_designator="U1.3"),
+    }
+
+    design = resolve_altium_source(source)
+
+    designators: set[str] = set()
+    for component in design.components:
+        if component.reference != "U1":
+            continue
+        for occurrence in component.occurrences:
+            designators.add(occurrence.physical_designator)
+    assert designators == {"U1.1", "U1.3"}
+
+
+def test_unannotated_occurrence_has_empty_physical_designator():
+    """With no .Annotation data, occurrences carry no physical designator."""
+    pin = _instance_pin("A", ("Title", "sym_a", "child"), "VIIQXJDH", reference="U6")
+    sheet = _instance_sheet("A", ("Title", "sym_a", "child"), pin)
+
+    design = resolve_altium_source(_source([sheet]))
+
+    for component in design.components:
+        for occurrence in component.occurrences:
+            assert occurrence.physical_designator == ""

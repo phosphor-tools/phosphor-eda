@@ -255,7 +255,8 @@ TABLE_DDL: dict[str, str] = {
             x DOUBLE,
             y DOUBLE,
             rotation DOUBLE,
-            mirror BOOLEAN
+            mirror BOOLEAN,
+            physical_designator VARCHAR
         )
     """,
     "component_pages": """

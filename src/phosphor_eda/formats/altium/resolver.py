@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from phosphor_eda.domain.schematic import Schematic, ScopeId
+    from phosphor_eda.formats.altium.annotation import AnnotationDesignator
     from phosphor_eda.formats.altium.source import (
         AltiumLocalNet,
         AltiumPinOccurrence,
@@ -76,11 +77,23 @@ def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None =
     if ctx is not None and ctx.issues:
         metadata["parse_issue_count"] = str(len(ctx.issues))
 
+    symbol_uid_by_id = {
+        symbol.id: symbol.unique_id
+        for sheet in source.sheets.values()
+        for symbol in sheet.sheet_symbols
+        if symbol.unique_id
+    }
+
     return build_resolved_schematic(
         name=source.name,
         pages=_page_inputs(source),
         local_nets=_local_net_inputs(local_refs),
-        pins=_pin_inputs(pin_occurrences, component_source_ids_by_component_id),
+        pins=_pin_inputs(
+            pin_occurrences,
+            component_source_ids_by_component_id,
+            source.physical_designators,
+            symbol_uid_by_id,
+        ),
         net_union=net_union,
         net_factory=lambda net_index, root_id, group_local_nets: _altium_net_input_for_group(
             source,
@@ -508,6 +521,8 @@ def _include_altium_net(
 def _pin_inputs(
     pin_occurrences: Iterable[AltiumPinOccurrence],
     component_source_ids_by_component_id: dict[str, list[str]],
+    physical_designators: dict[str, AnnotationDesignator],
+    symbol_uid_by_id: dict[str, str],
 ) -> list[ResolvedPinInput]:
     result: list[ResolvedPinInput] = []
     seen_pin_occurrences: set[tuple[str, str]] = set()
@@ -534,6 +549,11 @@ def _pin_inputs(
                 component_occurrence=ResolvedComponentOccurrenceInput(
                     source_id=_component_occurrence_source_id(pin_occurrence),
                     part_id=pin_occurrence.component_part_id,
+                    physical_designator=_physical_designator(
+                        pin_occurrence,
+                        physical_designators,
+                        symbol_uid_by_id,
+                    ),
                     metadata=_component_occurrence_metadata(pin_occurrence),
                 ),
                 pin_metadata={
@@ -547,6 +567,35 @@ def _pin_inputs(
             )
         )
     return result
+
+
+def _physical_designator(
+    pin_occurrence: AltiumPinOccurrence,
+    physical_designators: dict[str, AnnotationDesignator],
+    symbol_uid_by_id: dict[str, str],
+) -> str:
+    """Resolve a pin occurrence's per-instance physical designator, or ``""``.
+
+    For components inside repeated/multi-channel sheets the logical designator
+    (e.g. ``U1``) collides across instances. The ``.Annotation`` file assigns a
+    distinct physical designator keyed by the component's hierarchical unique-id
+    path ``\\<sheet-symbol-uid>...\\<component-uid>``. The logical reference is
+    never substituted — the physical designator is occurrence-level metadata.
+    Empty when no entry resolves (single-instance / un-annotated components).
+    """
+    if not physical_designators:
+        return ""
+    component_uid = pin_occurrence.component_metadata.get("altium_component_unique_id")
+    if not component_uid:
+        return ""
+    symbol_uids = [
+        symbol_uid_by_id[element]
+        for element in pin_occurrence.scope_id.path
+        if element in symbol_uid_by_id
+    ]
+    unique_id_path = "\\" + "\\".join([*symbol_uids, component_uid])
+    entry = physical_designators.get(unique_id_path)
+    return entry.physical_designator if entry is not None else ""
 
 
 def _source_file_key(source_file: str) -> str:
