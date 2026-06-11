@@ -10,6 +10,10 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.schematic import ScopeId
+from phosphor_eda.formats.altium.annotation import (
+    AnnotationDesignator,
+    load_annotation_designators,
+)
 from phosphor_eda.formats.altium.project import AltiumProject, parse_prjpcb_file
 from phosphor_eda.formats.altium.records import (
     AltiumRecord,
@@ -28,6 +32,7 @@ from phosphor_eda.formats.altium.sheet_builder import (
     resolve_local_net_groups,
 )
 from phosphor_eda.formats.common.diagnostics import ParseContext
+from phosphor_eda.formats.common.paths import resolve_document_reference
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -84,6 +89,7 @@ class AltiumSheetSymbol:
     location: tuple[int, int]
     x_size: int
     y_size: int
+    unique_id: str = ""
 
 
 @dataclass(slots=True)
@@ -180,6 +186,10 @@ class AltiumSourceDesign:
     project: AltiumProject
     sheets: dict[str, AltiumSheetSource]
     root_sheet_name: str = ""
+    # Hierarchical unique-id path -> per-instance designator entry, from the
+    # project's ``.Annotation`` file. Empty for single sheets and un-annotated
+    # projects.
+    physical_designators: dict[str, AnnotationDesignator] = field(default_factory=dict)
 
 
 def _source_id(sheet_id: str, kind: str, source_index: int) -> str:
@@ -188,6 +198,12 @@ def _source_id(sheet_id: str, kind: str, source_index: int) -> str:
 
 def _source_file_key(source_file: str) -> str:
     return source_file.replace("\\", "/")
+
+
+def _parent_dir(source_file_key: str) -> str:
+    """Return the directory portion of a normalized source-file key, or ``""``."""
+    head, sep, _ = source_file_key.rpartition("/")
+    return head if sep else ""
 
 
 def _default_sheet_id(sheet: SheetRecords, source_file: str) -> str:
@@ -225,6 +241,7 @@ def _sheet_symbol_sources(
                 location=symbol.location,
                 x_size=symbol.x_size,
                 y_size=symbol.y_size,
+                unique_id=symbol.unique_id,
             ),
         )
 
@@ -624,14 +641,32 @@ def load_project_source_sheets(
                     f"Schematic sheet not found: {rel_path} (resolved to {schdoc})",
                 )
 
+        # Sheet-symbol FileName records store a bare filename (e.g.
+        # "Microcontroller Pin Choice.SchDoc"), but project document paths may
+        # include a subdirectory ("SCH/Microcontroller Pin Choice.SchDoc").
+        # Resolve a symbol's child reference to the canonical project source-file
+        # key so hierarchy detection and instance expansion match regardless of
+        # how the child is spelled.
+        def canonical_child(child_source_file: str, referencing_dir: str) -> str:
+            if not child_source_file:
+                return ""
+            resolved = resolve_document_reference(
+                child_source_file,
+                referencing_dir=referencing_dir,
+                known_documents=records_by_source_file.keys(),
+                ctx=ctx,
+            )
+            return resolved if resolved is not None else _source_file_key(child_source_file)
+
         base_sources_by_file = {
             source_file: _source_sheet(sheet_records, source_file)
             for source_file, sheet_records in records_by_source_file.items()
         }
         child_source_counts: dict[str, int] = {}
-        for source in base_sources_by_file.values():
+        for source_file, source in base_sources_by_file.items():
+            referencing_dir = _parent_dir(source_file)
             for symbol in source.sheet_symbols:
-                child_source_file = _source_file_key(symbol.child_source_file)
+                child_source_file = canonical_child(symbol.child_source_file, referencing_dir)
                 if child_source_file:
                     child_source_counts[child_source_file] = (
                         child_source_counts.get(child_source_file, 0) + 1
@@ -649,8 +684,9 @@ def load_project_source_sheets(
             (source, (_source_file_key(source.source_file),)) for source in sheets.values()
         ]
         for parent, lineage in parents:
+            referencing_dir = _parent_dir(_source_file_key(parent.source_file))
             for symbol in parent.sheet_symbols:
-                child_source_file = _source_file_key(symbol.child_source_file)
+                child_source_file = canonical_child(symbol.child_source_file, referencing_dir)
                 child_records = records_by_source_file.get(child_source_file)
                 if child_records is None or child_source_file in lineage:
                     continue
@@ -700,4 +736,5 @@ def altium_to_source(
         project=project,
         sheets=sheets,
         root_sheet_name=root_sheet_name,
+        physical_designators=load_annotation_designators(path, ctx=ctx),
     )

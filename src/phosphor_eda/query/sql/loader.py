@@ -678,7 +678,7 @@ def _load_component_occurrences(con: duckdb.DuckDBPyConnection, schematic: Schem
     for comp in schematic.components:
         for occurrence in comp.occurrences:
             _ = con.execute(
-                "INSERT INTO component_occurrences VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO component_occurrences VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     occurrence.id,
                     occurrence.component.id,
@@ -692,6 +692,7 @@ def _load_component_occurrences(con: duckdb.DuckDBPyConnection, schematic: Schem
                     occurrence.y,
                     occurrence.rotation,
                     occurrence.mirror,
+                    occurrence.physical_designator or None,
                 ],
             )
 
