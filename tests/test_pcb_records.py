@@ -3,7 +3,7 @@
 import math
 import struct
 
-from phosphor_eda.formats.altium.pcb_parser import linearize_arc_vertices
+from phosphor_eda.formats.altium.geometry import linearize_arc_vertices
 from phosphor_eda.formats.altium.pcb_records import (
     ArcRecord,
     ExtendedVertex,
