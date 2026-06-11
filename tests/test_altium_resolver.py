@@ -17,6 +17,7 @@ from phosphor_eda.formats.altium.source import (
     AltiumSheetSymbol,
     AltiumSourceDesign,
 )
+from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.common.resolved_graph import ResolutionInputError
 
 
@@ -930,6 +931,49 @@ def test_repeated_instance_occurrence_carries_physical_designator():
         for occurrence in component.occurrences:
             designators.add(occurrence.physical_designator)
     assert designators == {"U1.1", "U1.3"}
+
+
+def test_hierarchy_merge_warns_on_ambiguous_child_basename():
+    """A child reference matching multiple documents by basename warns on ctx."""
+    symbol = _symbol("Top", "Child.SchDoc")
+    entry = _entry("Top", "SIG", symbol.id)
+    parent_net, parent_pins = _local_net("Top", "parent", entries=[entry], references=["PARENT"])
+    child_a_net, child_a_pins = _local_net(
+        "ChildA",
+        "sig",
+        ports=[_port("ChildA", "SIG")],
+        references=["A1"],
+    )
+    child_b_net, child_b_pins = _local_net(
+        "ChildB",
+        "sig",
+        ports=[_port("ChildB", "SIG")],
+        references=["B1"],
+    )
+
+    ctx = ParseContext()
+    _ = resolve_altium_source(
+        _source(
+            [
+                _sheet(
+                    "Top",
+                    [parent_net],
+                    parent_pins,
+                    sheet_symbols=[symbol],
+                    sheet_entries=[entry],
+                ),
+                _sheet("ChildA", [child_a_net], child_a_pins, source_file="A/Child.SchDoc"),
+                _sheet("ChildB", [child_b_net], child_b_pins, source_file="B/Child.SchDoc"),
+            ],
+            mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
+            root_sheet_name="Top",
+        ),
+        ctx,
+    )
+
+    ambiguous = [issue for issue in ctx.issues if issue.category == "ambiguous_document_reference"]
+    assert ambiguous
+    assert "Child.SchDoc" in ambiguous[0].message
 
 
 def test_unannotated_occurrence_has_empty_physical_designator():

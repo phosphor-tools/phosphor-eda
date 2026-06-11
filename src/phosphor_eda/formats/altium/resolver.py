@@ -66,7 +66,7 @@ def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None =
 
     _merge_repeated_logical_pins(net_union, pin_occurrences)
     _merge_source_names(source, local_refs, net_union, effective_mode)
-    _merge_hierarchy(source, local_refs, local_net_by_id, net_union, effective_mode)
+    _merge_hierarchy(source, local_refs, local_net_by_id, net_union, effective_mode, ctx)
 
     component_source_ids_by_component_id = _component_source_ids_by_component_id(pin_occurrences)
 
@@ -187,6 +187,7 @@ def _merge_hierarchy(
     local_net_by_id: dict[str, _LocalNetRef],
     net_union: NetUnion,
     effective_mode: AltiumHierarchyMode,
+    ctx: ParseContext | None,
 ) -> None:
     if effective_mode not in (
         AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
@@ -196,7 +197,7 @@ def _merge_hierarchy(
 
     known_source_files = _known_source_files(source)
     child_sheets_by_file = _child_sheets_by_source_file(source)
-    repeated_child_files = _repeated_child_source_files(source, known_source_files)
+    repeated_child_files = _repeated_child_source_files(source, known_source_files, ctx)
     child_port_nets = _child_port_net_ids(source)
     for ref in local_refs:
         referencing_dir = _parent_dir(_source_file_key(ref.sheet.source_file))
@@ -220,6 +221,7 @@ def _merge_hierarchy(
                 sheet_symbol,
                 known_source_files,
                 referencing_dir,
+                ctx,
             )
             for child_sheet in child_sheets:
                 for child_net_id in child_port_nets.get((child_sheet.id, entry_name), []):
@@ -242,17 +244,20 @@ def _canonical_child_key(
     sheet_symbol: AltiumSheetSymbol,
     known_source_files: list[str],
     referencing_dir: str,
+    ctx: ParseContext | None,
 ) -> str:
     """Resolve a sheet symbol's child reference to a canonical source-file key.
 
     Sheet symbols reference a child by bare filename while the project lists
     documents with a directory prefix; reconcile the two spellings so the
-    canonical key matches the resolved child sheets' source files.
+    canonical key matches the resolved child sheets' source files. Basename
+    collisions warn on *ctx* as ``ambiguous_document_reference``.
     """
     resolved = resolve_document_reference(
         sheet_symbol.child_source_file,
         referencing_dir=referencing_dir,
         known_documents=known_source_files,
+        ctx=ctx,
     )
     if resolved is not None:
         return resolved
@@ -272,6 +277,7 @@ def _child_sheets_by_source_file(
 def _repeated_child_source_files(
     source: AltiumSourceDesign,
     known_source_files: list[str],
+    ctx: ParseContext | None,
 ) -> set[str]:
     symbol_counts: dict[str, int] = {}
     for sheet in source.sheets.values():
@@ -282,6 +288,7 @@ def _repeated_child_source_files(
                     symbol,
                     known_source_files,
                     referencing_dir,
+                    ctx,
                 )
                 symbol_counts[child_source_file] = symbol_counts.get(child_source_file, 0) + 1
     return {child_source_file for child_source_file, count in symbol_counts.items() if count > 1}
@@ -293,8 +300,9 @@ def _child_sheets_for_symbol(
     sheet_symbol: AltiumSheetSymbol,
     known_source_files: list[str],
     referencing_dir: str,
+    ctx: ParseContext | None,
 ) -> list[AltiumSheetSource]:
-    canonical = _canonical_child_key(sheet_symbol, known_source_files, referencing_dir)
+    canonical = _canonical_child_key(sheet_symbol, known_source_files, referencing_dir, ctx)
     child_sheets = child_sheets_by_file.get(canonical, [])
     instance_scoped = [
         sheet
