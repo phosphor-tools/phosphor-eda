@@ -237,10 +237,12 @@ def _token_css_value(tokens: TokenMap, key: str) -> str | None:
     """Resolve a token that maps to a CSS value, accepting numbers as strings."""
     if key not in tokens:
         return None
-    value = tokens[key]
-    if isinstance(value, bool):
-        msg = f"token {key!r} must be a string or number, got {value!r}"
-        raise ValueError(msg)
-    if isinstance(value, int | float):
+    # Widen to object: token maps built from unvalidated JSON can carry
+    # values outside TokenValue at runtime, which must not leak into CSS.
+    value: object = tokens[key]
+    if not isinstance(value, bool) and isinstance(value, int | float):
         return f"{float(value):g}"
-    return value
+    if isinstance(value, str):
+        return value
+    msg = f"token {key!r} must be a string or number, got {value!r}"
+    raise ValueError(msg)

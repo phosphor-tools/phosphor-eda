@@ -89,18 +89,18 @@ def parse_annotations(data: JsonDict) -> AnnotationSpec:
         boxes.append(
             BoxSpec(
                 targets=target_strs,
-                label=str(d.get("label", "")),
-                label_position=str(d.get("label_position", "")),
-                color=str(d.get("color", "")),
+                label=str(d.get("label") or ""),
+                label_position=str(d.get("label_position") or ""),
+                color=str(d.get("color") or ""),
             )
         )
 
     pointers: list[PointerSpec] = []
     for i, raw in enumerate(_as_list(data.get("pointers"))):
         d = _as_dict(raw, f"pointers[{i}]")
-        target = str(d.get("target", ""))
-        target_net = str(d.get("target_net", ""))
-        target_near = str(d.get("target_near", ""))
+        target = str(d.get("target") or "")
+        target_net = str(d.get("target_net") or "")
+        target_near = str(d.get("target_near") or "")
         if not target and not (target_net and target_near):
             msg = f"pointers[{i}]: 'target' or both 'target_net'+'target_near' required"
             raise ValueError(msg)
@@ -109,9 +109,9 @@ def parse_annotations(data: JsonDict) -> AnnotationSpec:
                 target=target,
                 target_net=target_net,
                 target_near=target_near,
-                label=str(d.get("label", "")),
-                position=str(d.get("position", "")),
-                color=str(d.get("color", "")),
+                label=str(d.get("label") or ""),
+                position=str(d.get("position") or ""),
+                color=str(d.get("color") or ""),
             )
         )
 
@@ -120,9 +120,9 @@ def parse_annotations(data: JsonDict) -> AnnotationSpec:
         d = _as_dict(raw, f"labels[{i}]")
         labels.append(
             LabelSpec(
-                target=str(d.get("target", "")),
-                content=str(d.get("content", "")),
-                position=str(d.get("position", "")),
+                target=str(d.get("target") or ""),
+                content=str(d.get("content") or ""),
+                position=str(d.get("position") or ""),
             )
         )
 
@@ -139,14 +139,14 @@ def parse_annotations(data: JsonDict) -> AnnotationSpec:
             ed = _as_dict(entry_raw, f"legend.entries[{j}]")
             entries.append(
                 LegendEntry(
-                    color=str(ed.get("color", "")),
-                    label=str(ed.get("label", "")),
+                    color=str(ed.get("color") or ""),
+                    label=str(ed.get("label") or ""),
                 )
             )
         legend = LegendSpec(
-            title=str(ld.get("title", "")),
+            title=str(ld.get("title") or ""),
             entries=entries,
-            position=str(ld.get("position", "")),
+            position=str(ld.get("position") or ""),
         )
 
     return AnnotationSpec(boxes=boxes, pointers=pointers, labels=labels, legend=legend)

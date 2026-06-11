@@ -44,10 +44,6 @@ def render_pcb_svg_from_derived_plan(
         + f'{view_box.width:.4f} {view_box.height:.4f}">'
     )
     svg.raw(svg_open)
-    if plan.custom_css:
-        svg.raw('<style id="custom">')
-        svg.raw(_escape_style_block_text(plan.custom_css))
-        svg.raw("</style>")
     if plan.annotations is not None:
         svg.raw('<style id="annotations">')
         svg.raw(
@@ -55,6 +51,13 @@ def render_pcb_svg_from_derived_plan(
                 annotation_css(plan.annotations.font_size, annotation_style=plan.annotation_style)
             )
         )
+        svg.raw("</style>")
+    # User CSS comes after generated annotation styles so equal-specificity
+    # custom rules win, matching the --custom-css "overrides built-in rules"
+    # contract.
+    if plan.custom_css:
+        svg.raw('<style id="custom">')
+        svg.raw(_escape_style_block_text(plan.custom_css))
         svg.raw("</style>")
 
     clip_ids_by_signature: dict[_LayerClipSignature, str] = {}

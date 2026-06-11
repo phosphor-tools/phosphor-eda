@@ -31,6 +31,7 @@ from phosphor_eda.render.annotation_spec import (
     PointerSpec,
     parse_annotations,
 )
+from phosphor_eda.render.annotation_svg import DEFAULT_ANNOTATION_COLOR, _parse_rgb
 from phosphor_eda.render.annotations import (
     ResolvedAnnotations,
     resolve_annotations,
@@ -226,6 +227,18 @@ class TestParseAnnotations:
         with pytest.raises(ValueError, match="target"):
             parse_annotations({"pointers": [{"label": "orphan"}]})
 
+    def test_pointer_null_target_raises(self) -> None:
+        """JSON null targets are treated as missing, not as the string 'None'."""
+        with pytest.raises(ValueError, match="target"):
+            parse_annotations({"pointers": [{"target": None, "label": "orphan"}]})
+
+    def test_label_null_fields_become_empty(self) -> None:
+        """JSON null label fields become empty strings, not the string 'None'."""
+        spec = parse_annotations({"labels": [{"target": None, "content": None, "position": None}]})
+        assert spec.labels[0].target == ""
+        assert spec.labels[0].content == ""
+        assert spec.labels[0].position == ""
+
     def test_pointer_net_target(self) -> None:
         data = {"pointers": [{"target_net": "SPI_CLK", "target_near": "U2", "label": "CLK"}]}
         spec = parse_annotations(data)
@@ -267,6 +280,34 @@ class TestParseAnnotations:
         spec = parse_annotations(data)
         assert spec.boxes[0].label_position == "below"
         assert spec.boxes[0].color == "#ff6b35"
+
+
+# ---------------------------------------------------------------------------
+# Color parsing
+# ---------------------------------------------------------------------------
+
+
+class TestParseRgb:
+    def test_hex6(self) -> None:
+        assert _parse_rgb("#ff6b35") == (255, 107, 53)
+
+    def test_hex3(self) -> None:
+        assert _parse_rgb("#f00") == (255, 0, 0)
+
+    def test_rgb_functional(self) -> None:
+        assert _parse_rgb("rgb(1, 2, 3)") == (1, 2, 3)
+
+    def test_rgba_with_alpha(self) -> None:
+        assert _parse_rgb("rgba(10, 20, 30, 0.5)") == (10, 20, 30)
+
+    def test_hex6_with_trailing_garbage_falls_back(self) -> None:
+        assert _parse_rgb("#FF0000garbage") == DEFAULT_ANNOTATION_COLOR
+
+    def test_rgb_with_trailing_garbage_falls_back(self) -> None:
+        assert _parse_rgb("rgb(255,0,0) extra") == DEFAULT_ANNOTATION_COLOR
+
+    def test_unknown_color_falls_back(self) -> None:
+        assert _parse_rgb("not-a-color") == DEFAULT_ANNOTATION_COLOR
 
 
 # ---------------------------------------------------------------------------
