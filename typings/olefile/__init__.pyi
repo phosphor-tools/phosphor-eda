@@ -2,6 +2,8 @@
 
 from typing import IO
 
+def isOleFile(filename: str | bytes | IO[bytes] | None = None) -> bool: ...
+
 class OleFileIO:
     def __init__(
         self,

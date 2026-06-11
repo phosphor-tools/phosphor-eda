@@ -99,16 +99,20 @@ def load_sheet_tree(
 
 
 def parse_sheet_info(sheet_node: SExpNode) -> tuple[str, str]:
-    """Extract name and filename from a sheet S-expression node."""
+    """Extract name and filename from a sheet S-expression node.
+
+    KiCad 6 wrote the properties as ``"Sheet name"`` / ``"Sheet file"``
+    (with a space); KiCad 7+ writes ``"Sheetname"`` / ``"Sheetfile"``.
+    """
     sheet_name = ""
     sheet_file = ""
     for sub in sheet_node[1:]:
         if sexp.tag(sub) == "property" and isinstance(sub, list):
             prop_name = str(sub[1])
             prop_val = str(sub[2]) if len(sub) > 2 else ""
-            if prop_name == "Sheetname":
+            if prop_name in ("Sheetname", "Sheet name"):
                 sheet_name = prop_val
-            elif prop_name == "Sheetfile":
+            elif prop_name in ("Sheetfile", "Sheet file"):
                 sheet_file = prop_val
     return sheet_name, sheet_file
 
@@ -154,6 +158,10 @@ def _load_sheet_tree(
         sheet_uuid = _node_value(sheet_node[1:], "uuid") or f"sheet-{sheet_index}"
         child_name, child_file = parse_sheet_info(sheet_node)
         if not child_file:
+            warning_reporter.warn(
+                f"Warning: sheet symbol {child_name or sheet_uuid!r} in {path.name} "
+                "has no sheet-file property; child sheet not loaded",
+            )
             continue
         child_scope = ScopeId(path=(*scope_id.path, sheet_uuid))
         child_path = path.parent / child_file.replace("\\", "/")

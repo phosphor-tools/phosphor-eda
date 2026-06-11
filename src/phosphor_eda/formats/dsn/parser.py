@@ -22,6 +22,7 @@ from phosphor_eda.formats.common.raw_models import (
     PlacedInstance,
     SchematicPage,
     Wire,
+    WireAlias,
 )
 from phosphor_eda.formats.dsn.binary_reader import (
     PAGE_SETTINGS_SIZE,
@@ -33,6 +34,7 @@ from phosphor_eda.formats.dsn.binary_reader import (
     STRUCT_WIRE_SCALAR,
     BinaryReader,
 )
+from phosphor_eda.formats.dsn.errors import DsnFormatError
 
 # --- Structure parsers ---
 
@@ -55,12 +57,69 @@ def skip_self_describing(r: BinaryReader) -> int:
 
     T0x34, T0x35, and similar structures use this format.
     body_len is the byte count of the body AFTER the 9-byte header.
+
+    The declared length comes straight from the stream; older (PSD-era)
+    files carry layouts this parser misreads, producing absurd lengths.
+    Validate against the bytes that actually remain so those files fail
+    with a typed, located error instead of an IndexError far away.
     """
+    offset = r.pos
     type_id = r.read_uint8()
     body_len = r.read_uint32()
     r.skip(4)  # zero padding
+    remaining = len(r.data) - r.pos
+    if body_len > remaining:
+        msg = (
+            f"self-describing structure 0x{type_id:02x} at offset {offset} declares a "
+            f"{body_len}-byte body but only {remaining} bytes remain in the stream"
+        )
+        raise DsnFormatError(msg, offset=offset, type_id=type_id)
     r.skip(body_len)  # skip the body
     return type_id
+
+
+# Net labels placed on a wire never exceed a handful; a larger count means
+# the wire body layout differs from the StructWire layout we know.
+_MAX_WIRE_ALIASES = 64
+
+
+def _parse_wire_aliases(
+    r: BinaryReader, wire_end_offset: int, ctx: ParseContext | None
+) -> list[WireAlias]:
+    """Parse the StructAlias (net label) records inside a wire body.
+
+    Layout per OpenOrCadParser ``StructWire.cpp``: after the end coordinates
+    come one unknown byte, a uint16 alias count, then one StructAlias per
+    label (prefix chain, preamble, locX/locY/color/rotation/fontIdx, name).
+    Versions whose wire body differs fail the bounds checks and are recorded
+    as diagnostics; the wire itself stays (the caller re-anchors at the
+    wire's end offset).
+    """
+    r.skip(1)
+    num_aliases = r.read_uint16()
+    if num_aliases == 0:
+        return []
+    if num_aliases > _MAX_WIRE_ALIASES:
+        msg = f"implausible wire alias count {num_aliases}; wire body layout unknown"
+        raise ValueError(msg)
+    aliases: list[WireAlias] = []
+    for _ in range(num_aliases):
+        _tid, alias_end, _pairs = r.read_prefix_chain()
+        r.try_read_preamble()
+        alias = WireAlias()
+        alias.x = r.read_int32()
+        alias.y = r.read_int32()
+        alias.color = r.read_uint32()
+        alias.rotation = r.read_uint32()
+        alias.font_idx = r.read_uint32()
+        alias.name = r.read_string_len_zero()
+        if wire_end_offset > 0 and r.pos > wire_end_offset:
+            msg = "wire alias overruns the wire body"
+            raise ValueError(msg)
+        aliases.append(alias)
+        if alias_end > 0:
+            r.pos = alias_end
+    return aliases
 
 
 def skip_counted_structures(r: BinaryReader, label: str = "") -> int:
@@ -115,7 +174,10 @@ def _parse_graphic_inst(
     # Read coordinates and color per StructGraphicInst.
     gi.loc_y = r.read_int16()
     gi.loc_x = r.read_int16()
-    r.skip(8)  # y2, x2, x1, y1
+    gi.bbox_y2 = r.read_int16()
+    gi.bbox_x2 = r.read_int16()
+    gi.bbox_x1 = r.read_int16()
+    gi.bbox_y1 = r.read_int16()
     r.skip(1)  # color
     r.skip(3)  # 3 unknown bytes
 
@@ -251,6 +313,7 @@ def parse_page(
                 parsed_wire = True
                 wire_net_map.setdefault((wire.start_x, wire.start_y), set()).add(wire.wire_id)
                 wire_net_map.setdefault((wire.end_x, wire.end_y), set()).add(wire.wire_id)
+                wire.aliases = _parse_wire_aliases(r, end_offset, ctx)
         except (struct.error, IndexError, ValueError) as e:
             if ctx is not None:
                 ctx.warn("dsn_wire", f"Wire parse error: {e}")
@@ -622,7 +685,13 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
         path = "/".join(entry)
         if path.startswith("Views/") and "/Pages/" in path:
             page_data = ole.openstream(entry).read()
-            page = parse_page(page_data, string_list, ctx)
+            try:
+                page = parse_page(page_data, string_list, ctx)
+            except DsnFormatError as exc:
+                # Leave the failure observable on the context, then surface
+                # it — a misread page header poisons everything after it.
+                ctx.error("dsn_format", f"page {path!r}: {exc}")
+                raise
             design.pages.append(page)
 
     # 3. Parse Hierarchy stream

@@ -53,6 +53,7 @@ class PcbBuilder:
         self._drill_ids: set[int] = set()
         self._drill_id_strs: set[str] = set()
         self._layers_by_name: dict[str, PcbLayer] = {}
+        self._nets_by_name: dict[str, PcbNet] = {}
 
     def add_layer(self, layer: PcbLayer, *, source: str = "") -> PcbLayer:
         """Add a concrete source layer definition."""
@@ -71,6 +72,7 @@ class PcbBuilder:
         if net.number in self.nets:
             self._fail(f"duplicate net number {net.number}", source)
         self.nets[net.number] = net
+        self._nets_by_name.setdefault(net.name, net)
         return net
 
     def add_footprint(self, footprint: PcbFootprint, *, source: str = "") -> PcbFootprint:
@@ -110,6 +112,15 @@ class PcbBuilder:
         net = self.nets.get(number)
         if net is None:
             self._fail(f"unknown net number {number}", source)
+        return net
+
+    def resolve_net_name(self, name: str, *, source: str = "") -> PcbNet | None:
+        """Resolve a source net name. Empty string is the unconnected-net model."""
+        if not name:
+            return None
+        net = self._nets_by_name.get(name)
+        if net is None:
+            self._fail(f"unknown net name {name!r}", source)
         return net
 
     def add_drill_object(self, drill: PcbDrill, *, source: str = "") -> PcbDrill:

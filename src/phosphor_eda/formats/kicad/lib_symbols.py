@@ -115,14 +115,19 @@ def transform_pin(
     comp_rot: float,
     mirror: str | None = None,
 ) -> KiCadPoint:
-    """Transform a pin from library coordinates to schematic coordinates."""
-    lx, ly = lib_x, lib_y
-    if mirror == "y":
-        lx = -lx
-    elif mirror == "x":
-        ly = -ly
-    ly = -ly
+    """Transform a pin from library coordinates to schematic coordinates.
+
+    KiCad semantics (verified against kicad-cli netlists): flip the library
+    y-axis into screen coordinates, rotate by the placement angle (positive
+    is counterclockwise on screen, i.e. clockwise in math convention), then
+    apply ``(mirror x|y)`` in screen coordinates.
+    """
+    sx, sy = lib_x, -lib_y
     rad = math.radians(comp_rot)
-    rx = lx * math.cos(rad) - ly * math.sin(rad)
-    ry = lx * math.sin(rad) + ly * math.cos(rad)
+    rx = sx * math.cos(rad) + sy * math.sin(rad)
+    ry = -sx * math.sin(rad) + sy * math.cos(rad)
+    if mirror == "x":
+        ry = -ry
+    elif mirror == "y":
+        rx = -rx
     return round(comp_x + rx, 4), round(comp_y + ry, 4)

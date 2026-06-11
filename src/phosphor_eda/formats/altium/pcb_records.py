@@ -37,13 +37,13 @@ class TrackRecord:
       [3:5]   net      u16
       [5:7]   polygon  u16
       [7:9]   component u16
-      [9:11]  subpoly_index u16
       [13:17] x1       i32
       [17:21] y1       i32
       [21:25] x2       i32
       [25:29] y2       i32
       [29:33] width    i32
-      [56]    keepout restrictions bitmask, when present
+      [33:35] subpoly_index u16
+      [45]    keepout restrictions bitmask, when present (len >= 46)
     """
 
     layer: int
@@ -77,11 +77,11 @@ class TrackRecord:
             net=u16(body, 3),
             polygon=u16(body, 5),
             component=u16(body, 7),
-            subpoly_index=u16(body, 9) if len(body) >= 11 else 0,
+            subpoly_index=u16(body, 33) if len(body) >= 35 else 0,
             start=(i32(body, 13), i32(body, 17)),
             end=(i32(body, 21), i32(body, 25)),
             width=i32(body, 29),
-            keepout_restrictions=body[56] if len(body) >= 57 else 0,
+            keepout_restrictions=body[45] if len(body) >= 46 else 0,
         )
 
 
@@ -205,7 +205,7 @@ class FillRecord:
       [21:25] x2     i32
       [25:29] y2     i32
       [29:37] rotation f64
-      [56]    keepout restrictions bitmask, when present
+      [46]    keepout restrictions bitmask, when present (len >= 47)
     """
 
     layer: int
@@ -239,7 +239,7 @@ class FillRecord:
             pos1=(i32(body, 13), i32(body, 17)),
             pos2=(i32(body, 21), i32(body, 25)),
             rotation=f64(body, 29),
-            keepout_restrictions=body[56] if len(body) >= 57 else 0,
+            keepout_restrictions=body[46] if len(body) >= 47 else 0,
         )
 
 
@@ -258,6 +258,7 @@ class TextRecord:
       [17:21] y       i32
       [21:25] height  u32
       [27:35] rotation f64
+      [35]    is_mirrored u8
       [40]    is_comment u8
       [41]    is_designator u8
     """
@@ -270,6 +271,7 @@ class TextRecord:
     is_comment: bool
     is_designator: bool
     text: str
+    is_mirrored: bool = False
 
     @classmethod
     def from_bytes(cls, data: bytes, ctx: ParseContext) -> Self | None:
@@ -324,6 +326,7 @@ class TextRecord:
 
         is_comment_byte = sub1[40] if sub1_len > 40 else 0
         is_designator_byte = sub1[41] if sub1_len > 41 else 0
+        is_mirrored_byte = sub1[35] if sub1_len > 35 else 0
 
         text_content = ""
         if sub2_len > 0 and len(sub2) > 0:
@@ -340,6 +343,7 @@ class TextRecord:
                 is_comment=bool(is_comment_byte),
                 is_designator=bool(is_designator_byte),
                 text=text_content,
+                is_mirrored=bool(is_mirrored_byte),
             ),
             pos,
         )
@@ -364,6 +368,14 @@ class PadRecord:
       [45:49] hole_size u32
       [49]    shape    u8
       [52:60] rotation f64
+      [60]    plated   u8 (bool)
+
+    Sub6 (size-and-shape, ≥596 bytes; offsets per KiCad altium_parser_pcb.cpp):
+      [262]     hole_shape    u8 (0 round, 1 square, 2 slot)
+      [263:267] slot_size     u32 (slot length; hole_size is the width)
+      [267:275] slot_rotation f64 (degrees)
+      [532:564] alt_shape[32] u8 per layer (9 = roundrect)
+      [564:596] corner_radius[32] u8 per layer (percent, 100 = fully round)
     """
 
     name: str
@@ -375,7 +387,12 @@ class PadRecord:
     hole_size: int
     shape: int
     rotation: float
-    shape_alt: int | None = None  # from sub6 per-layer override
+    shape_alt: int | None = None  # from sub6 per-layer override (top layer)
+    corner_radius_pct: int | None = None
+    plated: bool = True
+    hole_shape: int | None = None
+    slot_size: int = 0
+    slot_rotation: float = 0.0
 
     @classmethod
     def from_bytes(cls, data: bytes, ctx: ParseContext) -> Self | None:
@@ -443,9 +460,19 @@ class PadRecord:
             return None, pos
 
         shape_byte = sub5[49] if sub5_len > 49 else 1
+        plated = bool(sub5[60]) if sub5_len > 60 else True
         shape_alt_val: int | None = None
-        if sub6 and len(sub6) > 551:
-            shape_alt_val = sub6[519]
+        corner_radius_pct: int | None = None
+        hole_shape: int | None = None
+        slot_size = 0
+        slot_rotation = 0.0
+        # 596 bytes is the smallest known sub6 layout (KiCad: 596/628/651).
+        if len(sub6) >= 596:
+            hole_shape = sub6[262]
+            slot_size = u32(sub6, 263)
+            slot_rotation = f64(sub6, 267)
+            shape_alt_val = sub6[532]
+            corner_radius_pct = sub6[564]
 
         return (
             cls(
@@ -459,6 +486,11 @@ class PadRecord:
                 shape=shape_byte,
                 rotation=f64(sub5, 52),
                 shape_alt=shape_alt_val,
+                corner_radius_pct=corner_radius_pct,
+                plated=plated,
+                hole_shape=hole_shape,
+                slot_size=slot_size,
+                slot_rotation=slot_rotation,
             ),
             pos,
         )

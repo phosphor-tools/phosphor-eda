@@ -193,3 +193,78 @@ def test_subfolder_child_sheet_windows_separator():
     assert "ChildSheet" in names, "backslash-separated child must still resolve"
     refs = {c.reference for c in design.components}
     assert {"R1", "R2"} <= refs
+
+
+# --- KiCad 6 sheet property spellings ---
+
+V6_DIR = Path(__file__).parent / "fixtures" / "kicad-hierarchy-v6"
+V6_ROOT_SCH = V6_DIR / "root.kicad_sch"
+
+
+def test_kicad6_sheet_file_property_loads_children():
+    # KiCad 6 wrote "Sheet file" / "Sheet name" (with a space); v7+ writes
+    # "Sheetfile" / "Sheetname". Both must load.
+    design = kicad_to_design(V6_ROOT_SCH)
+
+    assert {c.reference for c in design.components} == {"R1", "R2"}
+    assert {p.name for p in design.pages} == {"root", "ChildSheet"}
+
+
+def test_sheet_without_file_property_warns(tmp_path):
+    from phosphor_eda.formats.common.diagnostics import ParseContext
+    from phosphor_eda.formats.kicad.to_schematic import kicad_to_source
+
+    sch = tmp_path / "root.kicad_sch"
+    sch.write_text(
+        """(kicad_sch (version 20230121) (generator eeschema)
+          (uuid 77777777-0000-0000-0000-000000000001)
+          (paper "A4")
+          (lib_symbols)
+          (sheet (at 20.32 33.02) (size 12.7 10.16)
+            (uuid 77777777-0000-0000-0000-000000000002)
+            (property "Sheetname" "Orphan" (at 20.32 32.3 0)
+              (effects (font (size 1.27 1.27)))
+            )
+          )
+          (sheet_instances (path "/" (page "1")))
+        )
+        """,
+        encoding="utf-8",
+    )
+    ctx = ParseContext()
+    kicad_to_source(sch, ctx=ctx)
+
+    assert any(
+        issue.category == "missing_sheet" and "Orphan" in issue.message for issue in ctx.issues
+    )
+
+
+# --- Per-instance references on reused sheets ---
+
+INSTANCE_REFS_DIR = Path(__file__).parent / "fixtures" / "kicad-instance-refs"
+INSTANCE_REFS_ROOT = INSTANCE_REFS_DIR / "root.kicad_sch"
+
+
+def test_reused_sheet_instances_get_per_instance_references():
+    # Fixture mirrors the complex_hierarchy KiCad demo: one child file
+    # instantiated by two sheet symbols, with per-path (instances) reference
+    # assignments R201/R301 on the shared symbol.
+    design = kicad_to_design(INSTANCE_REFS_ROOT)
+
+    refs = sorted(c.reference for c in design.components)
+    assert refs == ["R201", "R301"]
+
+    for ref in ("R201", "R301"):
+        component = next(c for c in design.components if c.reference == ref)
+        pin1 = next(p for p in component.pins if p.designator == "1")
+        assert pin1.net is not None, f"{ref} pin 1 has no net"
+        assert "LOAD" in pin1.net.name or any(
+            "LOAD" in occ.source_names for occ in pin1.net.occurrences
+        ), f"{ref} pin 1 net {pin1.net.name!r} not the labeled LOAD net"
+
+    # The two instances' LOAD nets are local labels on sibling scopes and
+    # must remain separate nets.
+    load_nets = {
+        c.reference: next(p for p in c.pins if p.designator == "1").net for c in design.components
+    }
+    assert load_nets["R201"] is not load_nets["R301"]

@@ -52,20 +52,21 @@ def _make_track_body(
     width: int = 10000,
     keepout_restrictions: int = 0,
 ) -> bytes:
-    """Build a track body."""
-    body = bytearray(57)
+    """Build a 49-byte track body (the long corpus layout, with the
+    keepout-restrictions byte at 45 per KiCad's altium_parser_pcb.cpp)."""
+    body = bytearray(49)
     body[0] = layer
     body[2] = flags2
     body[3:5] = _pack_u16(net)
     body[5:7] = _pack_u16(polygon)
     body[7:9] = _pack_u16(component)
-    body[9:11] = _pack_u16(subpoly_index)
     body[13:17] = _pack_i32(x1)
     body[17:21] = _pack_i32(y1)
     body[21:25] = _pack_i32(x2)
     body[25:29] = _pack_i32(y2)
     body[29:33] = _pack_i32(width)
-    body[56] = keepout_restrictions
+    body[33:35] = _pack_u16(subpoly_index)
+    body[45] = keepout_restrictions
     return bytes(body)
 
 
@@ -256,6 +257,7 @@ def _make_text_record(
     is_comment: int = 0,
     is_designator: int = 1,
     text: str = "U1",
+    is_mirrored: int = 0,
 ) -> bytes:
     """Build a text record with 2 subrecords: binary + Pascal string."""
     # Sub1: binary properties (need at least 42 bytes)
@@ -266,6 +268,7 @@ def _make_text_record(
     sub1[17:21] = _pack_i32(y)
     sub1[21:25] = _pack_u32(height)
     sub1[27:35] = _pack_f64(rotation)
+    sub1[35] = is_mirrored
     sub1[40] = is_comment
     sub1[41] = is_designator
     sub1_bytes = bytes(sub1)
@@ -308,6 +311,17 @@ def test_text_from_bytes():
     assert rec.text == "U1"
 
 
+def test_text_mirror_flag():
+    ctx = ParseContext()
+    rec = TextRecord.from_bytes(_make_text_record(is_mirrored=1), ctx)
+    assert rec is not None
+    assert rec.is_mirrored is True
+
+    rec = TextRecord.from_bytes(_make_text_record(is_mirrored=0), ctx)
+    assert rec is not None
+    assert rec.is_mirrored is False
+
+
 def test_text_truncated():
     ctx = ParseContext()
     rec = TextRecord.from_bytes(b"\x05\x05\x00\x00\x00\x01\x02", ctx)
@@ -340,6 +354,19 @@ def _make_fill_body(
     body[25:29] = _pack_i32(y2)
     body[29:37] = _pack_f64(rotation)
     return bytes(body)
+
+
+def test_fill_keepout_restrictions_at_46():
+    # 47-byte fill body: keepout byte sits at 46 (after the 5-byte skip and
+    # u32 v7 layer that follow the 37-byte core), per altium_parser_pcb.cpp.
+    body = bytearray(47)
+    body[:37] = _make_fill_body(layer=1, net=2)
+    body[2] = 0x02  # keepout flag
+    body[46] = 0x04
+    rec = FillRecord.from_bytes(bytes(body), ParseContext())
+    assert rec is not None
+    assert rec.is_keepout is True
+    assert rec.keepout_restrictions == 0x04
 
 
 def test_fill_from_bytes():
@@ -646,3 +673,57 @@ def test_linearize_arc_wrapping_past_360():
     for px, py in points:
         dist = math.sqrt(px**2 + py**2)
         assert abs(dist - 1000) < 2  # small tolerance for rounding
+
+
+# ---------------------------------------------------------------------------
+# PadRecord — corpus-captured records (LimeSDR-USB_1v4s.PcbDoc, Pads6/Data)
+# ---------------------------------------------------------------------------
+
+from pathlib import Path  # noqa: E402
+
+_ALTIUM_FIXTURES = Path(__file__).parent / "fixtures" / "altium"
+
+
+def test_pad_roundrect_alt_shape_and_corner_radius():
+    # Real record with sub6 length 651: alt_shape[0]=9 (roundrect),
+    # cornerradius[0]=25 (percent, 100 = fully round).
+    data = (_ALTIUM_FIXTURES / "pad_roundrect.bin").read_bytes()
+    ctx = ParseContext()
+    rec = PadRecord.from_bytes(data, ctx)
+    assert rec is not None
+    assert rec.shape_alt == 9
+    assert rec.corner_radius_pct == 25
+    assert rec.plated is True
+
+
+def test_pad_slot_hole_shape_and_params():
+    # Real record: hole_shape=2 (slot), slot length 2.5mm at 90 degrees,
+    # hole_size carries the slot width (1.0mm).
+    data = (_ALTIUM_FIXTURES / "pad_slot.bin").read_bytes()
+    ctx = ParseContext()
+    rec = PadRecord.from_bytes(data, ctx)
+    assert rec is not None
+    assert rec.hole_shape == 2
+    assert rec.slot_size == 984252
+    assert rec.slot_rotation == 90.0
+    assert rec.hole_size == 393701
+    assert rec.plated is True
+
+
+def test_pad_npth_plated_flag():
+    # Real record: sub5[60]=0 — a non-plated mounting hole.
+    data = (_ALTIUM_FIXTURES / "pad_npth.bin").read_bytes()
+    ctx = ParseContext()
+    rec = PadRecord.from_bytes(data, ctx)
+    assert rec is not None
+    assert rec.plated is False
+    assert rec.hole_size > 0
+
+
+def test_pad_without_sub6_has_no_alt_shape_fields():
+    ctx = ParseContext()
+    rec = PadRecord.from_bytes(_make_pad_record(), ctx)
+    assert rec is not None
+    assert rec.shape_alt is None
+    assert rec.corner_radius_pct is None
+    assert rec.hole_shape is None

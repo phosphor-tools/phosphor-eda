@@ -260,6 +260,10 @@ class PcbText:
     rotation: float
     font_size: float
     justify: str = ""
+    # Explicit mirror flag from the source format (Altium Texts6). None means
+    # the source has no per-text flag and mirroring is derived from the layer
+    # side at render time.
+    mirrored: bool | None = None
 
 
 @dataclass

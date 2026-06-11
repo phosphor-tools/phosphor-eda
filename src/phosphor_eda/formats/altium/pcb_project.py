@@ -15,6 +15,7 @@ import olefile
 
 from phosphor_eda.domain.project import DesignRule, DiffPair, NetClass, Stackup, StackupLayer
 from phosphor_eda.formats.altium._helpers import u32
+from phosphor_eda.formats.altium.errors import require_ole_file
 from phosphor_eda.formats.altium.pcb_primitives import MIL_TO_MM, read_text_records
 from phosphor_eda.formats.altium.record_parser import parse_record_payload
 
@@ -424,6 +425,7 @@ def load_altium_enrichment(path: Path, ctx: ParseContext | None = None) -> Altiu
     orchestrate: open the document once for the Rules6/Classes6/
     DifferentialPairs6/Board6 streams and turn them into domain enrichment.
     """
+    require_ole_file(path)
     ole = olefile.OleFileIO(str(path))
     try:
         rules_data = ole.openstream("Rules6/Data").read() if ole.exists("Rules6/Data") else b""
