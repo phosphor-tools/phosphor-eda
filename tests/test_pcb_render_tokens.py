@@ -220,6 +220,87 @@ def test_eda_part_text_functions_default_to_neutral_fill(function: str) -> None:
     assert style == ResolvedStyle(fill="#777777", stroke="none", opacity=0.8)
 
 
+@pytest.mark.parametrize(
+    ("side", "fill"),
+    [("front", "#ff8a00"), ("back", "#5aa7ff"), ("inner", "#ffe066")],
+)
+def test_highlight_copper_defaults_by_side(side: str, fill: str) -> None:
+    style = resolve_layer_style(
+        {},
+        VisualRole(namespace="highlight", function="copper", side=side),
+        dimmed=False,
+        warn=lambda _message: None,
+    )
+
+    assert style == ResolvedStyle(fill=fill, stroke="none", opacity=0.85)
+
+
+def test_highlight_non_copper_defaults_to_side_fill() -> None:
+    style = resolve_layer_style(
+        {},
+        VisualRole(namespace="highlight", function="silkscreen", side="front"),
+        dimmed=False,
+        warn=lambda _message: None,
+    )
+
+    assert style == ResolvedStyle(fill="#ff8a00", stroke="none", opacity=0.85)
+
+
+def test_highlight_sideless_layer_defaults_to_front_fill() -> None:
+    style = resolve_layer_style(
+        {},
+        VisualRole(namespace="highlight", function="mechanical"),
+        dimmed=False,
+        warn=lambda _message: None,
+    )
+
+    assert style == ResolvedStyle(fill="#ff8a00", stroke="none", opacity=0.85)
+
+
+def test_highlight_token_overrides_code_default() -> None:
+    style = resolve_layer_style(
+        {"highlight.copper.front.fill": "#cc0000"},
+        VisualRole(namespace="highlight", function="copper", side="front"),
+        dimmed=False,
+        warn=lambda _message: None,
+    )
+
+    assert style.fill == "#cc0000"
+
+
+@pytest.mark.parametrize(
+    ("function", "expected"),
+    [
+        ("substrate", ResolvedStyle(fill="#b58b55")),
+        ("solder_mask", ResolvedStyle(fill="#1f7a3a")),
+        ("covered_copper", ResolvedStyle(fill="#145222", opacity=0.6)),
+        ("exposed_substrate", ResolvedStyle(fill="#b58b55")),
+        ("exposed_copper", ResolvedStyle(fill="#b87333", opacity=0.9)),
+        ("silkscreen", ResolvedStyle(fill="#ffffff")),
+    ],
+)
+def test_realistic_functions_have_code_defaults(function: str, expected: ResolvedStyle) -> None:
+    style = resolve_layer_style(
+        {},
+        VisualRole(namespace="realistic", function=function),
+        dimmed=False,
+        warn=lambda _message: None,
+    )
+
+    assert style == expected
+
+
+def test_realistic_substrate_token_overrides_code_default() -> None:
+    style = resolve_layer_style(
+        {"realistic.substrate.fill": "#244426"},
+        VisualRole(namespace="realistic", function="substrate"),
+        dimmed=False,
+        warn=lambda _message: None,
+    )
+
+    assert style.fill == "#244426"
+
+
 def test_explicit_highlight_color_overrides_fill_but_retains_other_tokens() -> None:
     style = resolve_layer_style(
         {

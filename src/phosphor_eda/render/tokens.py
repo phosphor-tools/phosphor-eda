@@ -69,6 +69,24 @@ _EDA_KEEPOUT_COLOR = "#cc2e7f"
 _EDA_MECHANICAL_COLOR = "#777777"
 _EDA_TEXT_COLOR = "#777777"
 _DIMMED_DEFAULT_OPACITY = 0.25
+_HIGHLIGHT_NAMESPACE = "highlight"
+_HIGHLIGHT_FILL_BY_SIDE = {
+    "front": "#ff8a00",
+    "back": "#5aa7ff",
+    "bottom": "#5aa7ff",
+    "inner": "#ffe066",
+}
+_HIGHLIGHT_DEFAULT_FILL = "#ff8a00"
+_HIGHLIGHT_DEFAULT_OPACITY = 0.85
+_REALISTIC_DEFAULTS: dict[tuple[str, str], object] = {
+    ("substrate", "fill"): "#b58b55",
+    ("solder_mask", "fill"): "#1f7a3a",
+    ("covered_copper", "fill"): "#145222",
+    ("covered_copper", "opacity"): 0.6,
+    ("exposed_copper", "fill"): "#b87333",
+    ("exposed_copper", "opacity"): 0.9,
+    ("silkscreen", "fill"): "#ffffff",
+}
 _EDA_STYLE_FALLBACK_FUNCTIONS = {
     "assembly": ("fabrication", "mechanical"),
     "courtyard": ("fabrication", "mechanical"),
@@ -229,6 +247,8 @@ def _resolve_default_value(
 ) -> object | None:
     if role.namespace == _REALISTIC_NAMESPACE:
         return _resolve_realistic_default_value(tokens, role, prop)
+    if role.namespace == _HIGHLIGHT_NAMESPACE:
+        return _resolve_highlight_default_value(role, prop)
     return _resolve_eda_default_value(role, prop, eda_layer_order)
 
 
@@ -238,7 +258,20 @@ def _resolve_realistic_default_value(
     prop: str,
 ) -> object | None:
     if role.function == "exposed_substrate" and prop == "fill":
-        return tokens.get("realistic.substrate.fill")
+        substrate_fill = tokens.get("realistic.substrate.fill")
+        if substrate_fill is not None:
+            return substrate_fill
+        return _REALISTIC_DEFAULTS[("substrate", "fill")]
+    return _REALISTIC_DEFAULTS.get((role.function, prop))
+
+
+def _resolve_highlight_default_value(role: VisualRole, prop: str) -> object | None:
+    if prop == "fill":
+        return _HIGHLIGHT_FILL_BY_SIDE.get(role.side, _HIGHLIGHT_DEFAULT_FILL)
+    if prop == "opacity":
+        return _HIGHLIGHT_DEFAULT_OPACITY
+    if prop == "stroke":
+        return "none"
     return None
 
 
