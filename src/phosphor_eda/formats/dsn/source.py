@@ -48,7 +48,7 @@ class DsnWire:
 class DsnPinOccurrence:
     id: str
     scope_id: ScopeId
-    local_net_id: str
+    local_net_id: str | None
     source_net_id: int
     component_source_id: str
     component_reference: str

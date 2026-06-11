@@ -74,6 +74,12 @@ class GraphicInst:
     db_id: int = 0
     loc_x: int = 0
     loc_y: int = 0
+    # Symbol bounding box (x1,y1)-(x2,y2); the electrical connection point
+    # of a power symbol lies inside it, not at (loc_x, loc_y).
+    bbox_x1: int = 0
+    bbox_y1: int = 0
+    bbox_x2: int = 0
+    bbox_y2: int = 0
     display_props: list[SymbolDisplayProp] = field(default_factory=list)
     # Arbitrary name-value properties from parsed binary data.
     props: dict[str, str] = field(default_factory=dict)

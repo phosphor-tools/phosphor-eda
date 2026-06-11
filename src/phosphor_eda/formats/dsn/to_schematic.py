@@ -40,6 +40,12 @@ def _local_net_id(page_id: str, net_id: int) -> str:
     return f"{page_id}:net:{net_id}"
 
 
+# Net ids 0 and 0xFFFFFFFF mean "no net assignment" in Capture page streams
+# (seen on pins whose connection comes from a power symbol at the pin
+# coordinate). They must never materialize as nets.
+_SENTINEL_NET_IDS = frozenset({0, 0xFFFFFFFF})
+
+
 def _source_net_ids_at(raw_page: RawPage, location: tuple[int, int]) -> list[int]:
     return sorted(raw_page.wire_net_map.get(location, set()))
 
@@ -49,13 +55,35 @@ def _pin_source_net_id(
     page_net_ids: set[int],
     pin_net_id: int,
     location: tuple[int, int],
-) -> int:
-    if pin_net_id in page_net_ids:
+) -> int | None:
+    """Resolve a pin's source net id; ``None`` means no assignment exists."""
+    if pin_net_id not in _SENTINEL_NET_IDS and pin_net_id in page_net_ids:
         return pin_net_id
-    coord_net_ids = _source_net_ids_at(raw_page, location)
+    coord_net_ids = [
+        nid for nid in _source_net_ids_at(raw_page, location) if nid not in _SENTINEL_NET_IDS
+    ]
     if coord_net_ids:
         return coord_net_ids[0]
+    if pin_net_id in _SENTINEL_NET_IDS:
+        return None
     return pin_net_id
+
+
+def _global_anchor(raw_page: RawPage, location: tuple[int, int]) -> GraphicInst | None:
+    """The power symbol whose body covers *location*, if any.
+
+    A pin connected only to a power symbol carries a sentinel net id; the
+    symbol's anchor point is its placement location, but the electrical
+    touch point can be anywhere inside its bounding box.
+    """
+    for graphic in raw_page.globals:
+        if (graphic.loc_x, graphic.loc_y) == location:
+            return graphic
+        x1, x2 = sorted((graphic.bbox_x1, graphic.bbox_x2))
+        y1, y2 = sorted((graphic.bbox_y1, graphic.bbox_y2))
+        if (x1, y1) != (x2, y2) and x1 <= location[0] <= x2 and y1 <= location[1] <= y2:
+            return graphic
+    return None
 
 
 def _source_props(props: dict[str, str]) -> dict[str, str]:
@@ -86,30 +114,76 @@ def _add_page_net_if_missing(
     return page_net
 
 
+def _synthetic_net_at(
+    *,
+    synthetic_nets_by_location: dict[tuple[int, int], DsnPageNet],
+    page_source: DsnPageSource,
+    page_id: str,
+    scope_id: ScopeId,
+    location: tuple[int, int],
+) -> DsnPageNet:
+    """A nameless local net anchored at a coordinate.
+
+    Connects a sentinel-net-id pin to the power symbol sitting on the same
+    point when no wire passes through it; the symbol's name evidence then
+    names (and merges) the resolved net.
+    """
+    page_net = synthetic_nets_by_location.get(location)
+    if page_net is None:
+        page_net = DsnPageNet(
+            id=f"{page_id}:net:loc:{location[0]}:{location[1]}",
+            scope_id=scope_id,
+            net_id=-1,
+            name="",
+            name_key="",
+        )
+        synthetic_nets_by_location[location] = page_net
+        page_source.nets.append(page_net)
+    return page_net
+
+
 def _graphic_sources(
     *,
     raw_page: RawPage,
     graphics: list[GraphicInst],
     page_source: DsnPageSource,
     page_nets_by_id: dict[int, DsnPageNet],
+    synthetic_nets_by_location: dict[tuple[int, int], DsnPageNet],
     page_id: str,
     scope_id: ScopeId,
     kind: str,
 ) -> None:
     for index, graphic in enumerate(graphics):
         location = (graphic.loc_x, graphic.loc_y)
-        for ordinal, net_id in enumerate(_source_net_ids_at(raw_page, location)):
-            local_net_id = _local_net_id(page_id, net_id)
+        wire_net_ids = [
+            net_id
+            for net_id in _source_net_ids_at(raw_page, location)
+            if net_id not in _SENTINEL_NET_IDS
+        ]
+        net_targets: list[tuple[str, DsnPageNet, int]] = []
+        for net_id in wire_net_ids:
+            net_targets.append(
+                (
+                    _local_net_id(page_id, net_id),
+                    _add_page_net_if_missing(
+                        page_nets_by_id=page_nets_by_id,
+                        page_source=page_source,
+                        page_id=page_id,
+                        scope_id=scope_id,
+                        net_id=net_id,
+                    ),
+                    net_id,
+                )
+            )
+        if not net_targets and location in synthetic_nets_by_location:
+            # A sentinel-net-id pin at this coordinate already created an
+            # anchor net; attach the symbol so its name applies.
+            synthetic_net = synthetic_nets_by_location[location]
+            net_targets.append((synthetic_net.id, synthetic_net, synthetic_net.net_id))
+        for ordinal, (local_net_id, page_net, net_id) in enumerate(net_targets):
             object_id = f"{page_id}:{kind}:{index}"
             if ordinal > 0:
                 object_id = f"{object_id}:{ordinal}"
-            page_net = _add_page_net_if_missing(
-                page_nets_by_id=page_nets_by_id,
-                page_source=page_source,
-                page_id=page_id,
-                scope_id=scope_id,
-                net_id=net_id,
-            )
             if kind == "port":
                 port = DsnPort(
                     id=object_id,
@@ -168,6 +242,7 @@ def _source_page(
         off_page_connectors=[],
     )
     page_nets_by_id: dict[int, DsnPageNet] = {}
+    synthetic_nets_by_location: dict[tuple[int, int], DsnPageNet] = {}
     for raw_net in raw_page.nets:
         page_net = DsnPageNet(
             id=_local_net_id(page_id, raw_net.net_id),
@@ -227,18 +302,34 @@ def _source_page(
                 raw_pin.net_id,
                 location,
             )
-            page_net = _add_page_net_if_missing(
-                page_nets_by_id=page_nets_by_id,
-                page_source=page_source,
-                page_id=page_id,
-                scope_id=scope_id,
-                net_id=source_net_id,
-            )
+            page_net: DsnPageNet | None = None
+            if source_net_id is not None:
+                page_net = _add_page_net_if_missing(
+                    page_nets_by_id=page_nets_by_id,
+                    page_source=page_source,
+                    page_id=page_id,
+                    scope_id=scope_id,
+                    net_id=source_net_id,
+                )
+            elif (anchor := _global_anchor(raw_page, location)) is not None:
+                page_net = _synthetic_net_at(
+                    synthetic_nets_by_location=synthetic_nets_by_location,
+                    page_source=page_source,
+                    page_id=page_id,
+                    scope_id=scope_id,
+                    location=(anchor.loc_x, anchor.loc_y),
+                )
+            elif ctx is not None:
+                ctx.warn(
+                    "dsn_netless_pin",
+                    f"{raw_inst.reference} pin {raw_pin.pin_number} has a sentinel "
+                    "net id and no wire or power symbol at its location; pin is netless",
+                )
             pin = DsnPinOccurrence(
                 id=f"{component_source_id}:pin:{pin_index}",
                 scope_id=scope_id,
-                local_net_id=page_net.id,
-                source_net_id=source_net_id,
+                local_net_id=page_net.id if page_net is not None else None,
+                source_net_id=source_net_id if source_net_id is not None else raw_pin.net_id,
                 component_source_id=component_source_id,
                 component_reference=raw_inst.reference,
                 component_part=pkg,
@@ -253,13 +344,15 @@ def _source_page(
                 location=location,
             )
             page_source.pin_occurrences.append(pin)
-            page_net.pin_ids.append(pin.id)
+            if page_net is not None:
+                page_net.pin_ids.append(pin.id)
 
     _graphic_sources(
         raw_page=raw_page,
         graphics=raw_page.ports,
         page_source=page_source,
         page_nets_by_id=page_nets_by_id,
+        synthetic_nets_by_location=synthetic_nets_by_location,
         page_id=page_id,
         scope_id=scope_id,
         kind="port",
@@ -269,6 +362,7 @@ def _source_page(
         graphics=raw_page.globals,
         page_source=page_source,
         page_nets_by_id=page_nets_by_id,
+        synthetic_nets_by_location=synthetic_nets_by_location,
         page_id=page_id,
         scope_id=scope_id,
         kind="global",
@@ -278,6 +372,7 @@ def _source_page(
         graphics=raw_page.off_page_connectors,
         page_source=page_source,
         page_nets_by_id=page_nets_by_id,
+        synthetic_nets_by_location=synthetic_nets_by_location,
         page_id=page_id,
         scope_id=scope_id,
         kind="off_page_connector",
