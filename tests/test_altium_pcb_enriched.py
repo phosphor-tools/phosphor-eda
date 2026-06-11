@@ -17,13 +17,13 @@ from phosphor_eda.domain.pcb import (
     PcbLine,
     PcbPolygon,
 )
-from phosphor_eda.formats.altium.pcb_parser import (
+from phosphor_eda.formats.altium.pcb_parser import parse_altium_pcb
+from phosphor_eda.formats.altium.pcb_primitives import read_text_records
+from phosphor_eda.formats.altium.pcb_project import (
     parse_altium_classes,
     parse_altium_diff_pairs,
-    parse_altium_pcb,
     parse_altium_rules,
     parse_altium_stackup,
-    read_text_records,
 )
 
 if TYPE_CHECKING:

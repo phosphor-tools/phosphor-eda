@@ -115,7 +115,7 @@ def test_polygon_degenerate_returns_empty() -> None:
 
 
 def test_board_outline_from_normalized_fixture_geometry() -> None:
-    from phosphor_eda.formats.kicad.pcb_parser import parse_kicad_pcb
+    from phosphor_eda.formats.kicad.board import parse_kicad_pcb
 
     pcb = parse_kicad_pcb(SWD_SWITCH_PCB)
 
@@ -129,7 +129,7 @@ def test_board_outline_from_normalized_fixture_geometry() -> None:
 
 
 def test_board_outline_closes_orangecrab_fractional_arc_ring() -> None:
-    from phosphor_eda.formats.kicad.pcb_parser import parse_kicad_pcb
+    from phosphor_eda.formats.kicad.board import parse_kicad_pcb
 
     pcb = parse_kicad_pcb(ORANGECRAB_PCB)
 

@@ -138,7 +138,8 @@ def resolve_effective_settings(
     The result is a fully-resolved ``RenderSettings``: ``side``, ``width``,
     and ``font_size`` are concrete (never empty/zero), CLI highlights are
     merged with the base highlights, and ``custom_css`` is composed
-    base-then-CLI.
+    base-then-CLI. An explicitly empty CLI ``custom_css`` clears the base
+    CSS.
     """
     side = overrides.side or base.side or DEFAULT_SIDE
     width = overrides.width or base.width or DEFAULT_WIDTH
@@ -149,8 +150,16 @@ def resolve_effective_settings(
         if highlight not in highlights:
             highlights.append(highlight)
 
-    css_parts = [css for css in (base.custom_css, overrides.custom_css) if css]
-    custom_css = "\n".join(css_parts)
+    if overrides.custom_css is None:
+        custom_css = base.custom_css
+    elif not overrides.custom_css:
+        custom_css = ""
+    else:
+        css_parts = [css for css in (base.custom_css, overrides.custom_css) if css]
+        custom_css = "\n".join(css_parts)
+    if len(custom_css) > MAX_CUSTOM_CSS_LENGTH:
+        msg = f"custom_css must be at most {MAX_CUSTOM_CSS_LENGTH} characters"
+        raise ValueError(msg)
 
     return replace(
         base,
@@ -343,6 +352,7 @@ def render_settings_schema() -> dict[str, object]:
             },
             "custom_css": {
                 "type": "string",
+                "maxLength": MAX_CUSTOM_CSS_LENGTH,
             },
         },
         "$defs": {
@@ -673,7 +683,7 @@ def _parse_highlight(item: object, index: int) -> HighlightSpec:
 
 def _load_render_settings_file_data(path: Path, stack: list[str]) -> dict[str, object]:
     try:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
     except OSError as exc:
         msg = f"Render settings file not found: {path}"
         raise ValueError(msg) from exc
@@ -738,7 +748,7 @@ def _load_parent_render_settings(
         if not resource.is_file():
             msg = f"Unknown phosphor render settings: {parent_ref}"
             raise ValueError(msg)
-        text = resource.read_text()
+        text = resource.read_text(encoding="utf-8")
         return _load_render_settings_text_data(text, source=parent_ref, stack=stack)
 
     parent_path = Path(parent_ref)

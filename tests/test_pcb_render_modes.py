@@ -5,7 +5,7 @@ from pathlib import Path
 
 from conftest import build_render_test_board as _board
 
-from phosphor_eda.formats.kicad.pcb_parser import parse_kicad_pcb
+from phosphor_eda.formats.kicad.board import parse_kicad_pcb
 from phosphor_eda.render.inventory import build_inventory
 from phosphor_eda.render.modes import (
     build_eda_layers,

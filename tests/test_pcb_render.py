@@ -26,6 +26,7 @@ from phosphor_eda.render.inventory import (
     select_inventory_items,
 )
 from phosphor_eda.render.settings import (
+    MAX_CUSTOM_CSS_LENGTH,
     CliOverrides,
     HighlightSpec,
     RenderSettings,
@@ -377,11 +378,45 @@ def test_render_settings_accept_valid_annotations() -> None:
 
 
 def test_render_settings_reject_oversized_custom_css() -> None:
-    from phosphor_eda.render.settings import MAX_CUSTOM_CSS_LENGTH
-
     oversized = "a" * (MAX_CUSTOM_CSS_LENGTH + 1)
     with pytest.raises(ValueError, match="custom_css must be at most"):
         load_render_settings_json(json.dumps({"custom_css": oversized}))
+
+
+def test_render_settings_schema_advertises_custom_css_max_length() -> None:
+    from phosphor_eda.render.api import render_settings_schema
+
+    schema = render_settings_schema()
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    custom_css = properties["custom_css"]
+    assert isinstance(custom_css, dict)
+    assert custom_css["maxLength"] == MAX_CUSTOM_CSS_LENGTH
+
+
+def test_effective_settings_compose_base_and_cli_custom_css() -> None:
+    base = RenderSettings(custom_css=".base {}")
+    settings = resolve_effective_settings(base, CliOverrides(custom_css=".cli {}"))
+    assert settings.custom_css == ".base {}\n.cli {}"
+
+
+def test_effective_settings_keep_base_custom_css_when_cli_flag_omitted() -> None:
+    base = RenderSettings(custom_css=".base {}")
+    settings = resolve_effective_settings(base, CliOverrides(custom_css=None))
+    assert settings.custom_css == ".base {}"
+
+
+def test_effective_settings_explicit_empty_cli_custom_css_clears_base() -> None:
+    base = RenderSettings(custom_css=".base {}")
+    settings = resolve_effective_settings(base, CliOverrides(custom_css=""))
+    assert settings.custom_css == ""
+
+
+def test_effective_settings_reject_oversized_combined_custom_css() -> None:
+    base = RenderSettings(custom_css="a" * MAX_CUSTOM_CSS_LENGTH)
+    overrides = CliOverrides(custom_css="b")
+    with pytest.raises(ValueError, match="custom_css must be at most"):
+        resolve_effective_settings(base, overrides)
 
 
 # Documents the imperative parser rejects; the JSON schema must reject the
@@ -454,6 +489,20 @@ def test_annotation_style_rejects_wrong_token_type() -> None:
 
     settings = RenderSettings(tokens={"annotation.label.fill": 42})
     with pytest.raises(ValueError, match="must be a string"):
+        annotation_style_for_settings(settings)
+
+
+def test_annotation_style_rejects_non_scalar_css_value_token() -> None:
+    from typing import cast
+
+    from phosphor_eda.render.plan import annotation_style_for_settings
+    from phosphor_eda.render.settings import RenderSettings, TokenMap
+
+    # Simulate untyped runtime data sneaking past the TokenMap type, e.g. a
+    # caller constructing RenderSettings from unvalidated JSON.
+    tokens = cast("TokenMap", {"annotation.label.fontWeight": ["bold"]})
+    settings = RenderSettings(tokens=tokens)
+    with pytest.raises(ValueError, match="must be a string or number"):
         annotation_style_for_settings(settings)
 
 
