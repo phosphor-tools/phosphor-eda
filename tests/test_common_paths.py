@@ -41,6 +41,35 @@ def test_basename_fallback_when_directory_prefix_differs():
     )
 
 
+def test_backslash_known_document_matches_exactly_and_keeps_original_key():
+    # The known-documents index may spell paths with backslashes; the reference
+    # must still exact-match, and the returned key must be the original spelling
+    # so callers can index their known-documents mapping with it.
+    known = ["SCH\\Main.SchDoc", "other/Main.SchDoc"]
+    ctx = ParseContext()
+    result = resolve_document_reference(
+        "SCH/Main.SchDoc",
+        referencing_dir=None,
+        known_documents=known,
+        ctx=ctx,
+    )
+    assert result == "SCH\\Main.SchDoc"
+    assert ctx.issues == []
+
+
+def test_backslash_known_document_matches_relative_to_referencing_directory():
+    known = ["SCH\\Power.SchDoc", "other/Power.SchDoc"]
+    ctx = ParseContext()
+    result = resolve_document_reference(
+        "Power.SchDoc",
+        referencing_dir="SCH",
+        known_documents=known,
+        ctx=ctx,
+    )
+    assert result == "SCH\\Power.SchDoc"
+    assert ctx.issues == []
+
+
 def test_returns_none_when_no_candidate_matches():
     assert (
         resolve_document_reference(
