@@ -73,7 +73,7 @@ def test_missing_normal_fill_token_raises_with_role_and_property() -> None:
 def test_realistic_exposed_substrate_fill_defaults_to_substrate_fill() -> None:
     style = resolve_layer_style(
         {"realistic.substrate.fill": "#244426"},
-        VisualRole(namespace="realistic", function="exposedSubstrate"),
+        VisualRole(namespace="realistic", function="exposed_substrate"),
         dimmed=False,
         warn=lambda _message: None,
     )

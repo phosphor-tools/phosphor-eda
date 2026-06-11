@@ -163,17 +163,40 @@ def find_net(design: Schematic, name: str) -> Net:
     return matches[0]
 
 
+def component_physical_designator(comp: Component) -> str:
+    """The per-instance physical designator for a component, or ``""``.
+
+    Repeated/multi-channel instances carry a distinct physical designator (e.g.
+    ``U1.3``) on their occurrences. Returns the first non-empty one. Empty for
+    single-instance and un-annotated components.
+    """
+    for occurrence in comp.occurrences:
+        if occurrence.physical_designator:
+            return occurrence.physical_designator
+    return ""
+
+
 def find_component(design: Schematic, ref: str) -> Component:
-    """Find a component by reference.  Raises ValueError if not found/ambiguous."""
+    """Find a component by logical reference or physical designator.
+
+    ``ref`` may be a logical reference (``U1``) or an exact per-instance
+    physical designator (``U1.3``). A physical designator resolves to that
+    specific occurrence's component; an ambiguous logical reference raises,
+    naming the physical designators so the caller can disambiguate.
+    """
     matches = [comp for comp in design.components if comp.reference == ref]
     if not matches:
-        raise ValueError(f"Component '{ref}' not found in design.")
+        matches = [comp for comp in design.components if component_physical_designator(comp) == ref]
+        if not matches:
+            raise ValueError(f"Component '{ref}' not found in design.")
     if len(matches) > 1:
         locations: list[str] = []
         for comp in matches:
             page_names = sorted({page.name for page in comp.pages})
             location = ", ".join(page_names) if page_names else "unknown page"
-            locations.append(f"{comp.reference} on {location}")
+            designator = component_physical_designator(comp)
+            label = f"{comp.reference} [{designator}]" if designator else comp.reference
+            locations.append(f"{label} on {location}")
         raise ValueError(f"Component '{ref}' is ambiguous; matches: {', '.join(locations)}.")
     return matches[0]
 

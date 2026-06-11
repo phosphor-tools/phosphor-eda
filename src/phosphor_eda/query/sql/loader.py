@@ -730,6 +730,7 @@ _COMPONENT_OCCURRENCES: TableSpec[ComponentOccurrence] = TableSpec(
         col("y", "DOUBLE", lambda o: o.y),
         col("rotation", "DOUBLE", lambda o: o.rotation),
         col("mirror", "BOOLEAN", lambda o: o.mirror),
+        col("physical_designator", "VARCHAR", lambda o: _null_if_unset(o.physical_designator)),
     ),
 )
 

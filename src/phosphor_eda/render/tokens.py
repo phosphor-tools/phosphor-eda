@@ -237,7 +237,7 @@ def _resolve_realistic_default_value(
     role: VisualRole,
     prop: str,
 ) -> object | None:
-    if role.function == "exposedSubstrate" and prop == "fill":
+    if role.function == "exposed_substrate" and prop == "fill":
         return tokens.get("realistic.substrate.fill")
     return None
 
@@ -256,7 +256,7 @@ def _resolve_eda_default_value(
         return _resolve_eda_silkscreen_default(role, prop)
     if role.function == "edge":
         return _resolve_eda_edge_default(role, prop)
-    if role.function in {"drill", "drills"}:
+    if role.function == "drill":
         return _resolve_eda_drill_default(role, prop)
     if role.function == "keepout":
         return _resolve_eda_keepout_default(prop)

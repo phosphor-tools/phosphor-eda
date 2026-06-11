@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, override
@@ -19,16 +20,30 @@ if TYPE_CHECKING:
 
     from phosphor_eda.domain.pcb import PcbText
 
-_FONT = TTFont(INTER_REGULAR)
-_GLYPH_SET = _FONT.getGlyphSet()
-_CMAP: dict[int, str] = _FONT.getBestCmap() or {}
-_HMTX = _FONT["hmtx"]
-_HEAD = _FONT["head"]
-_UNITS_PER_EM = float(_HEAD.unitsPerEm)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
-_SPACE_GLYPH = _CMAP.get(ord(" "))
-
 _CURVE_STEPS = 8
 _POINT_TOLERANCE = 1e-9
+
+
+@functools.cache
+def _font() -> TTFont:
+    """Load the bundled Inter face once, lazily (not at import)."""
+    return TTFont(INTER_REGULAR)
+
+
+@functools.cache
+def _glyph_set() -> object:
+    return _font().getGlyphSet()
+
+
+@functools.cache
+def _cmap() -> dict[int, str]:
+    return _font().getBestCmap() or {}
+
+
+@functools.cache
+def _units_per_em() -> float:
+    head = _font()["head"]
+    return float(head.unitsPerEm)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]
 
 
 @dataclass(frozen=True)
@@ -42,7 +57,7 @@ class _TextSpec:
 
 class _OutlinePen(BasePen):
     def __init__(self) -> None:
-        super().__init__(_GLYPH_SET)  # pyright: ignore[reportUnknownMemberType]
+        super().__init__(_glyph_set())  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
         self.contours: list[list[tuple[float, float]]] = []
         self._current: list[tuple[float, float]] = []
         self._position: tuple[float, float] | None = None
@@ -146,12 +161,14 @@ def text_outline_geometry(text: PcbText) -> BaseGeometry:
     if not spec.text or spec.font_size <= 0:
         return GeometryCollection()
 
+    cmap = _cmap()
+    space_glyph = cmap.get(ord(" "))
     glyph_geometries: list[BaseGeometry] = []
     cursor_x = 0.0
     for char in spec.text:
-        glyph_name = _CMAP.get(ord(char))
+        glyph_name = cmap.get(ord(char))
         if glyph_name is None:
-            cursor_x += _glyph_advance(_SPACE_GLYPH)
+            cursor_x += _glyph_advance(space_glyph)
             continue
         glyph_geometry = _glyph_geometry(glyph_name)
         if not glyph_geometry.is_empty:
@@ -162,7 +179,7 @@ def text_outline_geometry(text: PcbText) -> BaseGeometry:
         return GeometryCollection()
 
     geometry = unary_union(glyph_geometries)
-    font_scale = spec.font_size / _UNITS_PER_EM
+    font_scale = spec.font_size / _units_per_em()
     geometry = scale(geometry, xfact=font_scale, yfact=-font_scale, origin=(0.0, 0.0))
     min_x, min_y, max_x, max_y = geometry.bounds
     geometry = translate(
@@ -186,7 +203,7 @@ def _text_spec(text: PcbText) -> _TextSpec:
 
 
 def _glyph_geometry(glyph_name: str) -> BaseGeometry:
-    glyph = _GLYPH_SET[glyph_name]  # pyright: ignore[reportUnknownVariableType]
+    glyph = _glyph_set()[glyph_name]  # pyright: ignore[reportUnknownVariableType, reportIndexIssue]
     pen = _OutlinePen()
     glyph.draw(pen)  # pyright: ignore[reportUnknownMemberType]
     pen.finish()
@@ -195,11 +212,11 @@ def _glyph_geometry(glyph_name: str) -> BaseGeometry:
 
 def _glyph_advance(glyph_name: str | None) -> float:
     if glyph_name is None:
-        return _UNITS_PER_EM * 0.5
-    advance = _HMTX[glyph_name][0]  # pyright: ignore[reportUnknownVariableType]
+        return _units_per_em() * 0.5
+    advance = _font()["hmtx"][glyph_name][0]  # pyright: ignore[reportUnknownVariableType]
     if isinstance(advance, int | float):
         return float(advance)
-    return _UNITS_PER_EM * 0.5
+    return _units_per_em() * 0.5
 
 
 def _contours_to_geometry(contours: list[list[tuple[float, float]]]) -> BaseGeometry:

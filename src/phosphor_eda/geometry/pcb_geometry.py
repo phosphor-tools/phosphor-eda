@@ -17,6 +17,7 @@ from phosphor_eda.domain.pcb import PcbArc, PcbCircle, PcbLine, PcbPathSegmentKi
 from phosphor_eda.geometry.shapely_ops import normalize_geometry, robust_polygonize
 
 if TYPE_CHECKING:
+    from shapely.coords import CoordinateSequence
     from shapely.geometry.base import BaseGeometry
 
     from phosphor_eda.domain.pcb import (
@@ -42,10 +43,256 @@ def _box(min_x: float, min_y: float, max_x: float, max_y: float) -> Polygon:
 # ---------------------------------------------------------------------------
 
 
-def pad_polygon(pad: PcbPad) -> BaseGeometry:
-    """Construct the actual copper polygon for a pad in board coordinates."""
+def _rotate_point(x: float, y: float, cx: float, cy: float, degrees: float) -> tuple[float, float]:
+    """Rotate (x, y) about (cx, cy) by ``-degrees`` (pad/shapely convention)."""
+    if degrees == 0.0:
+        return x, y
+    angle = math.radians(-degrees)
+    cos_a = math.cos(angle)
+    sin_a = math.sin(angle)
+    dx = x - cx
+    dy = y - cy
+    return cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a
+
+
+def circle_path_d(cx: float, cy: float, radius: float, *, clockwise: bool = False) -> str:
+    """Exact SVG path for a full circle (two semicircular arcs).
+
+    ``clockwise`` flips the winding (arc sweep flag). Annular rings pair a
+    default-wound outer circle with a clockwise inner circle so the hole
+    survives ``fill-rule="nonzero"``.
+    """
+    if radius <= 0.0:
+        return ""
+    sweep = 1 if clockwise else 0
+    return (
+        f"M {cx + radius:.4f} {cy:.4f} "
+        f"A {radius:.4f} {radius:.4f} 0 1 {sweep} {cx - radius:.4f} {cy:.4f} "
+        f"A {radius:.4f} {radius:.4f} 0 1 {sweep} {cx + radius:.4f} {cy:.4f} Z"
+    )
+
+
+def rect_path_d(cx: float, cy: float, w: float, h: float, rotation: float = 0.0) -> str:
+    """Exact SVG path for an (optionally rotated) rectangle centered at (cx, cy)."""
+    if w <= 0.0 or h <= 0.0:
+        return ""
+    hw = w / 2.0
+    hh = h / 2.0
+    corners = (
+        (cx - hw, cy - hh),
+        (cx + hw, cy - hh),
+        (cx + hw, cy + hh),
+        (cx - hw, cy + hh),
+    )
+    rotated = [_rotate_point(x, y, cx, cy, rotation) for x, y in corners]
+    commands = [f"M {rotated[0][0]:.4f} {rotated[0][1]:.4f}"]
+    commands.extend(f"L {x:.4f} {y:.4f}" for x, y in rotated[1:])
+    commands.append("Z")
+    return " ".join(commands)
+
+
+def oval_path_d(cx: float, cy: float, w: float, h: float, rotation: float = 0.0) -> str:
+    """Exact SVG path for a capsule/stadium (two semicircle arcs + two lines)."""
+    if w <= 0.0 or h <= 0.0:
+        return ""
+    if math.isclose(w, h):
+        return circle_path_d(cx, cy, w / 2.0)
+    if w > h:
+        radius = h / 2.0
+        half = (w - h) / 2.0
+        # Top edge then right cap then bottom edge then left cap.
+        p_tl = (cx - half, cy - radius)
+        p_tr = (cx + half, cy - radius)
+        p_br = (cx + half, cy + radius)
+        p_bl = (cx - half, cy + radius)
+        pts = [_rotate_point(x, y, cx, cy, rotation) for x, y in (p_tl, p_tr, p_br, p_bl)]
+        return (
+            f"M {pts[0][0]:.4f} {pts[0][1]:.4f} "
+            f"L {pts[1][0]:.4f} {pts[1][1]:.4f} "
+            f"A {radius:.4f} {radius:.4f} 0 0 0 {pts[2][0]:.4f} {pts[2][1]:.4f} "
+            f"L {pts[3][0]:.4f} {pts[3][1]:.4f} "
+            f"A {radius:.4f} {radius:.4f} 0 0 0 {pts[0][0]:.4f} {pts[0][1]:.4f} Z"
+        )
+    radius = w / 2.0
+    half = (h - w) / 2.0
+    # Left edge then bottom cap then right edge then top cap.
+    p_tl = (cx - radius, cy - half)
+    p_bl = (cx - radius, cy + half)
+    p_br = (cx + radius, cy + half)
+    p_tr = (cx + radius, cy - half)
+    pts = [_rotate_point(x, y, cx, cy, rotation) for x, y in (p_tl, p_bl, p_br, p_tr)]
+    return (
+        f"M {pts[0][0]:.4f} {pts[0][1]:.4f} "
+        f"L {pts[1][0]:.4f} {pts[1][1]:.4f} "
+        f"A {radius:.4f} {radius:.4f} 0 0 0 {pts[2][0]:.4f} {pts[2][1]:.4f} "
+        f"L {pts[3][0]:.4f} {pts[3][1]:.4f} "
+        f"A {radius:.4f} {radius:.4f} 0 0 0 {pts[0][0]:.4f} {pts[0][1]:.4f} Z"
+    )
+
+
+def roundrect_path_d(
+    cx: float, cy: float, w: float, h: float, corner_radius: float, rotation: float = 0.0
+) -> str:
+    """Exact SVG path for a rounded rectangle (four lines + four quarter arcs)."""
+    if w <= 0.0 or h <= 0.0:
+        return ""
+    radius = max(min(corner_radius, w / 2.0, h / 2.0), 0.0)
+    if radius <= 0.0:
+        return rect_path_d(cx, cy, w, h, rotation)
+    hw = w / 2.0
+    hh = h / 2.0
+    # Walk clockwise (in SVG's y-down space) from the top edge, inserting a
+    # quarter arc at each corner. Sweep flag 1 keeps arcs convex outward.
+    raw = (
+        ("M", cx - hw + radius, cy - hh),
+        ("L", cx + hw - radius, cy - hh),
+        ("A", cx + hw, cy - hh + radius),
+        ("L", cx + hw, cy + hh - radius),
+        ("A", cx + hw - radius, cy + hh),
+        ("L", cx - hw + radius, cy + hh),
+        ("A", cx - hw, cy + hh - radius),
+        ("L", cx - hw, cy - hh + radius),
+        ("A", cx - hw + radius, cy - hh),
+    )
+    commands: list[str] = []
+    for op, x, y in raw:
+        rx, ry = _rotate_point(x, y, cx, cy, rotation)
+        if op == "A":
+            commands.append(f"A {radius:.4f} {radius:.4f} 0 0 1 {rx:.4f} {ry:.4f}")
+        else:
+            commands.append(f"{op} {rx:.4f} {ry:.4f}")
+    commands.append("Z")
+    return " ".join(commands)
+
+
+def pad_path_d(pad: PcbPad, *, width: float | None = None, height: float | None = None) -> str:
+    """Native SVG path for a pad's copper shape (no shapely).
+
+    ``width``/``height`` override the pad dimensions (used for solder-mask
+    openings that expand the aperture). ``custom`` pads concatenate their
+    sub-shape subpaths; the caller paints them with ``fill-rule="nonzero"``.
+    Overridden custom pads fall back to a shapely outline dilated by the
+    override margin (see ``_custom_pad_margin``).
+    """
+    w = pad.width if width is None else width
+    h = pad.height if height is None else height
     cx, cy = pad.x, pad.y
-    w, h = pad.width, pad.height
+    if pad.shape == "custom" and pad.custom_shapes:
+        if _custom_pad_margin(pad, w, h) == 0.0:
+            return custom_pad_path_d(pad)
+        return _polygon_to_path_d(pad_polygon(pad, width=w, height=h))
+    if pad.shape == "circle":
+        return circle_path_d(cx, cy, w / 2.0)
+    if pad.shape == "oval":
+        return oval_path_d(cx, cy, w, h, pad.rotation)
+    if pad.shape == "roundrect":
+        corner_radius = min(w, h) * pad.roundrect_rratio / 2.0
+        return roundrect_path_d(cx, cy, w, h, corner_radius, pad.rotation)
+    return rect_path_d(cx, cy, w, h, pad.rotation)
+
+
+def custom_pad_path_d(pad: PcbPad) -> str:
+    """Concatenate a custom pad's sub-shape subpaths into one ``d`` string."""
+    subpaths = [d for shape in pad.custom_shapes if (d := _custom_pad_shape_path_d(shape))]
+    return " ".join(subpaths)
+
+
+def _custom_pad_shape_path_d(shape: PcbLine | PcbArc | PcbCircle | PcbPolygon) -> str:
+    if isinstance(shape, PcbLine):
+        if shape.width <= 0.0:
+            return ""
+        return _stroke_centerline_to_filled_path_d(
+            ((shape.start_x, shape.start_y), (shape.end_x, shape.end_y)), shape.width
+        )
+    if isinstance(shape, PcbArc):
+        if shape.width <= 0.0:
+            return ""
+        points = arc_to_polyline(
+            shape.start_x,
+            shape.start_y,
+            shape.mid_x,
+            shape.mid_y,
+            shape.end_x,
+            shape.end_y,
+            num_points=32,
+        )
+        return _stroke_centerline_to_filled_path_d(tuple(points), shape.width)
+    if isinstance(shape, PcbCircle):
+        if shape.fill or shape.width <= 0.0:
+            return circle_path_d(shape.cx, shape.cy, shape.radius)
+        inner_radius = max(shape.radius - shape.width, 0.0)
+        outer = circle_path_d(shape.cx, shape.cy, shape.radius)
+        if inner_radius <= 0.0:
+            return outer
+        return f"{outer} {circle_path_d(shape.cx, shape.cy, inner_radius, clockwise=True)}"
+    return _polygon_to_path_d(polygon_geometry(shape))
+
+
+def _stroke_centerline_to_filled_path_d(
+    points: tuple[tuple[float, float], ...], width: float
+) -> str:
+    """Buffer a centerline into a filled-outline subpath (custom-pad sub-shapes).
+
+    Custom-pad line/arc sub-shapes carry width and must contribute filled area
+    to the union; a stroked centerline can't because the surrounding ``<path>``
+    is a single fill element. Keep shapely here -- this is genuine polygonal
+    union input, not the per-primitive curve bloat plan 11 removes.
+    """
+    line = LineString(points)
+    return _polygon_to_path_d(line.buffer(width / 2.0, cap_style="round"))
+
+
+def _polygon_to_path_d(geometry: BaseGeometry) -> str:
+    if geometry.is_empty:
+        return ""
+    polygons: list[Polygon] = []
+    if isinstance(geometry, Polygon):
+        polygons = [geometry]
+    elif isinstance(geometry, MultiPolygon):
+        polygons = list(geometry.geoms)
+    parts: list[str] = []
+    for polygon in polygons:
+        parts.append(_ring_to_path_d(polygon.exterior.coords))
+        parts.extend(_ring_to_path_d(interior.coords) for interior in polygon.interiors)
+    return " ".join(part for part in parts if part)
+
+
+def _ring_to_path_d(coords: CoordinateSequence) -> str:
+    points = [(float(x), float(y)) for x, y, *_ in coords]
+    if len(points) < 3:
+        return ""
+    if points[0] == points[-1]:
+        points = points[:-1]
+    commands = [f"M {points[0][0]:.4f} {points[0][1]:.4f}"]
+    commands.extend(f"L {x:.4f} {y:.4f}" for x, y in points[1:])
+    commands.append("Z")
+    return " ".join(commands)
+
+
+def _custom_pad_margin(pad: PcbPad, width: float, height: float) -> float:
+    """Uniform outline offset equivalent to a width/height override.
+
+    Custom pads are unions of absolute-coordinate sub-shapes with no
+    width/height parameterization, so aperture overrides (e.g. solder-mask
+    expansion) are applied as an offset of the copper outline instead. The
+    per-axis half-deltas are averaged; mask-expansion callers grow both axes
+    by the same amount, so the average is exact for them.
+    """
+    return ((width - pad.width) + (height - pad.height)) / 4.0
+
+
+def pad_polygon(
+    pad: PcbPad, *, width: float | None = None, height: float | None = None
+) -> BaseGeometry:
+    """Construct the actual copper polygon for a pad in board coordinates.
+
+    ``width``/``height`` override the pad dimensions (used for solder-mask
+    openings that expand the aperture). Custom pads apply the override as a
+    uniform dilation of the sub-shape union (see ``_custom_pad_margin``).
+    """
+    cx, cy = pad.x, pad.y
+    w = pad.width if width is None else width
+    h = pad.height if height is None else height
 
     if pad.shape == "custom" and pad.custom_shapes:
         geometries = [
@@ -53,9 +300,13 @@ def pad_polygon(pad: PcbPad) -> BaseGeometry:
             for shape in pad.custom_shapes
             if not (geometry := _custom_pad_shape_geometry(shape)).is_empty
         ]
-        return (
-            GeometryCollection() if not geometries else normalize_geometry(unary_union(geometries))
-        )
+        if not geometries:
+            return GeometryCollection()
+        union = normalize_geometry(unary_union(geometries))
+        margin = _custom_pad_margin(pad, w, h)
+        if margin == 0.0 or union.is_empty:
+            return union
+        return normalize_geometry(union.buffer(margin, quad_segs=PAD_CURVE_QUAD_SEGS))
 
     if pad.shape == "circle":
         return Point(cx, cy).buffer(w / 2, quad_segs=PAD_CURVE_QUAD_SEGS)
@@ -128,8 +379,7 @@ def _custom_pad_shape_geometry(
         if inner_radius <= 0.0:
             return outer
         return outer.difference(Point(shape.cx, shape.cy).buffer(inner_radius))
-    polygon = polygon_geometry(shape)
-    return GeometryCollection() if polygon is None else polygon
+    return polygon_geometry(shape)
 
 
 # ---------------------------------------------------------------------------
@@ -286,16 +536,17 @@ def via_geometry(via: PcbVia) -> tuple[Polygon, Polygon]:
 # ---------------------------------------------------------------------------
 
 
-def polygon_geometry(poly: PcbPolygon) -> Polygon | None:
-    """Convert polygon geometry to a Shapely Polygon, or None if degenerate."""
+def polygon_geometry(poly: PcbPolygon) -> BaseGeometry:
+    """Convert polygon geometry to normalized Shapely geometry.
+
+    Returns an empty ``GeometryCollection`` for degenerate or non-repairable
+    input — never raw, possibly-invalid geometry (invalid WKB corrupts spatial
+    queries and SVG serialization alike).
+    """
     if len(poly.points) < 3:
-        return None
+        return GeometryCollection()
     holes = [h for h in poly.holes if len(h) >= 3]
-    geometry = Polygon(poly.points, holes=holes or None)
-    normalized = normalize_geometry(geometry)
-    if not normalized.is_empty and isinstance(normalized, Polygon):
-        return normalized
-    return geometry
+    return normalize_geometry(Polygon(poly.points, holes=holes or None))
 
 
 def closed_path_geometry(path: PcbClosedPath) -> Polygon | None:
@@ -351,8 +602,8 @@ def board_outline_polygon(profile: PcbBoardProfile) -> Polygon | MultiPolygon | 
     """
     outline_segments: list[LineString] = []
     cutout_segments: list[LineString] = []
-    solids: list[Polygon] = []
-    cutouts: list[Polygon] = []
+    solids: list[Polygon | MultiPolygon] = []
+    cutouts: list[Polygon | MultiPolygon] = []
 
     for item in profile.elements:
         if isinstance(item.data, PcbLine):
@@ -387,8 +638,10 @@ def board_outline_polygon(profile: PcbBoardProfile) -> Polygon | MultiPolygon | 
                 solids.append(ring)
 
         else:
+            # Repairing a self-intersecting outline can yield a MultiPolygon;
+            # keep all pieces so no board material or cutout is dropped.
             polygon = polygon_geometry(item.data)
-            if polygon is None:
+            if polygon.is_empty or not isinstance(polygon, (Polygon, MultiPolygon)):
                 continue
             if item.is_cutout:
                 cutouts.append(polygon)

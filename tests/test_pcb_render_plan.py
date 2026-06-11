@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from test_pcb_render import _board
+from conftest import build_render_test_board as _board
 
 from phosphor_eda.render.plan import build_derived_render_plan
 from phosphor_eda.render.settings import (
@@ -33,6 +33,8 @@ class _Profiler:
 def test_render_plan_builds_from_typed_inventory() -> None:
     settings = RenderSettings(
         render_mode="eda",
+        side="front",
+        width=640,
         source=SourceSelection(
             layers=[
                 LayerSelectionRule(match=LayerMatch(role="copper")),
@@ -48,8 +50,6 @@ def test_render_plan_builds_from_typed_inventory() -> None:
     plan = build_derived_render_plan(
         _board(),
         settings=settings,
-        side="front",
-        width_px=640,
         annotations=None,
     )
 
@@ -62,14 +62,14 @@ def test_render_plan_profiler_counts_typed_collections() -> None:
     profiler = _Profiler()
     settings = RenderSettings(
         render_mode="eda",
+        side="front",
+        width=640,
         source=SourceSelection(layers=[LayerSelectionRule(match=LayerMatch(role="copper"))]),
     )
 
     build_derived_render_plan(
         _board(),
         settings=settings,
-        side="front",
-        width_px=640,
         annotations=None,
         profiler=profiler,
     )

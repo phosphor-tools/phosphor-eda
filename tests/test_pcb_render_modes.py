@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
-from test_pcb_render import _board
+from conftest import build_render_test_board as _board
 
 from phosphor_eda.formats.kicad.pcb_parser import parse_kicad_pcb
 from phosphor_eda.render.inventory import build_inventory
@@ -30,16 +31,16 @@ def test_layer_mask_bounds_from_real_geometry_not_path_pairing() -> None:
     ``d`` string drops the true vertical extremes. ``LayerMask.bounds()`` reads
     the primitive's real geometry bbox instead.
     """
+    from phosphor_eda.geometry.pcb_geometry import circle_path_d
     from phosphor_eda.render.inventory import InventoryTags
     from phosphor_eda.render.primitives import (
         LayerMask,
         SvgPrimitive,
-        _circle_path_d,
     )
 
     cx, cy, radius = 50.0, 50.0, 20.0
     board = SvgPrimitive(
-        d=_circle_path_d(cx, cy, radius),
+        d=circle_path_d(cx, cy, radius),
         source_id="board",
         source_layer="edge",
         kind="board_profile",
@@ -84,26 +85,25 @@ def test_eda_layers_are_built_from_typed_inventory() -> None:
 
 def test_realistic_layers_use_board_material_copper_and_silkscreen() -> None:
     inventory = build_inventory(_board(), side="front")
-    settings = load_render_settings_json('{"extends": "phosphor:review"}')
-    settings.side = "front"
+    settings = replace(load_render_settings_json('{"extends": "phosphor:review"}'), side="front")
 
     layers = build_realistic_layers(inventory, settings, warn=lambda _message: None)
 
     layer_ids = {layer.id for layer in layers}
     assert {
         "realistic:substrate",
-        "realistic:solderMask",
-        "realistic:coveredCopper",
-        "realistic:exposedSubstrate",
-        "realistic:exposedCopper",
+        "realistic:solder_mask",
+        "realistic:covered_copper",
+        "realistic:exposed_substrate",
+        "realistic:exposed_copper",
         "realistic:silkscreen",
     }.issubset(layer_ids)
     assert "realistic:boardOutline" not in layer_ids
     layers_by_id = {layer.id: layer for layer in layers}
-    assert layers_by_id["realistic:solderMask"].mask is not None
-    assert layers_by_id["realistic:solderMask"].mask.openings
-    assert layers_by_id["realistic:exposedCopper"].mask is not None
-    assert layers_by_id["realistic:exposedCopper"].mask.board
+    assert layers_by_id["realistic:solder_mask"].mask is not None
+    assert layers_by_id["realistic:solder_mask"].mask.openings
+    assert layers_by_id["realistic:exposed_copper"].mask is not None
+    assert layers_by_id["realistic:exposed_copper"].mask.board
     assert layers_by_id["realistic:silkscreen"].mask is not None
     assert layers_by_id["realistic:silkscreen"].mask.openings
 
@@ -152,11 +152,13 @@ def test_realistic_board_material_uses_profile_path_for_orangecrab() -> None:
 
 def test_highlights_match_typed_inventory_tags() -> None:
     inventory = build_inventory(_board(), side="front")
-    settings = load_render_settings_json('{"extends": "phosphor:review"}')
-    settings.render_mode = "eda"
-    settings.side = "front"
-    settings.source = SourceSelection(layers=[LayerSelectionRule(match=LayerMatch(role="copper"))])
-    settings.highlights = [HighlightSpec(net="VCC")]
+    settings = replace(
+        load_render_settings_json('{"extends": "phosphor:review"}'),
+        render_mode="eda",
+        side="front",
+        source=SourceSelection(layers=[LayerSelectionRule(match=LayerMatch(role="copper"))]),
+        highlights=[HighlightSpec(net="VCC")],
+    )
 
     groups = build_highlight_layers(inventory, settings, warn=lambda _message: None)
 
@@ -167,10 +169,12 @@ def test_highlights_match_typed_inventory_tags() -> None:
 
 def test_highlight_layers_use_board_and_drill_cutouts() -> None:
     inventory = build_inventory(_board(), side="front")
-    settings = load_render_settings_json('{"extends": "phosphor:review"}')
-    settings.render_mode = "eda"
-    settings.side = "front"
-    settings.highlights = [HighlightSpec(net="VCC")]
+    settings = replace(
+        load_render_settings_json('{"extends": "phosphor:review"}'),
+        render_mode="eda",
+        side="front",
+        highlights=[HighlightSpec(net="VCC")],
+    )
 
     groups = build_highlight_layers(inventory, settings, warn=lambda _message: None)
 
@@ -186,10 +190,12 @@ def test_highlight_layers_use_board_and_drill_cutouts() -> None:
 
 def test_highlights_do_not_select_drills_from_net_tags() -> None:
     inventory = build_inventory(_board(), side="front")
-    settings = load_render_settings_json('{"extends": "phosphor:review"}')
-    settings.render_mode = "eda"
-    settings.side = "front"
-    settings.highlights = [HighlightSpec(net="VCC")]
+    settings = replace(
+        load_render_settings_json('{"extends": "phosphor:review"}'),
+        render_mode="eda",
+        side="front",
+        highlights=[HighlightSpec(net="VCC")],
+    )
 
     groups = build_highlight_layers(inventory, settings, warn=lambda _message: None)
 

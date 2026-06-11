@@ -13,7 +13,12 @@ from typing import TYPE_CHECKING
 
 from phosphor_eda.formats.common.electrical import ELECTRICAL_KEY, PinElectrical
 from phosphor_eda.query.classify import PASSIVE_PREFIXES, is_power_net, ref_prefix
-from phosphor_eda.query.query import find_component, find_net, net_page_names
+from phosphor_eda.query.query import (
+    component_physical_designator,
+    find_component,
+    find_net,
+    net_page_names,
+)
 from phosphor_eda.query.trace import (
     find_paths,
     is_two_pin_passive,
@@ -100,6 +105,20 @@ def _pin_net_str(pin: Pin) -> str:
 
 def _component_reference_is_ambiguous(design: Schematic, comp: Component) -> bool:
     return sum(1 for candidate in design.components if candidate.reference == comp.reference) > 1
+
+
+def _component_block_label(design: Schematic, comp: Component) -> str:
+    """Component header reference, qualified by physical designator when needed.
+
+    For a logical reference that is ambiguous across instances (Case B/C), append
+    the physical designator (``U1 [U1.3]``) so each instance block is
+    distinguishable. Unambiguous references and un-annotated designs show no
+    suffix.
+    """
+    designator = component_physical_designator(comp)
+    if designator and _component_reference_is_ambiguous(design, comp):
+        return f"{comp.reference} [{designator}]"
+    return comp.reference
 
 
 def _same_component(left: Component, right: Component) -> bool:
@@ -229,9 +248,8 @@ def _format_components(design: Schematic) -> list[str]:
     lines = ["=== COMPONENTS ===", ""]
     for comp in sorted(design.components, key=lambda c: c.reference):
         page_names = ", ".join(_page_names(comp.pages))
-        lines.append(
-            f"COMPONENT: {comp.reference} | {comp.part} | {comp.description} | Pages: {page_names}"
-        )
+        label = _component_block_label(design, comp)
+        lines.append(f"COMPONENT: {label} | {comp.part} | {comp.description} | Pages: {page_names}")
 
         for key, value in sorted(_filter_metadata(comp).items()):
             lines.append(f"  {key}: {value}")
@@ -471,13 +489,19 @@ def format_page_table(
 
 
 def format_component_detail(design: Schematic, ref: str) -> str:
-    """Format full detail for a single component. Raises ValueError if not found."""
+    """Format full detail for a single component. Raises ValueError if not found.
+
+    ``ref`` may be a logical reference (``U1``) or an exact per-instance physical
+    designator (``U1.3``); see ``find_component``.
+    """
     comp = find_component(design, ref)
 
     page_names = ", ".join(_page_names(comp.pages))
-    lines = [
-        f"COMPONENT: {comp.reference} | {comp.part} | {comp.description} | Pages: {page_names}"
-    ]
+    header = (
+        f"COMPONENT: {_component_block_label(design, comp)} | {comp.part} |"
+        f" {comp.description} | Pages: {page_names}"
+    )
+    lines = [header]
 
     for key, value in sorted(_filter_metadata(comp).items()):
         lines.append(f"  {key}: {value}")

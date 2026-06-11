@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from shapely import LineString, Point
 from shapely.affinity import rotate
 
-from phosphor_eda.geometry.pcb_geometry import VIA_DRILL_QUAD_SEGS
+from phosphor_eda.geometry.pcb_geometry import (
+    VIA_DRILL_QUAD_SEGS,
+    circle_path_d,
+)
 
 if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry
@@ -16,11 +20,57 @@ if TYPE_CHECKING:
     from phosphor_eda.domain.pcb import PcbDrill
 
 
+@dataclass(frozen=True)
+class DrillRender:
+    """Native SVG path for a drill plus stroke metadata for slots.
+
+    Round drills are a filled circle (``stroke_width is None``); slots are a
+    stroked centerline whose ``stroke_width`` is the slot's narrow dimension.
+    """
+
+    d: str
+    stroke_width: float | None = None
+
+
 def drill_dimensions(drill: PcbDrill) -> tuple[float, float]:
     """Return the drill aperture dimensions in millimetres."""
     width = drill.width if drill.width > 0.0 else drill.diameter
     height = drill.height if drill.height > 0.0 else drill.diameter
     return width, height
+
+
+def drill_render(drill: PcbDrill) -> DrillRender | None:
+    """Return the native SVG drill aperture (circle or stroked slot)."""
+    width, height = drill_dimensions(drill)
+    if width <= 0.0 or height <= 0.0:
+        return None
+    if drill.shape != "slot" or math.isclose(width, height):
+        return DrillRender(d=circle_path_d(drill.x, drill.y, width / 2.0))
+
+    slot_width = min(width, height)
+    half_span = (max(width, height) - slot_width) / 2.0
+    if width > height:
+        start = (drill.x - half_span, drill.y)
+        end = (drill.x + half_span, drill.y)
+    else:
+        start = (drill.x, drill.y - half_span)
+        end = (drill.x, drill.y + half_span)
+    if not math.isclose(drill.rotation % 360.0, 0.0):
+        start = _rotate_about(start, (drill.x, drill.y), drill.rotation)
+        end = _rotate_about(end, (drill.x, drill.y), drill.rotation)
+    d = f"M {start[0]:.4f} {start[1]:.4f} L {end[0]:.4f} {end[1]:.4f}"
+    return DrillRender(d=d, stroke_width=slot_width)
+
+
+def _rotate_about(
+    point: tuple[float, float], origin: tuple[float, float], degrees: float
+) -> tuple[float, float]:
+    angle = math.radians(-degrees)
+    cos_a = math.cos(angle)
+    sin_a = math.sin(angle)
+    dx = point[0] - origin[0]
+    dy = point[1] - origin[1]
+    return (origin[0] + dx * cos_a - dy * sin_a, origin[1] + dx * sin_a + dy * cos_a)
 
 
 def drill_geometry(drill: PcbDrill) -> BaseGeometry | None:

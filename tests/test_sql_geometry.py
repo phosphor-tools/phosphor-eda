@@ -11,6 +11,7 @@ from phosphor_eda.domain.pcb import (
     PcbArtworkKind,
     PcbBoardProfile,
     PcbBoardProfileElement,
+    PcbCircle,
     PcbDrill,
     PcbLine,
     PcbPad,
@@ -103,12 +104,14 @@ def test_polygon_with_holes() -> None:
 
     geom = polygon_geometry(poly)
 
-    assert geom is not None
+    assert not geom.is_empty
     assert geom.area == pytest.approx(96.0, abs=0.01)
 
 
-def test_polygon_degenerate_returns_none() -> None:
-    assert polygon_geometry(PcbPolygon(points=[(0, 0), (1, 0)])) is None
+def test_polygon_degenerate_returns_empty() -> None:
+    # Never raw, possibly-invalid geometry: degenerate input yields an empty
+    # geometry (treated as "no shape" by both SQL WKB and SVG serialization).
+    assert polygon_geometry(PcbPolygon(points=[(0, 0), (1, 0)])).is_empty
 
 
 def test_board_outline_from_normalized_fixture_geometry() -> None:
@@ -237,6 +240,71 @@ def test_board_outline_polygon_keeps_all_panelized_outlines() -> None:
     assert isinstance(geom, MultiPolygon)
     assert len(geom.geoms) == 2
     assert geom.area == pytest.approx(24.0)
+
+
+def test_board_outline_polygon_keeps_repaired_self_intersecting_outline() -> None:
+    """A self-intersecting outline polygon repairs into a MultiPolygon; both
+    lobes must survive as board material instead of being dropped."""
+    outline = PcbBoardProfile(
+        elements=(
+            PcbBoardProfileElement(
+                id="outline:bowtie",
+                kind=PcbArtworkKind.POLYGON,
+                layer=None,
+                data=PcbPolygon(points=[(0.0, 0.0), (4.0, 4.0), (4.0, 0.0), (0.0, 4.0)]),
+            ),
+        )
+    )
+
+    geom = board_outline_polygon(outline)
+
+    assert geom is not None
+    assert geom.area == pytest.approx(8.0)
+
+
+def test_board_outline_polygon_subtracts_repaired_self_intersecting_cutout() -> None:
+    outline = PcbBoardProfile(
+        elements=(
+            PcbBoardProfileElement(
+                id="outline:poly",
+                kind=PcbArtworkKind.POLYGON,
+                layer=None,
+                data=PcbPolygon(points=[(-1.0, -1.0), (5.0, -1.0), (5.0, 5.0), (-1.0, 5.0)]),
+            ),
+            PcbBoardProfileElement(
+                id="cutout:bowtie",
+                kind=PcbArtworkKind.POLYGON,
+                layer=None,
+                data=PcbPolygon(points=[(0.0, 0.0), (4.0, 4.0), (4.0, 0.0), (0.0, 4.0)]),
+                is_cutout=True,
+            ),
+        )
+    )
+
+    geom = board_outline_polygon(outline)
+
+    assert geom is not None
+    assert geom.area == pytest.approx(36.0 - 8.0)
+
+
+def test_pad_polygon_custom_honors_dimension_overrides() -> None:
+    pad = PcbPad(
+        id="pad:custom",
+        number="1",
+        x=0.0,
+        y=0.0,
+        width=2.0,
+        height=2.0,
+        shape="custom",
+        pad_type=PcbPadType.SMD,
+        layers=(),
+        custom_shapes=(PcbCircle(cx=0.0, cy=0.0, radius=1.0, width=0.0, fill=True),),
+    )
+
+    # A +0.5 margin per side dilates the r=1 copper circle to r=1.5.
+    geom = pad_polygon(pad, width=3.0, height=3.0)
+
+    assert geom.area == pytest.approx(math.pi * 1.5**2, rel=0.01)
 
 
 def _pad(

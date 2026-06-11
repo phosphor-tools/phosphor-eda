@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from phosphor_eda.formats.altium.annotation import load_annotation_designators
 from phosphor_eda.formats.altium.project import parse_prjpcb_file
 from phosphor_eda.formats.altium.resolver import resolve_altium_source
 from phosphor_eda.formats.altium.sheet_builder import SheetRecords, load_sheet
@@ -62,6 +63,7 @@ def load_project_source(
         project=project,
         sheets=sheets,
         root_sheet_name=next(iter(sheets), ""),
+        physical_designators=load_annotation_designators(path, ctx=ctx),
     )
     return source, ctx
 
