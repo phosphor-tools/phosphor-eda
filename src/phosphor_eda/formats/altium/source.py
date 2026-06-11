@@ -14,10 +14,16 @@ from phosphor_eda.formats.altium.project import AltiumProject, parse_prjpcb_file
 from phosphor_eda.formats.altium.records import (
     AltiumRecord,
     ComponentRec,
+    DesignatorRec,
+    FileNameRec,
     HarnessConnectorRec,
     HarnessEntryRec,
     HarnessTypeRec,
+    ParameterRec,
     PinRec,
+    SheetEntryRec,
+    SheetNameRec,
+    SheetSymbolRec,
     SignalHarnessRec,
 )
 from phosphor_eda.formats.altium.sheet_builder import (
@@ -204,15 +210,15 @@ def _sheet_symbol_sources(
 ) -> tuple[list[AltiumSheetSymbol], dict[int, str]]:
     names_by_owner: dict[int, str] = {}
     files_by_owner: dict[int, str] = {}
-    for rec in sheet.sheet_names:
+    for rec in sheet.by_type(SheetNameRec):
         names_by_owner[rec.owner_index] = rec.text
-    for rec in sheet.file_names:
+    for rec in sheet.by_type(FileNameRec):
         files_by_owner[rec.owner_index] = rec.text
 
     symbols: list[AltiumSheetSymbol] = []
     symbol_ids_by_owner: dict[int, str] = {}
-    for symbol in sheet.sheet_symbols:
-        owner_key = symbol.index - 1
+    for symbol in sheet.by_type(SheetSymbolRec):
+        owner_key = symbol.owner_key
         symbol_id = _source_id(sheet_id, "sheet_symbol", symbol.index)
         symbol_ids_by_owner[owner_key] = symbol_id
         symbols.append(
@@ -238,7 +244,7 @@ def _sheet_entry_sources(
     symbol_ids_by_owner: dict[int, str],
 ) -> dict[int, AltiumSheetEntry]:
     entries: dict[int, AltiumSheetEntry] = {}
-    for entry in sheet.sheet_entries:
+    for entry in sheet.by_type(SheetEntryRec):
         entries[entry.index] = AltiumSheetEntry(
             id=_source_id(sheet_id, "sheet_entry", entry.index),
             scope_id=scope_id,
@@ -316,12 +322,12 @@ def _harness_sources(
 
 
 def _component_records(sheet: SheetRecords) -> dict[int, ComponentRec]:
-    return {component.index - 1: component for component in sheet.components}
+    return {component.owner_key: component for component in sheet.by_type(ComponentRec)}
 
 
 def _designators_by_owner(sheet: SheetRecords) -> dict[int, str]:
     result: dict[int, str] = {}
-    for designator in sheet.designators:
+    for designator in sheet.by_type(DesignatorRec):
         if designator.owner_index >= 0:
             result[designator.owner_index] = designator.text
     return result
@@ -329,7 +335,7 @@ def _designators_by_owner(sheet: SheetRecords) -> dict[int, str]:
 
 def _component_parameters_by_owner(sheet: SheetRecords) -> dict[int, dict[str, str]]:
     result: dict[int, dict[str, str]] = {}
-    for parameter in sheet.parameters:
+    for parameter in sheet.by_type(ParameterRec):
         if parameter.owner_index < 0 or not parameter.name or not parameter.text:
             continue
         result.setdefault(parameter.owner_index, {})[parameter.name] = parameter.text
@@ -542,7 +548,7 @@ def _source_sheet(
     }
 
     pin_occurrences: list[AltiumPinOccurrence] = []
-    for pin in sheet.pins:
+    for pin in sheet.by_type(PinRec):
         if pin.owner_index < 0 or not _pin_is_visible(pin, components_by_owner):
             continue
         root = _root_for_point(pin.tip, sheet, resolution)
