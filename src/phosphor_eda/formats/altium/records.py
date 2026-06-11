@@ -142,6 +142,16 @@ class AltiumRecord:
     index: int  # position in the flat record list
     owner_index: int = -1  # OwnerIndex value, -1 if not applicable
 
+    @property
+    def owner_key(self) -> int:
+        """Key under which children reference this record by OwnerIndex.
+
+        Altium stores a child's ``OwnerIndex`` as the parent's record position
+        minus one, so a parent is keyed by ``index - 1``. Children join to it
+        via their ``owner_index``.
+        """
+        return self.index - 1
+
 
 @dataclass
 class HeaderRec(AltiumRecord):

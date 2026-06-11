@@ -274,33 +274,54 @@ class TextRecord:
     @classmethod
     def from_bytes(cls, data: bytes, ctx: ParseContext) -> Self | None:
         """Parse from complete record data including the type byte."""
-        pos = 0
-        if len(data) < 1 or data[pos] != 5:
+        return cls.parse(data, 0, ctx)[0]
+
+    @classmethod
+    def parse(cls, data: bytes, pos: int, ctx: ParseContext) -> tuple[Self | None, int]:
+        """Parse one text record at *pos*, returning (record, next position).
+
+        One walk of the 2-subrecord chain (binary properties + Pascal string)
+        yields both the decoded fields and the byte cursor, so callers never
+        re-walk the chain and the two byte layouts cannot shear.  ``next`` is
+        the cursor past every subrecord whose length prefix is present, even
+        when a field is malformed and the record is discarded.
+        """
+        if pos >= len(data) or data[pos] != 5:
             ctx.warn("truncated_record", "Text record missing type byte")
-            return None
+            return None, pos
         pos += 1
 
-        # Sub1: binary properties
+        # Sub1: binary properties.
         if pos + 4 > len(data):
             ctx.warn("truncated_record", "Text record sub1 length missing")
-            return None
+            return None, pos
         sub1_len = u32(data, pos)
-        pos += 4
-        if pos + sub1_len > len(data) or sub1_len < 40:
+        sub1_start = pos + 4
+        pos = sub1_start + sub1_len
+        bad_sub1 = sub1_start + sub1_len > len(data) or sub1_len < 40
+        if bad_sub1:
             ctx.warn("truncated_record", f"Text record sub1 too short ({sub1_len})")
-            return None
-        sub1 = data[pos : pos + sub1_len]
-        pos += sub1_len
+        sub1 = data[sub1_start : sub1_start + sub1_len]
 
-        # Sub2: text content (Pascal string)
-        if pos + 4 > len(data):
+        # Sub2: text content (Pascal string).
+        sub2_len = 0
+        sub2 = b""
+        if pos + 4 <= len(data):
+            sub2_len = u32(data, pos)
+            sub2_start = pos + 4
+            sub2 = (
+                data[sub2_start : sub2_start + sub2_len]
+                if sub2_start + sub2_len <= len(data)
+                else b""
+            )
+            pos = sub2_start + sub2_len
+        elif not bad_sub1:
             ctx.warn("truncated_record", "Text record sub2 length missing")
-            return None
-        sub2_len = u32(data, pos)
-        pos += 4
-        sub2 = data[pos : pos + sub2_len] if pos + sub2_len <= len(data) else b""
+            return None, pos
 
-        # Parse fields
+        if bad_sub1:
+            return None, pos
+
         is_comment_byte = sub1[40] if sub1_len > 40 else 0
         is_designator_byte = sub1[41] if sub1_len > 41 else 0
 
@@ -309,15 +330,18 @@ class TextRecord:
             str_len = sub2[0]
             text_content = sub2[1 : 1 + str_len].decode("cp1252", errors="replace")
 
-        return cls(
-            layer=sub1[0],
-            component=u16(sub1, 7),
-            position=(i32(sub1, 13), i32(sub1, 17)),
-            height=u32(sub1, 21),
-            rotation=f64(sub1, 27),
-            is_comment=bool(is_comment_byte),
-            is_designator=bool(is_designator_byte),
-            text=text_content,
+        return (
+            cls(
+                layer=sub1[0],
+                component=u16(sub1, 7),
+                position=(i32(sub1, 13), i32(sub1, 17)),
+                height=u32(sub1, 21),
+                rotation=f64(sub1, 27),
+                is_comment=bool(is_comment_byte),
+                is_designator=bool(is_designator_byte),
+                text=text_content,
+            ),
+            pos,
         )
 
 
@@ -356,16 +380,27 @@ class PadRecord:
     @classmethod
     def from_bytes(cls, data: bytes, ctx: ParseContext) -> Self | None:
         """Parse from complete record data including the type byte."""
-        pos = 0
-        if len(data) < 1 or data[pos] != 2:
+        return cls.parse(data, 0, ctx)[0]
+
+    @classmethod
+    def parse(cls, data: bytes, pos: int, ctx: ParseContext) -> tuple[Self | None, int]:
+        """Parse one pad record at *pos*, returning (record, next position).
+
+        One walk of the 6-subrecord chain (name, skip×3, geometry, per-layer
+        overrides) yields both the decoded fields and the byte cursor, so
+        callers never re-walk the chain and the two byte layouts cannot shear.
+        ``next`` advances past every subrecord whose length prefix is present,
+        even when the record is discarded.
+        """
+        if pos >= len(data) or data[pos] != 2:
             ctx.warn("truncated_record", "Pad record missing type byte")
-            return None
+            return None, pos
         pos += 1
 
-        # Sub1: pad name (Pascal string)
+        # Sub1: pad name (Pascal string).
         if pos + 4 > len(data):
             ctx.warn("truncated_record", "Pad record sub1 length missing")
-            return None
+            return None, pos
         sub1_len = u32(data, pos)
         pos += 4
         pad_name = ""
@@ -374,50 +409,58 @@ class PadRecord:
             pad_name = data[pos + 1 : pos + 1 + name_len].decode("cp1252", errors="replace")
         pos += sub1_len
 
-        # Sub2–Sub4: skip
+        # Sub2–Sub4: skip.
         for _ in range(3):
             if pos + 4 > len(data):
                 ctx.warn("truncated_record", "Pad record sub2-4 truncated")
-                return None
+                return None, pos
             sl = u32(data, pos)
             pos += 4 + sl
 
-        # Sub5: main pad geometry
+        # Sub5: main pad geometry.
         if pos + 4 > len(data):
             ctx.warn("truncated_record", "Pad record sub5 length missing")
-            return None
+            return None, pos
         sub5_len = u32(data, pos)
-        pos += 4
-        if sub5_len < 61 or pos + sub5_len > len(data):
+        sub5_start = pos + 4
+        pos = sub5_start + sub5_len
+        bad_sub5 = sub5_len < 61 or sub5_start + sub5_len > len(data)
+        if bad_sub5:
             ctx.warn("truncated_record", f"Pad record sub5 too short ({sub5_len})")
-            return None
-        sub5 = data[pos : pos + sub5_len]
-        pos += sub5_len
+        sub5 = data[sub5_start : sub5_start + sub5_len]
 
-        # Sub6: per-layer overrides
+        # Sub6: per-layer overrides.
         sub6 = b""
         if pos + 4 <= len(data):
             sub6_len = u32(data, pos)
             pos += 4
-            if sub6_len > 0 and pos + sub6_len <= len(data):
-                sub6 = data[pos : pos + sub6_len]
+            sub6_end = pos + sub6_len
+            if sub6_len > 0 and sub6_end <= len(data):
+                sub6 = data[pos:sub6_end]
+            pos = sub6_end if sub6_end <= len(data) else pos
+
+        if bad_sub5:
+            return None, pos
 
         shape_byte = sub5[49] if sub5_len > 49 else 1
         shape_alt_val: int | None = None
         if sub6 and len(sub6) > 551:
             shape_alt_val = sub6[519]
 
-        return cls(
-            name=pad_name,
-            layer=sub5[0],
-            net=u16(sub5, 3),
-            component=u16(sub5, 7),
-            position=(i32(sub5, 13), i32(sub5, 17)),
-            top_size=(i32(sub5, 21), i32(sub5, 25)),
-            hole_size=u32(sub5, 45),
-            shape=shape_byte,
-            rotation=f64(sub5, 52),
-            shape_alt=shape_alt_val,
+        return (
+            cls(
+                name=pad_name,
+                layer=sub5[0],
+                net=u16(sub5, 3),
+                component=u16(sub5, 7),
+                position=(i32(sub5, 13), i32(sub5, 17)),
+                top_size=(i32(sub5, 21), i32(sub5, 25)),
+                hole_size=u32(sub5, 45),
+                shape=shape_byte,
+                rotation=f64(sub5, 52),
+                shape_alt=shape_alt_val,
+            ),
+            pos,
         )
 
 

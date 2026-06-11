@@ -229,11 +229,10 @@ def link_children(
     Also computes ``coord`` for SheetEntryRec and HarnessEntryRec from
     their parent's location and size.
     """
-    # Build index lookup: record.index → record (for owner resolution)
-    # OwnerIndex=N refers to records[N+1], so the key is index - 1
+    # Build index lookup: record.owner_key → record (for owner resolution).
     by_key: dict[int, AltiumRecord] = {}
     for rec in records:
-        by_key[rec.index - 1] = rec
+        by_key[rec.owner_key] = rec
 
     # Group children by owner_index
     children: dict[int, list[AltiumRecord]] = {}
