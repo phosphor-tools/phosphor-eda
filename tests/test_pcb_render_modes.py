@@ -73,7 +73,7 @@ def test_eda_layers_are_built_from_typed_inventory() -> None:
         ),
     )
 
-    layers = build_eda_layers(inventory, settings, warn=lambda _message: None)
+    layers = build_eda_layers(inventory, settings)
 
     roles = {(layer.role.function, layer.role.side) for layer in layers}
     assert ("copper", "front") in roles
@@ -87,7 +87,7 @@ def test_realistic_layers_use_board_material_copper_and_silkscreen() -> None:
     inventory = build_inventory(_board(), side="front")
     settings = replace(load_render_settings_json('{"extends": "phosphor:review"}'), side="front")
 
-    layers = build_realistic_layers(inventory, settings, warn=lambda _message: None)
+    layers = build_realistic_layers(inventory, settings)
 
     layer_ids = {layer.id for layer in layers}
     assert {
@@ -124,7 +124,7 @@ def test_eda_layers_use_board_drill_and_solder_mask_cutouts() -> None:
         ),
     )
 
-    layers = build_eda_layers(inventory, settings, warn=lambda _message: None)
+    layers = build_eda_layers(inventory, settings)
 
     copper = next(layer for layer in layers if layer.role.function == "copper")
     silkscreen = next(layer for layer in layers if layer.role.function == "silkscreen")
@@ -142,7 +142,7 @@ def test_realistic_board_material_uses_profile_path_for_orangecrab() -> None:
     inventory = build_inventory(board, side="front")
     settings = load_render_settings_json('{"extends": "phosphor:review", "side": "front"}')
 
-    layers = build_realistic_layers(inventory, settings, warn=lambda _message: None)
+    layers = build_realistic_layers(inventory, settings)
     substrate = next(layer for layer in layers if layer.id == "realistic:substrate")
     board_path = substrate.primitives[0].d
 

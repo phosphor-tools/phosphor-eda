@@ -402,6 +402,116 @@ _REJECTED_SETTINGS_DOCUMENTS: list[dict[str, object]] = [
 ]
 
 
+def test_dimming_mode_parses() -> None:
+    for mode in ("off", "on", "auto"):
+        settings = load_render_settings_json(json.dumps({"dimming": {"mode": mode}}))
+        assert settings.dimming.mode == mode
+
+
+def test_dimming_defaults_to_auto() -> None:
+    settings = load_render_settings_json("{}")
+    assert settings.dimming.mode == "auto"
+
+
+def test_dimming_rejects_unknown_mode() -> None:
+    with pytest.raises(ValueError, match="dimming.mode"):
+        _ = load_render_settings_json(json.dumps({"dimming": {"mode": "sometimes"}}))
+
+
+def test_dimming_enabled_is_rejected_with_migration_message() -> None:
+    with pytest.raises(ValueError, match="dimming.enabled is no longer supported"):
+        _ = load_render_settings_json(json.dumps({"dimming": {"enabled": True}}))
+
+
+def test_background_parses() -> None:
+    settings = load_render_settings_json(json.dumps({"background": "#fafafa"}))
+    assert settings.background == "#fafafa"
+
+
+def test_background_defaults_to_white_when_resolved() -> None:
+    base = load_render_settings_json("{}")
+    resolved = resolve_effective_settings(base, CliOverrides())
+    assert resolved.background == "#ffffff"
+
+
+def test_background_rejects_empty_and_oversized_values() -> None:
+    with pytest.raises(ValueError, match="background"):
+        _ = load_render_settings_json(json.dumps({"background": ""}))
+    with pytest.raises(ValueError, match="background"):
+        _ = load_render_settings_json(json.dumps({"background": "x" * 65}))
+
+
+def test_render_emits_background_rect_by_default() -> None:
+    svg = render_pcb_svg(_board(), _design_settings()).svg
+    assert 'class="canvas-background"' in svg
+    assert "#ffffff" in svg
+
+
+def test_background_none_omits_rect() -> None:
+    base = load_render_settings_json(json.dumps({"background": "none"}))
+    settings = resolve_effective_settings(base, CliOverrides(side="front"))
+    svg = render_pcb_svg(_board(), settings).svg
+    assert "canvas-background" not in svg
+
+
+def test_auto_dimming_emits_scrim_only_when_highlights_resolve() -> None:
+    plain = render_pcb_svg(_board(), _design_settings()).svg
+    assert "dim-scrim" not in plain
+
+    highlighted = render_pcb_svg(_board(), _design_settings(highlight_nets=("VCC",))).svg
+    assert 'class="dim-scrim"' in highlighted
+    # The scrim paints after base layers and before the highlight overlay.
+    assert highlighted.index("dim-scrim") < highlighted.index("highlight-overlay")
+
+    unresolved = render_pcb_svg(
+        _board(),
+        _design_settings(highlight_nets=("DOES_NOT_EXIST",)),
+    ).svg
+    assert "dim-scrim" not in unresolved
+
+
+def test_dimming_off_suppresses_scrim() -> None:
+    base = load_render_settings_json(
+        json.dumps({"extends": "phosphor:design", "dimming": {"mode": "off"}})
+    )
+    settings = resolve_effective_settings(
+        base,
+        CliOverrides(side="front", highlights=(HighlightSpec(net="VCC"),)),
+    )
+    svg = render_pcb_svg(_board(), settings).svg
+    assert "dim-scrim" not in svg
+
+
+def test_dimming_on_emits_scrim_without_highlights() -> None:
+    base = load_render_settings_json(
+        json.dumps({"extends": "phosphor:design", "dimming": {"mode": "on"}})
+    )
+    settings = resolve_effective_settings(base, CliOverrides(side="front"))
+    svg = render_pcb_svg(_board(), settings).svg
+    assert 'class="dim-scrim"' in svg
+
+
+def test_scrim_tokens_override_fill_and_opacity() -> None:
+    base = load_render_settings_json(
+        json.dumps(
+            {
+                "extends": "phosphor:design",
+                "tokens": {"highlight.dim.fill": "#000000", "highlight.dim.opacity": 0.3},
+            }
+        )
+    )
+    settings = resolve_effective_settings(
+        base,
+        CliOverrides(side="front", highlights=(HighlightSpec(net="VCC"),)),
+    )
+    svg = render_pcb_svg(_board(), settings).svg
+    assert 'class="dim-scrim"' in svg
+    scrim_index = svg.index("dim-scrim")
+    scrim_tag = svg[svg.rindex("<rect", 0, scrim_index) : svg.index(">", scrim_index) + 1]
+    assert "#000000" in scrim_tag
+    assert "0.3" in scrim_tag
+
+
 @pytest.mark.parametrize("document", _REJECTED_SETTINGS_DOCUMENTS)
 def test_parser_rejects_invalid_settings_documents(document: dict[str, object]) -> None:
     with pytest.raises(ValueError):

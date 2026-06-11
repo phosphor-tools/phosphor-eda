@@ -58,6 +58,14 @@ class AnnotationStyle:
 
 
 @dataclass(frozen=True)
+class DimScrim:
+    """A translucent wash painted over base layers so highlights pop."""
+
+    fill: str = "#ffffff"
+    opacity: float = 0.55
+
+
+@dataclass(frozen=True)
 class DerivedRenderPlan:
     view_box: ViewBox
     width_px: int
@@ -68,6 +76,8 @@ class DerivedRenderPlan:
     warnings: tuple[str, ...]
     annotation_style: AnnotationStyle = field(default_factory=AnnotationStyle)
     custom_css: str = ""
+    background: str = ""
+    dim_scrim: DimScrim | None = None
 
 
 def build_derived_render_plan(
@@ -133,7 +143,6 @@ def build_derived_render_plan(
             base_layers = build_realistic_layers(
                 inventory,
                 settings,
-                warn=warnings.append,
                 profiler=profiler,
             )
     else:
@@ -141,7 +150,6 @@ def build_derived_render_plan(
             base_layers = build_eda_layers(
                 inventory,
                 settings,
-                warn=warnings.append,
                 profiler=profiler,
             )
     with profile_span(profiler, "plan.build_highlight_layers"):
@@ -162,6 +170,31 @@ def build_derived_render_plan(
         warnings=tuple(warnings),
         annotation_style=annotation_style_for_settings(settings),
         custom_css=settings.custom_css,
+        background=_resolved_background(settings),
+        dim_scrim=_dim_scrim_for_settings(settings, highlight_groups),
+    )
+
+
+def _resolved_background(settings: RenderSettings) -> str:
+    """Map the background setting to a paintable fill ('' = no background)."""
+    if settings.background in ("none", "transparent"):
+        return ""
+    return settings.background
+
+
+def _dim_scrim_for_settings(
+    settings: RenderSettings,
+    highlight_groups: tuple[HighlightGroup, ...],
+) -> DimScrim | None:
+    mode = settings.dimming.mode
+    if mode == "off" or (mode == "auto" and not highlight_groups):
+        return None
+    fill = _token_str(settings.tokens, "highlight.dim.fill")
+    opacity = _token_float(settings.tokens, "highlight.dim.opacity")
+    defaults = DimScrim()
+    return DimScrim(
+        fill=fill if fill is not None else defaults.fill,
+        opacity=opacity if opacity is not None else defaults.opacity,
     )
 
 

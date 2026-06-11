@@ -87,9 +87,19 @@ class SourceSelection:
     exclude_components: tuple[str, ...] = ()
 
 
+DIMMING_MODES = ("off", "on", "auto")
+type DimmingMode = Literal["off", "on", "auto"]
+
+
 @dataclass
 class DimmingSettings:
-    enabled: bool = False
+    """Highlight-driven base-layer dimming.
+
+    ``auto`` dims base layers only when at least one highlight resolves;
+    ``on`` always paints the dim scrim; ``off`` never does.
+    """
+
+    mode: DimmingMode = "auto"
 
 
 @dataclass(frozen=True)
@@ -100,6 +110,7 @@ class RenderSettings:
     side: str = ""
     width: int = 0
     font_size: float = 0.0
+    background: str = ""
     source: SourceSelection = field(default_factory=SourceSelection)
     tokens: TokenMap = field(default_factory=dict)
     dimming: DimmingSettings = field(default_factory=DimmingSettings)
@@ -111,6 +122,10 @@ class RenderSettings:
 DEFAULT_SIDE = "front"
 DEFAULT_WIDTH = 800
 DEFAULT_FONT_SIZE = 10.0
+DEFAULT_BACKGROUND = "#ffffff"
+
+# Upper bound on a CSS color value for the canvas background.
+MAX_BACKGROUND_LENGTH = 64
 
 
 @dataclass(frozen=True)
@@ -143,6 +158,7 @@ def resolve_effective_settings(
     side = overrides.side or base.side or DEFAULT_SIDE
     width = overrides.width or base.width or DEFAULT_WIDTH
     font_size = overrides.font_size or base.font_size or DEFAULT_FONT_SIZE
+    background = base.background or DEFAULT_BACKGROUND
 
     highlights = list(base.highlights)
     for highlight in overrides.highlights:
@@ -157,6 +173,7 @@ def resolve_effective_settings(
         side=side,
         width=width,
         font_size=font_size,
+        background=background,
         highlights=highlights,
         custom_css=custom_css,
     )
@@ -242,6 +259,15 @@ def render_settings_schema() -> dict[str, object]:
                 "maximum": 500,
                 "description": "Annotation label font size in display pixels.",
             },
+            "background": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_BACKGROUND_LENGTH,
+                "description": (
+                    "Canvas background CSS color (default '#ffffff'). "
+                    "Use 'none' for a transparent canvas."
+                ),
+            },
             "source": {
                 "type": "object",
                 "additionalProperties": False,
@@ -313,7 +339,14 @@ def render_settings_schema() -> dict[str, object]:
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "enabled": {"type": "boolean"},
+                    "mode": {
+                        "type": "string",
+                        "enum": list(DIMMING_MODES),
+                        "description": (
+                            "off: never dim; on: always dim base layers; "
+                            "auto (default): dim base layers when a highlight resolves."
+                        ),
+                    },
                 },
             },
             "highlights": {
@@ -370,7 +403,7 @@ def render_settings_schema() -> dict[str, object]:
                     "eda.copper.front.fill": "#d17a22",
                     "eda.layer[F.Cu].fill": "#d17a22",
                 },
-                "dimming": {"enabled": False},
+                "dimming": {"mode": "auto"},
                 "highlights": [{"pad": "CN11.30", "color": "#c00000"}],
                 "annotations": {
                     "pointers": [{"target": "CN11.30", "label": "PA1 / REF_CLK"}],
@@ -425,6 +458,21 @@ def parse_render_settings(data: dict[str, object]) -> RenderSettings:
     if "fontSizePx" in data:
         font_size = _parse_font_size(data["fontSizePx"], "fontSizePx")
 
+    background = ""
+    if "background" in data:
+        raw_background = data["background"]
+        if (
+            not isinstance(raw_background, str)
+            or not raw_background
+            or len(raw_background) > MAX_BACKGROUND_LENGTH
+        ):
+            msg = (
+                "background must be a CSS color string of at most "
+                f"{MAX_BACKGROUND_LENGTH} characters (or 'none'), got {raw_background!r}"
+            )
+            raise ValueError(msg)
+        background = raw_background
+
     source = _parse_source_selection(data["source"]) if "source" in data else SourceSelection()
     tokens = _parse_tokens(data["tokens"]) if "tokens" in data else {}
     dimming = _parse_dimming_settings(data["dimming"]) if "dimming" in data else DimmingSettings()
@@ -467,6 +515,7 @@ def parse_render_settings(data: dict[str, object]) -> RenderSettings:
         side=side,
         width=width,
         font_size=font_size,
+        background=background,
         source=source,
         tokens=tokens,
         dimming=dimming,
@@ -624,13 +673,17 @@ def _parse_dimming_settings(raw_dimming: object) -> DimmingSettings:
         msg = "dimming must be an object"
         raise ValueError(msg)
 
-    dimming = DimmingSettings()
     if "enabled" in raw_dimming:
-        enabled = raw_dimming["enabled"]
-        if not isinstance(enabled, bool):
-            msg = "dimming.enabled must be a boolean"
+        msg = "dimming.enabled is no longer supported; use dimming.mode (off, on, auto)"
+        raise ValueError(msg)
+
+    dimming = DimmingSettings()
+    if "mode" in raw_dimming:
+        mode = raw_dimming["mode"]
+        if mode not in ("off", "on", "auto"):
+            msg = f"dimming.mode must be one of {', '.join(DIMMING_MODES)}, got {mode!r}"
             raise ValueError(msg)
-        dimming.enabled = enabled
+        dimming.mode = mode
     return dimming
 
 
