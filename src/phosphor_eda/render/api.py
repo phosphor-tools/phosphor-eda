@@ -23,6 +23,8 @@ from phosphor_eda.render.serialize import (
     render_pcb_svg_from_derived_plan,
 )
 from phosphor_eda.render.settings import (
+    BUNDLED_PRESETS,
+    DEFAULT_PRESET,
     HighlightSpec,
     RenderSettings,
     is_json_dict,
@@ -39,6 +41,8 @@ if TYPE_CHECKING:
     from phosphor_eda.render.profiler import RenderProfiler
 
 __all__ = [
+    "BUNDLED_PRESETS",
+    "DEFAULT_PRESET",
     "HighlightSpec",
     "RenderResult",
     "RenderSettings",

@@ -1,0 +1,22 @@
+{
+  "renderMode": "realistic",
+  "source": {
+    "layers": [
+      {
+        "match": { "role": "copper" },
+        "itemKinds": ["pad", "via", "conductor"],
+        "purposes": ["copper"]
+      },
+      { "match": { "role": "solder_mask", "side": "active" } },
+      {
+        "match": { "role": "silkscreen", "side": "active" },
+        "purposes": ["silkscreen", "designator", "value", "user_text"]
+      }
+    ]
+  },
+  "tokens": {
+    "annotation.label.fill": "#ffffff",
+    "annotation.label.textHalo": "#1a5c2a",
+    "annotation.connector.stroke": "#ffffffcc"
+  }
+}

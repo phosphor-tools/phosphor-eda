@@ -468,7 +468,7 @@ def test_cli_render_prjpcb_with_multiple_existing_pcbdocs_reports_clear_error(
 
 def test_cli_render_settings_inline_custom_css_is_injected(tmp_path: Path) -> None:
     settings = {
-        "extends": "phosphor:review",
+        "extends": "phosphor:realistic",
         "custom_css": ".board-fill { fill: rgb(1, 2, 3); }",
     }
     settings_file = tmp_path / "settings.json"
@@ -490,7 +490,7 @@ def test_cli_render_settings_inline_custom_css_is_injected(tmp_path: Path) -> No
 def test_cli_render_settings_from_file(tmp_path: Path) -> None:
     """--render-settings loads highlights and annotations from a JSON file."""
     settings = {
-        "extends": "phosphor:review",
+        "extends": "phosphor:realistic",
         "highlights": [{"net": "/SWDIO_TMS"}],
         "annotations": {
             "pointers": [{"target": "TP3", "label": "SWD"}],
@@ -514,7 +514,7 @@ def test_cli_render_settings_from_file(tmp_path: Path) -> None:
 
 
 def test_cli_render_profile_outputs_json_to_stderr(tmp_path: Path) -> None:
-    settings = {"extends": "phosphor:review"}
+    settings = {"extends": "phosphor:realistic"}
     settings_file = tmp_path / "settings.json"
     settings_file.write_text(json.dumps(settings))
     out_file = tmp_path / "out.svg"
@@ -546,7 +546,7 @@ def test_cli_render_profile_outputs_json_to_stderr(tmp_path: Path) -> None:
 
 def test_cli_render_settings_font_size_sets_annotation_size(tmp_path: Path) -> None:
     settings = {
-        "extends": "phosphor:review",
+        "extends": "phosphor:realistic",
         "fontSizePx": 24,
         "annotations": {
             "pointers": [{"target": "TP3", "label": "SWD"}],
@@ -569,7 +569,7 @@ def test_cli_render_settings_font_size_sets_annotation_size(tmp_path: Path) -> N
 
 def test_cli_render_settings_accepts_packaged_v2_settings(tmp_path: Path) -> None:
     settings = {
-        "extends": "phosphor:simplified-high-contrast",
+        "extends": "phosphor:documentation",
         "fontSizePx": 64,
         "annotations": {
             "pointers": [{"target": "TP3.1", "label": "SWD"}],
@@ -593,7 +593,7 @@ def test_cli_render_settings_accepts_packaged_v2_settings(tmp_path: Path) -> Non
 
 def test_cli_font_size_overrides_render_settings(tmp_path: Path) -> None:
     settings = {
-        "extends": "phosphor:review",
+        "extends": "phosphor:realistic",
         "fontSizePx": 12,
         "annotations": {
             "pointers": [{"target": "TP3", "label": "SWD"}],
@@ -628,7 +628,7 @@ def test_cli_font_size_overrides_render_settings(tmp_path: Path) -> None:
 def test_cli_render_settings_from_stdin(tmp_path: Path) -> None:
     """--render-settings - reads JSON from stdin."""
     settings = {
-        "extends": "phosphor:review",
+        "extends": "phosphor:realistic",
         "highlights": [{"net": "/SWDIO_TMS"}],
     }
     out_file = tmp_path / "out.svg"
@@ -649,7 +649,7 @@ def test_cli_render_settings_from_stdin(tmp_path: Path) -> None:
 def test_cli_render_settings_with_highlight_colors(tmp_path: Path) -> None:
     """Highlight colors from render settings appear in the SVG CSS."""
     settings = {
-        "extends": "phosphor:review",
+        "extends": "phosphor:realistic",
         "highlights": [
             {"net": "/SWDIO_TMS", "color": "#d4a843"},
             {"net": "/SWDCLK_TCK", "color": "#5b8abf"},

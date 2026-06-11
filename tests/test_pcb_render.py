@@ -26,6 +26,7 @@ from phosphor_eda.render.inventory import (
     select_inventory_items,
 )
 from phosphor_eda.render.settings import (
+    BUNDLED_PRESETS,
     CliOverrides,
     HighlightSpec,
     RenderSettings,
@@ -230,7 +231,7 @@ def test_render_settings_reject_old_objects_filter() -> None:
         )
 
 
-@pytest.mark.parametrize("name", ["design", "review", "clean", "high-contrast"])
+@pytest.mark.parametrize("name", BUNDLED_PRESETS)
 def test_builtin_render_settings_use_typed_source_filters(name: str) -> None:
     settings_file = files("phosphor_eda.render.profiles").joinpath(f"{name}.json")
     with as_file(settings_file) as path:
@@ -242,19 +243,7 @@ def test_builtin_render_settings_use_typed_source_filters(name: str) -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "clean",
-        "design",
-        "high-contrast",
-        "print",
-        "print-callout",
-        "review",
-        "review-callout",
-        "simplified-high-contrast",
-    ],
-)
+@pytest.mark.parametrize("name", BUNDLED_PRESETS)
 def test_builtin_render_settings_hide_non_silkscreen_footprint_text(name: str) -> None:
     board = _board()
     copper_layer = next(layer for layer in board.layers if layer.name == "F.Cu")
@@ -325,11 +314,8 @@ def test_builtin_render_settings_hide_non_silkscreen_footprint_text(name: str) -
     assert "text:U1:mech-user" not in selected_ids
 
 
-@pytest.mark.parametrize(
-    "name",
-    ["high-contrast", "print", "print-callout", "simplified-high-contrast"],
-)
-def test_high_contrast_presets_hide_mechanical_artwork_by_default(name: str) -> None:
+@pytest.mark.parametrize("name", BUNDLED_PRESETS)
+def test_presets_hide_mechanical_artwork_by_default(name: str) -> None:
     board = _board()
     mechanical_layer = PcbLayer(
         "Top 3D Body",
@@ -400,6 +386,39 @@ _REJECTED_SETTINGS_DOCUMENTS: list[dict[str, object]] = [
     {"width": 0},
     {"fontSizePx": 0},
 ]
+
+
+def test_hidden_pill_label_text_defaults_to_dark_fill() -> None:
+    """With the pill hidden, text must not keep the white-on-pill contrast color."""
+    from phosphor_eda.render.annotations import parse_annotations, resolve_annotations
+
+    base = load_render_settings_json(
+        json.dumps(
+            {
+                "extends": "phosphor:documentation",
+                "annotations": {"pointers": [{"target": "U1.1", "label": "VCC"}]},
+            }
+        )
+    )
+    settings = resolve_effective_settings(base, CliOverrides(side="front"))
+    board = _board()
+    annotations = resolve_annotations(
+        parse_annotations(settings.annotations),
+        board,
+        settings.side,
+        settings.width,
+        settings.font_size,
+    )
+    svg = render_pcb_svg(board, settings, annotations=annotations).svg
+
+    label_texts = [
+        chunk.split(">")[0]
+        for chunk in svg.split("<text ")
+        if 'class="annotation-label-text"' in chunk.split(">")[0]
+    ]
+    assert label_texts
+    for attrs in label_texts:
+        assert 'fill="#fff"' not in attrs
 
 
 def test_dimming_mode_parses() -> None:

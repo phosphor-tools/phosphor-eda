@@ -28,6 +28,12 @@ SOURCE_CONTENT_KINDS = tuple(
 )
 
 _BUNDLED_SETTINGS_PACKAGE = "phosphor_eda.render.profiles"
+
+# Bundled presets, addressed as ``extends: "phosphor:<name>"``. Adding a
+# preset file requires registering it here and documenting it in skill.md
+# (guarded by tests/test_pcb_render_presets.py).
+BUNDLED_PRESETS = ("realistic", "design", "print", "documentation")
+DEFAULT_PRESET = "realistic"
 _SETTINGS_EXTENDS_KEY = "extends"
 _PHOSPHOR_SETTINGS_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 _PAD_TARGET_RE = re.compile(r"^[^.]+\..+$")
@@ -385,7 +391,7 @@ def render_settings_schema() -> dict[str, object]:
         },
         "examples": [
             {
-                "extends": "phosphor:simplified-high-contrast",
+                "extends": "phosphor:documentation",
                 "renderMode": "eda",
                 "width": 3000,
                 "fontSizePx": 40,
@@ -787,9 +793,15 @@ def _load_parent_render_settings(
         if not _PHOSPHOR_SETTINGS_RE.fullmatch(name):
             msg = f"Invalid phosphor render settings name: {parent_ref!r}"
             raise ValueError(msg)
+        if name not in BUNDLED_PRESETS:
+            msg = (
+                f"Unknown phosphor render settings: {parent_ref} "
+                f"(available: {', '.join(BUNDLED_PRESETS)})"
+            )
+            raise ValueError(msg)
         resource = files(_BUNDLED_SETTINGS_PACKAGE).joinpath(f"{name}.json")
         if not resource.is_file():
-            msg = f"Unknown phosphor render settings: {parent_ref}"
+            msg = f"Bundled render settings file missing for registered preset: {name}"
             raise ValueError(msg)
         text = resource.read_text()
         return _load_render_settings_text_data(text, source=parent_ref, stack=stack)

@@ -85,7 +85,7 @@ def test_eda_layers_are_built_from_typed_inventory() -> None:
 
 def test_realistic_layers_use_board_material_copper_and_silkscreen() -> None:
     inventory = build_inventory(_board(), side="front")
-    settings = replace(load_render_settings_json('{"extends": "phosphor:review"}'), side="front")
+    settings = replace(load_render_settings_json('{"extends": "phosphor:realistic"}'), side="front")
 
     layers = build_realistic_layers(inventory, settings)
 
@@ -140,7 +140,7 @@ def test_eda_layers_use_board_drill_and_solder_mask_cutouts() -> None:
 def test_realistic_board_material_uses_profile_path_for_orangecrab() -> None:
     board = parse_kicad_pcb(FIXTURES / "orangecrab.kicad_pcb")
     inventory = build_inventory(board, side="front")
-    settings = load_render_settings_json('{"extends": "phosphor:review", "side": "front"}')
+    settings = load_render_settings_json('{"extends": "phosphor:realistic", "side": "front"}')
 
     layers = build_realistic_layers(inventory, settings)
     substrate = next(layer for layer in layers if layer.id == "realistic:substrate")
@@ -153,7 +153,7 @@ def test_realistic_board_material_uses_profile_path_for_orangecrab() -> None:
 def test_highlights_match_typed_inventory_tags() -> None:
     inventory = build_inventory(_board(), side="front")
     settings = replace(
-        load_render_settings_json('{"extends": "phosphor:review"}'),
+        load_render_settings_json('{"extends": "phosphor:realistic"}'),
         render_mode="eda",
         side="front",
         source=SourceSelection(layers=[LayerSelectionRule(match=LayerMatch(role="copper"))]),
@@ -170,7 +170,7 @@ def test_highlights_match_typed_inventory_tags() -> None:
 def test_highlight_layers_use_board_and_drill_cutouts() -> None:
     inventory = build_inventory(_board(), side="front")
     settings = replace(
-        load_render_settings_json('{"extends": "phosphor:review"}'),
+        load_render_settings_json('{"extends": "phosphor:realistic"}'),
         render_mode="eda",
         side="front",
         highlights=[HighlightSpec(net="VCC")],
@@ -191,7 +191,7 @@ def test_highlight_layers_use_board_and_drill_cutouts() -> None:
 def test_highlights_do_not_select_drills_from_net_tags() -> None:
     inventory = build_inventory(_board(), side="front")
     settings = replace(
-        load_render_settings_json('{"extends": "phosphor:review"}'),
+        load_render_settings_json('{"extends": "phosphor:realistic"}'),
         render_mode="eda",
         side="front",
         highlights=[HighlightSpec(net="VCC")],

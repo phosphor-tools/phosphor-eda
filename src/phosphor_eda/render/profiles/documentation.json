@@ -1,5 +1,9 @@
 {
   "renderMode": "eda",
+  "fontSizePx": 40,
+  "dimming": {
+    "mode": "off"
+  },
   "source": {
     "layers": [
       {
@@ -8,8 +12,7 @@
         },
         "itemKinds": [
           "pad",
-          "via",
-          "conductor"
+          "via"
         ],
         "purposes": [
           "copper"
@@ -22,9 +25,7 @@
         },
         "purposes": [
           "silkscreen",
-          "designator",
-          "value",
-          "user_text"
+          "designator"
         ]
       },
       {
@@ -34,31 +35,22 @@
         "itemKinds": [
           "board_profile"
         ]
-      },
-      {
-        "match": {
-          "role": "drill"
-        },
-        "itemKinds": [
-          "drill"
-        ]
       }
     ]
   },
   "tokens": {
-    "eda.copper.front.fill": "#c8c8c8",
-    "eda.copper.back.fill": "#c8c8c8",
-    "eda.copper.inner.default.fill": "#dedede",
-    "eda.silkscreen.front.fill": "#1a1a1a",
-    "eda.silkscreen.back.fill": "#1a1a1a",
-    "eda.fabrication.front.fill": "#666666",
-    "eda.fabrication.back.fill": "#666666",
+    "eda.copper.front.fill": "#b8b8b8",
+    "eda.copper.back.fill": "#b8b8b8",
+    "eda.copper.inner.default.fill": "#cccccc",
+    "eda.silkscreen.front.fill": "#666666",
+    "eda.silkscreen.back.fill": "#666666",
     "eda.edge.stroke": "#444444",
-    "eda.edge.strokeWidthMm": 0.12,
-    "highlight.layer.default.fill": "#000000",
+    "eda.edge.strokeWidthMm": 0.15,
+    "highlight.layer.default.fill": "#cc0000",
     "highlight.layer.default.opacity": 1,
-    "annotation.connector.stroke": "#1a1a1a",
     "annotation.label.pillVisible": false,
+    "annotation.connector.dotVisible": false,
+    "annotation.connector.stroke": "#333333",
     "annotation.label.textHalo": "#ffffff",
     "annotation.label.textHaloWidthPx": 4,
     "annotation.label.fontWeight": 650
