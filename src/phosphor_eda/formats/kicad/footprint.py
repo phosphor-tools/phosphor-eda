@@ -111,7 +111,7 @@ def parse_pad(
     drill = parse_pad_drill(
         builder,
         pad_sexpr,
-        id=f"drill:pad:{global_pad_index}:{number}",
+        drill_id=f"drill:pad:{global_pad_index}:{number}",
         x=abs_x,
         y=abs_y,
         layers=layers,
@@ -184,7 +184,7 @@ def parse_pad_drill(
     builder: PcbBuilder,
     pad_sexpr: SExpNode,
     *,
-    id: str,
+    drill_id: str,
     x: float,
     y: float,
     layers: tuple[PcbLayer, ...],
@@ -215,7 +215,7 @@ def parse_pad_drill(
     )
     return builder.add_drill_object(
         PcbDrill(
-            id=id,
+            id=drill_id,
             x=x,
             y=y,
             diameter=diameter,
