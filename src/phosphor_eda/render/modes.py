@@ -224,14 +224,23 @@ def build_highlight_layers(
     settings: RenderSettings,
     *,
     warn: Callable[[str], None],
+    net_expansions: Mapping[str, frozenset[str]] | None = None,
     profiler: RenderProfiler | None = None,
 ) -> tuple[HighlightGroup, ...]:
-    """Build highlight overlays for net/component/pad targets."""
+    """Build highlight overlays for net/component/pad targets.
+
+    ``net_expansions`` maps a highlighted net name to the full group of net
+    names electrically continuous with it (schematic-bridged closure); a net
+    highlight matches any name in its group.
+    """
     groups: list[HighlightGroup] = []
     board_mask = _board_layer_mask(inventory)
     silkscreen_masks = _silkscreen_layer_masks(inventory, settings.side)
     for highlight in settings.highlights:
-        selected = tuple(item for item in inventory.items if _matches_highlight(item, highlight))
+        net_names = _highlight_net_names(highlight, net_expansions)
+        selected = tuple(
+            item for item in inventory.items if _matches_highlight(item, highlight, net_names)
+        )
         if not selected:
             warn(f"Highlight target not found: {_highlight_target(highlight)}")
             continue
@@ -470,11 +479,30 @@ def _filter_excluded_components(
     return tuple(item for item in items if item.tags.component_prefix.upper() not in normalized)
 
 
-def _matches_highlight(item: InventoryItem, highlight: HighlightSpec) -> bool:
+def _highlight_net_names(
+    highlight: HighlightSpec,
+    net_expansions: Mapping[str, frozenset[str]] | None,
+) -> frozenset[str]:
+    """Upper-cased net names this highlight matches."""
+    if not highlight.net:
+        return frozenset()
+    if net_expansions is None or highlight.exact:
+        return frozenset({highlight.net.upper()})
+    expanded = net_expansions.get(highlight.net)
+    if expanded is None:
+        return frozenset({highlight.net.upper()})
+    return frozenset(name.upper() for name in expanded)
+
+
+def _matches_highlight(
+    item: InventoryItem,
+    highlight: HighlightSpec,
+    net_names: frozenset[str],
+) -> bool:
     if item.item_kind == InventoryItemKind.DRILL:
         return False
     if highlight.net:
-        return item.tags.net_name.upper() == highlight.net.upper()
+        return item.tags.net_name.upper() in net_names
     if highlight.component:
         return item.tags.component_ref.upper() == highlight.component.upper()
     if highlight.pad:

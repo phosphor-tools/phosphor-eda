@@ -63,12 +63,18 @@ _REMOVED_KEYS: dict[str, str] = {
 
 @dataclass
 class HighlightSpec:
-    """A single net, component, or pad to highlight, with an optional color."""
+    """A single net, component, or pad to highlight, with an optional color.
+
+    Net highlights follow the signal through series passives by default
+    (schematic-bridged closure); ``exact`` restricts the match to the named
+    net only.
+    """
 
     net: str = ""
     component: str = ""
     pad: str = ""
     color: str = ""
+    exact: bool = False
 
 
 @dataclass
@@ -369,6 +375,13 @@ def render_settings_schema() -> dict[str, object]:
                             "pattern": r"^[^.]+\..+$",
                         },
                         "color": {"type": "string"},
+                        "exact": {
+                            "type": "boolean",
+                            "description": (
+                                "Match only the named net instead of following "
+                                "the signal through series passives."
+                            ),
+                        },
                     },
                     "oneOf": [
                         {"required": ["net"]},
@@ -714,6 +727,10 @@ def _parse_highlight(item: object, index: int) -> HighlightSpec:
         if field_name in item and not isinstance(item[field_name], str):
             msg = f"highlights[{index}].{field_name} must be a string"
             raise ValueError(msg)
+    exact = item.get("exact", False)
+    if not isinstance(exact, bool):
+        msg = f"highlights[{index}].exact must be a boolean"
+        raise ValueError(msg)
     net = str(item.get("net", ""))
     component = str(item.get("component", ""))
     pad = str(item.get("pad", ""))
@@ -727,7 +744,7 @@ def _parse_highlight(item: object, index: int) -> HighlightSpec:
         msg = f"highlights[{index}].pad must be '<component>.<pad>', got {pad!r}"
         raise ValueError(msg)
     color = str(item.get("color", ""))
-    return HighlightSpec(net=net, component=component, pad=pad, color=color)
+    return HighlightSpec(net=net, component=component, pad=pad, color=color, exact=exact)
 
 
 def _load_render_settings_file_data(path: Path, stack: list[str]) -> dict[str, object]:

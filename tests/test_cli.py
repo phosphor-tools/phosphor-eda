@@ -727,6 +727,47 @@ def test_cli_render_unknown_net_warns_on_stderr_and_exits_zero() -> None:
     assert "<svg" in result.stdout
 
 
+def test_cli_render_net_highlight_without_schematic_warns_and_matches_exact() -> None:
+    """A net highlight on a board with no discoverable schematic falls back
+    to exact matching with a warning."""
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["pcb", "render", "-n", "GND", str(FIXTURES / "orangecrab.kicad_pcb")],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "no schematic found" in result.stderr
+    assert "<svg" in result.stdout
+
+
+def test_cli_render_net_highlight_traverses_series_passives_via_schematic() -> None:
+    """Highlighting one side of a series resistor lights the far-side net's
+    copper on every layer (the jetson-orin project has a sibling schematic)."""
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "pcb",
+            "render",
+            "-n",
+            "/CSI/I2C_MUX_SCL",
+            str(FIXTURES / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pcb"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "no schematic found" not in result.stderr
+    # SCL_CAM is the far side of a series resistor from /CSI/I2C_MUX_SCL and
+    # routes on front, back, and inner copper; all of it joins the highlight.
+    assert 'data-net-name="SCL_CAM"' in result.stdout
+    highlight_block = result.stdout.split('data-highlight-target="net:/CSI/I2C_MUX_SCL"')[1]
+    overlay = highlight_block.split("</svg>")[0]
+    assert 'data-role="highlight.copper.front"' in overlay
+    assert 'data-role="highlight.copper.back"' in overlay
+    assert 'data-role="highlight.copper.inner' in overlay
+
+
 def test_cli_list_components_unknown_net_errors(tmp_path: Path) -> None:
     """list components -n on an unknown net: one-line error, exit 1."""
     runner = CliRunner()

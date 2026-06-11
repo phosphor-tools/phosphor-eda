@@ -188,6 +188,59 @@ def test_highlight_layers_use_board_and_drill_cutouts() -> None:
     assert copper.mask.drills
 
 
+def test_net_highlight_matches_expanded_net_group() -> None:
+    """A net highlight with an expansion matches every net in its group and
+    keeps the user's name as the group target."""
+    inventory = build_inventory(_board(), side="front")
+    settings = replace(
+        load_render_settings_json('{"extends": "phosphor:realistic"}'),
+        render_mode="eda",
+        side="front",
+        highlights=[HighlightSpec(net="USB_DP")],
+    )
+
+    groups = build_highlight_layers(
+        inventory,
+        settings,
+        warn=lambda _message: None,
+        net_expansions={"USB_DP": frozenset({"USB_DP", "VCC"})},
+    )
+
+    assert len(groups) == 1
+    assert groups[0].target == "net:USB_DP"
+    assert any(layer.primitives for layer in groups[0].layers)
+
+
+def test_exact_net_highlight_ignores_expansions() -> None:
+    inventory = build_inventory(_board(), side="front")
+    settings = replace(
+        load_render_settings_json('{"extends": "phosphor:realistic"}'),
+        render_mode="eda",
+        side="front",
+        highlights=[HighlightSpec(net="USB_DP", exact=True)],
+    )
+
+    warnings: list[str] = []
+    groups = build_highlight_layers(
+        inventory,
+        settings,
+        warn=warnings.append,
+        net_expansions={"USB_DP": frozenset({"USB_DP", "VCC"})},
+    )
+
+    assert groups == ()
+    assert any("Highlight target not found" in warning for warning in warnings)
+
+
+def test_exact_flag_parses_from_settings_json() -> None:
+    settings = load_render_settings_json(
+        '{"highlights": [{"net": "X", "exact": true}, {"net": "Y"}]}'
+    )
+
+    assert settings.highlights[0].exact is True
+    assert settings.highlights[1].exact is False
+
+
 def test_highlights_do_not_select_drills_from_net_tags() -> None:
     inventory = build_inventory(_board(), side="front")
     settings = replace(

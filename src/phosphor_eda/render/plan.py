@@ -18,6 +18,8 @@ from phosphor_eda.render.profiler import profile_span
 from phosphor_eda.render.tokens import ResolvedStyle, VisualRole
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from phosphor_eda.domain.pcb import Pcb
     from phosphor_eda.render.annotations import ResolvedAnnotations
     from phosphor_eda.render.profiler import RenderProfiler
@@ -88,6 +90,7 @@ def build_derived_render_plan(
     *,
     settings: RenderSettings,
     annotations: ResolvedAnnotations | None,
+    net_expansions: Mapping[str, frozenset[str]] | None = None,
     profiler: RenderProfiler | None = None,
 ) -> DerivedRenderPlan:
     # Settings must be fully resolved (resolve_effective_settings) before
@@ -160,6 +163,7 @@ def build_derived_render_plan(
             inventory,
             settings,
             warn=warnings.append,
+            net_expansions=net_expansions,
             profiler=profiler,
         )
     px_per_mm = width_px / vb_w if vb_w > 0 else 1.0

@@ -266,6 +266,26 @@ def resolve_prjpcb_pcbdoc(prj_path: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 
+def load_schematic(path: Path) -> Schematic | None:
+    """Load just the schematic associated with a project entry point.
+
+    Returns ``None`` when no schematic is discoverable: a KiCad entry with no
+    sibling ``.kicad_sch`` of the same stem, a ``.PrjPcb`` listing no
+    schematic documents, or a bare ``.PcbDoc`` (which carries no schematic
+    reference). Cheaper than :func:`load_project` — the PCB is not parsed.
+    """
+    ext = path.suffix.lower()
+    if ext in (".kicad_pcb", ".kicad_pro", ".kicad_sch", ".kicad_dru"):
+        sch_path = path.parent / f"{path.stem}.kicad_sch"
+        return kicad_to_design(sch_path, name=path.stem) if sch_path.exists() else None
+    if ext == ".prjpcb":
+        project_info = parse_prjpcb_file(str(path))
+        if project_info.schematic_paths:
+            return altium_to_design(path, name=path.stem)
+        return None
+    return None
+
+
 def load_project(path: Path) -> Project:
     """Load a complete project from any entry-point file.
 
