@@ -55,14 +55,20 @@ def _rotate_point(x: float, y: float, cx: float, cy: float, degrees: float) -> t
     return cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a
 
 
-def circle_path_d(cx: float, cy: float, radius: float) -> str:
-    """Exact SVG path for a full circle (two semicircular arcs)."""
+def circle_path_d(cx: float, cy: float, radius: float, *, clockwise: bool = False) -> str:
+    """Exact SVG path for a full circle (two semicircular arcs).
+
+    ``clockwise`` flips the winding (arc sweep flag). Annular rings pair a
+    default-wound outer circle with a clockwise inner circle so the hole
+    survives ``fill-rule="nonzero"``.
+    """
     if radius <= 0.0:
         return ""
+    sweep = 1 if clockwise else 0
     return (
         f"M {cx + radius:.4f} {cy:.4f} "
-        f"A {radius:.4f} {radius:.4f} 0 1 0 {cx - radius:.4f} {cy:.4f} "
-        f"A {radius:.4f} {radius:.4f} 0 1 0 {cx + radius:.4f} {cy:.4f} Z"
+        f"A {radius:.4f} {radius:.4f} 0 1 {sweep} {cx - radius:.4f} {cy:.4f} "
+        f"A {radius:.4f} {radius:.4f} 0 1 {sweep} {cx + radius:.4f} {cy:.4f} Z"
     )
 
 
@@ -165,12 +171,16 @@ def pad_path_d(pad: PcbPad, *, width: float | None = None, height: float | None 
     ``width``/``height`` override the pad dimensions (used for solder-mask
     openings that expand the aperture). ``custom`` pads concatenate their
     sub-shape subpaths; the caller paints them with ``fill-rule="nonzero"``.
+    Overridden custom pads fall back to a shapely outline dilated by the
+    override margin (see ``_custom_pad_margin``).
     """
     w = pad.width if width is None else width
     h = pad.height if height is None else height
     cx, cy = pad.x, pad.y
     if pad.shape == "custom" and pad.custom_shapes:
-        return custom_pad_path_d(pad)
+        if _custom_pad_margin(pad, w, h) == 0.0:
+            return custom_pad_path_d(pad)
+        return _polygon_to_path_d(pad_polygon(pad, width=w, height=h))
     if pad.shape == "circle":
         return circle_path_d(cx, cy, w / 2.0)
     if pad.shape == "oval":
@@ -214,7 +224,7 @@ def _custom_pad_shape_path_d(shape: PcbLine | PcbArc | PcbCircle | PcbPolygon) -
         outer = circle_path_d(shape.cx, shape.cy, shape.radius)
         if inner_radius <= 0.0:
             return outer
-        return f"{outer} {circle_path_d(shape.cx, shape.cy, inner_radius)}"
+        return f"{outer} {circle_path_d(shape.cx, shape.cy, inner_radius, clockwise=True)}"
     return _polygon_to_path_d(polygon_geometry(shape))
 
 
@@ -259,10 +269,30 @@ def _ring_to_path_d(coords: CoordinateSequence) -> str:
     return " ".join(commands)
 
 
-def pad_polygon(pad: PcbPad) -> BaseGeometry:
-    """Construct the actual copper polygon for a pad in board coordinates."""
+def _custom_pad_margin(pad: PcbPad, width: float, height: float) -> float:
+    """Uniform outline offset equivalent to a width/height override.
+
+    Custom pads are unions of absolute-coordinate sub-shapes with no
+    width/height parameterization, so aperture overrides (e.g. solder-mask
+    expansion) are applied as an offset of the copper outline instead. The
+    per-axis half-deltas are averaged; mask-expansion callers grow both axes
+    by the same amount, so the average is exact for them.
+    """
+    return ((width - pad.width) + (height - pad.height)) / 4.0
+
+
+def pad_polygon(
+    pad: PcbPad, *, width: float | None = None, height: float | None = None
+) -> BaseGeometry:
+    """Construct the actual copper polygon for a pad in board coordinates.
+
+    ``width``/``height`` override the pad dimensions (used for solder-mask
+    openings that expand the aperture). Custom pads apply the override as a
+    uniform dilation of the sub-shape union (see ``_custom_pad_margin``).
+    """
     cx, cy = pad.x, pad.y
-    w, h = pad.width, pad.height
+    w = pad.width if width is None else width
+    h = pad.height if height is None else height
 
     if pad.shape == "custom" and pad.custom_shapes:
         geometries = [
@@ -270,9 +300,13 @@ def pad_polygon(pad: PcbPad) -> BaseGeometry:
             for shape in pad.custom_shapes
             if not (geometry := _custom_pad_shape_geometry(shape)).is_empty
         ]
-        return (
-            GeometryCollection() if not geometries else normalize_geometry(unary_union(geometries))
-        )
+        if not geometries:
+            return GeometryCollection()
+        union = normalize_geometry(unary_union(geometries))
+        margin = _custom_pad_margin(pad, w, h)
+        if margin == 0.0 or union.is_empty:
+            return union
+        return normalize_geometry(union.buffer(margin, quad_segs=PAD_CURVE_QUAD_SEGS))
 
     if pad.shape == "circle":
         return Point(cx, cy).buffer(w / 2, quad_segs=PAD_CURVE_QUAD_SEGS)
@@ -568,8 +602,8 @@ def board_outline_polygon(profile: PcbBoardProfile) -> Polygon | MultiPolygon | 
     """
     outline_segments: list[LineString] = []
     cutout_segments: list[LineString] = []
-    solids: list[Polygon] = []
-    cutouts: list[Polygon] = []
+    solids: list[Polygon | MultiPolygon] = []
+    cutouts: list[Polygon | MultiPolygon] = []
 
     for item in profile.elements:
         if isinstance(item.data, PcbLine):
@@ -604,8 +638,10 @@ def board_outline_polygon(profile: PcbBoardProfile) -> Polygon | MultiPolygon | 
                 solids.append(ring)
 
         else:
+            # Repairing a self-intersecting outline can yield a MultiPolygon;
+            # keep all pieces so no board material or cutout is dropped.
             polygon = polygon_geometry(item.data)
-            if polygon.is_empty or not isinstance(polygon, Polygon):
+            if polygon.is_empty or not isinstance(polygon, (Polygon, MultiPolygon)):
                 continue
             if item.is_cutout:
                 cutouts.append(polygon)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -354,7 +354,7 @@ def _pad_solder_mask_opening_geometry(pad: PcbPad) -> BaseGeometry | None:
     if dimensions is None:
         return None
     width, height = dimensions
-    return pad_polygon(replace(pad, width=width, height=height))
+    return pad_polygon(pad, width=width, height=height)
 
 
 def _pad_solder_mask_opening_path_d(pad: PcbPad) -> str:
