@@ -4,47 +4,57 @@ import json
 from importlib.resources import as_file, files
 
 import pytest
+from conftest import build_render_test_board
 
 from phosphor_eda.domain.pcb import (
     LayerRole,
-    Pcb,
     PcbArtwork,
     PcbArtworkKind,
     PcbArtworkPurpose,
-    PcbBoardProfile,
-    PcbBoardProfileElement,
-    PcbConductor,
     PcbConductorKind,
     PcbDrill,
-    PcbDrillPlating,
-    PcbFootprint,
     PcbLayer,
     PcbLine,
-    PcbMaskAperture,
-    PcbNet,
     PcbObjectMetadata,
-    PcbPad,
-    PcbPadType,
     PcbText,
-    PcbVia,
 )
-from phosphor_eda.render.api import load_render_settings_json, render_pcb_svg
+from phosphor_eda.render.api import render_pcb_svg
 from phosphor_eda.render.inventory import (
     InventoryItemKind,
     InventoryPurpose,
     build_inventory,
     select_inventory_items,
 )
-from phosphor_eda.render.settings import load_render_settings_file
+from phosphor_eda.render.settings import (
+    MAX_CUSTOM_CSS_LENGTH,
+    CliOverrides,
+    HighlightSpec,
+    RenderSettings,
+    load_render_settings_file,
+    load_render_settings_json,
+    resolve_effective_settings,
+)
+
+
+def _design_settings(
+    *,
+    side: str = "front",
+    highlight_nets: tuple[str, ...] = (),
+) -> RenderSettings:
+    """Resolve the bundled ``phosphor:design`` settings for render tests."""
+    base = load_render_settings_json('{"extends": "phosphor:design"}')
+    overrides = CliOverrides(
+        side=side,
+        highlights=tuple(HighlightSpec(net=net) for net in highlight_nets),
+    )
+    return resolve_effective_settings(base, overrides)
 
 
 def test_render_result_carries_unknown_highlight_warning() -> None:
     """render_pcb_svg returns warnings for an unresolved highlight target."""
     result = render_pcb_svg(
         _board(),
-        side="front",
-        highlight_nets=["DOES_NOT_EXIST"],
-        render_settings=load_render_settings_json('{"extends": "phosphor:design"}'),
+        _design_settings(highlight_nets=("DOES_NOT_EXIST",)),
     )
 
     assert "<svg" in result.svg
@@ -53,20 +63,12 @@ def test_render_result_carries_unknown_highlight_warning() -> None:
 
 
 def test_render_result_no_warnings_on_clean_render() -> None:
-    result = render_pcb_svg(
-        _board(),
-        side="front",
-        render_settings=load_render_settings_json('{"extends": "phosphor:design"}'),
-    )
+    result = render_pcb_svg(_board(), _design_settings())
     assert result.warnings == ()
 
 
 def test_render_svg_uses_typed_inventory_metadata() -> None:
-    svg = render_pcb_svg(
-        _board(),
-        side="front",
-        render_settings=load_render_settings_json('{"extends": "phosphor:design"}'),
-    ).svg
+    svg = render_pcb_svg(_board(), _design_settings()).svg
 
     assert 'data-kind="pad"' in svg
     assert 'data-kind="via"' in svg
@@ -83,11 +85,7 @@ def test_mask_viewports_cover_full_board_bbox() -> None:
     import re
 
     board = _board()
-    svg = render_pcb_svg(
-        board,
-        side="front",
-        render_settings=load_render_settings_json('{"extends": "phosphor:design"}'),
-    ).svg
+    svg = render_pcb_svg(board, _design_settings()).svg
 
     min_x, min_y, max_x, max_y = board.bbox()
     masks = re.findall(r"<mask ([^>]*)>", svg)
@@ -339,106 +337,149 @@ def test_high_contrast_presets_hide_mechanical_artwork_by_default(name: str) -> 
     assert "line:U1:body" not in {item.id for item in selected}
 
 
-def _board() -> Pcb:
-    front_cu = PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT, LayerRole.OUTER), number=0)
-    back_cu = PcbLayer("B.Cu", (LayerRole.COPPER, LayerRole.BACK, LayerRole.OUTER), number=31)
-    front_mask = PcbLayer("F.Mask", (LayerRole.SOLDER_MASK, LayerRole.FRONT), number=37)
-    front_silk = PcbLayer("F.SilkS", (LayerRole.SILKSCREEN, LayerRole.FRONT), number=33)
-    edge = PcbLayer("Edge.Cuts", (LayerRole.EDGE,), number=44)
-    net = PcbNet(1, "VCC")
-    footprint = PcbFootprint("U1", "Package", 5.0, 5.0, 0.0, front_cu, value="MCU")
-    pad_drill = PcbDrill(
-        "drill:pad:U1:1",
-        5.0,
-        5.0,
-        0.4,
-        plating=PcbDrillPlating.PLATED,
-        layers=(front_cu, back_cu),
+def test_render_settings_validate_annotations_at_parse() -> None:
+    # A box with no targets is invalid; parse_render_settings must reject it
+    # at load, not defer the failure to render time.
+    with pytest.raises(ValueError, match="target"):
+        load_render_settings_json(json.dumps({"annotations": {"boxes": [{"label": "no targets"}]}}))
+
+
+def test_render_settings_accept_valid_annotations() -> None:
+    settings = load_render_settings_json(
+        json.dumps({"annotations": {"labels": [{"target": "U1", "content": "MCU"}]}})
     )
-    via_drill = PcbDrill(
-        "drill:via:1",
-        8.0,
-        5.0,
-        0.35,
-        plating=PcbDrillPlating.PLATED,
-        layers=(front_cu, back_cu),
+    assert settings.annotations["labels"] == [{"target": "U1", "content": "MCU"}]
+
+
+def test_render_settings_reject_oversized_custom_css() -> None:
+    oversized = "a" * (MAX_CUSTOM_CSS_LENGTH + 1)
+    with pytest.raises(ValueError, match="custom_css must be at most"):
+        load_render_settings_json(json.dumps({"custom_css": oversized}))
+
+
+def test_render_settings_schema_advertises_custom_css_max_length() -> None:
+    from phosphor_eda.render.api import render_settings_schema
+
+    schema = render_settings_schema()
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    custom_css = properties["custom_css"]
+    assert isinstance(custom_css, dict)
+    assert custom_css["maxLength"] == MAX_CUSTOM_CSS_LENGTH
+
+
+def test_effective_settings_compose_base_and_cli_custom_css() -> None:
+    base = RenderSettings(custom_css=".base {}")
+    settings = resolve_effective_settings(base, CliOverrides(custom_css=".cli {}"))
+    assert settings.custom_css == ".base {}\n.cli {}"
+
+
+def test_effective_settings_keep_base_custom_css_when_cli_flag_omitted() -> None:
+    base = RenderSettings(custom_css=".base {}")
+    settings = resolve_effective_settings(base, CliOverrides(custom_css=None))
+    assert settings.custom_css == ".base {}"
+
+
+def test_effective_settings_explicit_empty_cli_custom_css_clears_base() -> None:
+    base = RenderSettings(custom_css=".base {}")
+    settings = resolve_effective_settings(base, CliOverrides(custom_css=""))
+    assert settings.custom_css == ""
+
+
+def test_effective_settings_reject_oversized_combined_custom_css() -> None:
+    base = RenderSettings(custom_css="a" * MAX_CUSTOM_CSS_LENGTH)
+    overrides = CliOverrides(custom_css="b")
+    with pytest.raises(ValueError, match="custom_css must be at most"):
+        resolve_effective_settings(base, overrides)
+
+
+# Documents the imperative parser rejects; the JSON schema must reject the
+# same set (legacy keys via additionalProperties: False, value constraints
+# via enums/types/minimums).
+_REJECTED_SETTINGS_DOCUMENTS: list[dict[str, object]] = [
+    {"theme": "dark"},
+    {"font_size": 12},
+    {"font_size_px": 12},
+    {"include": ["copper"]},
+    {"highlight_behavior": "dim"},
+    {"style_rules": []},
+    {"exclude_component_prefixes": ["R"]},
+    {"renderMode": "sketch"},
+    {"side": "left"},
+    {"width": 0},
+    {"fontSizePx": 0},
+]
+
+
+@pytest.mark.parametrize("document", _REJECTED_SETTINGS_DOCUMENTS)
+def test_parser_rejects_invalid_settings_documents(document: dict[str, object]) -> None:
+    with pytest.raises(ValueError):
+        load_render_settings_json(json.dumps(document))
+
+
+@pytest.mark.parametrize("document", _REJECTED_SETTINGS_DOCUMENTS)
+def test_schema_rejects_invalid_settings_documents(document: dict[str, object]) -> None:
+    from phosphor_eda.render.api import render_settings_schema
+
+    schema = render_settings_schema()
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    (key,) = document
+    if key not in properties:
+        # Legacy keys: additionalProperties False makes the schema reject them.
+        assert schema["additionalProperties"] is False
+        return
+    # Value-constrained keys: schema declares an enum or numeric minimum that
+    # excludes the offending value.
+    constraint = properties[key]
+    assert isinstance(constraint, dict)
+    assert "enum" in constraint or "minimum" in constraint
+
+
+def test_annotation_style_tokens_resolve_typed() -> None:
+    from phosphor_eda.render.plan import annotation_style_for_settings
+    from phosphor_eda.render.settings import RenderSettings
+
+    settings = RenderSettings(
+        tokens={
+            "annotation.label.fill": "#fff",
+            "annotation.label.textHaloWidthPx": 3,
+            "annotation.label.pillVisible": False,
+            "annotation.connector.stroke": "#0f0",
+            "annotation.connector.strokeWidthPx": 1.5,
+        }
     )
-    pad = PcbPad(
-        id="pad:U1:1",
-        number="1",
-        x=5.0,
-        y=5.0,
-        width=1.4,
-        height=1.4,
-        shape="circle",
-        pad_type=PcbPadType.THROUGH_HOLE,
-        layers=(front_cu, front_mask),
-        net=net,
-        footprint=footprint,
-        drill=pad_drill,
-        mask_aperture=PcbMaskAperture(mask_expansion=0.05),
-    )
-    via = PcbVia(
-        id="via:1",
-        x=8.0,
-        y=5.0,
-        diameter=0.8,
-        layers=(front_cu, back_cu),
-        drill=via_drill,
-        net=net,
-    )
-    return Pcb(
-        name="render-test",
-        layers=[front_cu, back_cu, front_mask, front_silk, edge],
-        nets={1: net},
-        footprints=[footprint],
-        pads=[pad],
-        vias=[via],
-        drills=[pad_drill, via_drill],
-        conductors=[
-            PcbConductor(
-                id="trace:1",
-                kind=PcbConductorKind.TRACE,
-                layer=front_cu,
-                data=PcbLine(5.0, 5.0, 8.0, 5.0, 0.25),
-                net=net,
-            )
-        ],
-        artwork=[
-            PcbArtwork(
-                id="silk:1",
-                kind=PcbArtworkKind.LINE,
-                purpose=PcbArtworkPurpose.SILKSCREEN,
-                layer=front_silk,
-                data=PcbLine(4.0, 7.0, 6.0, 7.0, 0.12),
-                footprint=footprint,
-            ),
-            PcbArtwork(
-                id="text:U1:ref",
-                kind=PcbArtworkKind.TEXT,
-                purpose=PcbArtworkPurpose.DESIGNATOR,
-                layer=front_silk,
-                data=PcbText("U1", 5.0, 3.5, 0.0, 1.0),
-                footprint=footprint,
-            ),
-        ],
-        pours=[],
-        keepouts=[],
-        board_profile=PcbBoardProfile(
-            elements=tuple(
-                PcbBoardProfileElement(
-                    id=f"edge:{index}",
-                    kind=PcbArtworkKind.LINE,
-                    layer=edge,
-                    data=PcbLine(x1, y1, x2, y2, 0.1),
-                )
-                for index, ((x1, y1), (x2, y2)) in enumerate(
-                    zip(
-                        [(0.0, 0.0), (12.0, 0.0), (12.0, 10.0), (0.0, 10.0)],
-                        [(12.0, 0.0), (12.0, 10.0), (0.0, 10.0), (0.0, 0.0)],
-                        strict=False,
-                    )
-                )
-            )
-        ),
-    )
+    style = annotation_style_for_settings(settings)
+    assert style.label.fill == "#fff"
+    assert style.label.text_halo_width_px == 3.0
+    assert style.label.pill_visible is False
+    assert style.connector.stroke == "#0f0"
+    assert style.connector.stroke_width_px == 1.5
+
+
+def test_annotation_style_rejects_wrong_token_type() -> None:
+    from phosphor_eda.render.plan import annotation_style_for_settings
+    from phosphor_eda.render.settings import RenderSettings
+
+    settings = RenderSettings(tokens={"annotation.label.fill": 42})
+    with pytest.raises(ValueError, match="must be a string"):
+        annotation_style_for_settings(settings)
+
+
+def test_annotation_style_rejects_non_scalar_css_value_token() -> None:
+    from typing import cast
+
+    from phosphor_eda.render.plan import annotation_style_for_settings
+    from phosphor_eda.render.settings import RenderSettings, TokenMap
+
+    # Simulate untyped runtime data sneaking past the TokenMap type, e.g. a
+    # caller constructing RenderSettings from unvalidated JSON.
+    tokens = cast("TokenMap", {"annotation.label.fontWeight": ["bold"]})
+    settings = RenderSettings(tokens=tokens)
+    with pytest.raises(ValueError, match="must be a string or number"):
+        annotation_style_for_settings(settings)
+
+
+# The shared synthetic render board lives in conftest so every render test
+# module reuses one builder instead of importing across test files.
+_board = build_render_test_board

@@ -20,6 +20,7 @@ from phosphor_eda.formats.dsn.parser import parse_dsn
 from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
 from phosphor_eda.formats.eagle.to_schematic import eagle_to_design
 from phosphor_eda.formats.kicad.board import (
+    parse_kicad_pcb,
     parse_kicad_pcb_from_sexpr,
     read_kicad_pcb_sexpr,
 )
@@ -33,10 +34,14 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
+    from phosphor_eda.domain.pcb import Pcb
     from phosphor_eda.domain.schematic import Schematic
 
 # Matches "Sheetfile" "<value>" in KiCad S-expression text.
 _SHEETFILE_RE = re.compile(r'"Sheetfile"\s+"([^"]+)"')
+
+# Walk-up search depth for project-root detection.
+_PROJECT_SEARCH_MAX_LEVELS = 5
 
 
 def _load_altium(path: Path) -> Schematic:
@@ -88,16 +93,40 @@ def find_project_root(path: Path) -> Path | None:
     return None
 
 
+def _walk_up_for(
+    start: Path,
+    predicate: Callable[[Path], Path | None],
+    *,
+    max_levels: int = _PROJECT_SEARCH_MAX_LEVELS,
+) -> Path | None:
+    """Walk up from *start* applying *predicate* to each directory.
+
+    *predicate* inspects one directory and returns the matched project root
+    (or ``None`` to keep searching). Stops at the filesystem root or after
+    *max_levels* directories.
+    """
+    search_dir = start.resolve()
+    for _ in range(max_levels):
+        result = predicate(search_dir)
+        if result is not None:
+            return result
+        parent = search_dir.parent
+        if parent == search_dir:
+            break  # filesystem root
+        search_dir = parent
+    return None
+
+
 def _find_altium_project(schdoc: Path) -> Path | None:
     """Find a .PrjPcb that references *schdoc*.
 
     Searches the schdoc's own directory first, then walks up parent
-    directories (up to 5 levels) to handle projects whose DocumentPath
-    values place schematics in subdirectories.
+    directories to handle projects whose DocumentPath values place
+    schematics in subdirectories.
     """
     schdoc_resolved = schdoc.resolve()
-    search_dir = schdoc.parent.resolve()
-    for _ in range(5):
+
+    def find_in(search_dir: Path) -> Path | None:
         for child in search_dir.iterdir():
             if not child.is_file() or child.suffix.lower() != ".prjpcb":
                 continue
@@ -105,11 +134,9 @@ def _find_altium_project(schdoc: Path) -> Path | None:
             for rel_path in project.schematic_paths:
                 if (child.parent / rel_path.replace("\\", "/")).resolve() == schdoc_resolved:
                     return child
-        parent = search_dir.parent
-        if parent == search_dir:
-            break  # filesystem root
-        search_dir = parent
-    return None
+        return None
+
+    return _walk_up_for(schdoc.parent, find_in)
 
 
 def _find_kicad_root(sch: Path) -> Path | None:
@@ -118,11 +145,11 @@ def _find_kicad_root(sch: Path) -> Path | None:
     Handles Sheetfile values that may use Windows backslash separators or
     include subdirectory prefixes (e.g. ``"sheets\\child.kicad_sch"``).
     Searches the child's own directory first, then walks up parent
-    directories (up to 5 levels).
+    directories.
     """
     sch_resolved = sch.resolve()
-    search_dir = sch.parent.resolve()
-    for _ in range(5):
+
+    def find_in(search_dir: Path) -> Path | None:
         for sibling in search_dir.iterdir():
             if not sibling.is_file() or sibling.suffix.lower() != ".kicad_sch":
                 continue
@@ -138,11 +165,9 @@ def _find_kicad_root(sch: Path) -> Path | None:
                 sheet_ref = match.group(1).replace("\\", "/")
                 if (sibling.parent / sheet_ref).resolve() == sch_resolved:
                     return sibling
-        parent = search_dir.parent
-        if parent == search_dir:
-            break  # filesystem root
-        search_dir = parent
-    return None
+        return None
+
+    return _walk_up_for(sch.parent, find_in)
 
 
 def load_design(path: Path) -> Schematic:
@@ -161,10 +186,78 @@ def convert(path: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Project-level loading
+# PCB board loading
 # ---------------------------------------------------------------------------
 
-PCB_EXTENSIONS: frozenset[str] = frozenset({".kicad_pcb", ".pcbdoc"})
+
+def _load_kicad_pcb(path: Path) -> Pcb:
+    return parse_kicad_pcb(path)
+
+
+def _load_altium_pcb(path: Path) -> Pcb:
+    return parse_altium_pcb(path)
+
+
+def _load_prjpcb(path: Path) -> Pcb:
+    return parse_altium_pcb(resolve_prjpcb_pcbdoc(path))
+
+
+_PCB_LOADERS: dict[str, Callable[[Path], Pcb]] = {
+    ".kicad_pcb": _load_kicad_pcb,
+    ".pcbdoc": _load_altium_pcb,
+    ".prjpcb": _load_prjpcb,
+}
+
+PCB_EXTENSIONS: frozenset[str] = frozenset(_PCB_LOADERS)
+
+
+def load_pcb(path: Path) -> Pcb:
+    """Parse a PCB layout file into a Pcb board.
+
+    Dispatches on extension; ``.prjpcb`` resolves to its referenced
+    ``.PcbDoc`` first. Raises ``ValueError`` for unsupported formats.
+    """
+    ext = path.suffix.lower()
+    loader = _PCB_LOADERS.get(ext)
+    if loader is None:
+        supported = ", ".join(sorted(PCB_EXTENSIONS))
+        raise ValueError(f"Unsupported PCB format: '{path.suffix}'. Supported: {supported}")
+    return loader(path)
+
+
+def resolve_prjpcb_pcbdoc(prj_path: Path) -> Path:
+    """Resolve a .PrjPcb to exactly one existing referenced .PcbDoc."""
+    project = parse_prjpcb_file(str(prj_path))
+    existing_pcbdocs: list[Path] = []
+    seen_resolved: set[Path] = set()
+
+    for pcb_rel in project.pcb_paths:
+        pcb_path = prj_path.parent / pcb_rel.replace("\\", "/")
+        if not pcb_path.exists():
+            continue
+        resolved = pcb_path.resolve()
+        if resolved in seen_resolved:
+            continue
+        seen_resolved.add(resolved)
+        existing_pcbdocs.append(pcb_path)
+
+    if not existing_pcbdocs:
+        raise ValueError(
+            f"{prj_path.name} does not reference an existing .PcbDoc. "
+            "Pass a .PcbDoc directly or update the project DocumentPath."
+        )
+    if len(existing_pcbdocs) > 1:
+        boards = ", ".join(str(path) for path in existing_pcbdocs)
+        raise ValueError(
+            f"{prj_path.name} references multiple existing .PcbDoc files: {boards}. "
+            "Pass the intended .PcbDoc directly."
+        )
+    return existing_pcbdocs[0]
+
+
+# ---------------------------------------------------------------------------
+# Project-level loading
+# ---------------------------------------------------------------------------
 
 
 def load_project(path: Path) -> Project:

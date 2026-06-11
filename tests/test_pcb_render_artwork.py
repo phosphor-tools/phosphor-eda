@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from test_pcb_render import _board
+from conftest import build_render_test_board as _board
 
 from phosphor_eda.domain.pcb import PcbClosedPath, PcbKeepout
 from phosphor_eda.render.inventory import (

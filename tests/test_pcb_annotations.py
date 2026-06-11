@@ -17,22 +17,27 @@ from phosphor_eda.domain.pcb import (
     PcbPad,
     PcbPadType,
 )
-from phosphor_eda.render.annotations import (
+from phosphor_eda.render.annotation_placement import (
+    auto_assign_margin,
+    compute_connector,
+    measure_label,
+)
+from phosphor_eda.render.annotation_spec import (
     AnnotationSpec,
     BoxSpec,
     LabelSpec,
     LegendEntry,
     LegendSpec,
     PointerSpec,
-    ResolvedAnnotations,
-    _auto_assign_margin,  # pyright: ignore[reportPrivateUsage]
-    _compute_connector,  # pyright: ignore[reportPrivateUsage]
-    _measure_label,  # pyright: ignore[reportPrivateUsage]
-    _resolve_component_target,  # pyright: ignore[reportPrivateUsage]
-    _resolve_net_target,  # pyright: ignore[reportPrivateUsage]
-    _resolve_pad_target,  # pyright: ignore[reportPrivateUsage]
     parse_annotations,
+)
+from phosphor_eda.render.annotation_svg import DEFAULT_ANNOTATION_COLOR, _parse_rgb
+from phosphor_eda.render.annotations import (
+    ResolvedAnnotations,
     resolve_annotations,
+    resolve_component_target,
+    resolve_net_target,
+    resolve_pad_target,
 )
 
 # ---------------------------------------------------------------------------
@@ -222,6 +227,18 @@ class TestParseAnnotations:
         with pytest.raises(ValueError, match="target"):
             parse_annotations({"pointers": [{"label": "orphan"}]})
 
+    def test_pointer_null_target_raises(self) -> None:
+        """JSON null targets are treated as missing, not as the string 'None'."""
+        with pytest.raises(ValueError, match="target"):
+            parse_annotations({"pointers": [{"target": None, "label": "orphan"}]})
+
+    def test_label_null_fields_become_empty(self) -> None:
+        """JSON null label fields become empty strings, not the string 'None'."""
+        spec = parse_annotations({"labels": [{"target": None, "content": None, "position": None}]})
+        assert spec.labels[0].target == ""
+        assert spec.labels[0].content == ""
+        assert spec.labels[0].position == ""
+
     def test_pointer_net_target(self) -> None:
         data = {"pointers": [{"target_net": "SPI_CLK", "target_near": "U2", "label": "CLK"}]}
         spec = parse_annotations(data)
@@ -266,43 +283,71 @@ class TestParseAnnotations:
 
 
 # ---------------------------------------------------------------------------
+# Color parsing
+# ---------------------------------------------------------------------------
+
+
+class TestParseRgb:
+    def test_hex6(self) -> None:
+        assert _parse_rgb("#ff6b35") == (255, 107, 53)
+
+    def test_hex3(self) -> None:
+        assert _parse_rgb("#f00") == (255, 0, 0)
+
+    def test_rgb_functional(self) -> None:
+        assert _parse_rgb("rgb(1, 2, 3)") == (1, 2, 3)
+
+    def test_rgba_with_alpha(self) -> None:
+        assert _parse_rgb("rgba(10, 20, 30, 0.5)") == (10, 20, 30)
+
+    def test_hex6_with_trailing_garbage_falls_back(self) -> None:
+        assert _parse_rgb("#FF0000garbage") == DEFAULT_ANNOTATION_COLOR
+
+    def test_rgb_with_trailing_garbage_falls_back(self) -> None:
+        assert _parse_rgb("rgb(255,0,0) extra") == DEFAULT_ANNOTATION_COLOR
+
+    def test_unknown_color_falls_back(self) -> None:
+        assert _parse_rgb("not-a-color") == DEFAULT_ANNOTATION_COLOR
+
+
+# ---------------------------------------------------------------------------
 # Target resolution
 # ---------------------------------------------------------------------------
 
 
 class TestResolveTargets:
-    def test_resolve_component_target(self, board: Pcb) -> None:
-        center, bbox = _resolve_component_target("U1", board)
+    def testresolve_component_target(self, board: Pcb) -> None:
+        center, bbox = resolve_component_target("U1", board)
         assert center == pytest.approx((11.0, 10.0), abs=0.1)
         assert bbox == (9.0, 9.0, 13.0, 11.0)
 
     def test_resolve_component_unknown_raises(self, board: Pcb) -> None:
         with pytest.raises(ValueError, match="U99"):
-            _resolve_component_target("U99", board)
+            resolve_component_target("U99", board)
 
-    def test_resolve_pad_target(self, board: Pcb) -> None:
-        x, y = _resolve_pad_target("U1.2", board)
+    def testresolve_pad_target(self, board: Pcb) -> None:
+        x, y = resolve_pad_target("U1.2", board)
         assert x == pytest.approx(12.0)
         assert y == pytest.approx(10.0)
 
     def test_resolve_pad_unknown_ref_raises(self, board: Pcb) -> None:
         with pytest.raises(ValueError, match="U99"):
-            _resolve_pad_target("U99.1", board)
+            resolve_pad_target("U99.1", board)
 
     def test_resolve_pad_unknown_number_raises(self, board: Pcb) -> None:
         with pytest.raises(ValueError, match="99"):
-            _resolve_pad_target("U1.99", board)
+            resolve_pad_target("U1.99", board)
 
-    def test_resolve_net_target(self, board: Pcb) -> None:
+    def testresolve_net_target(self, board: Pcb) -> None:
         """SPI_CLK on U2 → pad 1 at (30, 10)."""
-        x, y = _resolve_net_target("SPI_CLK", "U2", board)
+        x, y = resolve_net_target("SPI_CLK", "U2", board)
         assert x == pytest.approx(30.0)
         assert y == pytest.approx(10.0)
 
-    def test_resolve_net_target_not_on_component(self, board: Pcb) -> None:
+    def testresolve_net_target_not_on_component(self, board: Pcb) -> None:
         """SPI_MOSI is only on U2, not U1."""
         with pytest.raises(ValueError, match="SPI_MOSI.*U1"):
-            _resolve_net_target("SPI_MOSI", "U1", board)
+            resolve_net_target("SPI_MOSI", "U1", board)
 
 
 # ---------------------------------------------------------------------------
@@ -311,27 +356,27 @@ class TestResolveTargets:
 
 
 class TestMarginAssignment:
-    """_auto_assign_margin uses nearest-edge: the label goes to whichever
+    """auto_assign_margin uses nearest-edge: the label goes to whichever
     board edge the target is physically closest to."""
 
     def test_target_right_of_center(self) -> None:
         board_bbox = (0.0, 0.0, 40.0, 20.0)
-        margin = _auto_assign_margin(35.0, 10.0, board_bbox)
+        margin = auto_assign_margin(35.0, 10.0, board_bbox)
         assert margin == "right"
 
     def test_target_left_of_center(self) -> None:
         board_bbox = (0.0, 0.0, 40.0, 20.0)
-        margin = _auto_assign_margin(5.0, 10.0, board_bbox)
+        margin = auto_assign_margin(5.0, 10.0, board_bbox)
         assert margin == "left"
 
     def test_target_below_center(self) -> None:
         board_bbox = (0.0, 0.0, 40.0, 20.0)
-        margin = _auto_assign_margin(20.0, 18.0, board_bbox)
+        margin = auto_assign_margin(20.0, 18.0, board_bbox)
         assert margin == "bottom"
 
     def test_target_above_center(self) -> None:
         board_bbox = (0.0, 0.0, 40.0, 20.0)
-        margin = _auto_assign_margin(20.0, 2.0, board_bbox)
+        margin = auto_assign_margin(20.0, 2.0, board_bbox)
         assert margin == "top"
 
     def test_nearest_edge_beats_center_quadrant(self) -> None:
@@ -339,32 +384,32 @@ class TestMarginAssignment:
         Nearest-edge picks top even though the center-quadrant approach
         would pick right (larger normalized horizontal offset)."""
         board_bbox = (0.0, 0.0, 40.0, 20.0)
-        margin = _auto_assign_margin(36.0, 3.0, board_bbox)
+        margin = auto_assign_margin(36.0, 3.0, board_bbox)
         assert margin == "top"
 
     def test_corner_target_picks_closest_edge(self) -> None:
         """Target near a corner goes to whichever edge is closer."""
         board_bbox = (0.0, 0.0, 40.0, 20.0)
         # 2mm from right, 3mm from bottom
-        assert _auto_assign_margin(38.0, 17.0, board_bbox) == "right"
+        assert auto_assign_margin(38.0, 17.0, board_bbox) == "right"
         # 1mm from bottom, 3mm from right
-        assert _auto_assign_margin(37.0, 19.0, board_bbox) == "bottom"
+        assert auto_assign_margin(37.0, 19.0, board_bbox) == "bottom"
 
     def test_square_board_symmetry(self) -> None:
         """On a square board, nearest-edge is unambiguous for off-center."""
         board_bbox = (0.0, 0.0, 20.0, 20.0)
-        assert _auto_assign_margin(18.0, 10.0, board_bbox) == "right"
-        assert _auto_assign_margin(2.0, 10.0, board_bbox) == "left"
-        assert _auto_assign_margin(10.0, 18.0, board_bbox) == "bottom"
-        assert _auto_assign_margin(10.0, 2.0, board_bbox) == "top"
+        assert auto_assign_margin(18.0, 10.0, board_bbox) == "right"
+        assert auto_assign_margin(2.0, 10.0, board_bbox) == "left"
+        assert auto_assign_margin(10.0, 18.0, board_bbox) == "bottom"
+        assert auto_assign_margin(10.0, 2.0, board_bbox) == "top"
 
     def test_tie_prefers_horizontal_edge(self) -> None:
         """Equal horizontal/vertical distance should prefer horizontal (right/left)."""
         board_bbox = (0.0, 0.0, 20.0, 20.0)
         # (15, 5): right=5, top=5 — tie, prefer right
-        assert _auto_assign_margin(15.0, 5.0, board_bbox) == "right"
+        assert auto_assign_margin(15.0, 5.0, board_bbox) == "right"
         # (5, 15): left=5, bottom=5 — tie, prefer left
-        assert _auto_assign_margin(5.0, 15.0, board_bbox) == "left"
+        assert auto_assign_margin(5.0, 15.0, board_bbox) == "left"
 
 
 # ---------------------------------------------------------------------------
@@ -376,7 +421,7 @@ class TestConnectorPath:
     def test_right_margin_connector(self) -> None:
         """Right margin connector: label → horizontal → vertical → target."""
         board_bbox = (0.0, 0.0, 40.0, 20.0)
-        path = _compute_connector(
+        path = compute_connector(
             label_x=45.0,
             label_y=8.0,
             label_w=10.0,
@@ -395,7 +440,7 @@ class TestConnectorPath:
 
     def test_left_margin_connector(self) -> None:
         board_bbox = (0.0, 0.0, 40.0, 20.0)
-        path = _compute_connector(
+        path = compute_connector(
             label_x=-15.0,
             label_y=8.0,
             label_w=10.0,
@@ -415,7 +460,7 @@ class TestConnectorPath:
     def test_connector_is_orthogonal(self) -> None:
         """All segments should be horizontal or vertical."""
         board_bbox = (0.0, 0.0, 40.0, 20.0)
-        path = _compute_connector(
+        path = compute_connector(
             label_x=45.0,
             label_y=5.0,
             label_w=10.0,
@@ -440,7 +485,7 @@ class TestConnectorPath:
 
 class TestMeasureLabel:
     def test_empty_text(self) -> None:
-        w, h = _measure_label("", 1.0)
+        w, h = measure_label("", 1.0)
         assert w == 0.0
         assert h == 0.0
 
@@ -450,7 +495,7 @@ class TestMeasureLabel:
 
         text = "Hello"
         raw_w, raw_h = measure_text(text, 1.0)
-        pill_w, pill_h = _measure_label(text, 1.0)
+        pill_w, pill_h = measure_label(text, 1.0)
         assert pill_w > raw_w
         assert pill_h > raw_h
 
@@ -517,10 +562,11 @@ class TestResolveAnnotations:
         )
         resolved = resolve_annotations(spec, board, "front")
         assert len(resolved.labels) == 1
-        label = resolved.labels[0]
-        assert label.label_text == "Main MCU"
+        callout = resolved.labels[0].callout
+        assert callout is not None
+        assert callout.text == "Main MCU"
         # On-board labels get a connector path to the target
-        assert len(label.connector_path) >= 2
+        assert len(callout.connector_path) >= 2
 
     def test_label_without_target_no_connector(self, board: Pcb) -> None:
         """Labels without a target should have no connector."""
@@ -530,8 +576,9 @@ class TestResolveAnnotations:
             labels=[LabelSpec(content="Board note")],
         )
         resolved = resolve_annotations(spec, board, "front")
-        label = resolved.labels[0]
-        assert label.connector_path == []
+        callout = resolved.labels[0].callout
+        assert callout is not None
+        assert callout.connector_path == []
 
     def test_net_pointer(self, board: Pcb) -> None:
         """Pointer via target_net + target_near resolves to the correct pad."""
@@ -564,8 +611,12 @@ class TestResolveAnnotations:
         front = resolve_annotations(spec, board, "front", width_px=800)
         back = resolve_annotations(spec, board, "back", width_px=800)
 
-        assert front.pointers[0].label_x < front.pointers[0].target_x
-        assert back.pointers[0].label_x > back.pointers[0].target_x
+        front_ptr = front.pointers[0]
+        back_ptr = back.pointers[0]
+        assert front_ptr.callout is not None
+        assert back_ptr.callout is not None
+        assert front_ptr.callout.x < front_ptr.target_x
+        assert back_ptr.callout.x > back_ptr.target_x
 
     def test_back_side_position_hint_is_rendered_view(self, board: Pcb) -> None:
         """Back-side explicit position hints are interpreted in rendered-view space."""
@@ -577,7 +628,8 @@ class TestResolveAnnotations:
         resolved = resolve_annotations(spec, board, "back", width_px=800)
         ptr = resolved.pointers[0]
 
-        assert ptr.label_x > ptr.target_x
+        assert ptr.callout is not None
+        assert ptr.callout.x > ptr.target_x
 
     def test_back_side_pointer_target_uses_rendered_pad_location(self, board: Pcb) -> None:
         """Back-side connector endpoints point to the mirrored rendered pad location."""
@@ -591,7 +643,8 @@ class TestResolveAnnotations:
 
         assert ptr.target_x * resolved.px_scale == pytest.approx(30.0)
         assert ptr.target_y * resolved.px_scale == pytest.approx(10.0)
-        assert ptr.connector_path[-1] == pytest.approx((ptr.target_x, ptr.target_y))
+        assert ptr.callout is not None
+        assert ptr.callout.connector_path[-1] == pytest.approx((ptr.target_x, ptr.target_y))
 
     def test_empty_spec_returns_empty(self, board: Pcb) -> None:
         spec = AnnotationSpec(boxes=[], pointers=[], labels=[])
@@ -610,13 +663,14 @@ class TestResolveAnnotations:
         )
         resolved = resolve_annotations(spec, board, "front")
         box = resolved.boxes[0]
+        assert box.callout is not None
         s = resolved.px_scale
         board_bbox = board.bbox()
         # Convert label coords from pixels back to board mm for comparison
-        lx = box.label_x * s
-        ly = box.label_y * s
-        lr = (box.label_x + box.label_width) * s
-        lb = (box.label_y + box.label_height) * s
+        lx = box.callout.x * s
+        ly = box.callout.y * s
+        lr = (box.callout.x + box.callout.width) * s
+        lb = (box.callout.y + box.callout.height) * s
         outside = (
             lx > board_bbox[2]  # right of board
             or lr < board_bbox[0]  # left of board
@@ -634,7 +688,8 @@ class TestResolveAnnotations:
         )
         resolved = resolve_annotations(spec, board, "front")
         box = resolved.boxes[0]
-        assert len(box.connector_path) >= 2
+        assert box.callout is not None
+        assert len(box.callout.connector_path) >= 2
 
     def test_box_label_anchor_comes_from_margin(self, board: Pcb) -> None:
         """Left margin box labels should right-align their text inside the pill."""
@@ -645,7 +700,9 @@ class TestResolveAnnotations:
         )
         resolved = resolve_annotations(spec, board, "front")
 
-        assert resolved.boxes[0].text_anchor == "end"
+        callout = resolved.boxes[0].callout
+        assert callout is not None
+        assert callout.text_anchor == "end"
 
     def test_pointer_label_anchor_comes_from_margin(self, board: Pcb) -> None:
         """Right margin pointer labels should left-align their text inside the pill."""
@@ -656,7 +713,9 @@ class TestResolveAnnotations:
         )
         resolved = resolve_annotations(spec, board, "front")
 
-        assert resolved.pointers[0].text_anchor == "start"
+        callout = resolved.pointers[0].callout
+        assert callout is not None
+        assert callout.text_anchor == "start"
 
     def test_label_anchor_comes_from_margin(self, board: Pcb) -> None:
         """Top/bottom margin labels should keep centered text."""
@@ -667,7 +726,9 @@ class TestResolveAnnotations:
         )
         resolved = resolve_annotations(spec, board, "front")
 
-        assert resolved.labels[0].text_anchor == "middle"
+        callout = resolved.labels[0].callout
+        assert callout is not None
+        assert callout.text_anchor == "middle"
 
     def test_label_dimensions_populated(self, board: Pcb) -> None:
         """Resolved labels should have positive width and height."""
@@ -678,8 +739,9 @@ class TestResolveAnnotations:
         )
         resolved = resolve_annotations(spec, board, "front")
         ptr = resolved.pointers[0]
-        assert ptr.label_width > 0
-        assert ptr.label_height > 0
+        assert ptr.callout is not None
+        assert ptr.callout.width > 0
+        assert ptr.callout.height > 0
 
     def test_no_label_overlap(self, board: Pcb) -> None:
         """Multiple labels in the same margin should not overlap."""
@@ -693,16 +755,18 @@ class TestResolveAnnotations:
         )
         resolved = resolve_annotations(spec, board, "front")
         if len(resolved.labels) >= 2:
-            a = resolved.labels[0]
-            b = resolved.labels[1]
+            a = resolved.labels[0].callout
+            b = resolved.labels[1].callout
+            assert a is not None
+            assert b is not None
             # Check no vertical overlap (for labels in the same left/right margin)
             # or no horizontal overlap (for top/bottom margin)
-            a_r = a.label_x + a.label_width
-            b_r = b.label_x + b.label_width
-            a_b = a.label_y + a.label_height
-            b_b = b.label_y + b.label_height
-            h_overlap = a.label_x < b_r and b.label_x < a_r
-            v_overlap = a.label_y < b_b and b.label_y < a_b
+            a_r = a.x + a.width
+            b_r = b.x + b.width
+            a_b = a.y + a.height
+            b_b = b.y + b.height
+            h_overlap = a.x < b_r and b.x < a_r
+            v_overlap = a.y < b_b and b.y < a_b
             assert not (h_overlap and v_overlap), "Labels overlap"
 
     def test_font_size_stored(self, board: Pcb) -> None:

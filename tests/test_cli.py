@@ -413,13 +413,11 @@ def test_cli_render_prjpcb_resolves_single_existing_pcbdoc(
         parsed_paths.append(path)
         return parsed_board
 
-    def fake_render_pcb_svg(board: object, **_kwargs: object) -> RenderResult:
+    def fake_render_pcb_svg(board: object, _settings: object, **_kwargs: object) -> RenderResult:
         assert board is parsed_board
         return RenderResult(svg="<svg></svg>")
 
-    monkeypatch.setattr(
-        "phosphor_eda.formats.altium.pcb_parser.parse_altium_pcb", fake_parse_altium_pcb
-    )
+    monkeypatch.setattr("phosphor_eda.query.convert.parse_altium_pcb", fake_parse_altium_pcb)
     monkeypatch.setattr("phosphor_eda.render.api.render_pcb_svg", fake_render_pcb_svg)
 
     runner = CliRunner()
@@ -487,6 +485,61 @@ def test_cli_render_settings_inline_custom_css_is_injected(tmp_path: Path) -> No
     svg = out_file.read_text()
     assert '<style id="custom">' in svg
     assert "rgb(1, 2, 3)" in svg
+
+
+def test_cli_render_explicit_empty_custom_css_clears_settings_css(tmp_path: Path) -> None:
+    """--custom-css '' clears custom CSS coming from the settings file."""
+    settings = {
+        "extends": "phosphor:review",
+        "custom_css": ".board-fill { fill: rgb(1, 2, 3); }",
+    }
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps(settings))
+    out_file = tmp_path / "out.svg"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "pcb",
+            "render",
+            PCB_FILE,
+            "--render-settings",
+            str(settings_file),
+            "--custom-css",
+            "",
+            "-o",
+            str(out_file),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    svg = out_file.read_text()
+    assert '<style id="custom">' not in svg
+
+
+def test_cli_render_custom_css_is_emitted_after_annotation_styles(tmp_path: Path) -> None:
+    """User CSS must come after generated annotation CSS so it can override it."""
+    settings = {
+        "extends": "phosphor:review",
+        "custom_css": ".annotation-label { fill: rgb(1, 2, 3); }",
+        "annotations": {
+            "pointers": [{"target": "TP3", "label": "SWD"}],
+        },
+    }
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps(settings))
+    out_file = tmp_path / "out.svg"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file), "-o", str(out_file)],
+    )
+
+    assert result.exit_code == 0, result.output
+    svg = out_file.read_text()
+    assert svg.index('<style id="annotations">') < svg.index('<style id="custom">')
 
 
 def test_cli_render_settings_from_file(tmp_path: Path) -> None:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.pcb import PcbConductorKind
@@ -11,13 +11,14 @@ from phosphor_eda.render.modes import (
     build_highlight_layers,
     build_realistic_layers,
 )
+from phosphor_eda.render.profiler import profile_span
 
 if TYPE_CHECKING:
     from phosphor_eda.domain.pcb import Pcb
     from phosphor_eda.render.annotations import ResolvedAnnotations
     from phosphor_eda.render.modes import DerivedLayer
     from phosphor_eda.render.profiler import RenderProfiler
-    from phosphor_eda.render.settings import RenderSettings
+    from phosphor_eda.render.settings import RenderSettings, TokenMap
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,34 @@ class ViewBox:
 
 
 @dataclass(frozen=True)
+class AnnotationLabelStyle:
+    """Resolved styling for annotation pill labels (display-pixel units)."""
+
+    fill: str | None = None
+    text_halo: str | None = None
+    text_halo_width_px: float | None = None
+    font_weight: str | None = None
+    pill_visible: bool | None = None
+
+
+@dataclass(frozen=True)
+class AnnotationConnectorStyle:
+    """Resolved styling for annotation connector lines and end dots."""
+
+    stroke: str | None = None
+    stroke_width_px: float | None = None
+    dot_visible: bool | None = None
+
+
+@dataclass(frozen=True)
+class AnnotationStyle:
+    """Resolved annotation styling, split by element class."""
+
+    label: AnnotationLabelStyle = field(default_factory=AnnotationLabelStyle)
+    connector: AnnotationConnectorStyle = field(default_factory=AnnotationConnectorStyle)
+
+
+@dataclass(frozen=True)
 class DerivedRenderPlan:
     view_box: ViewBox
     width_px: int
@@ -37,7 +66,7 @@ class DerivedRenderPlan:
     highlight_groups: tuple[HighlightGroup, ...]
     annotations: ResolvedAnnotations | None
     warnings: tuple[str, ...]
-    annotation_style: dict[str, object] = field(default_factory=dict)
+    annotation_style: AnnotationStyle = field(default_factory=AnnotationStyle)
     custom_css: str = ""
 
 
@@ -45,11 +74,15 @@ def build_derived_render_plan(
     board: Pcb,
     *,
     settings: RenderSettings,
-    side: str,
-    width_px: int,
     annotations: ResolvedAnnotations | None,
     profiler: RenderProfiler | None = None,
 ) -> DerivedRenderPlan:
+    # Settings must be fully resolved (resolve_effective_settings) before
+    # reaching here: side and width are read directly, no defaulting.
+    side = settings.side
+    width_px = settings.width
+    assert side, "render settings must have a resolved side"
+    assert width_px > 0, "render settings must have a resolved width"
     board_bbox = board.bbox()
     if board_bbox is None:
         msg = "cannot render an empty board: no board profile and no pads to bound the view"
@@ -91,45 +124,33 @@ def build_derived_render_plan(
             pours=len(board.pours),
             layers=len(board.layers),
         )
-    if profiler is None:
+    with profile_span(profiler, "plan.build_inventory"):
         inventory = build_inventory(board, side=side)
-    else:
-        with profiler.span("plan.build_inventory"):
-            inventory = build_inventory(board, side=side)
+    if profiler is not None:
         profiler.metric("inventory.items", count=len(inventory.items))
-    mode_settings = replace(settings, side=side)
-    if mode_settings.render_mode == "realistic":
-        if profiler is None:
-            base_layers = build_realistic_layers(inventory, mode_settings, warn=warnings.append)
-        else:
-            with profiler.span("plan.build_realistic_layers"):
-                base_layers = build_realistic_layers(
-                    inventory,
-                    mode_settings,
-                    warn=warnings.append,
-                    profiler=profiler,
-                )
-    else:
-        if profiler is None:
-            base_layers = build_eda_layers(inventory, mode_settings, warn=warnings.append)
-        else:
-            with profiler.span("plan.build_eda_layers"):
-                base_layers = build_eda_layers(
-                    inventory,
-                    mode_settings,
-                    warn=warnings.append,
-                    profiler=profiler,
-                )
-    if profiler is None:
-        highlight_groups = build_highlight_layers(inventory, mode_settings, warn=warnings.append)
-    else:
-        with profiler.span("plan.build_highlight_layers"):
-            highlight_groups = build_highlight_layers(
+    if settings.render_mode == "realistic":
+        with profile_span(profiler, "plan.build_realistic_layers"):
+            base_layers = build_realistic_layers(
                 inventory,
-                mode_settings,
+                settings,
                 warn=warnings.append,
                 profiler=profiler,
             )
+    else:
+        with profile_span(profiler, "plan.build_eda_layers"):
+            base_layers = build_eda_layers(
+                inventory,
+                settings,
+                warn=warnings.append,
+                profiler=profiler,
+            )
+    with profile_span(profiler, "plan.build_highlight_layers"):
+        highlight_groups = build_highlight_layers(
+            inventory,
+            settings,
+            warn=warnings.append,
+            profiler=profiler,
+        )
 
     return DerivedRenderPlan(
         view_box=ViewBox(vb_x, vb_y, vb_w, vb_h),
@@ -139,7 +160,7 @@ def build_derived_render_plan(
         highlight_groups=highlight_groups,
         annotations=annotations,
         warnings=tuple(warnings),
-        annotation_style=_annotation_style_for_settings(settings),
+        annotation_style=annotation_style_for_settings(settings),
         custom_css=settings.custom_css,
     )
 
@@ -165,43 +186,63 @@ def _expand_view_box_for_annotations(
     return vb_x, vb_y, vb_w, vb_h
 
 
-def _annotation_style_for_settings(settings: RenderSettings) -> dict[str, object]:
-    label_style = _annotation_token_style(
-        settings,
-        "annotation.label",
-        {
-            "fill": "fill",
-            "textHalo": "text_halo",
-            "textHaloWidthPx": "text_halo_width_px",
-            "fontWeight": "font_weight",
-            "pillVisible": "pill_visible",
-        },
+def annotation_style_for_settings(settings: RenderSettings) -> AnnotationStyle:
+    tokens = settings.tokens
+    label = AnnotationLabelStyle(
+        fill=_token_str(tokens, "annotation.label.fill"),
+        text_halo=_token_str(tokens, "annotation.label.textHalo"),
+        text_halo_width_px=_token_float(tokens, "annotation.label.textHaloWidthPx"),
+        font_weight=_token_css_value(tokens, "annotation.label.fontWeight"),
+        pill_visible=_token_bool(tokens, "annotation.label.pillVisible"),
     )
-    connector_style = _annotation_token_style(
-        settings,
-        "annotation.connector",
-        {
-            "stroke": "stroke",
-            "strokeWidthPx": "stroke_width_px",
-            "dotVisible": "dot_visible",
-        },
+    connector = AnnotationConnectorStyle(
+        stroke=_token_str(tokens, "annotation.connector.stroke"),
+        stroke_width_px=_token_float(tokens, "annotation.connector.strokeWidthPx"),
+        dot_visible=_token_bool(tokens, "annotation.connector.dotVisible"),
     )
-    styles: dict[str, object] = {}
-    if label_style:
-        styles["label"] = label_style
-    if connector_style:
-        styles["connector"] = connector_style
-    return styles
+    return AnnotationStyle(label=label, connector=connector)
 
 
-def _annotation_token_style(
-    settings: RenderSettings,
-    prefix: str,
-    field_map: dict[str, str],
-) -> dict[str, object]:
-    style: dict[str, object] = {}
-    for token_name, style_name in field_map.items():
-        key = f"{prefix}.{token_name}"
-        if key in settings.tokens:
-            style[style_name] = settings.tokens[key]
-    return style
+def _token_str(tokens: TokenMap, key: str) -> str | None:
+    if key not in tokens:
+        return None
+    value = tokens[key]
+    if not isinstance(value, str):
+        msg = f"token {key!r} must be a string, got {value!r}"
+        raise ValueError(msg)
+    return value
+
+
+def _token_float(tokens: TokenMap, key: str) -> float | None:
+    if key not in tokens:
+        return None
+    value = tokens[key]
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        msg = f"token {key!r} must be a number, got {value!r}"
+        raise ValueError(msg)
+    return float(value)
+
+
+def _token_bool(tokens: TokenMap, key: str) -> bool | None:
+    if key not in tokens:
+        return None
+    value = tokens[key]
+    if not isinstance(value, bool):
+        msg = f"token {key!r} must be a boolean, got {value!r}"
+        raise ValueError(msg)
+    return value
+
+
+def _token_css_value(tokens: TokenMap, key: str) -> str | None:
+    """Resolve a token that maps to a CSS value, accepting numbers as strings."""
+    if key not in tokens:
+        return None
+    # Widen to object: token maps built from unvalidated JSON can carry
+    # values outside TokenValue at runtime, which must not leak into CSS.
+    value: object = tokens[key]
+    if not isinstance(value, bool) and isinstance(value, int | float):
+        return f"{float(value):g}"
+    if isinstance(value, str):
+        return value
+    msg = f"token {key!r} must be a string or number, got {value!r}"
+    raise ValueError(msg)
