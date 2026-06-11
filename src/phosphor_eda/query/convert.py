@@ -19,13 +19,13 @@ from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.dsn.parser import parse_dsn
 from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
 from phosphor_eda.formats.eagle.to_schematic import eagle_to_design
-from phosphor_eda.formats.kicad.dru_parser import parse_kicad_dru
-from phosphor_eda.formats.kicad.pcb_parser import (
+from phosphor_eda.formats.kicad.board import (
     parse_kicad_pcb_from_sexpr,
-    parse_kicad_stackup,
     read_kicad_pcb_sexpr,
 )
+from phosphor_eda.formats.kicad.dru_parser import parse_kicad_dru
 from phosphor_eda.formats.kicad.pro_parser import parse_kicad_pro
+from phosphor_eda.formats.kicad.stackup import parse_kicad_stackup
 from phosphor_eda.formats.kicad.to_schematic import kicad_to_design
 from phosphor_eda.query.serialize import serialize_design
 
