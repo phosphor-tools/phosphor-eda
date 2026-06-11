@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from phosphor_eda.formats.altium._helpers import parse_bus_notation
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode
 from phosphor_eda.formats.common.net_union import NetUnion
+from phosphor_eda.formats.common.paths import resolve_document_reference
 from phosphor_eda.formats.common.resolved_graph import (
     ResolutionInputError,
     ResolvedComponentOccurrenceInput,
@@ -180,10 +181,12 @@ def _merge_hierarchy(
     ):
         return
 
+    known_source_files = _known_source_files(source)
     child_sheets_by_file = _child_sheets_by_source_file(source)
-    repeated_child_files = _repeated_child_source_files(source)
+    repeated_child_files = _repeated_child_source_files(source, known_source_files)
     child_port_nets = _child_port_net_ids(source)
     for ref in local_refs:
+        referencing_dir = _parent_dir(_source_file_key(ref.sheet.source_file))
         for entry in ref.local_net.sheet_entries:
             entry_name = _mergeable_name(entry.name)
             if entry_name is None:
@@ -202,11 +205,45 @@ def _merge_hierarchy(
                 child_sheets_by_file,
                 repeated_child_files,
                 sheet_symbol,
+                known_source_files,
+                referencing_dir,
             )
             for child_sheet in child_sheets:
                 for child_net_id in child_port_nets.get((child_sheet.id, entry_name), []):
                     if child_net_id in local_net_by_id:
                         _ = net_union.union(ref.local_net.id, child_net_id)
+
+
+def _known_source_files(source: AltiumSourceDesign) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for sheet in source.sheets.values():
+        key = _source_file_key(sheet.source_file)
+        if key and key not in seen:
+            seen.add(key)
+            result.append(key)
+    return result
+
+
+def _canonical_child_key(
+    sheet_symbol: AltiumSheetSymbol,
+    known_source_files: list[str],
+    referencing_dir: str,
+) -> str:
+    """Resolve a sheet symbol's child reference to a canonical source-file key.
+
+    Sheet symbols reference a child by bare filename while the project lists
+    documents with a directory prefix; reconcile the two spellings so the
+    canonical key matches the resolved child sheets' source files.
+    """
+    resolved = resolve_document_reference(
+        sheet_symbol.child_source_file,
+        referencing_dir=referencing_dir,
+        known_documents=known_source_files,
+    )
+    if resolved is not None:
+        return resolved
+    return _source_file_key(sheet_symbol.child_source_file)
 
 
 def _child_sheets_by_source_file(
@@ -219,12 +256,20 @@ def _child_sheets_by_source_file(
     return result
 
 
-def _repeated_child_source_files(source: AltiumSourceDesign) -> set[str]:
+def _repeated_child_source_files(
+    source: AltiumSourceDesign,
+    known_source_files: list[str],
+) -> set[str]:
     symbol_counts: dict[str, int] = {}
     for sheet in source.sheets.values():
+        referencing_dir = _parent_dir(_source_file_key(sheet.source_file))
         for symbol in sheet.sheet_symbols:
             if symbol.child_source_file:
-                child_source_file = _source_file_key(symbol.child_source_file)
+                child_source_file = _canonical_child_key(
+                    symbol,
+                    known_source_files,
+                    referencing_dir,
+                )
                 symbol_counts[child_source_file] = symbol_counts.get(child_source_file, 0) + 1
     return {child_source_file for child_source_file, count in symbol_counts.items() if count > 1}
 
@@ -233,8 +278,11 @@ def _child_sheets_for_symbol(
     child_sheets_by_file: dict[str, list[AltiumSheetSource]],
     repeated_child_files: set[str],
     sheet_symbol: AltiumSheetSymbol,
+    known_source_files: list[str],
+    referencing_dir: str,
 ) -> list[AltiumSheetSource]:
-    child_sheets = child_sheets_by_file.get(_source_file_key(sheet_symbol.child_source_file), [])
+    canonical = _canonical_child_key(sheet_symbol, known_source_files, referencing_dir)
+    child_sheets = child_sheets_by_file.get(canonical, [])
     instance_scoped = [
         sheet
         for sheet in child_sheets
@@ -242,7 +290,7 @@ def _child_sheets_for_symbol(
     ]
     if instance_scoped:
         return instance_scoped
-    if _source_file_key(sheet_symbol.child_source_file) in repeated_child_files:
+    if canonical in repeated_child_files:
         return []
     return child_sheets
 
@@ -503,6 +551,12 @@ def _pin_inputs(
 
 def _source_file_key(source_file: str) -> str:
     return source_file.replace("\\", "/")
+
+
+def _parent_dir(source_file_key: str) -> str:
+    """Return the directory portion of a normalized source-file key, or ``""``."""
+    head, sep, _ = source_file_key.rpartition("/")
+    return head if sep else ""
 
 
 def _select_net_name(source: AltiumSourceDesign, refs: Iterable[_LocalNetRef]) -> str:

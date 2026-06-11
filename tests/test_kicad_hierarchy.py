@@ -13,6 +13,10 @@ ROOT_SCH = HIERARCHY_DIR / "root.kicad_sch"
 MISSING_DIR = Path(__file__).parent / "fixtures" / "kicad-hierarchy-missing"
 MISSING_ROOT_SCH = MISSING_DIR / "root.kicad_sch"
 
+SUBFOLDER_DIR = Path(__file__).parent / "fixtures" / "kicad-hierarchy-subfolder"
+SUBFOLDER_ROOT_SCH = SUBFOLDER_DIR / "root.kicad_sch"
+SUBFOLDER_WINSEP_ROOT_SCH = SUBFOLDER_DIR / "root-winsep.kicad_sch"
+
 
 @pytest.fixture(scope="module")
 def design():
@@ -168,3 +172,24 @@ def test_missing_sheet_contributes_nothing(missing_middle_design):
     assert "RB" not in {c.reference for c in missing_middle_design.components}
     # No net may reference the missing child's NET_B sheet pin.
     assert "NET_B" not in {n.name for n in missing_middle_design.nets}
+
+
+# --- Subfolder child sheets (parent-relative resolution) ---
+
+
+def test_subfolder_child_sheet_loads():
+    """A child sheet referenced under sheets/ resolves relative to the parent."""
+    design = kicad_to_design(SUBFOLDER_ROOT_SCH)
+    names = {p.name for p in design.pages}
+    assert {"root", "ChildSheet"} <= names
+    refs = {c.reference for c in design.components}
+    assert {"R1", "R2"} <= refs
+
+
+def test_subfolder_child_sheet_windows_separator():
+    """A backslash-separated child reference resolves the same as a slash."""
+    design = kicad_to_design(SUBFOLDER_WINSEP_ROOT_SCH)
+    names = {p.name for p in design.pages}
+    assert "ChildSheet" in names, "backslash-separated child must still resolve"
+    refs = {c.reference for c in design.components}
+    assert {"R1", "R2"} <= refs
