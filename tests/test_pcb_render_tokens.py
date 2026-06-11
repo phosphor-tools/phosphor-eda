@@ -138,6 +138,21 @@ def test_eda_drill_defaults_to_outline_style() -> None:
     )
 
 
+@pytest.mark.parametrize("function", ["fabrication", "assembly", "courtyard"])
+def test_eda_fabrication_functions_default_to_outline_style(function: str) -> None:
+    style = resolve_layer_style(
+        {},
+        VisualRole(namespace="eda", function=function, side="front"),
+    )
+
+    assert style == ResolvedStyle(
+        fill="none",
+        stroke="#666666",
+        stroke_width_mm=0.08,
+        opacity=0.8,
+    )
+
+
 @pytest.mark.parametrize("function", ["designator", "value", "user_text"])
 def test_eda_part_text_functions_default_to_neutral_fill(function: str) -> None:
     style = resolve_layer_style(

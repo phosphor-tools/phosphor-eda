@@ -66,6 +66,7 @@ _EDA_SILKSCREEN_BACK_COLOR = "#ffff00"
 _EDA_EDGE_COLOR = "#202020"
 _EDA_DRILL_COLOR = "#202020"
 _EDA_KEEPOUT_COLOR = "#cc2e7f"
+_EDA_FABRICATION_COLOR = "#666666"
 _EDA_MECHANICAL_COLOR = "#777777"
 _EDA_TEXT_COLOR = "#777777"
 _HIGHLIGHT_NAMESPACE = "highlight"
@@ -263,8 +264,22 @@ def _resolve_eda_default_value(
         return _resolve_eda_keepout_default(prop)
     if role.function in {"designator", "value", "user_text"}:
         return _resolve_eda_text_default(prop)
+    if role.function in {"fabrication", "assembly", "courtyard"}:
+        return _resolve_eda_fabrication_default(prop)
     if role.function in {"mechanical", "unknown"}:
         return _resolve_eda_mechanical_default(prop)
+    return None
+
+
+def _resolve_eda_fabrication_default(prop: str) -> object | None:
+    if prop == "fill":
+        return "none"
+    if prop == "stroke":
+        return _EDA_FABRICATION_COLOR
+    if prop == "strokeWidthMm":
+        return 0.08
+    if prop == "opacity":
+        return 0.8
     return None
 
 
