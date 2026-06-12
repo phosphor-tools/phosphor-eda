@@ -189,6 +189,18 @@ def _connect_point_to_signal_harness(
             break
 
 
+def _harness_port_ends(port: PortRec) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Both candidate wire-attachment points of a port shape.
+
+    Altium stores ``location`` as one corner; the wire can attach there or
+    at the opposite end of the shape (right for horizontal styles 0-3,
+    above for vertical styles 4-7).
+    """
+    base = port.location
+    alt = (base[0], base[1] + port.width) if port.style >= 4 else (base[0] + port.width, base[1])
+    return base, alt
+
+
 def _first_generated_name(group: LocalNetRecordGroup, sheet_name: str, ordinal: int) -> str:
     for label in group.net_labels:
         if label.text:
@@ -321,13 +333,7 @@ def resolve_local_net_groups(
         if port.harness_type:
             # Harness ports attach to signal harness wires at either end
             # of the port shape.
-            base = port.location
-            alt = (
-                (base[0], base[1] + port.width)
-                if port.style >= 4
-                else (base[0] + port.width, base[1])
-            )
-            for probe in (base, alt):
+            for probe in _harness_port_ends(port):
                 uf.union(loc, probe)
                 _connect_point_to_signal_harness(probe, harness_segments, uf)
         port_points.append((port, loc))
@@ -520,12 +526,18 @@ def parse_harness_groups(sheet: SheetRecords) -> list[HarnessGroup]:
                         uf.union(wire_pt, pt)
                         break
 
-    # Connect each harness port location to signal harness wires
+    # Connect each harness port to signal harness wires; the wire can
+    # attach at either end of the port shape.
     harness_ports: list[PortRec] = [p for p in sheet.by_type(PortRec) if p.harness_type]
     for port in harness_ports:
-        for seg in harness_wire_segments:
-            if point_on_segment(port.location, seg[0], seg[1]):
-                uf.union(port.location, seg[0])
+        for probe in _harness_port_ends(port):
+            seg = next(
+                (s for s in harness_wire_segments if point_on_segment(probe, s[0], s[1])),
+                None,
+            )
+            if seg is not None:
+                uf.union(port.location, probe)
+                uf.union(probe, seg[0])
                 break
 
     # Map each connector to its port by finding which port shares the
@@ -542,9 +554,16 @@ def parse_harness_groups(sheet: SheetRecords) -> list[HarnessGroup]:
 
     # Fallback: map harness_type -> port_name for connectors that couldn't
     # be matched spatially (e.g. no signal harness wires on this page).
+    # Only unambiguous types qualify — with several same-type ports the
+    # choice would be arbitrary and could name the wrong interface.
     port_names_by_type: dict[str, str] = {}
+    ambiguous_types: set[str] = set()
     for port in harness_ports:
+        if port.harness_type in port_names_by_type:
+            ambiguous_types.add(port.harness_type)
         port_names_by_type[port.harness_type] = port.name
+    for harness_type in ambiguous_types:
+        del port_names_by_type[harness_type]
 
     result: list[HarnessGroup] = []
     for ai, conn in connectors.items():

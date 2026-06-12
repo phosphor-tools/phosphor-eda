@@ -236,10 +236,12 @@ def link_children(
     for rec in records:
         by_key[rec.owner_key] = rec
 
-    # Group children by owner_index
+    # Group children by owner_index. Harness entries/types use
+    # Additional-stream-relative owner indices that would collide with
+    # main-stream owner keys, so they are excluded here.
     children: dict[int, list[AltiumRecord]] = {}
     for rec in records:
-        if rec.owner_index >= 0:
+        if rec.owner_index >= 0 and not isinstance(rec, (HarnessEntryRec, HarnessTypeRec)):
             children.setdefault(rec.owner_index, []).append(rec)
 
     # Compute derived coordinates for entries
