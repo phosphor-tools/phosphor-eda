@@ -508,13 +508,18 @@ def test_dimming_defaults_to_auto() -> None:
 
 
 def test_dimming_rejects_unknown_mode() -> None:
-    with pytest.raises(ValueError, match="dimming.mode"):
+    with pytest.raises(ValueError, match=r"dimming\.mode"):
         _ = load_render_settings_json(json.dumps({"dimming": {"mode": "sometimes"}}))
 
 
 def test_dimming_enabled_is_rejected_with_migration_message() -> None:
-    with pytest.raises(ValueError, match="dimming.enabled is no longer supported"):
+    with pytest.raises(ValueError, match=r"dimming\.enabled is no longer supported"):
         _ = load_render_settings_json(json.dumps({"dimming": {"enabled": True}}))
+
+
+def test_dimming_rejects_unknown_keys() -> None:
+    with pytest.raises(ValueError, match="unknown dimming key"):
+        _ = load_render_settings_json(json.dumps({"dimming": {"mod": "off"}}))
 
 
 def test_background_parses() -> None:

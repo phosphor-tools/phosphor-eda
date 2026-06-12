@@ -696,6 +696,11 @@ def _parse_dimming_settings(raw_dimming: object) -> DimmingSettings:
         msg = "dimming.enabled is no longer supported; use dimming.mode (off, on, auto)"
         raise ValueError(msg)
 
+    unknown_keys = sorted(set(raw_dimming) - {"mode"})
+    if unknown_keys:
+        msg = f"unknown dimming key(s): {', '.join(unknown_keys)} (supported: mode)"
+        raise ValueError(msg)
+
     dimming = DimmingSettings()
     if "mode" in raw_dimming:
         mode = raw_dimming["mode"]

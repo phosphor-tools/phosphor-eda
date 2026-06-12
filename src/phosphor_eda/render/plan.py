@@ -204,13 +204,13 @@ def _append_pad_marker_rings(
     enabled = _token_bool(settings.tokens, "highlight.marker.enabled")
     if not enabled:
         return groups
+    min_diameter_token = _token_float(settings.tokens, "highlight.marker.minDiameterPx")
     min_diameter_px = (
-        _token_float(settings.tokens, "highlight.marker.minDiameterPx")
-        or _MARKER_DEFAULT_MIN_DIAMETER_PX
+        min_diameter_token if min_diameter_token is not None else _MARKER_DEFAULT_MIN_DIAMETER_PX
     )
+    stroke_width_token = _token_float(settings.tokens, "highlight.marker.strokeWidthPx")
     stroke_width_px = (
-        _token_float(settings.tokens, "highlight.marker.strokeWidthPx")
-        or _MARKER_DEFAULT_STROKE_WIDTH_PX
+        stroke_width_token if stroke_width_token is not None else _MARKER_DEFAULT_STROKE_WIDTH_PX
     )
 
     result: list[HighlightGroup] = []
