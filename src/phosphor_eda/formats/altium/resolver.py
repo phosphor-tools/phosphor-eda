@@ -320,7 +320,9 @@ def _merge_harness_members(
             interface_union.union(interfaces[0], interface)
 
     bundles: dict[tuple[str, str], list[tuple[str, str]]] = {}
-    for interface in seen_interfaces:
+    # Sorted so bundle (and therefore union-root) order is stable across
+    # processes — set iteration order varies with PYTHONHASHSEED.
+    for interface in sorted(seen_interfaces):
         bundles.setdefault(interface_union.find(interface), []).append(interface)
 
     for bundle in bundles.values():
