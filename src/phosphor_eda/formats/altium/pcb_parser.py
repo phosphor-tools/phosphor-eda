@@ -6,7 +6,7 @@ pipe-delimited ASCII properties; binary streams use fixed-size records with
 a type(u8) + length(u32) header.
 
 This module owns the top-level orchestration: read each OLE stream, decode it
-via :mod:`pcb_streams`, then assemble the domain ``Pcb`` via :mod:`pcb_build`.
+via :mod:`pcb_streams`, then assemble the domain ``Board`` via :mod:`pcb_build`.
 The layer map lives in :mod:`pcb_layers`, keepout synthesis in
 :mod:`pcb_keepouts`, the intermediate primitive model and shared helpers in
 :mod:`pcb_primitives`, and project-level enrichment in :mod:`pcb_project`.
@@ -32,6 +32,7 @@ from phosphor_eda.formats.altium.pcb_primitives import (
     parse_mil,
     read_text_records,
 )
+from phosphor_eda.formats.altium.pcb_project import parse_altium_stackup
 from phosphor_eda.formats.altium.pcb_records import COMPONENT_NONE
 from phosphor_eda.formats.altium.pcb_streams import (
     apply_drill_manager_mask_apertures,
@@ -56,7 +57,7 @@ from phosphor_eda.formats.common.diagnostics import ParseContext
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from phosphor_eda.domain.pcb import Pcb
+    from phosphor_eda.domain.pcb import Board
 
 # Re-exported so library code and tests can import the canonical Altium PCB
 # surface from one module even though the implementation is split.
@@ -75,7 +76,7 @@ def _read_stream(ole: olefile.OleFileIO, name: str) -> bytes:
 def parse_altium_pcb(
     path: Path,
     ctx: ParseContext | None = None,
-) -> Pcb:
+) -> Board:
     """Parse an Altium .PcbDoc file into the PCB domain model."""
     if ctx is None:
         ctx = ParseContext()
@@ -210,4 +211,7 @@ def parse_altium_pcb(
     if "originx" in board_props and "originy" in board_props:
         pcb.metadata.properties["origin_x_mm"] = f"{parse_mil(board_props['originx']):.6f}"
         pcb.metadata.properties["origin_y_mm"] = f"{-parse_mil(board_props['originy']):.6f}"
+    if board_props:
+        pcb.stackup = parse_altium_stackup(board_props, ctx)
+    pcb.source_path = str(path)
     return pcb

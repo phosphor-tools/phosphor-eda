@@ -9,8 +9,8 @@ deliberately different in these fixtures to prove names never need to match.
 from __future__ import annotations
 
 from phosphor_eda.domain.pcb import (
+    Board,
     LayerRole,
-    Pcb,
     PcbFootprint,
     PcbLayer,
     PcbNet,
@@ -61,7 +61,7 @@ def _schematic() -> Schematic:
     return schematic
 
 
-def _board() -> Pcb:
+def _board() -> Board:
     """PCB pads matching the schematic refs/pins, with different net names."""
     pcb_nets = {
         "conn": PcbNet(1, "USB_D+"),
@@ -104,7 +104,7 @@ def _board() -> Pcb:
                 footprint=footprint,
             )
         )
-    return Pcb(
+    return Board(
         name="test",
         layers=[_LAYER],
         nets={net.number: net for net in pcb_nets.values()},
@@ -215,7 +215,7 @@ def test_decorated_rail_is_a_fanout_boundary() -> None:
                 footprint=footprint,
             )
         )
-    board = Pcb(
+    board = Board(
         name="rail",
         layers=[_LAYER],
         nets={net.number: net for net in pcb_nets.values()},

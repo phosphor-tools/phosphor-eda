@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from phosphor_eda.domain.project import Stackup
+
 
 class PcbBuildError(ValueError):
     """Raised when parsed source data cannot form a strict PCB domain model."""
@@ -616,7 +618,7 @@ class PcbKeepout:
 
 
 @dataclass
-class Pcb:
+class Board:
     """Complete parsed PCB board."""
 
     name: str
@@ -631,6 +633,8 @@ class Pcb:
     pours: list[PcbPour]
     keepouts: list[PcbKeepout]
     board_profile: PcbBoardProfile | None = None
+    stackup: Stackup | None = None
+    source_path: str = ""
     metadata: PcbMetadata = field(default_factory=PcbMetadata)
 
     def layers_by_role(self, role: LayerRole | str) -> list[PcbLayer]:

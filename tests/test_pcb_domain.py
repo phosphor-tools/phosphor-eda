@@ -1,8 +1,8 @@
 import pytest
 
 from phosphor_eda.domain.pcb import (
+    Board,
     LayerRole,
-    Pcb,
     PcbArc,
     PcbArtwork,
     PcbArtworkKind,
@@ -87,7 +87,7 @@ def test_pcb_domain_has_typed_collections_without_generic_geometry_api() -> None
         data=PcbPolygon([(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]),
         footprint=footprint,
     )
-    board = Pcb(
+    board = Board(
         name="typed",
         layers=[top, edge],
         nets={1: net},
@@ -135,7 +135,7 @@ def test_pcb_bbox_falls_back_to_pad_extents_when_profile_is_absent() -> None:
         pad_type=PcbPadType.SMD,
         layers=(layer,),
     )
-    board = Pcb(
+    board = Board(
         name="pad-only",
         layers=[layer],
         nets={},
@@ -153,7 +153,7 @@ def test_pcb_bbox_falls_back_to_pad_extents_when_profile_is_absent() -> None:
 
 
 def test_pcb_bbox_is_none_for_empty_board() -> None:
-    board = Pcb(
+    board = Board(
         name="empty",
         layers=[],
         nets={},

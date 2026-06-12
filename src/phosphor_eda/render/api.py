@@ -38,7 +38,7 @@ from phosphor_eda.render.settings import (
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from phosphor_eda.domain.pcb import Pcb
+    from phosphor_eda.domain.pcb import Board
     from phosphor_eda.render.annotations import ResolvedAnnotations
     from phosphor_eda.render.profiler import RenderProfiler
 
@@ -73,14 +73,14 @@ class RenderResult:
 
 
 def render_pcb_svg(
-    board: Pcb,
+    board: Board,
     settings: RenderSettings,
     *,
     annotations: ResolvedAnnotations | None = None,
     net_expansions: Mapping[str, frozenset[str]] | None = None,
     profiler: RenderProfiler | None = None,
 ) -> RenderResult:
-    """Render a Pcb as a layered SVG from fully-resolved render settings.
+    """Render a Board as a layered SVG from fully-resolved render settings.
 
     Parameters
     ----------

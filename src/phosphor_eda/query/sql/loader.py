@@ -65,7 +65,7 @@ if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry
 
     from phosphor_eda.domain.pcb import (
-        Pcb,
+        Board,
         PcbArtwork,
         PcbBoardProfileElement,
         PcbConductor,
@@ -74,7 +74,7 @@ if TYPE_CHECKING:
         PcbNet,
         PcbPour,
     )
-    from phosphor_eda.domain.project import DesignRule, NetClass, Project, Stackup
+    from phosphor_eda.domain.project import DesignRule, NetClass, Project
     from phosphor_eda.domain.schematic import (
         Component,
         ComponentOccurrence,
@@ -261,6 +261,13 @@ def _null_if_unset[FalsyT: (float, str)](value: FalsyT) -> FalsyT | None:
     return value if value else None
 
 
+def _copper_layer_count(board: Board) -> int:
+    """Copper layer count, preferring the stackup over source layer roles."""
+    if board.stackup:
+        return sum(1 for layer in board.stackup.layers if layer.layer_type == "copper")
+    return len(board.layers_by_role(LayerRole.COPPER))
+
+
 def _unique_pages(pages: list[Page]) -> list[Page]:
     result: list[Page] = []
     seen: set[str] = set()
@@ -294,9 +301,14 @@ class _LayerRow:
 
 @dataclass(frozen=True, slots=True)
 class _BoardRow:
-    pcb: Pcb
-    stackup: Stackup | None
+    board: Board
     geom: BaseGeometry | None
+
+
+@dataclass(frozen=True, slots=True)
+class _BoardsRow:
+    board_id: str
+    board: Board
 
 
 @dataclass(frozen=True, slots=True)
@@ -645,23 +657,34 @@ _LAYERS: TableSpec[_LayerRow] = TableSpec(
 _BOARD: TableSpec[_BoardRow] = TableSpec(
     "board",
     (
-        col("name", "VARCHAR", lambda r: r.pcb.name),
+        col("name", "VARCHAR", lambda r: r.board.name),
         col(
             "total_thickness_mm",
             "DOUBLE",
-            lambda r: r.stackup.total_thickness_mm if r.stackup else None,
+            lambda r: r.board.stackup.total_thickness_mm if r.board.stackup else None,
         ),
-        col("copper_finish", "VARCHAR", lambda r: r.stackup.copper_finish if r.stackup else None),
         col(
-            "layer_count",
-            "INTEGER",
-            lambda r: (
-                sum(1 for layer in r.stackup.layers if layer.layer_type == "copper")
-                if r.stackup
-                else len(r.pcb.layers_by_role(LayerRole.COPPER))
-            ),
+            "copper_finish",
+            "VARCHAR",
+            lambda r: r.board.stackup.copper_finish if r.board.stackup else None,
         ),
+        col("layer_count", "INTEGER", lambda r: _copper_layer_count(r.board)),
         col("geom", GEOMETRY, lambda r: _wkb(r.geom)),
+    ),
+)
+
+_BOARDS: TableSpec[_BoardsRow] = TableSpec(
+    "boards",
+    (
+        col("board_id", "VARCHAR", lambda r: r.board_id, constraint="PRIMARY KEY"),
+        col("name", "VARCHAR", lambda r: r.board.name),
+        col("source_path", "VARCHAR", lambda r: _null_if_unset(r.board.source_path)),
+        col("layer_count", "INTEGER", lambda r: _copper_layer_count(r.board)),
+        col(
+            "total_thickness_mm",
+            "DOUBLE",
+            lambda r: r.board.stackup.total_thickness_mm if r.board.stackup else None,
+        ),
     ),
 )
 
@@ -919,6 +942,7 @@ _ORDERED_SPECS = (
     _KEEPOUTS,
     _LAYERS,
     _BOARD,
+    _BOARDS,
     _NET_CLASSES,
     _NET_CLASS_MEMBERS,
     _DESIGN_RULES,
@@ -983,18 +1007,21 @@ def load_database(project: Project) -> duckdb.DuckDBPyConnection:
     con = duckdb.connect(":memory:")
     create_tables(con)
 
-    if project.pcb:
-        _load_footprints(con, project.pcb)
-        _load_pads(con, project.pcb)
-        _load_vias(con, project.pcb)
-        _load_drills(con, project.pcb)
-        _load_conductors(con, project.pcb)
-        _load_artwork(con, project.pcb)
-        _load_board_profile(con, project.pcb)
-        _load_pours(con, project.pcb)
-        _load_keepouts(con, project.pcb)
-        _load_layers(con, project.pcb, project.stackup)
-        _load_board(con, project.pcb, project.stackup)
+    # Geometry tables describe the primary board; the boards table lists all.
+    board = project.board
+    if board:
+        _load_footprints(con, board)
+        _load_pads(con, board)
+        _load_vias(con, board)
+        _load_drills(con, board)
+        _load_conductors(con, board)
+        _load_artwork(con, board)
+        _load_board_profile(con, board)
+        _load_pours(con, board)
+        _load_keepouts(con, board)
+        _load_layers(con, board)
+        _load_board(con, board)
+    _load_boards(con, project)
 
     _load_net_classes(con, project)
     _load_design_rules(con, project)
@@ -1022,17 +1049,17 @@ def load_database(project: Project) -> duckdb.DuckDBPyConnection:
     return con
 
 
-def _load_footprints(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
+def _load_footprints(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
     for fp in pcb.footprints:
         _FOOTPRINTS.insert(con, fp)
 
 
-def _load_pads(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
+def _load_pads(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
     for pad in pcb.pads:
         _PADS.insert(con, pad)
 
 
-def _load_vias(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
+def _load_vias(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
     for via in pcb.vias:
         net_name, net_number = _net_fields(via.net)
         start_layer = via.layers[0].name if via.layers else ""
@@ -1050,7 +1077,7 @@ def _load_vias(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
         )
 
 
-def _load_drills(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
+def _load_drills(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
     for drill in pcb.drills:
         _DRILLS.insert(con, drill)
 
@@ -1132,12 +1159,12 @@ def _conductor_row(conductor: PcbConductor) -> _ConductorRow:
     )
 
 
-def _load_conductors(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
+def _load_conductors(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
     for conductor in pcb.conductors:
         _CONDUCTORS.insert(con, _conductor_row(conductor))
 
 
-def _load_artwork(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
+def _load_artwork(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
     for artwork in pcb.artwork:
         text = x = y = rotation = font_size = None
         if isinstance(artwork.data, PcbText):
@@ -1160,24 +1187,25 @@ def _load_artwork(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
         )
 
 
-def _load_board_profile(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
+def _load_board_profile(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
     if pcb.board_profile is None:
         return
     for element in pcb.board_profile.elements:
         _BOARD_PROFILE.insert(con, element)
 
 
-def _load_pours(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
+def _load_pours(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
     for pour in pcb.pours:
         _POURS.insert(con, pour)
 
 
-def _load_keepouts(con: duckdb.DuckDBPyConnection, pcb: Pcb) -> None:
+def _load_keepouts(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
     for keepout in pcb.keepouts:
         _KEEPOUTS.insert(con, keepout)
 
 
-def _load_layers(con: duckdb.DuckDBPyConnection, pcb: Pcb, stackup: Stackup | None) -> None:
+def _load_layers(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
+    stackup = pcb.stackup
     stackup_map: dict[str, int] = {}
     if stackup:
         for index, stack_layer in enumerate(stackup.layers, start=1):
@@ -1224,9 +1252,14 @@ def _load_layers(con: duckdb.DuckDBPyConnection, pcb: Pcb, stackup: Stackup | No
         )
 
 
-def _load_board(con: duckdb.DuckDBPyConnection, pcb: Pcb, stackup: Stackup | None) -> None:
+def _load_board(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
     outline = board_outline_polygon(pcb.board_profile) if pcb.board_profile is not None else None
-    _BOARD.insert(con, _BoardRow(pcb=pcb, stackup=stackup, geom=outline))
+    _BOARD.insert(con, _BoardRow(board=pcb, geom=outline))
+
+
+def _load_boards(con: duckdb.DuckDBPyConnection, project: Project) -> None:
+    for index, board in enumerate(project.boards, start=1):
+        _BOARDS.insert(con, _BoardsRow(board_id=f"board:{index:04d}", board=board))
 
 
 def _load_net_classes(con: duckdb.DuckDBPyConnection, project: Project) -> None:

@@ -11,8 +11,8 @@ from click.testing import CliRunner
 
 from phosphor_eda.cli import main
 from phosphor_eda.domain.pcb import (
+    Board,
     LayerRole,
-    Pcb,
     PcbConductor,
     PcbConductorKind,
     PcbDrill,
@@ -315,7 +315,7 @@ def _constructed_schematic() -> Schematic:
     )
 
 
-def _constructed_pcb() -> Pcb:
+def _constructed_pcb() -> Board:
     """One footprint J1 with one pad on net RESET, one trace, and one via."""
     builder = PcbBuilder("Constructed PCB")
     front = builder.add_layer(PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT)))
@@ -385,7 +385,7 @@ def constructed_db() -> Iterator[duckdb.DuckDBPyConnection]:
     project = Project(
         name="Constructed SQL",
         schematic=_constructed_schematic(),
-        pcb=_constructed_pcb(),
+        boards=[_constructed_pcb()],
     )
     con = load_database(project)
     try:
@@ -1212,7 +1212,7 @@ class TestBoard:
         self, constructed_db: duckdb.DuckDBPyConnection
     ) -> None:
         # The constructed project has no stackup metadata; layer_count must
-        # still reflect the two copper layers on the Pcb itself.
+        # still reflect the two copper layers on the Board itself.
         row = constructed_db.execute("SELECT layer_count FROM board").fetchone()
         assert row is not None
         assert row[0] == 2

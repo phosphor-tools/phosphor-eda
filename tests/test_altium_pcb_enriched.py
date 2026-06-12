@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from phosphor_eda.domain.pcb import (
-    Pcb,
+    Board,
     PcbArc,
     PcbArtworkKind,
     PcbCircle,
@@ -200,11 +200,11 @@ def test_stackup_total_thickness(stackup: Stackup) -> None:
 
 
 @pytest.fixture(scope="module")
-def pcb() -> Pcb:
+def pcb() -> Board:
     return parse_altium_pcb(FIXTURE)
 
 
-def test_altium_keepout_arcs_are_not_visible_trace_arcs(pcb: Pcb) -> None:
+def test_altium_keepout_arcs_are_not_visible_trace_arcs(pcb: Board) -> None:
     visible_keepout_rings = [
         conductor
         for conductor in pcb.conductors
@@ -220,7 +220,7 @@ def test_altium_keepout_arcs_are_not_visible_trace_arcs(pcb: Pcb) -> None:
     assert visible_keepout_rings == []
 
 
-def test_altium_keepout_arcs_are_preserved_as_queryable_keepouts(pcb: Pcb) -> None:
+def test_altium_keepout_arcs_are_preserved_as_queryable_keepouts(pcb: Board) -> None:
     keepout_rings = [
         item
         for item in pcb.keepouts
@@ -235,7 +235,7 @@ def test_altium_keepout_arcs_are_preserved_as_queryable_keepouts(pcb: Pcb) -> No
     assert all(len(item.boundary.segments) >= 16 for item in keepout_rings)
 
 
-def test_altium_board_level_solder_mask_lines_and_arcs_are_preserved(pcb: Pcb) -> None:
+def test_altium_board_level_solder_mask_lines_and_arcs_are_preserved(pcb: Board) -> None:
     top_solder_lines = _artwork_matching(pcb, "Top Solder", PcbLine, footprint_owned=False)
     bottom_solder_lines = _artwork_matching(pcb, "Bottom Solder", PcbLine, footprint_owned=False)
     top_solder_arcs = _artwork_matching(pcb, "Top Solder", PcbArc, footprint_owned=False)
@@ -249,28 +249,28 @@ def test_altium_board_level_solder_mask_lines_and_arcs_are_preserved(pcb: Pcb) -
     assert all(item.data.width == pytest.approx(0.1, abs=0.001) for item in top_solder_arcs)
 
 
-def test_altium_component_non_silk_fab_graphics_are_preserved(pcb: Pcb) -> None:
+def test_altium_component_non_silk_fab_graphics_are_preserved(pcb: Board) -> None:
     assert _artwork_matching(pcb, "Top Paste", PcbLine, footprint_owned=True)
     assert _artwork_matching(pcb, "Bottom Paste", PcbLine, footprint_owned=True)
     assert _artwork_matching(pcb, "Top 3D Body", PcbCircle, footprint_owned=True)
     assert _artwork_matching(pcb, "Bottom 3D Body", PcbCircle, footprint_owned=True)
 
 
-def test_polygons_with_holes(pcb: Pcb) -> None:
+def test_polygons_with_holes(pcb: Board) -> None:
     polygons = _polygon_payloads(pcb)
     polys_with_holes = [poly for poly in polygons if poly.holes]
     assert len(polys_with_holes) >= 30
     assert any(len(hole) > 300 for poly in polys_with_holes for hole in poly.holes)
 
 
-def test_polygon_hole_structure(pcb: Pcb) -> None:
+def test_polygon_hole_structure(pcb: Board) -> None:
     poly = next(poly for poly in _polygon_payloads(pcb) if poly.holes)
     hole = poly.holes[0]
     assert len(hole) >= 3
     assert len(hole[0]) == 2
 
 
-def test_duplicate_shape_based_board_copper_polygons_are_omitted(pcb: Pcb) -> None:
+def test_duplicate_shape_based_board_copper_polygons_are_omitted(pcb: Board) -> None:
     copper_area = [
         conductor
         for conductor in pcb.conductors
@@ -283,7 +283,7 @@ def test_duplicate_shape_based_board_copper_polygons_are_omitted(pcb: Pcb) -> No
     assert len(copper_area) == 1
 
 
-def test_polygon_cutout_regions_are_not_emitted_as_copper(pcb: Pcb) -> None:
+def test_polygon_cutout_regions_are_not_emitted_as_copper(pcb: Board) -> None:
     cutout_area = [
         conductor
         for conductor in pcb.conductors
@@ -296,13 +296,13 @@ def test_polygon_cutout_regions_are_not_emitted_as_copper(pcb: Pcb) -> None:
     assert cutout_area == []
 
 
-def test_altium_polygon_pours_are_intent_not_top_level_conductors(pcb: Pcb) -> None:
+def test_altium_polygon_pours_are_intent_not_top_level_conductors(pcb: Board) -> None:
     assert pcb.pours
     assert not any(conductor.id.startswith("polygon_pour:") for conductor in pcb.conductors)
     assert any(pour.id.startswith("polygon_pour:") for pour in pcb.pours)
 
 
-def test_altium_pour_fill_children_are_linked_to_parent_pours(pcb: Pcb) -> None:
+def test_altium_pour_fill_children_are_linked_to_parent_pours(pcb: Board) -> None:
     pour_fill = [
         conductor
         for conductor in pcb.conductors
@@ -315,7 +315,7 @@ def test_altium_pour_fill_children_are_linked_to_parent_pours(pcb: Pcb) -> None:
     assert any(pour.fills for pour in pcb.pours)
 
 
-def test_pimx8_problematic_polygon_boundary_is_not_renderable_copper(pcb: Pcb) -> None:
+def test_pimx8_problematic_polygon_boundary_is_not_renderable_copper(pcb: Board) -> None:
     assert pcb.pour_for("polygon_pour:29:6") is not None
     assert not any(conductor.id == "polygon_pour:29:6" for conductor in pcb.conductors)
     arc = next(conductor for conductor in pcb.conductors if conductor.id == "arc:1:46")
@@ -324,7 +324,7 @@ def test_pimx8_problematic_polygon_boundary_is_not_renderable_copper(pcb: Pcb) -
 
 
 def _artwork_matching(
-    pcb: Pcb,
+    pcb: Board,
     layer_name: str,
     payload_type: type[PcbLine] | type[PcbArc] | type[PcbCircle],
     *,
@@ -340,7 +340,7 @@ def _artwork_matching(
     ]
 
 
-def _polygon_payloads(pcb: Pcb) -> list[PcbPolygon]:
+def _polygon_payloads(pcb: Board) -> list[PcbPolygon]:
     polygons: list[PcbPolygon] = []
     for conductor in pcb.conductors:
         if isinstance(conductor.data, PcbPolygon):

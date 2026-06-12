@@ -14,6 +14,10 @@
         "rows": 8,
         "sha256": "12751d2e0d7f7dbc0e6151f1e83d13a2160ddc74eaad5900666ab71b3ce5ffe2"
       },
+      "boards": {
+        "rows": 1,
+        "sha256": "3fba3eac8551336a66ceeeab07a6c66cbbc01ee5416adc7f46306f32b1bd0a39"
+      },
       "component_metadata": {
         "rows": 2616,
         "sha256": "fbfc8513e333af0b2d674e06fea0c600a82a4ff42ce2285cf4165d4da081207f"
@@ -142,6 +146,10 @@
       "board_profile": {
         "rows": 8,
         "sha256": "870fec1d93978784a444c6e5514923018bcae030183a8f134a997a0b305200b6"
+      },
+      "boards": {
+        "rows": 1,
+        "sha256": "78db5c7f88840a2a3796d5ef00c1f39219d072f71beb90554c617a00040c779c"
       },
       "component_metadata": {
         "rows": 4910,

@@ -41,7 +41,7 @@ from phosphor_eda.render.settings import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from phosphor_eda.domain.pcb import Pcb
+    from phosphor_eda.domain.pcb import Board
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 GOLDENS = Path(__file__).resolve().parent / "goldens"
@@ -55,7 +55,7 @@ ALTIUM_MANIFEST = GOLDENS / "pi-mx8.design.front.manifest.json"
 _UPDATE = os.environ.get("PHOSPHOR_UPDATE_GOLDENS") == "1"
 
 
-def _design_front_svg(board_path: Path, parse: Callable[[Path], Pcb]) -> str:
+def _design_front_svg(board_path: Path, parse: Callable[[Path], Board]) -> str:
     base = load_render_settings_json('{"extends": "phosphor:design"}')
     settings = resolve_effective_settings(base, CliOverrides(side="front"))
     return render_pcb_svg(parse(board_path), settings).svg
