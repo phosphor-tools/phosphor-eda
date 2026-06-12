@@ -18,6 +18,7 @@ from phosphor_eda.formats.common.resolved_graph import (
     ResolvedPinInput,
     build_resolved_schematic,
 )
+from phosphor_eda.formats.common.spatial import UnionFind
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -227,6 +228,109 @@ def _merge_hierarchy(
                 for child_net_id in child_port_nets.get((child_sheet.id, entry_name), []):
                     if child_net_id in local_net_by_id:
                         _ = net_union.union(ref.local_net.id, child_net_id)
+
+    _merge_harness_members(
+        source,
+        local_refs,
+        net_union,
+        known_source_files,
+        child_sheets_by_file,
+        repeated_child_files,
+        ctx,
+    )
+
+
+def _merge_harness_members(
+    source: AltiumSourceDesign,
+    local_refs: Iterable[_LocalNetRef],
+    net_union: NetUnion,
+    known_source_files: list[str],
+    child_sheets_by_file: dict[str, list[AltiumSheetSource]],
+    repeated_child_files: set[str],
+    ctx: ParseContext | None,
+) -> None:
+    """Merge harness member nets across the sheet hierarchy.
+
+    A signal harness carries a bundle of named members. Harness-typed ports
+    and sheet entries are excluded from plain name merging (two unrelated
+    ``SPI`` harnesses must not short together), so harness connectivity is
+    resolved structurally instead:
+
+    - a harness *interface* is ``(sheet_id, port_name)`` — a child sheet's
+      harness port, whose member nets are the local nets holding that
+      connector's harness entries
+    - a local net joining harness-typed sheet entries (and/or a harness
+      port) is a *conduit* that bundles those interfaces together
+    - member nets union pairwise by member name across each bundle of
+      connected interfaces; the conduit net itself stays separate (it has
+      no pins and unioning it would short all members together)
+    """
+    members_by_interface: dict[tuple[str, str], dict[str, list[str]]] = {}
+    for sheet in source.sheets.values():
+        for local_net in sheet.local_nets:
+            for member in local_net.harness_members:
+                port_name = _clean_name(member.port_name)
+                member_name = _clean_name(member.name)
+                if not port_name or not member_name:
+                    continue
+                members_by_interface.setdefault((sheet.id, port_name), {}).setdefault(
+                    member_name, []
+                ).append(local_net.id)
+
+    interface_union: UnionFind[tuple[str, str]] = UnionFind()
+    seen_interfaces: set[tuple[str, str]] = set()
+    for ref in local_refs:
+        interfaces: list[tuple[str, str]] = []
+        for port in ref.local_net.ports:
+            if not port.harness_type:
+                continue
+            port_name = _clean_name(port.name)
+            if port_name:
+                interfaces.append((ref.sheet.id, port_name))
+        referencing_dir = _parent_dir(_source_file_key(ref.sheet.source_file))
+        for entry in ref.local_net.sheet_entries:
+            if not entry.harness_type:
+                continue
+            entry_name = _clean_name(entry.name)
+            if not entry_name:
+                continue
+            sheet_symbol = next(
+                (
+                    symbol
+                    for symbol in ref.sheet.sheet_symbols
+                    if symbol.id == entry.sheet_symbol_id
+                ),
+                None,
+            )
+            if sheet_symbol is None:
+                continue
+            child_sheets = _child_sheets_for_symbol(
+                child_sheets_by_file,
+                repeated_child_files,
+                sheet_symbol,
+                known_source_files,
+                referencing_dir,
+                ctx,
+            )
+            interfaces.extend((child_sheet.id, entry_name) for child_sheet in child_sheets)
+        if len(interfaces) < 2:
+            continue
+        seen_interfaces.update(interfaces)
+        for interface in interfaces[1:]:
+            interface_union.union(interfaces[0], interface)
+
+    bundles: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    for interface in seen_interfaces:
+        bundles.setdefault(interface_union.find(interface), []).append(interface)
+
+    for bundle in bundles.values():
+        nets_by_member: dict[str, list[str]] = {}
+        for interface in bundle:
+            for member_name, net_ids in members_by_interface.get(interface, {}).items():
+                nets_by_member.setdefault(member_name, []).extend(net_ids)
+        for net_ids in nets_by_member.values():
+            for net_id in net_ids[1:]:
+                _ = net_union.union(net_ids[0], net_id)
 
 
 def _known_source_files(source: AltiumSourceDesign) -> list[str]:
@@ -714,7 +818,16 @@ def _sheet_entry_names(local_net: AltiumLocalNet) -> list[str]:
 
 
 def _harness_member_names(local_net: AltiumLocalNet) -> list[str]:
-    return _dedupe(_mergeable_name(member.name) or "" for member in local_net.harness_members)
+    """Qualified ``port:member`` names — bare member names (CLK, CS) are too
+    generic to use as net names or merge keys across unrelated harnesses."""
+    names: list[str] = []
+    for member in local_net.harness_members:
+        name = _mergeable_name(member.name)
+        if name is None:
+            continue
+        port_name = _clean_name(member.port_name)
+        names.append(f"{port_name}:{name}" if port_name else name)
+    return _dedupe(names)
 
 
 def _mergeable_name(name: str) -> str | None:

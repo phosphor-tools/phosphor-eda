@@ -1134,15 +1134,16 @@ class HarnessConnectorRec(AltiumRecord):
 class HarnessEntryRec(AltiumRecord):
     """RECORD=216 — entry on a harness connector.
 
-    ``coord`` is computed from the parent HarnessConnector's location/size
-    and this entry's Side/DistanceFromTop during the linking phase.
+    The wire-side coordinate is derived from the parent HarnessConnector's
+    location/size and this entry's Side/DistanceFromTop by
+    ``parse_harness_groups`` (OwnerIndex is Additional-stream relative, so
+    the generic linking phase cannot resolve the parent).
     """
 
     name: str = ""
     has_overline: bool = False
     side: int = 0
     distance_from_top: int = 0
-    coord: tuple[int, int] = (0, 0)
 
     @classmethod
     def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
