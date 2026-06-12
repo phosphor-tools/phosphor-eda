@@ -12,6 +12,7 @@ from phosphor_eda.domain.schematic import (
     ComponentOccurrence,
     DnpSource,
     Net,
+    NetName,
     NetOccurrence,
     Page,
     Pin,
@@ -55,9 +56,18 @@ class ResolvedLocalNetInput:
 
 @dataclass(frozen=True, slots=True)
 class ResolvedNetInput:
+    """Format-resolved net identity.
+
+    ``names`` carries typed name evidence; when present and ``aliases`` is
+    empty, the alias set is derived from it (every evidence name except the
+    canonical one). Formats without name evidence yet keep supplying
+    ``aliases`` directly.
+    """
+
     id: str
     name: str
     aliases: frozenset[str] = field(default_factory=frozenset)
+    names: tuple[NetName, ...] = ()
     metadata: dict[str, str] = field(default_factory=dict)
 
 
@@ -244,10 +254,14 @@ def _build_nets(
             continue
         net_index += 1
         net_input = net_factory(net_index, root_id, tuple(group_local_nets))
+        aliases = set(net_input.aliases)
+        if net_input.names and not aliases:
+            aliases = {evidence.name for evidence in net_input.names} - {net_input.name}
         net = Net(
             id=net_input.id,
             name=net_input.name,
-            aliases=set(net_input.aliases),
+            names=list(net_input.names),
+            aliases=aliases,
             metadata=dict(net_input.metadata),
         )
         net_page_ids: set[str] = set()

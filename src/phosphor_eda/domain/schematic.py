@@ -183,15 +183,39 @@ class ComponentOccurrence:
     metadata: dict[str, str] = field(default_factory=dict)
 
 
+class NetNameKind(StrEnum):
+    """Provenance class of a net name."""
+
+    LABEL = "label"  # designer-assigned
+    TOOL_AUTO = "tool_auto"  # tool-generated, read or replicated from the source tool
+    SYNTHESIZED = "synthesized"  # ours — only when the tool defines none
+
+
+@dataclass(frozen=True)
+class NetName:
+    """One piece of net-name evidence."""
+
+    name: str
+    kind: NetNameKind
+    scope: ScopeId | None = None
+    source: str = ""
+
+
 @dataclass(repr=False)
 class Net:
-    """A resolved electrical connection between pins."""
+    """A resolved electrical connection between pins.
+
+    ``name`` is the canonical name selected per the source tool's own
+    policy; ``names`` holds all evidence; ``aliases`` is the derived set of
+    non-canonical evidence names (kept as a plain set for query surfaces).
+    """
 
     id: str
     name: str
     pins: list[Pin] = field(default_factory=list)
     pages: list[Page] = field(default_factory=list)
     occurrences: list[NetOccurrence] = field(default_factory=list)
+    names: list[NetName] = field(default_factory=list)
     aliases: set[str] = field(default_factory=set)
     bus: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)
