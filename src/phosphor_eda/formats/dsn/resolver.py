@@ -5,9 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from phosphor_eda.domain.schematic import FootprintModel, LibraryLink, Parameter
 from phosphor_eda.formats.common.net_union import NetUnion
 from phosphor_eda.formats.common.resolved_graph import (
     ResolutionInputError,
+    ResolvedComponentInfo,
     ResolvedComponentOccurrenceInput,
     ResolvedLocalNetInput,
     ResolvedNetInput,
@@ -267,6 +269,7 @@ def _page_inputs(source_pages: Iterable[DsnPageSource]) -> list[ResolvedPageInpu
             id=source_page.id,
             name=source_page.name,
             scope_id=source_page.scope_id,
+            title_block=source_page.title_block,
         )
         for source_page in source_pages
     ]
@@ -332,10 +335,60 @@ def _dsn_net_input_for_group(
     )
 
 
+# OrCAD CIS designs name the internal part-database key column either
+# "Part Number" or "part_number"; matched case-insensitively.
+_PART_NUMBER_PROP_KEYS = frozenset({"part number", "part_number"})
+
+# Exact instance property key carrying the footprint binding.
+_FOOTPRINT_PROP_KEY = "PCB Footprint"
+
+
+def _design_item_id(component_props: dict[str, str]) -> str:
+    for name, value in component_props.items():
+        if name.casefold() in _PART_NUMBER_PROP_KEYS and value:
+            return value
+    return ""
+
+
+def _component_info(pin_occurrence: DsnPinOccurrence) -> ResolvedComponentInfo:
+    """Typed enrichment evidence from a placed instance's properties.
+
+    ``explicit_dnp`` stays ``None`` — OrCAD has no native fit flag, so the
+    shared DNP convention ladder decides from the parameters.
+    """
+    props = pin_occurrence.component_props
+    footprint = props.get(_FOOTPRINT_PROP_KEY, "")
+    lib: LibraryLink | None = None
+    if pin_occurrence.component_part or _design_item_id(props):
+        lib = LibraryLink(
+            symbol=pin_occurrence.component_part,
+            design_item_id=_design_item_id(props),
+        )
+    return ResolvedComponentInfo(
+        parameters=tuple(Parameter(name=name, value=value) for name, value in props.items()),
+        lib=lib,
+        footprints=(FootprintModel(name=footprint, is_current=True),) if footprint else (),
+    )
+
+
+def _component_metadata(pin_occurrence: DsnPinOccurrence) -> dict[str, str]:
+    """Convenience dict of instance properties; empty values are dropped."""
+    metadata = {name: value for name, value in pin_occurrence.component_props.items() if value}
+    metadata["dsn_component_source_ids"] = pin_occurrence.component_source_id
+    return metadata
+
+
 def _pin_inputs(pin_occurrences: Iterable[DsnPinOccurrence]) -> list[ResolvedPinInput]:
     result: list[ResolvedPinInput] = []
+    # All pins of a placed instance share the same property evidence; build
+    # the component info once per component identity.
+    info_by_component: dict[str, ResolvedComponentInfo] = {}
     for pin_occurrence in pin_occurrences:
         component_id = _component_identity(pin_occurrence)
+        component_info = info_by_component.get(component_id)
+        if component_info is None:
+            component_info = _component_info(pin_occurrence)
+            info_by_component[component_id] = component_info
         result.append(
             ResolvedPinInput(
                 id=pin_occurrence.id,
@@ -352,6 +405,8 @@ def _pin_inputs(pin_occurrences: Iterable[DsnPinOccurrence]) -> list[ResolvedPin
                 component_occurrence=ResolvedComponentOccurrenceInput(
                     source_id=pin_occurrence.component_source_id,
                     part_id=pin_occurrence.component_part,
+                    x=pin_occurrence.component_x,
+                    y=pin_occurrence.component_y,
                 ),
                 pin_metadata={
                     "dsn_pin_source_id": pin_occurrence.id,
@@ -360,9 +415,8 @@ def _pin_inputs(pin_occurrences: Iterable[DsnPinOccurrence]) -> list[ResolvedPin
                     "dsn_source_net_id": str(pin_occurrence.source_net_id),
                     "dsn_local_net_id": pin_occurrence.local_net_id or "",
                 },
-                component_metadata={
-                    "dsn_component_source_ids": pin_occurrence.component_source_id,
-                },
+                component_metadata=_component_metadata(pin_occurrence),
+                component_info=component_info,
             )
         )
     return result

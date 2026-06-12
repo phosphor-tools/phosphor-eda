@@ -172,6 +172,8 @@ class ComponentRec(AltiumRecord):
     description: str = ""
     database_table: str = ""
     design_item_id: str = ""
+    source_library_name: str = ""
+    component_kind: int = 0
     current_part_id: int = 1
     part_count: int = 1
     display_mode: int = 0
@@ -192,6 +194,8 @@ class ComponentRec(AltiumRecord):
             description=desc,
             database_table=prop_str(props, "databasetablename"),
             design_item_id=prop_str(props, "designitemid"),
+            source_library_name=prop_str(props, "sourcelibraryname"),
+            component_kind=prop_int(props, "componentkind"),
             current_part_id=prop_int(props, "currentpartid", 1),
             part_count=prop_int(props, "partcount", 1),
             display_mode=prop_int(props, "displaymode"),
@@ -1024,10 +1028,19 @@ class ImplementationListRec(AltiumRecord):
 
 @dataclass
 class ImplementationRec(AltiumRecord):
-    """RECORD=45 — implementation model (PCB footprint, simulation, etc.)."""
+    """RECORD=45 — implementation model (PCB footprint, simulation, etc.).
+
+    ``model_library`` comes from ``MODELDATAFILE0`` — the library file the
+    model data was taken from (e.g. ``QV_SwReg.PcbLib``). Vault/IntLib
+    records omit it; the sibling ``MODELDATAFILEENTITY0`` /
+    ``MODELDATAFILEKIND0`` keys duplicate the model name and type.
+    """
 
     model_name: str = ""
     model_type: str = ""
+    model_library: str = ""
+    is_current: bool = False
+    description: str = ""
 
     @classmethod
     def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
@@ -1037,6 +1050,9 @@ class ImplementationRec(AltiumRecord):
             owner_index=_owner(props),
             model_name=prop_str(props, "modelname"),
             model_type=prop_str(props, "modeltype"),
+            model_library=prop_str(props, "modeldatafile0"),
+            is_current=prop_bool(props, "iscurrent"),
+            description=prop_str(props, "description", utf8=True),
         )
 
 

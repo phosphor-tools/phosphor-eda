@@ -8,6 +8,7 @@ https://github.com/Werni2A/OpenOrCadParser
 """
 
 import struct
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import olefile
@@ -35,6 +36,26 @@ from phosphor_eda.formats.dsn.binary_reader import (
     BinaryReader,
 )
 from phosphor_eda.formats.dsn.errors import DsnFormatError
+
+
+@dataclass
+class RawTitleBlock:
+    """A page title block: symbol name plus its name/value properties.
+
+    The Title/Doc/RevCode/OrgName values live in the record's prefix-chain
+    name/value pairs, exactly like ``PlacedInstance.props``.
+    """
+
+    name: str = ""
+    props: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class DsnSchematicPage(SchematicPage):
+    """DSN page raw model extended with title block records."""
+
+    title_blocks: list[RawTitleBlock] = field(default_factory=list)
+
 
 # --- Structure parsers ---
 
@@ -122,14 +143,6 @@ def _parse_wire_aliases(
     return aliases
 
 
-def skip_counted_structures(r: BinaryReader, label: str = "") -> int:
-    """Read a uint16 count, then skip that many structures. Returns the count."""
-    count = r.read_uint16()
-    for _ in range(count):
-        skip_structure(r)
-    return count
-
-
 def skip_counted_self_describing(r: BinaryReader) -> int:
     """Read a uint16 count, then skip that many self-describing structures."""
     count = r.read_uint16()
@@ -187,6 +200,38 @@ def _parse_graphic_inst(
 
     gi.props = props
     return gi
+
+
+def _parse_title_blocks(
+    r: BinaryReader, string_list: list[str], ctx: ParseContext | None
+) -> list[RawTitleBlock]:
+    """Parse the page's StructTitleBlock records (uint16 count, then records).
+
+    Each record is a StructGraphicInst (per OpenOrCadParser
+    ``StructTitleBlock.cpp``): the field values (Title, Doc, RevCode,
+    OrgName, …) ride in the prefix-chain name/value pairs, and the body
+    starts with 8 unknown bytes followed by the title block symbol name.
+    The record's end offset bounds the body decode, so a layout mismatch
+    is recorded as a diagnostic without losing stream position.
+    """
+    count = r.read_uint16()
+    title_blocks: list[RawTitleBlock] = []
+    for _ in range(count):
+        _type_id, end_offset, pairs = r.read_prefix_chain()
+        block = RawTitleBlock(props=_props_from_pairs(pairs, string_list))
+        if end_offset > 0:
+            try:
+                r.try_read_preamble()
+                r.skip(8)  # unknown bytes before the name, per StructGraphicInst
+                block.name = r.read_string_len_zero()
+            except (struct.error, IndexError, ValueError) as e:
+                if ctx is not None:
+                    ctx.warn("dsn_title_block", f"Title block parse error: {e}")
+            r.pos = end_offset
+        else:
+            r.try_read_preamble()
+        title_blocks.append(block)
+    return title_blocks
 
 
 # --- Stream parsers ---
@@ -250,7 +295,7 @@ def parse_library(data: bytes) -> tuple[list[str], list[str]]:
 
 def parse_page(
     data: bytes, string_list: list[str], ctx: ParseContext | None = None
-) -> SchematicPage:
+) -> DsnSchematicPage:
     """Parse a Page stream into a SchematicPage.
 
     Uses skip-based approach: read the header and net list precisely,
@@ -258,7 +303,7 @@ def parse_page(
     For placed instances and globals, we use end_offsets to bound our parsing
     so errors don't cascade.
     """
-    page = SchematicPage()
+    page = DsnSchematicPage()
     r = BinaryReader(data, "Page")
 
     # Page prefixes
@@ -272,8 +317,8 @@ def parse_page(
     # Page settings (inline, 156 bytes)
     r.skip(PAGE_SETTINGS_SIZE)
 
-    # Title blocks - skip
-    skip_counted_structures(r, "titleBlocks")
+    # Title blocks — field values ride in the record's prefix-chain pairs
+    page.title_blocks = _parse_title_blocks(r, string_list, ctx)
 
     # T0x34 - self-describing format, skip
     skip_counted_self_describing(r)

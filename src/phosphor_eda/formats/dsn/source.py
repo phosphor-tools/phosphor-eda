@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from phosphor_eda.domain.schematic import ScopeId
+    from phosphor_eda.domain.schematic import ScopeId, TitleBlock
 
 type DsnPoint = tuple[int, int]
 
@@ -56,6 +56,12 @@ class DsnPinOccurrence:
     pin_designator: str
     pin_name: str
     location: DsnPoint
+    # Instance-level evidence shared by all pins of a placed instance:
+    # name/value properties (insertion-ordered as parsed) and placement
+    # coordinates in raw DSN units.
+    component_props: dict[str, str] = field(default_factory=dict)
+    component_x: float | None = None
+    component_y: float | None = None
     kind: str = field(default="pin", init=False)
 
 
@@ -123,6 +129,7 @@ class DsnPageSource:
     ports: list[DsnPort]
     globals: list[DsnGlobal]
     off_page_connectors: list[DsnOffPageConnector]
+    title_block: TitleBlock | None = None
 
 
 @dataclass(slots=True)
