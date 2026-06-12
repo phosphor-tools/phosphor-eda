@@ -733,7 +733,7 @@ def test_cli_render_net_highlight_without_schematic_warns_and_matches_exact() ->
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["pcb", "render", "-n", "GND", str(FIXTURES / "orangecrab.kicad_pcb")],
+        ["pcb", "render", "-n", "GND", str(FIXTURES / "swd_switch.kicad_pcb")],
     )
 
     assert result.exit_code == 0, result.stderr

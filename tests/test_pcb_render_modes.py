@@ -138,7 +138,7 @@ def test_eda_layers_use_board_drill_and_solder_mask_cutouts() -> None:
 
 
 def test_realistic_board_material_uses_profile_path_for_orangecrab() -> None:
-    board = parse_kicad_pcb(FIXTURES / "orangecrab.kicad_pcb")
+    board = parse_kicad_pcb(FIXTURES / "kicad-orangecrab/OrangeCrab.kicad_pcb")
     inventory = build_inventory(board, side="front")
     settings = load_render_settings_json('{"extends": "phosphor:realistic", "side": "front"}')
 

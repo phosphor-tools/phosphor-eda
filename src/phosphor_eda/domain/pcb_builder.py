@@ -53,6 +53,7 @@ class PcbBuilder:
         self._drill_ids: set[int] = set()
         self._drill_id_strs: set[str] = set()
         self._layers_by_name: dict[str, PcbLayer] = {}
+        self._nets_by_name: dict[str, PcbNet] = {}
 
     def add_layer(self, layer: PcbLayer, *, source: str = "") -> PcbLayer:
         """Add a concrete source layer definition."""
@@ -71,6 +72,8 @@ class PcbBuilder:
         if net.number in self.nets:
             self._fail(f"duplicate net number {net.number}", source)
         self.nets[net.number] = net
+        # First occurrence wins for name lookups, matching layer behavior.
+        self._nets_by_name.setdefault(net.name, net)
         return net
 
     def add_footprint(self, footprint: PcbFootprint, *, source: str = "") -> PcbFootprint:
@@ -111,6 +114,20 @@ class PcbBuilder:
         if net is None:
             self._fail(f"unknown net number {number}", source)
         return net
+
+    def resolve_or_create_net_by_name(self, name: str, *, source: str = "") -> PcbNet:
+        """Resolve a net by name, creating it with the next free number.
+
+        KiCad 10 board files reference nets by name only (no numbered net
+        table), so numbers are synthesized in first-appearance order.
+        """
+        if not name:
+            self._fail("empty net name", source)
+        net = self._nets_by_name.get(name)
+        if net is not None:
+            return net
+        number = max(self.nets, default=0) + 1
+        return self.add_net(PcbNet(number=number, name=name), source=source)
 
     def add_drill_object(self, drill: PcbDrill, *, source: str = "") -> PcbDrill:
         """Add an already-constructed drill after validating references."""

@@ -315,6 +315,13 @@ def _resolve_net_node(builder: PcbBuilder, item: SExpNode, *, source: str) -> Pc
     net_node = sexp.find(item, "net")
     if not net_node or len(net_node) < 2:
         return None
+    raw = net_node[1]
+    # KiCad 10 dropped net numbers: objects carry ``(net "NAME")`` and there
+    # is no numbered net table; numbers are synthesized on first appearance.
+    if isinstance(raw, str):
+        if not raw:
+            return None
+        return builder.resolve_or_create_net_by_name(raw, source=source)
     number = int(sexp.num(net_node, 1))
     if number == 0:
         return None

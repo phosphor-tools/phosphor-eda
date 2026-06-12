@@ -17,6 +17,16 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+def _as_str(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _as_float(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return 0.0
+    return float(value)
+
+
 def parse_kicad_pro(path: Path) -> list[NetClass]:
     """Parse net classes from a .kicad_pro file.
 
@@ -27,24 +37,26 @@ def parse_kicad_pro(path: Path) -> list[NetClass]:
     data = json.loads(text)
 
     net_settings = data.get("net_settings", {})
-    classes_raw = net_settings.get("classes", [])
-    assignments = net_settings.get("netclass_assignments", {})
-    patterns = net_settings.get("netclass_patterns", [])
+    # Migrated projects carry explicit nulls for unused fields, so guard
+    # against None as well as absence.
+    classes_raw: list[dict[str, object]] = net_settings.get("classes") or []
+    assignments: dict[str, str] = net_settings.get("netclass_assignments") or {}
+    patterns: list[dict[str, str]] = net_settings.get("netclass_patterns") or []
 
     # Build net classes from definitions
     net_classes: dict[str, NetClass] = {}
     for cls in classes_raw:
-        name = cls.get("name", "")
+        name = _as_str(cls.get("name"))
         nc = NetClass(
             name=name,
-            clearance_mm=cls.get("clearance", 0.0),
-            trace_width_mm=cls.get("track_width", 0.0),
-            via_diameter_mm=cls.get("via_diameter", 0.0),
-            via_drill_mm=cls.get("via_drill", 0.0),
-            diff_pair_width_mm=cls.get("diff_pair_width", 0.0),
-            diff_pair_gap_mm=cls.get("diff_pair_gap", 0.0),
-            microvia_diameter_mm=cls.get("microvia_diameter", 0.0),
-            microvia_drill_mm=cls.get("microvia_drill", 0.0),
+            clearance_mm=_as_float(cls.get("clearance")),
+            trace_width_mm=_as_float(cls.get("track_width")),
+            via_diameter_mm=_as_float(cls.get("via_diameter")),
+            via_drill_mm=_as_float(cls.get("via_drill")),
+            diff_pair_width_mm=_as_float(cls.get("diff_pair_width")),
+            diff_pair_gap_mm=_as_float(cls.get("diff_pair_gap")),
+            microvia_diameter_mm=_as_float(cls.get("microvia_diameter")),
+            microvia_drill_mm=_as_float(cls.get("microvia_drill")),
         )
         net_classes[name] = nc
 
