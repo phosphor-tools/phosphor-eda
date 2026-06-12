@@ -9,7 +9,6 @@ import sexpdata
 
 from phosphor_eda.domain.pcb import (
     LayerRole,
-    PadStack,
     PcbArc,
     PcbArtwork,
     PcbArtworkKind,
@@ -30,6 +29,7 @@ from phosphor_eda.domain.pcb import (
 )
 from phosphor_eda.formats.kicad import graphics, pcb_common, sexp
 from phosphor_eda.formats.kicad.layers import resolve_layers
+from phosphor_eda.formats.kicad.padstack import parse_pad_stack
 from phosphor_eda.formats.kicad.zones import parse_zone_keepout
 
 if TYPE_CHECKING:
@@ -126,10 +126,11 @@ def parse_pad(
             number=number,
             x=abs_x,
             y=abs_y,
-            stack=PadStack.simple(
-                shape,
-                width,
-                height,
+            stack=parse_pad_stack(
+                pad_sexpr,
+                shape=shape,
+                size_x=width,
+                size_y=height,
                 corner_radius_ratio=sexp.find_num(pad_sexpr, "roundrect_rratio"),
             ),
             pad_type=(

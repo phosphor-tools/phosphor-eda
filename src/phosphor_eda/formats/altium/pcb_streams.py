@@ -17,6 +17,9 @@ from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.pcb import (
     LayerRole,
+    PadStack,
+    PadStackLayer,
+    PadStackMode,
     PcbArc,
     PcbCircle,
     PcbClosedPath,
@@ -37,6 +40,7 @@ from phosphor_eda.formats.altium._helpers import u32
 from phosphor_eda.formats.altium.enums import (
     AltiumLayer,
     PadHoleShape,
+    PadMode,
     PadShape,
     PadShapeAlt,
     PcbRecordType,
@@ -351,6 +355,166 @@ def parse_tracks(
     return geometry, keepouts
 
 
+# ---------------------------------------------------------------------------
+# Padstacks — non-simple stack modes from Pads6/Vias6 (KiCad altium_pcb.cpp
+# mapping: TMB tiers come from sub5 top/mid/bottom; FULL_STACK maps copper
+# layer n (Top=1 … Bottom=32) to the per-layer arrays at index n-1, with Mid1
+# taken from the sub5 mid geometry and Mid2..Mid30 from the sub6 inner arrays).
+# ---------------------------------------------------------------------------
+
+
+def _copper_stack_layers(layer_map: dict[int, PcbLayer]) -> list[tuple[int, str]]:
+    """Copper layers as (Altium layer number, name), ordered top → bottom."""
+    return sorted(
+        (number, layer.name)
+        for number, layer in layer_map.items()
+        if AltiumLayer.TOP_LAYER <= number <= AltiumLayer.BOTTOM_LAYER
+        and layer.has_role(LayerRole.COPPER)
+    )
+
+
+def _stack_is_uniform(entries: tuple[PadStackLayer, ...]) -> bool:
+    """True when every entry shares the first entry's geometry (names aside)."""
+    first = replace(entries[0], layer="")
+    return all(replace(entry, layer="") == first for entry in entries[1:])
+
+
+def _pad_stack_entry(
+    layer_name: str,
+    shape_byte: int,
+    size: tuple[int, int],
+    alt_shape: int | None,
+    corner_radius_pct: int,
+) -> PadStackLayer:
+    shape = _PAD_SHAPES.get(_pad_shape(shape_byte), "rect")
+    corner_radius_ratio = 0.0
+    if alt_shape == PadShapeAlt.ROUNDRECT:
+        shape = "roundrect"
+        # Altium stores percent where 100 = fully round; the ratio is
+        # radius / min(width, height), so 100% maps to 0.5.
+        corner_radius_ratio = corner_radius_pct / 200.0
+    return PadStackLayer(
+        layer=layer_name,
+        shape=shape,
+        size_x=int_to_mm(size[0]),
+        size_y=int_to_mm(size[1]),
+        corner_radius_ratio=corner_radius_ratio,
+    )
+
+
+def _altium_pad_stack(
+    pad: PadRecord, layer_map: dict[int, PcbLayer], ctx: ParseContext, index: int
+) -> PadStack | None:
+    """Non-simple stack for a Pads6 record; None keeps the SIMPLE wrap."""
+    if pad.pad_mode == PadMode.SIMPLE:
+        return None
+    if pad.pad_mode == PadMode.TOP_MIDDLE_BOTTOM:
+        return _pad_stack_top_mid_bottom(pad)
+    if pad.pad_mode == PadMode.FULL_STACK:
+        return _pad_stack_full(pad, layer_map, ctx, index)
+    ctx.warn(
+        "unsupported_padstack",
+        f"pad {index} ({pad.name}): unknown pad stack mode {pad.pad_mode}; using top geometry",
+        record_index=index,
+    )
+    return None
+
+
+def _pad_stack_alt_shape(pad: PadRecord, layer_index: int) -> tuple[int | None, int]:
+    """Per-layer (alt shape, corner radius pct) from sub6, defaulting when absent."""
+    alt_shape = pad.alt_shapes[layer_index] if pad.alt_shapes else None
+    corner_radius_pct = pad.corner_radii[layer_index] if pad.corner_radii else 0
+    return alt_shape, corner_radius_pct
+
+
+def _pad_stack_top_mid_bottom(pad: PadRecord) -> PadStack | None:
+    tiers = tuple(
+        _pad_stack_entry(tier, shape_byte, size, *_pad_stack_alt_shape(pad, layer_index))
+        for tier, shape_byte, size, layer_index in (
+            ("top", pad.shape, pad.top_size, 0),
+            ("mid", pad.mid_shape, pad.mid_size, 1),
+            ("bottom", pad.bot_shape, pad.bot_size, 31),
+        )
+    )
+    if _stack_is_uniform(tiers):
+        return None
+    return PadStack(mode=PadStackMode.TOP_MID_BOTTOM, layers=tiers)
+
+
+def _pad_stack_full(
+    pad: PadRecord, layer_map: dict[int, PcbLayer], ctx: ParseContext, index: int
+) -> PadStack | None:
+    copper = _copper_stack_layers(layer_map)
+    needs_inner_arrays = any(3 <= number <= 31 for number, _ in copper)
+    if needs_inner_arrays and not pad.inner_sizes:
+        ctx.warn(
+            "unsupported_padstack",
+            f"pad {index} ({pad.name}): full-stack pad has no per-layer size data; "
+            "using top geometry",
+            record_index=index,
+        )
+        return None
+    entries: list[PadStackLayer] = []
+    for number, name in copper:
+        if number == AltiumLayer.TOP_LAYER:
+            shape_byte, size = pad.shape, pad.top_size
+        elif number == AltiumLayer.MID_LAYER_1:  # Mid1 geometry lives in sub5, not sub6
+            shape_byte, size = pad.mid_shape, pad.mid_size
+        elif number == AltiumLayer.BOTTOM_LAYER:
+            shape_byte, size = pad.bot_shape, pad.bot_size
+        else:  # Mid2..Mid30 → sub6 inner arrays
+            shape_byte, size = pad.inner_shapes[number - 3], pad.inner_sizes[number - 3]
+        entries.append(
+            _pad_stack_entry(name, shape_byte, size, *_pad_stack_alt_shape(pad, number - 1))
+        )
+    if not entries or _stack_is_uniform(tuple(entries)):
+        return None
+    return PadStack(mode=PadStackMode.PER_LAYER, layers=tuple(entries))
+
+
+def _via_stack_entry(layer_name: str, raw_diameter: int) -> PadStackLayer:
+    diameter = int_to_mm(raw_diameter)
+    return PadStackLayer(layer=layer_name, shape="circle", size_x=diameter, size_y=diameter)
+
+
+def _altium_via_stack(
+    via: ViaRecord, layer_map: dict[int, PcbLayer], ctx: ParseContext, index: int
+) -> PadStack | None:
+    """Non-simple stack for a Vias6 record; None keeps the SIMPLE wrap."""
+    if via.via_mode == PadMode.SIMPLE:
+        return None
+    if via.via_mode not in (PadMode.TOP_MIDDLE_BOTTOM, PadMode.FULL_STACK):
+        ctx.warn(
+            "unsupported_padstack",
+            f"via {index}: unknown via stack mode {via.via_mode}; using outer diameter",
+            record_index=index,
+        )
+        return None
+    if not via.diameter_by_layer:
+        ctx.warn(
+            "unsupported_padstack",
+            f"via {index}: stack mode {via.via_mode} without per-layer diameters; "
+            "using outer diameter",
+            record_index=index,
+        )
+        return None
+    if via.via_mode == PadMode.TOP_MIDDLE_BOTTOM:
+        tiers = tuple(
+            _via_stack_entry(tier, via.diameter_by_layer[layer_index])
+            for tier, layer_index in (("top", 0), ("mid", 1), ("bottom", 31))
+        )
+        if _stack_is_uniform(tiers):
+            return None
+        return PadStack(mode=PadStackMode.TOP_MID_BOTTOM, layers=tiers)
+    entries = tuple(
+        _via_stack_entry(name, via.diameter_by_layer[number - 1])
+        for number, name in _copper_stack_layers(layer_map)
+    )
+    if not entries or _stack_is_uniform(entries):
+        return None
+    return PadStack(mode=PadStackMode.PER_LAYER, layers=entries)
+
+
 def parse_vias(
     data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext
 ) -> list[ParsedPrimitive]:
@@ -397,6 +561,7 @@ def parse_vias(
                     y=-int_to_mm(via.position[1]),
                     size=int_to_mm(via.diameter),
                     drill=int_to_mm(via.hole_size),
+                    stack=_altium_via_stack(via, layer_map, ctx, index),
                 ),
                 layers=tuple(layers),
                 net_number=altium_net_number(via.net),
@@ -586,6 +751,7 @@ def parse_pads(
                         hole_is_slot=hole_is_slot,
                         slot_length=slot_length,
                         slot_rotation=slot_rotation,
+                        stack=_altium_pad_stack(pad, layer_map, ctx, index),
                     ),
                     layers=tuple(layers),
                     net_number=net_num,

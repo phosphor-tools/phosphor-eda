@@ -125,8 +125,12 @@ def _make_via_body(
     hole: int = 25000,
     start_layer: int = 1,
     end_layer: int = 32,
+    mode: int | None = None,
+    diameters: tuple[int, ...] = (),
 ) -> bytes:
-    body = bytearray(31)
+    # 31 bytes is the minimal layout; a stacked via carries the mode byte at
+    # offset 74 and 32 per-layer diameters at 75..202 (203-byte body).
+    body = bytearray(203 if mode is not None else 31)
     body[3:5] = _pack_u16(net)
     body[7:9] = _pack_u16(component)
     body[13:17] = _pack_i32(x)
@@ -135,6 +139,10 @@ def _make_via_body(
     body[25:29] = _pack_i32(hole)
     body[29] = start_layer
     body[30] = end_layer
+    if mode is not None:
+        body[74] = mode
+        for index, layer_diameter in enumerate(diameters):
+            body[75 + index * 4 : 79 + index * 4] = _pack_i32(layer_diameter)
     return bytes(body)
 
 
@@ -164,6 +172,23 @@ def test_via_truncated():
     rec = ViaRecord.from_bytes(b"\x00" * 20, ctx)
     assert rec is None
     assert len(ctx.issues) == 1
+
+
+def test_via_short_record_is_simple_mode():
+    ctx = ParseContext()
+    rec = ViaRecord.from_bytes(_make_via_body(), ctx)
+    assert rec is not None
+    assert rec.via_mode == 0
+    assert rec.diameter_by_layer == ()
+
+
+def test_via_stack_mode_and_per_layer_diameters():
+    diameters = (600000,) + (500000,) * 30 + (600000,)
+    ctx = ParseContext()
+    rec = ViaRecord.from_bytes(_make_via_body(mode=2, diameters=diameters), ctx)
+    assert rec is not None
+    assert rec.via_mode == 2
+    assert rec.diameter_by_layer == diameters
 
 
 # ---------------------------------------------------------------------------
@@ -727,3 +752,46 @@ def test_pad_without_sub6_has_no_alt_shape_fields():
     assert rec.shape_alt is None
     assert rec.corner_radius_pct is None
     assert rec.hole_shape is None
+    assert rec.pad_mode == 0
+    assert rec.inner_sizes == ()
+    assert rec.inner_shapes == ()
+    assert rec.alt_shapes == ()
+    assert rec.corner_radii == ()
+
+
+# ---------------------------------------------------------------------------
+# PadRecord — padstack records (captured from cyber60-mxhs.PcbDoc, Pads6/Data)
+# ---------------------------------------------------------------------------
+
+
+def test_pad_stack_top_mid_bottom_record_fields():
+    # Pad 732 (switch S1): padmode 1 (top-mid-bottom), circles on every
+    # tier — top/bottom 1.3x2.0mm, mid 1.0x1.6mm (raw Altium units).
+    data = (_ALTIUM_FIXTURES / "pad_stack_top_mid_bottom.bin").read_bytes()
+    ctx = ParseContext()
+    rec = PadRecord.from_bytes(data, ctx)
+    assert rec is not None
+    assert rec.pad_mode == 1
+    assert rec.top_size == (511811, 787402)
+    assert rec.mid_size == (393701, 629921)
+    assert rec.bot_size == (511811, 787402)
+    assert (rec.shape, rec.mid_shape, rec.bot_shape) == (1, 1, 1)
+
+
+def test_pad_stack_full_record_fields():
+    # Pad 729 (switch S1): padmode 2 (full stack), top/bottom 1.3x2.4mm,
+    # mid + all 29 inner entries 1.0x2.1mm, all circles. Sub6 is 1131 bytes
+    # (596-byte fixed block + per-layer full-stack tail).
+    data = (_ALTIUM_FIXTURES / "pad_stack_full.bin").read_bytes()
+    ctx = ParseContext()
+    rec = PadRecord.from_bytes(data, ctx)
+    assert rec is not None
+    assert rec.pad_mode == 2
+    assert rec.top_size == (511811, 944882)
+    assert rec.mid_size == (393701, 826772)
+    assert rec.bot_size == (511811, 944882)
+    assert len(rec.inner_sizes) == 29
+    assert all(size == (393701, 826772) for size in rec.inner_sizes)
+    assert rec.inner_shapes == (1,) * 29
+    assert rec.alt_shapes == (1,) * 32
+    assert rec.corner_radii == (0,) * 32

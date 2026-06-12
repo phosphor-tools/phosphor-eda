@@ -204,7 +204,9 @@ def _add_parsed_pad(
             number=pad.number,
             x=pad.x,
             y=pad.y,
-            stack=PadStack.simple(
+            stack=pad.stack
+            if pad.stack is not None
+            else PadStack.simple(
                 pad.shape,
                 pad.width,
                 pad.height,
@@ -247,7 +249,9 @@ def _add_parsed_via(
             id=primitive.id,
             x=via.x,
             y=via.y,
-            stack=PadStack.simple("circle", via.size, via.size),
+            stack=via.stack
+            if via.stack is not None
+            else PadStack.simple("circle", via.size, via.size),
             layers=layers,
             drill=drill,
             net=_net_from_parsed_number(builder, primitive.net_number, primitive.id),

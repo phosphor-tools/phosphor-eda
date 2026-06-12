@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.pcb import (
     LayerRole,
+    PadStack,
     PcbArc,
     PcbCircle,
     PcbLayer,
@@ -134,6 +135,8 @@ class ParsedPadPayload:
     mask_aperture_width: float | None = None
     mask_aperture_height: float | None = None
     mask_aperture_source: str = ""
+    # Non-simple padstack (top-mid-bottom / per-layer); None = SIMPLE.
+    stack: PadStack | None = None
 
 
 @dataclass(frozen=True)
@@ -142,6 +145,8 @@ class ParsedViaPayload:
     y: float
     size: float
     drill: float
+    # Non-simple padstack (top-mid-bottom / per-layer); None = SIMPLE.
+    stack: PadStack | None = None
 
 
 type _ParsedPayload = (

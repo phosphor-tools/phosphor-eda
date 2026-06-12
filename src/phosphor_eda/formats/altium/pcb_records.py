@@ -153,7 +153,7 @@ class ArcRecord:
 class ViaRecord:
     """Binary via record (Vias6, rec_type=3).
 
-    Byte layout (31 bytes):
+    Byte layout (31 bytes minimum; stack fields per KiCad AVIA6):
       [3:5]   net       u16
       [13:17] x         i32
       [17:21] y         i32
@@ -162,6 +162,8 @@ class ViaRecord:
       [25:29] hole_size i32
       [29]    start_layer u8
       [30]    end_layer   u8
+      [74]    via_mode    u8 (0 simple, 1 top-mid-bottom, 2 full stack)
+      [75:203] diameter_by_layer[32] i32 (index 0 = top … 31 = bottom)
     """
 
     net: int
@@ -171,14 +173,25 @@ class ViaRecord:
     hole_size: int
     start_layer: int
     end_layer: int
+    via_mode: int = 0
+    diameter_by_layer: tuple[int, ...] = ()
 
     MIN_SIZE: ClassVar[int] = 31
+    # Offset of the stack-mode byte and the end of the 32-entry diameter array.
+    MODE_OFFSET: ClassVar[int] = 74
+    DIAMETERS_END: ClassVar[int] = 75 + 32 * 4
 
     @classmethod
     def from_bytes(cls, body: bytes, ctx: ParseContext) -> Self | None:
         if len(body) < cls.MIN_SIZE:
             ctx.warn("truncated_record", f"Via record too short ({len(body)} < {cls.MIN_SIZE})")
             return None
+        via_mode = body[cls.MODE_OFFSET] if len(body) > cls.MODE_OFFSET else 0
+        diameter_by_layer = (
+            tuple(i32(body, 75 + index * 4) for index in range(32))
+            if len(body) >= cls.DIAMETERS_END
+            else ()
+        )
         return cls(
             net=u16(body, 3),
             component=u16(body, 7),
@@ -187,6 +200,8 @@ class ViaRecord:
             hole_size=i32(body, 25),
             start_layer=body[29],
             end_layer=body[30],
+            via_mode=via_mode,
+            diameter_by_layer=diameter_by_layer,
         )
 
 
@@ -365,16 +380,26 @@ class PadRecord:
       [17:21] y        i32
       [21:25] top_sx   i32
       [25:29] top_sy   i32
+      [29:33] mid_sx   i32
+      [33:37] mid_sy   i32
+      [37:41] bot_sx   i32
+      [41:45] bot_sy   i32
       [45:49] hole_size u32
-      [49]    shape    u8
+      [49]    shape     u8 (top)
+      [50]    mid_shape u8
+      [51]    bot_shape u8
       [52:60] rotation f64
       [60]    plated   u8 (bool)
+      [62]    pad_mode u8 (0 simple, 1 top-mid-bottom, 2 full stack)
 
     Sub6 (size-and-shape, ≥596 bytes; offsets per KiCad altium_parser_pcb.cpp):
+      [0:116]   inner_size_x[29] i32 (Mid2..Mid30; Mid1 uses sub5 mid size)
+      [116:232] inner_size_y[29] i32
+      [232:261] inner_shape[29]  u8
       [262]     hole_shape    u8 (0 round, 1 square, 2 slot)
       [263:267] slot_size     u32 (slot length; hole_size is the width)
       [267:275] slot_rotation f64 (degrees)
-      [532:564] alt_shape[32] u8 per layer (9 = roundrect)
+      [532:564] alt_shape[32] u8 per layer (9 = roundrect; 0 top … 31 bottom)
       [564:596] corner_radius[32] u8 per layer (percent, 100 = fully round)
     """
 
@@ -393,6 +418,15 @@ class PadRecord:
     hole_shape: int | None = None
     slot_size: int = 0
     slot_rotation: float = 0.0
+    mid_size: tuple[int, int] = (0, 0)
+    bot_size: tuple[int, int] = (0, 0)
+    mid_shape: int = 0
+    bot_shape: int = 0
+    pad_mode: int = 0
+    inner_sizes: tuple[tuple[int, int], ...] = ()
+    inner_shapes: tuple[int, ...] = ()
+    alt_shapes: tuple[int, ...] = ()
+    corner_radii: tuple[int, ...] = ()
 
     @classmethod
     def from_bytes(cls, data: bytes, ctx: ParseContext) -> Self | None:
@@ -461,11 +495,16 @@ class PadRecord:
 
         shape_byte = sub5[49] if sub5_len > 49 else 1
         plated = bool(sub5[60]) if sub5_len > 60 else True
+        pad_mode = sub5[62] if sub5_len > 62 else 0
         shape_alt_val: int | None = None
         corner_radius_pct: int | None = None
         hole_shape: int | None = None
         slot_size = 0
         slot_rotation = 0.0
+        inner_sizes: tuple[tuple[int, int], ...] = ()
+        inner_shapes: tuple[int, ...] = ()
+        alt_shapes: tuple[int, ...] = ()
+        corner_radii: tuple[int, ...] = ()
         # 596 bytes is the smallest known sub6 layout (KiCad: 596/628/651).
         if len(sub6) >= 596:
             hole_shape = sub6[262]
@@ -473,6 +512,12 @@ class PadRecord:
             slot_rotation = f64(sub6, 267)
             shape_alt_val = sub6[532]
             corner_radius_pct = sub6[564]
+            inner_sizes = tuple(
+                (i32(sub6, index * 4), i32(sub6, 116 + index * 4)) for index in range(29)
+            )
+            inner_shapes = tuple(sub6[232:261])
+            alt_shapes = tuple(sub6[532:564])
+            corner_radii = tuple(sub6[564:596])
 
         return (
             cls(
@@ -491,6 +536,15 @@ class PadRecord:
                 hole_shape=hole_shape,
                 slot_size=slot_size,
                 slot_rotation=slot_rotation,
+                mid_size=(i32(sub5, 29), i32(sub5, 33)),
+                bot_size=(i32(sub5, 37), i32(sub5, 41)),
+                mid_shape=sub5[50] if sub5_len > 50 else 0,
+                bot_shape=sub5[51] if sub5_len > 51 else 0,
+                pad_mode=pad_mode,
+                inner_sizes=inner_sizes,
+                inner_shapes=inner_shapes,
+                alt_shapes=alt_shapes,
+                corner_radii=corner_radii,
             ),
             pos,
         )
