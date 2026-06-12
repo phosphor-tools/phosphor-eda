@@ -72,7 +72,6 @@ class PcbBuilder:
         if net.number in self.nets:
             self._fail(f"duplicate net number {net.number}", source)
         self.nets[net.number] = net
-        # First occurrence wins for name lookups, matching layer behavior.
         self._nets_by_name.setdefault(net.name, net)
         return net
 
@@ -115,19 +114,14 @@ class PcbBuilder:
             self._fail(f"unknown net number {number}", source)
         return net
 
-    def resolve_or_create_net_by_name(self, name: str, *, source: str = "") -> PcbNet:
-        """Resolve a net by name, creating it with the next free number.
-
-        KiCad 10 board files reference nets by name only (no numbered net
-        table), so numbers are synthesized in first-appearance order.
-        """
+    def resolve_net_name(self, name: str, *, source: str = "") -> PcbNet | None:
+        """Resolve a source net name. Empty string is the unconnected-net model."""
         if not name:
-            self._fail("empty net name", source)
+            return None
         net = self._nets_by_name.get(name)
-        if net is not None:
-            return net
-        number = max(self.nets, default=0) + 1
-        return self.add_net(PcbNet(number=number, name=name), source=source)
+        if net is None:
+            self._fail(f"unknown net name {name!r}", source)
+        return net
 
     def add_drill_object(self, drill: PcbDrill, *, source: str = "") -> PcbDrill:
         """Add an already-constructed drill after validating references."""

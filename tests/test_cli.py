@@ -487,6 +487,61 @@ def test_cli_render_settings_inline_custom_css_is_injected(tmp_path: Path) -> No
     assert "rgb(1, 2, 3)" in svg
 
 
+def test_cli_render_explicit_empty_custom_css_clears_settings_css(tmp_path: Path) -> None:
+    """--custom-css '' clears custom CSS coming from the settings file."""
+    settings = {
+        "extends": "phosphor:realistic",
+        "custom_css": ".board-fill { fill: rgb(1, 2, 3); }",
+    }
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps(settings))
+    out_file = tmp_path / "out.svg"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "pcb",
+            "render",
+            PCB_FILE,
+            "--render-settings",
+            str(settings_file),
+            "--custom-css",
+            "",
+            "-o",
+            str(out_file),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    svg = out_file.read_text()
+    assert '<style id="custom">' not in svg
+
+
+def test_cli_render_custom_css_is_emitted_after_annotation_styles(tmp_path: Path) -> None:
+    """User CSS must come after generated annotation CSS so it can override it."""
+    settings = {
+        "extends": "phosphor:realistic",
+        "custom_css": ".annotation-label { fill: rgb(1, 2, 3); }",
+        "annotations": {
+            "pointers": [{"target": "TP3", "label": "SWD"}],
+        },
+    }
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps(settings))
+    out_file = tmp_path / "out.svg"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file), "-o", str(out_file)],
+    )
+
+    assert result.exit_code == 0, result.output
+    svg = out_file.read_text()
+    assert svg.index('<style id="annotations">') < svg.index('<style id="custom">')
+
+
 def test_cli_render_settings_from_file(tmp_path: Path) -> None:
     """--render-settings loads highlights and annotations from a JSON file."""
     settings = {

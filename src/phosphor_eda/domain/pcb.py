@@ -260,6 +260,10 @@ class PcbText:
     rotation: float
     font_size: float
     justify: str = ""
+    # Explicit mirror flag from the source format (Altium Texts6). None means
+    # the source has no per-text flag and mirroring is derived from the layer
+    # side at render time.
+    mirrored: bool | None = None
 
 
 @dataclass
@@ -754,7 +758,7 @@ class Pcb:
         ys: list[float] = []
         if self.board_profile is not None:
             for element in self.board_profile.elements:
-                _extend_shape_bounds(xs, ys, element.data)
+                extend_shape_bounds(xs, ys, element.data)
         if not xs:
             for pad in self.pads:
                 xs.extend([pad.x - pad.width / 2, pad.x + pad.width / 2])
@@ -772,7 +776,8 @@ class Pcb:
         return matches[0] if matches else None
 
 
-def _extend_shape_bounds(xs: list[float], ys: list[float], shape: object) -> None:
+def extend_shape_bounds(xs: list[float], ys: list[float], shape: object) -> None:
+    """Extend ``xs``/``ys`` with the axis-aligned extents of a PCB shape payload."""
     if isinstance(shape, PcbLine):
         xs.extend([shape.start_x, shape.end_x])
         ys.extend([shape.start_y, shape.end_y])

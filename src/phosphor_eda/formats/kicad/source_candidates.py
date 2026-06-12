@@ -100,6 +100,7 @@ def extract_source_candidates(
     lib_pins: LibPins,
     lib_descs: dict[str, str],
     wire_graph: WireGraph,
+    root_uuid: str = "",
 ) -> SheetCandidates:
     local_label_candidates = _label_candidates(
         data,
@@ -139,6 +140,7 @@ def extract_source_candidates(
         lib_pins,
         lib_descs,
         wire_graph,
+        root_uuid,
     )
     return SheetCandidates(
         local_labels=local_label_candidates,
@@ -273,12 +275,19 @@ def _power_symbol_candidates(
 
         unit_pins = resolve_lib_pins(lib_id, lib_pins)
         pin_locations = [
-            transform_pin(px, py, comp_x, comp_y, comp_rot, mirror)
+            transform_pin(pin.x, pin.y, comp_x, comp_y, comp_rot, mirror)
             for pins in unit_pins.values()
-            for _pnum, _pname, _ptype, px, py in pins
+            for pin in pins
         ]
         if not pin_locations:
             pin_locations = [(round(comp_x, 4), round(comp_y, 4))]
+        if ref.startswith("#FLG"):
+            # PWR_FLAG symbols mark a wire as intentionally driven; their
+            # Value ("PWR_FLAG") is not a net name. Anchor the wire point but
+            # contribute no name evidence, or every flagged rail would merge.
+            for location in pin_locations:
+                wire_graph.connect_point(location)
+            continue
         symbol_uuid = _node_value(sym_node[1:], "uuid") or str(index)
         has_multiple_locations = len(pin_locations) > 1
         for pin_index, location in enumerate(pin_locations, start=1):
@@ -306,8 +315,10 @@ def _pin_candidates(
     lib_pins: LibPins,
     lib_descs: dict[str, str],
     wire_graph: WireGraph,
+    root_uuid: str = "",
 ) -> list[_PinCandidate]:
     no_connect_positions = _no_connect_positions(data)
+    instance_path = _scope_instance_path(root_uuid, scope_id)
     candidates: list[_PinCandidate] = []
     source_index = 0
     for sym_node in sexp.find_all(data[1:], "symbol"):
@@ -329,21 +340,30 @@ def _pin_candidates(
         mirrored = mirror is not None
         unit_node = sexp.find(sym_node[1:], "unit")
         inst_unit = int(sexp.num(unit_node, 1)) if unit_node is not None else 1
+        # A sheet file instantiated by several sheet symbols stores one
+        # (reference, unit) assignment per instance path; the file-level
+        # Reference property only reflects one of them.
+        instance_ref, instance_unit = _instance_assignment(sym_node, instance_path)
+        if instance_ref:
+            ref = instance_ref
+        if instance_unit is not None:
+            inst_unit = instance_unit
         symbol_uuid = _node_value(sym_node[1:], "uuid") or ref or str(source_index)
         component_source_id = _source_id(scope_id, "component", symbol_uuid)
         component_identity_source_id = _resolved_component_identity_source_id(
             scope_id,
             sym_node,
             component_source_id,
+            instance_path,
         )
         pin_uuids = _pin_uuids_by_designator(sym_node)
 
         unit_pins = resolve_lib_pins(lib_id, lib_pins)
         sym_pins = unit_pins.get(inst_unit, []) + unit_pins.get(0, [])
-        for pnum, pname, ptype, px, py in sym_pins:
-            location = transform_pin(px, py, comp_x, comp_y, comp_rot, mirror)
+        for pin in sym_pins:
+            location = transform_pin(pin.x, pin.y, comp_x, comp_y, comp_rot, mirror)
             wire_graph.connect_point(location)
-            pin_uuid = pin_uuids.get(pnum, f"{symbol_uuid}:pin:{pnum}")
+            pin_uuid = pin_uuids.get(pin.number, f"{symbol_uuid}:pin:{pin.number}")
             candidates.append(
                 _PinCandidate(
                     id=_source_id(scope_id, "pin", pin_uuid),
@@ -361,11 +381,11 @@ def _pin_candidates(
                     component_y=comp_y,
                     component_rotation=comp_rot,
                     component_mirror=mirrored,
-                    pin_designator=pnum,
-                    pin_name=pname,
-                    pin_type=ptype,
+                    pin_designator=pin.number,
+                    pin_name=pin.name,
+                    pin_type=pin.pin_type,
                     location=location,
-                    no_connect=ptype == "no_connect"
+                    no_connect=pin.pin_type == "no_connect"
                     or _matches_point(location, no_connect_positions),
                 ),
             )
@@ -377,14 +397,52 @@ def _resolved_component_identity_source_id(
     scope_id: ScopeId,
     sym_node: SExpNode,
     component_source_id: str,
+    scope_instance_path: str,
 ) -> str:
-    instance_path = _symbol_instance_path(sym_node)
+    instance_path = _symbol_instance_path(sym_node, scope_instance_path)
     if not instance_path:
         return component_source_id
     return _source_id(scope_id, "component_instance", instance_path)
 
 
-def _symbol_instance_path(sym_node: SExpNode) -> str:
+def _scope_instance_path(root_uuid: str, scope_id: ScopeId) -> str:
+    """The KiCad instance-path string for this scope: /<root-uuid>/<sheet-uuids>."""
+    if not root_uuid:
+        return ""
+    return "/" + "/".join((root_uuid, *scope_id.path))
+
+
+def _instance_assignment(sym_node: SExpNode, scope_instance_path: str) -> tuple[str, int | None]:
+    """Look up the (reference, unit) assigned to this symbol for one instance path."""
+    path_node = _matching_instance_path_node(sym_node, scope_instance_path)
+    if path_node is None:
+        return "", None
+    ref_node = sexp.find(path_node[2:], "reference")
+    unit_node = sexp.find(path_node[2:], "unit")
+    reference = sexp.val(ref_node) if ref_node is not None else ""
+    unit = int(sexp.num(unit_node, 1)) if unit_node is not None else None
+    return reference, unit
+
+
+def _matching_instance_path_node(
+    sym_node: SExpNode,
+    scope_instance_path: str,
+) -> SExpNode | None:
+    if not scope_instance_path:
+        return None
+    instances_node = sexp.find(sym_node[1:], "instances")
+    if instances_node is None:
+        return None
+    for project_node in sexp.find_all(instances_node[1:], "project"):
+        for path_node in sexp.find_all(project_node[1:], "path"):
+            if len(path_node) > 1 and str(path_node[1]) == scope_instance_path:
+                return path_node
+    return None
+
+
+def _symbol_instance_path(sym_node: SExpNode, scope_instance_path: str) -> str:
+    if _matching_instance_path_node(sym_node, scope_instance_path) is not None:
+        return scope_instance_path
     instances_node = sexp.find(sym_node[1:], "instances")
     if instances_node is None:
         return ""

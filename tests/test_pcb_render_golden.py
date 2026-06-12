@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from phosphor_eda.formats.altium.pcb_parser import parse_altium_pcb
-from phosphor_eda.formats.kicad.pcb_parser import parse_kicad_pcb
+from phosphor_eda.formats.kicad.board import parse_kicad_pcb
 from phosphor_eda.render.api import render_pcb_svg
 from phosphor_eda.render.settings import (
     CliOverrides,

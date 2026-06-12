@@ -5,7 +5,12 @@ rather than crashes, and that parse issues propagate from leaf parsers
 up to the top-level entry points.
 """
 
+import pytest
+
+from phosphor_eda.formats.altium.errors import AltiumFormatError
+from phosphor_eda.formats.altium.pcb_parser import parse_altium_pcb
 from phosphor_eda.formats.altium.record_factory import materialize_records
+from phosphor_eda.formats.altium.record_parser import read_schematic_records
 from phosphor_eda.formats.altium.records import RecordType, UnknownRecord
 from phosphor_eda.formats.common.diagnostics import ParseContext
 
@@ -124,3 +129,31 @@ def test_altium_to_design_returns_parse_issues():
     design = altium_to_design(schdoc)
     # The design should load, parse issues (if any) are in metadata
     assert len(design.pages) == 1
+
+
+def test_ascii_schdoc_gets_friendly_error(tmp_path):
+    path = tmp_path / "ASCII_design.SchDoc"
+    path.write_text("|RECORD=31|FONTIDCOUNT=1|SIZE1=10|\n", encoding="cp1252")
+
+    with pytest.raises(AltiumFormatError) as excinfo:
+        read_schematic_records(str(path))
+    assert "ASCII-format Altium files are not supported" in str(excinfo.value)
+    assert "ASCII_design.SchDoc" in str(excinfo.value)
+
+
+def test_ascii_pcbdoc_gets_friendly_error(tmp_path):
+    path = tmp_path / "ASCII_board.PcbDoc"
+    path.write_text("|RECORD=Board|FILENAME=board.PcbDoc|\n", encoding="cp1252")
+
+    with pytest.raises(AltiumFormatError) as excinfo:
+        parse_altium_pcb(path)
+    assert "ASCII-format Altium files are not supported" in str(excinfo.value)
+
+
+def test_non_ole_garbage_gets_named_error(tmp_path):
+    path = tmp_path / "garbage.PcbDoc"
+    path.write_bytes(b"\x00\x01\x02\x03 not an ole file")
+
+    with pytest.raises(AltiumFormatError) as excinfo:
+        parse_altium_pcb(path)
+    assert "garbage.PcbDoc" in str(excinfo.value)

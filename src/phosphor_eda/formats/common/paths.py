@@ -51,16 +51,20 @@ def resolve_document_reference(
     Returns the matched known-document key, or ``None`` when nothing matches.
     """
     known = list(known_documents)
-    known_set = set(known)
+    # Index known documents by normalized spelling, but resolve to the original
+    # key — callers use the result to index their known-documents mapping.
+    by_normalized: dict[str, str] = {}
+    for doc in known:
+        by_normalized.setdefault(normalize_path_key(doc), doc)
     normalized = normalize_path_key(reference)
 
-    if normalized in known_set:
-        return normalized
+    if normalized in by_normalized:
+        return by_normalized[normalized]
 
     if referencing_dir:
         relative = normalize_path_key(f"{normalize_path_key(referencing_dir)}/{normalized}")
-        if relative in known_set:
-            return relative
+        if relative in by_normalized:
+            return by_normalized[relative]
 
     target_basename = basename_key(normalized)
     basename_matches = [doc for doc in known if basename_key(doc) == target_basename]

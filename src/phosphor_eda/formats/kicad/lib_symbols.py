@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import phosphor_eda.formats.kicad.sexp as sexp
@@ -12,8 +13,19 @@ if TYPE_CHECKING:
     from phosphor_eda.formats.kicad.sexp import SExpNode
     from phosphor_eda.formats.kicad.source import KiCadPoint
 
-type PinDefinition = tuple[str, str, str, float, float]
-type LibPins = dict[str, dict[int, list[PinDefinition]]]
+
+@dataclass(frozen=True)
+class LibPin:
+    """A pin declared on a library symbol unit, in library coordinates."""
+
+    number: str
+    name: str
+    pin_type: str
+    x: float
+    y: float
+
+
+type LibPins = dict[str, dict[int, list[LibPin]]]
 
 # KiCad overline: ~{TEXT} means TEXT with overline bar.
 # Bare ~ means "no name" (unnamed pin).
@@ -40,7 +52,7 @@ def parse_lib_symbols(lib_syms: SExpNode) -> tuple[LibPins, dict[str, str]]:
         desc = sexp.find_property(sym[2:], "ki_description")
         if desc:
             desc_result[lib_id] = desc
-        units: dict[int, list[PinDefinition]] = {}
+        units: dict[int, list[LibPin]] = {}
         for child in sym[2:]:
             if sexp.tag(child) != "symbol" or not isinstance(child, list):
                 continue
@@ -64,12 +76,14 @@ def parse_lib_symbols(lib_syms: SExpNode) -> tuple[LibPins, dict[str, str]]:
                     elif tag_name == "at":
                         px = sexp.num(pe, 1)
                         py = sexp.num(pe, 2)
-                units.setdefault(unit_num, []).append((pnum, pname, pin_type, px, py))
+                units.setdefault(unit_num, []).append(
+                    LibPin(number=pnum, name=pname, pin_type=pin_type, x=px, y=py)
+                )
         pins_result[lib_id] = units
     return pins_result, desc_result
 
 
-def resolve_lib_pins(lib_id: str, lib_pins: LibPins) -> dict[int, list[PinDefinition]]:
+def resolve_lib_pins(lib_id: str, lib_pins: LibPins) -> dict[int, list[LibPin]]:
     """Resolve a placed instance's lib_id to its pin definitions."""
     if lib_id in lib_pins:
         return lib_pins[lib_id]
@@ -101,14 +115,19 @@ def transform_pin(
     comp_rot: float,
     mirror: str | None = None,
 ) -> KiCadPoint:
-    """Transform a pin from library coordinates to schematic coordinates."""
-    lx, ly = lib_x, lib_y
-    if mirror == "y":
-        lx = -lx
-    elif mirror == "x":
-        ly = -ly
-    ly = -ly
+    """Transform a pin from library coordinates to schematic coordinates.
+
+    KiCad semantics (verified against kicad-cli netlists): flip the library
+    y-axis into screen coordinates, rotate by the placement angle (positive
+    is counterclockwise on screen, i.e. clockwise in math convention), then
+    apply ``(mirror x|y)`` in screen coordinates.
+    """
+    sx, sy = lib_x, -lib_y
     rad = math.radians(comp_rot)
-    rx = lx * math.cos(rad) - ly * math.sin(rad)
-    ry = lx * math.sin(rad) + ly * math.cos(rad)
+    rx = sx * math.cos(rad) + sy * math.sin(rad)
+    ry = -sx * math.sin(rad) + sy * math.cos(rad)
+    if mirror == "x":
+        ry = -ry
+    elif mirror == "y":
+        rx = -rx
     return round(comp_x + rx, 4), round(comp_y + ry, 4)

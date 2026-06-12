@@ -10,6 +10,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 HIERARCHY_ROOT = FIXTURES / "kicad-hierarchy" / "root.kicad_sch"
 REPEATED_ROOT = FIXTURES / "kicad-repeated-sheet" / "root.kicad_sch"
 NET_SCOPE_ROOT = FIXTURES / "kicad-net-scope" / "root.kicad_sch"
+PWR_FLAG_RAILS = FIXTURES / "kicad-pwr-flag" / "rails.kicad_sch"
 
 
 def _net_for_reference(nets: list[Net], reference: str) -> Net:
@@ -80,6 +81,22 @@ def test_net_scope_fixture_keeps_repeated_sheet_instances_distinct_without_paren
 
     assert len(iso_nets) == 2
     assert all(len(net.pins) == 1 for net in iso_nets)
+
+
+def test_pwr_flag_does_not_merge_power_rails() -> None:
+    # Two rails (+1V8, +3V0), each carrying a PWR_FLAG. The flag's Value
+    # ("PWR_FLAG") must not become net-name evidence that merges the rails.
+    design = resolve_kicad_source(kicad_to_source(PWR_FLAG_RAILS))
+
+    r1_net = _net_for_reference(design.nets, "R1")
+    r2_net = _net_for_reference(design.nets, "R2")
+    assert r1_net.name == "+1V8"
+    assert r2_net.name == "+3V0"
+    assert r1_net is not r2_net
+
+    all_names = {net.name for net in design.nets}
+    all_aliases = {alias for net in design.nets for alias in net.aliases}
+    assert "PWR_FLAG" not in all_names | all_aliases
 
 
 def test_net_scope_fixture_parent_sheet_pins_merge_matching_child_hierarchical_labels() -> None:

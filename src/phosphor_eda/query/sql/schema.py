@@ -1,403 +1,84 @@
-"""DDL definitions for the DuckDB SQL schema."""
+"""Declarative table specs for the DuckDB SQL schema.
+
+Each table is described once by a :class:`TableSpec`: an ordered list of
+:class:`Column` definitions carrying the SQL type, optional constraint, and an
+extractor that pulls the column value out of a per-row source object. Both the
+``CREATE TABLE`` DDL and the named-column ``INSERT`` statements are generated
+from these specs, so the on-disk schema and the loader can never drift out of
+column order. Indexes, views, and ``schema_text()`` are still hand-written.
+
+Row sources are plain domain objects for most tables; tables that need
+cross-row context or precomputed geometry receive a small ``*Row`` dataclass
+the loader builds and fills (see :mod:`phosphor_eda.query.sql.loader`).
+"""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import duckdb
 
-TABLE_DDL: dict[str, str] = {
-    "footprints": """
-        CREATE TABLE footprints (
-            reference VARCHAR,
-            footprint_lib VARCHAR,
-            x DOUBLE,
-            y DOUBLE,
-            rotation DOUBLE,
-            side VARCHAR,
-            value VARCHAR,
-            geom GEOMETRY
-        )
-    """,
-    "pads": """
-        CREATE TABLE pads (
-            id VARCHAR,
-            reference VARCHAR,
-            pad_number VARCHAR,
-            net_name VARCHAR,
-            net_number INTEGER,
-            x DOUBLE,
-            y DOUBLE,
-            width DOUBLE,
-            height DOUBLE,
-            shape VARCHAR,
-            pad_type VARCHAR,
-            drill_id VARCHAR,
-            drill DOUBLE,
-            side VARCHAR,
-            primary_layer VARCHAR,
-            layers VARCHAR[],
-            pin_function VARCHAR,
-            pin_type VARCHAR,
-            mask_aperture_width DOUBLE,
-            mask_aperture_height DOUBLE,
-            mask_aperture_source VARCHAR,
-            geom GEOMETRY
-        )
-    """,
-    "vias": """
-        CREATE TABLE vias (
-            id VARCHAR,
-            net_name VARCHAR,
-            net_number INTEGER,
-            x DOUBLE,
-            y DOUBLE,
-            diameter_mm DOUBLE,
-            drill_id VARCHAR,
-            via_type VARCHAR,
-            start_layer VARCHAR,
-            end_layer VARCHAR,
-            layers VARCHAR[],
-            geom GEOMETRY
-        )
-    """,
-    "drills": """
-        CREATE TABLE drills (
-            id VARCHAR,
-            owner_kind VARCHAR,
-            owner_id VARCHAR,
-            plating VARCHAR,
-            shape VARCHAR,
-            x DOUBLE,
-            y DOUBLE,
-            diameter_mm DOUBLE,
-            width_mm DOUBLE,
-            height_mm DOUBLE,
-            rotation DOUBLE,
-            layers VARCHAR[],
-            geom GEOMETRY
-        )
-    """,
-    "conductors": """
-        CREATE TABLE conductors (
-            id VARCHAR,
-            kind VARCHAR,
-            net_name VARCHAR,
-            net_number INTEGER,
-            layer VARCHAR,
-            width_mm DOUBLE,
-            start_x DOUBLE,
-            start_y DOUBLE,
-            end_x DOUBLE,
-            end_y DOUBLE,
-            is_arc BOOLEAN,
-            arc_center_x DOUBLE,
-            arc_center_y DOUBLE,
-            arc_angle DOUBLE,
-            length_mm DOUBLE,
-            footprint_ref VARCHAR,
-            pour_id VARCHAR,
-            centerline GEOMETRY,
-            geom GEOMETRY
-        )
-    """,
-    "artwork": """
-        CREATE TABLE artwork (
-            id VARCHAR,
-            purpose VARCHAR,
-            content_kind VARCHAR,
-            footprint_ref VARCHAR,
-            layer VARCHAR,
-            text VARCHAR,
-            x DOUBLE,
-            y DOUBLE,
-            rotation DOUBLE,
-            font_size DOUBLE,
-            geom GEOMETRY
-        )
-    """,
-    "board_profile": """
-        CREATE TABLE board_profile (
-            id VARCHAR,
-            kind VARCHAR,
-            layer VARCHAR,
-            is_cutout BOOLEAN,
-            geom GEOMETRY
-        )
-    """,
-    "pours": """
-        CREATE TABLE pours (
-            id VARCHAR,
-            name VARCHAR,
-            net_name VARCHAR,
-            net_number INTEGER,
-            primary_layer VARCHAR,
-            layers VARCHAR[],
-            priority INTEGER,
-            fill_mode VARCHAR,
-            hatch_style VARCHAR,
-            grid_mm DOUBLE,
-            track_width_mm DOUBLE,
-            min_thickness_mm DOUBLE,
-            thermal_gap_mm DOUBLE,
-            thermal_bridge_width_mm DOUBLE,
-            connect_pads_clearance_mm DOUBLE,
-            fill_conductor_ids VARCHAR[],
-            footprint_ref VARCHAR,
-            source_format VARCHAR,
-            native_type VARCHAR,
-            native_kind VARCHAR,
-            native_id VARCHAR,
-            native_index INTEGER,
-            metadata JSON,
-            boundary GEOMETRY
-        )
-    """,
-    "keepouts": """
-        CREATE TABLE keepouts (
-            id VARCHAR,
-            name VARCHAR,
-            footprint_ref VARCHAR,
-            primary_layer VARCHAR,
-            layers VARCHAR[],
-            tracks VARCHAR,
-            vias VARCHAR,
-            pads VARCHAR,
-            copper_pours VARCHAR,
-            footprints VARCHAR,
-            source_format VARCHAR,
-            native_type VARCHAR,
-            native_kind VARCHAR,
-            native_id VARCHAR,
-            native_index INTEGER,
-            metadata JSON,
-            boundary GEOMETRY
-        )
-    """,
-    "layers": """
-        CREATE TABLE layers (
-            position INTEGER,
-            name VARCHAR,
-            roles VARCHAR[],
-            side VARCHAR,
-            number INTEGER,
-            thickness_mm DOUBLE,
-            material VARCHAR,
-            epsilon_r DOUBLE,
-            loss_tangent DOUBLE,
-            layer_type VARCHAR,
-            copper_orientation VARCHAR
-        )
-    """,
-    "board": """
-        CREATE TABLE board (
-            name VARCHAR,
-            total_thickness_mm DOUBLE,
-            copper_finish VARCHAR,
-            pad_to_mask_clearance_mm DOUBLE,
-            layer_count INTEGER,
-            geom GEOMETRY
-        )
-    """,
-    "net_classes": """
-        CREATE TABLE net_classes (
-            name VARCHAR,
-            kind INTEGER,
-            trace_width_mm DOUBLE,
-            clearance_mm DOUBLE,
-            via_diameter_mm DOUBLE,
-            via_drill_mm DOUBLE,
-            diff_pair_width_mm DOUBLE,
-            diff_pair_gap_mm DOUBLE
-        )
-    """,
-    "net_class_members": """
-        CREATE TABLE net_class_members (
-            net_name VARCHAR,
-            net_class VARCHAR
-        )
-    """,
-    "design_rules": """
-        CREATE TABLE design_rules (
-            name VARCHAR,
-            kind VARCHAR,
-            enabled BOOLEAN,
-            priority INTEGER,
-            scope1 VARCHAR,
-            scope2 VARCHAR,
-            layer_scope VARCHAR,
-            min_value_mm DOUBLE,
-            max_value_mm DOUBLE,
-            target_value_mm DOUBLE
-        )
-    """,
-    "components": """
-        CREATE TABLE components (
-            component_id VARCHAR PRIMARY KEY,
-            reference VARCHAR NOT NULL,
-            part VARCHAR NOT NULL,
-            description VARCHAR NOT NULL,
-            page_ids VARCHAR,
-            page_names VARCHAR
-        )
-    """,
-    "component_occurrences": """
-        CREATE TABLE component_occurrences (
-            occurrence_id VARCHAR PRIMARY KEY,
-            component_id VARCHAR NOT NULL,
-            reference VARCHAR NOT NULL,
-            page_id VARCHAR NOT NULL,
-            page_name VARCHAR NOT NULL,
-            scope_path VARCHAR NOT NULL,
-            source_id VARCHAR NOT NULL,
-            part_id VARCHAR,
-            x DOUBLE,
-            y DOUBLE,
-            rotation DOUBLE,
-            mirror BOOLEAN,
-            physical_designator VARCHAR
-        )
-    """,
-    "component_pages": """
-        CREATE TABLE component_pages (
-            component_id VARCHAR NOT NULL,
-            reference VARCHAR NOT NULL,
-            page_id VARCHAR NOT NULL,
-            page_name VARCHAR NOT NULL
-        )
-    """,
-    "component_metadata": """
-        CREATE TABLE component_metadata (
-            component_id VARCHAR NOT NULL,
-            reference VARCHAR NOT NULL,
-            key VARCHAR NOT NULL,
-            value VARCHAR NOT NULL
-        )
-    """,
-    "component_occurrence_metadata": """
-        CREATE TABLE component_occurrence_metadata (
-            occurrence_id VARCHAR NOT NULL,
-            component_id VARCHAR NOT NULL,
-            key VARCHAR NOT NULL,
-            value VARCHAR NOT NULL
-        )
-    """,
-    "pins": """
-        CREATE TABLE pins (
-            pin_id VARCHAR PRIMARY KEY,
-            component_id VARCHAR NOT NULL,
-            reference VARCHAR NOT NULL,
-            designator VARCHAR NOT NULL,
-            name VARCHAR NOT NULL,
-            net_id VARCHAR,
-            net_name VARCHAR,
-            electrical VARCHAR,
-            no_connect BOOLEAN NOT NULL
-        )
-    """,
-    "pin_occurrences": """
-        CREATE TABLE pin_occurrences (
-            occurrence_id VARCHAR PRIMARY KEY,
-            pin_id VARCHAR NOT NULL,
-            component_id VARCHAR NOT NULL,
-            reference VARCHAR NOT NULL,
-            designator VARCHAR NOT NULL,
-            page_id VARCHAR NOT NULL,
-            page_name VARCHAR NOT NULL,
-            scope_path VARCHAR NOT NULL,
-            source_id VARCHAR NOT NULL
-        )
-    """,
-    "pin_occurrence_metadata": """
-        CREATE TABLE pin_occurrence_metadata (
-            occurrence_id VARCHAR NOT NULL,
-            pin_id VARCHAR NOT NULL,
-            key VARCHAR NOT NULL,
-            value VARCHAR NOT NULL
-        )
-    """,
-    "nets": """
-        CREATE TABLE nets (
-            net_id VARCHAR PRIMARY KEY,
-            name VARCHAR NOT NULL,
-            pin_count INTEGER NOT NULL,
-            page_ids VARCHAR,
-            page_names VARCHAR,
-            is_power BOOLEAN NOT NULL,
-            net_class VARCHAR,
-            diff_pair VARCHAR,
-            diff_pair_polarity VARCHAR,
-            aliases VARCHAR
-        )
-    """,
-    "net_pages": """
-        CREATE TABLE net_pages (
-            net_id VARCHAR NOT NULL,
-            name VARCHAR NOT NULL,
-            page_id VARCHAR NOT NULL,
-            page_name VARCHAR NOT NULL
-        )
-    """,
-    "net_aliases": """
-        CREATE TABLE net_aliases (
-            net_id VARCHAR NOT NULL,
-            name VARCHAR NOT NULL,
-            alias VARCHAR NOT NULL
-        )
-    """,
-    "net_occurrences": """
-        CREATE TABLE net_occurrences (
-            occurrence_id VARCHAR PRIMARY KEY,
-            net_id VARCHAR NOT NULL,
-            name VARCHAR NOT NULL,
-            page_id VARCHAR NOT NULL,
-            page_name VARCHAR NOT NULL,
-            scope_path VARCHAR NOT NULL,
-            source_local_net_id VARCHAR NOT NULL,
-            source_names VARCHAR
-        )
-    """,
-    "net_occurrence_source_names": """
-        CREATE TABLE net_occurrence_source_names (
-            occurrence_id VARCHAR NOT NULL,
-            net_id VARCHAR NOT NULL,
-            source_name VARCHAR NOT NULL
-        )
-    """,
-    "net_metadata": """
-        CREATE TABLE net_metadata (
-            net_id VARCHAR NOT NULL,
-            name VARCHAR NOT NULL,
-            key VARCHAR NOT NULL,
-            value VARCHAR NOT NULL
-        )
-    """,
-    "net_occurrence_metadata": """
-        CREATE TABLE net_occurrence_metadata (
-            occurrence_id VARCHAR NOT NULL,
-            net_id VARCHAR NOT NULL,
-            key VARCHAR NOT NULL,
-            value VARCHAR NOT NULL
-        )
-    """,
-    "pages": """
-        CREATE TABLE pages (
-            page_id VARCHAR PRIMARY KEY,
-            name VARCHAR NOT NULL,
-            source_file VARCHAR,
-            scope_path VARCHAR NOT NULL,
-            component_count INTEGER NOT NULL,
-            net_count INTEGER NOT NULL
-        )
-    """,
-    "project": """
-        CREATE TABLE project (
-            key VARCHAR,
-            value VARCHAR
-        )
-    """,
-}
+GEOMETRY = "GEOMETRY"
+
+
+@dataclass(frozen=True)
+class Column[T]:
+    """One column: its DDL fragment and how to extract its value from a row."""
+
+    name: str
+    sql_type: str
+    extractor: Callable[[T], object]
+    constraint: str = ""
+
+    @property
+    def is_geometry(self) -> bool:
+        return self.sql_type == GEOMETRY
+
+    def ddl(self) -> str:
+        suffix = f" {self.constraint}" if self.constraint else ""
+        return f"{self.name} {self.sql_type}{suffix}"
+
+    def placeholder(self) -> str:
+        return "ST_GeomFromWKB(?)" if self.is_geometry else "?"
+
+
+@dataclass(frozen=True)
+class TableSpec[T]:
+    """An ordered column spec generating DDL and named-column inserts."""
+
+    name: str
+    columns: tuple[Column[T], ...]
+
+    def create_ddl(self) -> str:
+        body = ",\n".join(f"            {column.ddl()}" for column in self.columns)
+        return f"\n        CREATE TABLE {self.name} (\n{body}\n        )\n    "
+
+    def insert_sql(self) -> str:
+        names = ", ".join(column.name for column in self.columns)
+        placeholders = ", ".join(column.placeholder() for column in self.columns)
+        return f"INSERT INTO {self.name} ({names}) VALUES ({placeholders})"
+
+    def values(self, source: T) -> list[object]:
+        return [column.extractor(source) for column in self.columns]
+
+    def insert(self, con: duckdb.DuckDBPyConnection, source: T) -> None:
+        _ = con.execute(self.insert_sql(), self.values(source))
+
+
+def col[T](
+    name: str,
+    sql_type: str,
+    extractor: Callable[[T], object],
+    *,
+    constraint: str = "",
+) -> Column[T]:
+    """Concise constructor for a :class:`Column`."""
+    return Column(name=name, sql_type=sql_type, extractor=extractor, constraint=constraint)
+
 
 INDEX_DDL: dict[str, str] = {
     "idx_components_reference": """
@@ -546,43 +227,7 @@ VIEW_DDL: dict[str, str] = {
 }
 
 
-def create_tables(con: duckdb.DuckDBPyConnection) -> None:
-    """Install spatial extension and create all tables."""
-    _ = con.execute("INSTALL spatial")
-    _ = con.execute("LOAD spatial")
-    for ddl in TABLE_DDL.values():
-        _ = con.execute(ddl)
-    for ddl in INDEX_DDL.values():
-        _ = con.execute(ddl)
-
-
 def create_views(con: duckdb.DuckDBPyConnection) -> None:
     """Create all views after tables are populated."""
     for ddl in VIEW_DDL.values():
         _ = con.execute(ddl)
-
-
-def schema_text() -> str:
-    """Return formatted DDL for all tables and views."""
-    lines: list[str] = ["-- Tables\n"]
-    for name, ddl in TABLE_DDL.items():
-        cleaned = "\n".join(line.strip() for line in ddl.strip().splitlines())
-        lines.append(f"-- {name}")
-        lines.append(cleaned)
-        lines.append("")
-
-    lines.append("-- Indexes\n")
-    for name, ddl in INDEX_DDL.items():
-        cleaned = "\n".join(line.strip() for line in ddl.strip().splitlines())
-        lines.append(f"-- {name}")
-        lines.append(cleaned)
-        lines.append("")
-
-    lines.append("-- Views\n")
-    for name, ddl in VIEW_DDL.items():
-        cleaned = "\n".join(line.strip() for line in ddl.strip().splitlines())
-        lines.append(f"-- {name}")
-        lines.append(cleaned)
-        lines.append("")
-
-    return "\n".join(lines)

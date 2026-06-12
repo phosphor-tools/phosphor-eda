@@ -43,6 +43,16 @@ def test_circle_path_degenerate_radius_empty() -> None:
     assert circle_path_d(0.0, 0.0, 0.0) == ""
 
 
+def test_circle_path_clockwise_reverses_sweep() -> None:
+    ccw = circle_path_d(0.0, 0.0, 1.0)
+    cw = circle_path_d(0.0, 0.0, 1.0, clockwise=True)
+    # Arc format: "A rx ry x-rot large-arc sweep x y".
+    assert " 0 1 0 " in ccw
+    assert " 0 1 1 " not in ccw
+    assert " 0 1 1 " in cw
+    assert " 0 1 0 " not in cw
+
+
 def test_rect_path_unrotated_corners() -> None:
     d = rect_path_d(0.0, 0.0, 4.0, 2.0)
     assert d.count(" L ") == 3
@@ -148,6 +158,48 @@ def test_custom_pad_concatenates_subpaths() -> None:
     # One circle subpath (2 arcs) plus the buffered line outline.
     assert d.count("M ") >= 2
     assert " A " in d
+
+
+def test_custom_pad_annular_circle_uses_opposite_windings() -> None:
+    pad = PcbPad(
+        id="c",
+        number="1",
+        x=0.0,
+        y=0.0,
+        width=4.0,
+        height=4.0,
+        shape="custom",
+        pad_type=PcbPadType.SMD,
+        layers=(),
+        custom_shapes=(PcbCircle(cx=0.0, cy=0.0, radius=2.0, width=0.5, fill=False),),
+    )
+    d = pad_path_d(pad)
+    # Outer ring at r=2 keeps the default winding; inner ring at r=1.5 is
+    # reversed so the hole survives fill-rule="nonzero".
+    assert "M 2.0000 0.0000" in d
+    assert "M 1.5000 0.0000" in d
+    assert " 0 1 0 " in d
+    assert " 0 1 1 " in d
+
+
+def test_custom_pad_path_honors_dimension_overrides() -> None:
+    pad = PcbPad(
+        id="c",
+        number="1",
+        x=0.0,
+        y=0.0,
+        width=2.0,
+        height=2.0,
+        shape="custom",
+        pad_type=PcbPadType.SMD,
+        layers=(),
+        custom_shapes=(PcbCircle(cx=0.0, cy=0.0, radius=1.0, width=0.0, fill=True),),
+    )
+    base = pad_path_d(pad)
+    expanded = pad_path_d(pad, width=3.0, height=3.0)
+    assert base != expanded
+    # A +0.5 margin per side dilates the r=1 circle to r=1.5.
+    assert max(_coords(expanded)) == pytest.approx(1.5, abs=0.01)
 
 
 @pytest.mark.parametrize("shape", ["circle", "rect", "oval", "roundrect"])

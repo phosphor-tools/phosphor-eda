@@ -60,13 +60,19 @@ def prop_location(props: dict[str, str]) -> tuple[int, int]:
 
 
 def prop_points(props: dict[str, str]) -> list[tuple[int, int]]:
-    """Parse ``LocationCount`` / ``X1,Y1`` / ``X2,Y2`` / ... into points."""
+    """Parse ``LocationCount`` / ``X1,Y1`` / ``X2,Y2`` / ... into points.
+
+    Altium caps ``LocationCount`` at 50; vertices 51+ are stored as
+    ``ExtraLocationCount`` / ``EX{i},EY{i}``.
+    """
     loc_count = prop_int(props, "locationcount", 2)
+    extra_count = prop_int(props, "extralocationcount", 0)
     points: list[tuple[int, int]] = []
-    for i in range(1, loc_count + 1):
-        x = prop_int(props, f"x{i}")
-        y = prop_int(props, f"y{i}")
-        points.append((x, y))
+    for i in range(1, loc_count + extra_count + 1):
+        if f"x{i}" in props:
+            points.append((prop_int(props, f"x{i}"), prop_int(props, f"y{i}")))
+        else:
+            points.append((prop_int(props, f"ex{i}"), prop_int(props, f"ey{i}")))
     return points
 
 

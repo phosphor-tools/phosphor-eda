@@ -3,7 +3,9 @@
 import pytest
 
 from phosphor_eda.domain.schematic import Net, ScopeId
+from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.common.raw_models import (
+    GraphicInst,
     PageNetEntry,
     ParsedDesign,
     PinConnection,
@@ -489,3 +491,59 @@ def test_global_with_unknown_local_net_fails_resolution() -> None:
                 ]
             )
         )
+
+
+def test_sentinel_pin_net_id_resolves_through_global_at_pin_location() -> None:
+    # Pin net_id 0xFFFFFFFF is a "no assignment" sentinel, not a net. The
+    # 8Mics corpus board has R3.1 carrying the sentinel while a 3.3V power
+    # symbol sits on the pin coordinate — the pstxnet oracle puts the pin
+    # on 3.3V. Sentinels must never materialize as N4294967295 nets.
+    page = SchematicPage(
+        name="Main",
+        instances=[
+            PlacedInstance(
+                package_name="R.Normal",
+                db_id=1,
+                reference="R3",
+                pin_connections=[
+                    PinConnection(pin_number="1", pin_x=10, pin_y=20, net_id=0xFFFFFFFF),
+                ],
+            ),
+        ],
+        globals=[GraphicInst(name="3.3V", db_id=2, loc_x=10, loc_y=20)],
+    )
+    design = dsn_to_design(ParsedDesign(pages=[page]))
+
+    net_names = {net.name for net in design.nets}
+    assert "N4294967295" not in net_names
+    assert "N00000000" not in net_names
+
+    component = next(c for c in design.components if c.reference == "R3")
+    pin = component.pins[0]
+    assert pin.net is not None
+    assert pin.net.name == "3.3V"
+
+
+def test_sentinel_pin_without_anchor_is_netless_with_diagnostic() -> None:
+    page = SchematicPage(
+        name="Main",
+        instances=[
+            PlacedInstance(
+                package_name="R.Normal",
+                db_id=1,
+                reference="R9",
+                pin_connections=[
+                    PinConnection(pin_number="2", pin_x=5, pin_y=5, net_id=0),
+                ],
+            ),
+        ],
+    )
+    ctx = ParseContext()
+    design = dsn_to_design(ParsedDesign(pages=[page]), ctx=ctx)
+
+    assert {net.name for net in design.nets} == set()
+    component = next(c for c in design.components if c.reference == "R9")
+    assert component.pins[0].net is None
+    assert any(
+        issue.category == "dsn_netless_pin" and "R9" in issue.message for issue in ctx.issues
+    )

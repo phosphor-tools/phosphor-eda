@@ -15,6 +15,8 @@ For type-0 records the payload is null-terminated pipe-delimited ASCII:
 
 import olefile
 
+from phosphor_eda.formats.altium.errors import require_ole_file
+
 
 def parse_record_payload(payload: bytes) -> dict[str, str]:
     """Parse a pipe-delimited payload into a property dict.
@@ -66,6 +68,7 @@ def read_schematic_records(schdoc_path: str) -> list[dict[str, str]]:
     (RECORD 215–218).  Its records are appended after those from FileHeader
     so that OWNERINDEX references resolve correctly across both streams.
     """
+    require_ole_file(schdoc_path)
     ole = olefile.OleFileIO(schdoc_path)
     try:
         data = ole.openstream("FileHeader").read()

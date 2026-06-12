@@ -103,7 +103,12 @@ def embedded_font_base64(charset: frozenset[str] = frozenset()) -> str:
     actually use. Results are cached per glyph set, so repeated renders with
     the same characters reuse one subset.
     """
-    return _embedded_font_base64(_BASE_SUBSET_CHARS | charset)
+    chars = _BASE_SUBSET_CHARS | charset
+    # Past the cap, every distinct large charset would memoize its own copy
+    # of the same payload — route them all to the single cached full face.
+    if len(chars) > _FULL_FACE_CHAR_CAP:
+        return _full_face_base64()
+    return _embedded_font_base64(chars)
 
 
 def embedded_font_css(charset: frozenset[str] = frozenset()) -> str:
@@ -127,15 +132,12 @@ def _embedded_font_base64(chars: frozenset[str]) -> str:
 def _subset_font_base64(chars: frozenset[str]) -> str:
     """Subset the face to *chars* and return base64 (uncached).
 
-    ``recalcTimestamp=False`` keeps the output stable across builds so the
-    embedded data is deterministic; the cached wrapper avoids re-running this
-    per render.
+    Callers cap the charset at :data:`_FULL_FACE_CHAR_CAP` before reaching
+    here. ``recalcTimestamp=False`` keeps the output stable across builds so
+    the embedded data is deterministic; the cached wrapper avoids re-running
+    this per render.
     """
     codepoints = {ord(c) for c in chars}
-    # CJK and other large scripts would balloon the subset; past the cap we
-    # embed the full face once rather than subsetting a huge glyph set.
-    if len(codepoints) > _FULL_FACE_CHAR_CAP:
-        return _full_face_base64()
     font = TTFont(INTER_REGULAR, recalcTimestamp=False)
     subsetter = ft_subset.Subsetter()  # pyright: ignore[reportUnknownMemberType]
     subsetter.populate(unicodes=sorted(codepoints))  # pyright: ignore[reportUnknownMemberType]
@@ -150,21 +152,49 @@ def _full_face_base64() -> str:
     return base64.b64encode(INTER_REGULAR.read_bytes()).decode("ascii")
 
 
+GLYPH_FALLBACK_CHAR = "□"
+"""Replacement for characters Inter-Regular has no glyph for (□ WHITE SQUARE).
+
+Renderers normalize text through :func:`normalize_glyphs` before serializing,
+and :func:`measure_text` advances missing glyphs by this character's width, so
+measured layout always matches the glyphs the SVG actually contains instead of
+depending on viewer-specific font fallback.
+"""
+
+
+def normalize_glyphs(text: str) -> str:
+    """Replace characters the embedded face cannot render with the fallback.
+
+    Whitespace is kept as-is — SVG collapses it rather than drawing tofu.
+    Keeps measurement and serialization in agreement: a normalized string
+    contains only codepoints Inter-Regular has glyphs for (plus whitespace),
+    so the rendered SVG shows exactly what :func:`measure_text` measured.
+    """
+    cmap = _cmap()
+    return "".join(
+        char if char.isspace() or ord(char) in cmap else GLYPH_FALLBACK_CHAR for char in text
+    )
+
+
 def _measure_line_width(text: str) -> int:
-    """Measure a single line of plain text in font design units."""
+    """Measure a single line of plain text in font design units.
+
+    Mirrors :func:`normalize_glyphs`: glyphless whitespace advances like a
+    space, any other character without a glyph advances by
+    :data:`GLYPH_FALLBACK_CHAR`'s width — the width it renders at after
+    normalization.
+    """
     cmap = _cmap()
     hmtx = _load_font()["hmtx"]  # pyright: ignore[reportAny]
+    space_id = cmap[ord(" ")]
+    fallback_id = cmap[ord(GLYPH_FALLBACK_CHAR)]
     total: int = 0
     for char in text:
         glyph_id = cmap.get(ord(char))
-        if glyph_id is not None:
-            advance: int = int(hmtx[glyph_id][0])  # pyright: ignore[reportUnknownArgumentType]
-            total += advance
-        else:
-            # Fallback: use space width for unknown glyphs
-            space_id = cmap.get(ord(" "))
-            if space_id is not None:
-                total += int(hmtx[space_id][0])  # pyright: ignore[reportUnknownArgumentType]
+        if glyph_id is None:
+            glyph_id = space_id if char.isspace() else fallback_id
+        advance: int = int(hmtx[glyph_id][0])  # pyright: ignore[reportUnknownArgumentType]
+        total += advance
     return total
 
 

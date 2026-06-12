@@ -53,10 +53,6 @@ def render_pcb_svg_from_derived_plan(
         svg.raw('<style id="fonts">')
         svg.raw(_escape_style_block_text(embedded_font_css(frozenset(charset))))
         svg.raw("</style>")
-    if plan.custom_css:
-        svg.raw('<style id="custom">')
-        svg.raw(_escape_style_block_text(plan.custom_css))
-        svg.raw("</style>")
     if plan.annotations is not None:
         svg.raw('<style id="annotations">')
         svg.raw(
@@ -64,6 +60,13 @@ def render_pcb_svg_from_derived_plan(
                 annotation_css(plan.annotations.font_size, annotation_style=plan.annotation_style)
             )
         )
+        svg.raw("</style>")
+    # User CSS comes after generated annotation styles so equal-specificity
+    # custom rules win, matching the --custom-css "overrides built-in rules"
+    # contract.
+    if plan.custom_css:
+        svg.raw('<style id="custom">')
+        svg.raw(_escape_style_block_text(plan.custom_css))
         svg.raw("</style>")
 
     if plan.background:
@@ -266,7 +269,10 @@ def _plan_text_charset(plan: DerivedRenderPlan) -> set[str]:
                 chars.update(callout.text)
         legend = annotations.legend
         if legend is not None:
+            # .legend-title-text renders with `text-transform: uppercase`,
+            # so the subset needs the uppercased glyphs too.
             chars.update(legend.title)
+            chars.update(legend.title.upper())
             for entry in legend.entries:
                 chars.update(entry.label)
     return chars
