@@ -1,7 +1,7 @@
 """Unified project domain model.
 
 A Project ties together all data extracted from an EDA project: schematic,
-PCB, stackup, net classes, design rules, diff pairs, and library references.
+boards, net classes, design rules, diff pairs, and library references.
 This is the top-level container for the SQL query layer.
 """
 
@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from phosphor_eda.domain.pcb import Pcb
+    from phosphor_eda.domain.pcb import Board
     from phosphor_eda.domain.schematic import Schematic
 
 
@@ -104,8 +104,12 @@ class Project:
     name: str
     metadata: ProjectMetadata = field(default_factory=ProjectMetadata)
     schematic: Schematic | None = None
-    pcb: Pcb | None = None
-    stackup: Stackup | None = None
+    boards: list[Board] = field(default_factory=list)
     net_classes: list[NetClass] = field(default_factory=list)
     design_rules: list[DesignRule] = field(default_factory=list)
     diff_pairs: list[DiffPair] = field(default_factory=list)
+
+    @property
+    def board(self) -> Board | None:
+        """The primary board — first in ``boards``, or None when layout-less."""
+        return self.boards[0] if self.boards else None

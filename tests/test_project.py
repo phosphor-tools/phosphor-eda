@@ -1,6 +1,6 @@
 """Tests for the unified Project domain model."""
 
-from phosphor_eda.domain.pcb import Pcb, PcbNet
+from phosphor_eda.domain.pcb import Board, PcbNet
 from phosphor_eda.domain.project import (
     DesignRule,
     DiffPair,
@@ -82,7 +82,28 @@ def test_diff_pair_construction():
     assert dp.negative_net == "HDMI_TX0_N"
 
 
+def _board(name: str) -> Board:
+    return Board(
+        name=name,
+        layers=[],
+        nets={1: PcbNet(number=1, name="VCC")},
+        footprints=[],
+        pads=[],
+        vias=[],
+        drills=[],
+        conductors=[],
+        artwork=[],
+        pours=[],
+        keepouts=[],
+    )
+
+
 def test_project_with_all_submodels():
+    board = _board("test-board")
+    board.stackup = Stackup(
+        layers=[StackupLayer(name="F.Cu", layer_type="copper", thickness_mm=0.035)],
+        total_thickness_mm=1.6,
+    )
     project = Project(
         name="test-board",
         metadata=ProjectMetadata(
@@ -92,31 +113,15 @@ def test_project_with_all_submodels():
             author="Test",
         ),
         schematic=Schematic(name="test-board"),
-        pcb=Pcb(
-            name="test-board",
-            layers=[],
-            nets={1: PcbNet(number=1, name="VCC")},
-            footprints=[],
-            pads=[],
-            vias=[],
-            drills=[],
-            conductors=[],
-            artwork=[],
-            pours=[],
-            keepouts=[],
-        ),
-        stackup=Stackup(
-            layers=[StackupLayer(name="F.Cu", layer_type="copper", thickness_mm=0.035)],
-            total_thickness_mm=1.6,
-        ),
+        boards=[board],
         net_classes=[NetClass(name="Default", clearance_mm=0.2)],
         design_rules=[DesignRule(name="clearance1", kind="clearance", min_value_mm=0.125)],
         diff_pairs=[DiffPair(name="USB", positive_net="USB_P", negative_net="USB_N")],
     )
     assert project.name == "test-board"
     assert project.schematic is not None
-    assert project.pcb is not None
-    assert project.stackup is not None
+    assert project.board is not None
+    assert project.board.stackup is not None
     assert len(project.net_classes) == 1
     assert len(project.design_rules) == 1
     assert len(project.diff_pairs) == 1
@@ -126,8 +131,16 @@ def test_project_minimal():
     """Project with only required fields — all optionals are None/empty."""
     project = Project(name="empty")
     assert project.schematic is None
-    assert project.pcb is None
-    assert project.stackup is None
+    assert project.boards == []
+    assert project.board is None
     assert project.net_classes == []
     assert project.design_rules == []
     assert project.diff_pairs == []
+
+
+def test_project_board_property_selects_primary():
+    first = _board("first")
+    second = _board("second")
+    project = Project(name="multi", boards=[first, second])
+    assert project.board is first
+    assert project.boards == [first, second]

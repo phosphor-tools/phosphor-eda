@@ -3,7 +3,7 @@
 This is the foundation layer imported by every other Altium PCB module
 (``pcb_layers``, ``pcb_streams``, ``pcb_keepouts``, ``pcb_build``,
 ``pcb_parser``). It holds the intermediate ``_Parsed*`` model the parser
-assembles before building the domain ``Pcb``, the binary/text stream framing
+assembles before building the domain ``Board``, the binary/text stream framing
 readers, coordinate conversions, and the metadata/role helpers shared across
 stream decoding and domain assembly.
 """

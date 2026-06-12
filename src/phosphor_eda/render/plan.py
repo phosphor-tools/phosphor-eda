@@ -20,7 +20,7 @@ from phosphor_eda.render.tokens import ResolvedStyle, VisualRole
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from phosphor_eda.domain.pcb import Pcb
+    from phosphor_eda.domain.pcb import Board
     from phosphor_eda.render.annotations import ResolvedAnnotations
     from phosphor_eda.render.profiler import RenderProfiler
     from phosphor_eda.render.settings import RenderSettings, TokenMap
@@ -86,7 +86,7 @@ class DerivedRenderPlan:
 
 
 def build_derived_render_plan(
-    board: Pcb,
+    board: Board,
     *,
     settings: RenderSettings,
     annotations: ResolvedAnnotations | None,

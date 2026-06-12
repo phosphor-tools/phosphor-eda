@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from phosphor_eda.domain.pcb import Pcb
+    from phosphor_eda.domain.pcb import Board
     from phosphor_eda.domain.schematic import Schematic
     from phosphor_eda.formats.common.diagnostics import ParseContext
 
@@ -28,7 +28,7 @@ def altium_to_design(path: Path, name: str = "") -> Schematic:
     return _altium_to_design(path, name)
 
 
-def parse_altium_pcb(path: Path, ctx: ParseContext | None = None) -> Pcb:
+def parse_altium_pcb(path: Path, ctx: ParseContext | None = None) -> Board:
     """Parse an Altium .PcbDoc file into the PCB domain model."""
     from phosphor_eda.formats.altium.pcb_parser import parse_altium_pcb as _parse_altium_pcb
 

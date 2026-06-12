@@ -6,8 +6,8 @@ import pytest
 import sexpdata
 
 from phosphor_eda.domain.pcb import (
+    Board,
     LayerRole,
-    Pcb,
     PcbArtworkPurpose,
     PcbConductorKind,
     PcbDrillShape,
@@ -33,11 +33,11 @@ V10_FIXTURE = Path(__file__).parent / "fixtures" / "kicad_v10_nets.kicad_pcb"
 
 
 @pytest.fixture(scope="module")
-def board() -> Pcb:
+def board() -> Board:
     return parse_kicad_pcb(FIXTURE)
 
 
-def test_kicad_parser_emits_typed_domain_collections(board: Pcb) -> None:
+def test_kicad_parser_emits_typed_domain_collections(board: Board) -> None:
     assert not hasattr(board, "geometry")
     assert len(board.layers) == 31
     assert len(board.nets) == 27
@@ -53,7 +53,7 @@ def test_kicad_parser_emits_typed_domain_collections(board: Pcb) -> None:
     assert len(board.board_profile.elements) > 0
 
 
-def test_layer_definitions_are_normalized(board: Pcb) -> None:
+def test_layer_definitions_are_normalized(board: Board) -> None:
     fcu = board.layer_for("F.Cu")
     assert fcu is not None
     assert set(fcu.roles) >= {
@@ -70,7 +70,7 @@ def test_layer_definitions_are_normalized(board: Pcb) -> None:
     assert edge.has_role(LayerRole.EDGE)
 
 
-def test_footprints_reference_concrete_layers(board: Pcb) -> None:
+def test_footprints_reference_concrete_layers(board: Board) -> None:
     tp3 = board.footprint_by_ref("TP3")
     assert tp3 is not None
     assert tp3.layer.name == "B.Cu"
@@ -80,7 +80,7 @@ def test_footprints_reference_concrete_layers(board: Pcb) -> None:
     assert d1.layer.name == "F.Cu"
 
 
-def test_pads_resolve_nets_layers_and_drills(board: Pcb) -> None:
+def test_pads_resolve_nets_layers_and_drills(board: Board) -> None:
     tp3_pads = board.pads_for_footprint("TP3")
     assert len(tp3_pads) == 1
     pad = tp3_pads[0]
@@ -223,7 +223,7 @@ def test_kicad_pad_slot_drills_use_board_coordinate_orientation() -> None:
     assert pad_polygon(pad).covers(drill_cutout)
 
 
-def _board_with_via(tenting_clause: str) -> Pcb:
+def _board_with_via(tenting_clause: str) -> Board:
     parsed = sexpdata.loads(
         f"""
         (kicad_pcb
@@ -264,7 +264,7 @@ def test_kicad_via_without_tenting_defaults_false() -> None:
     assert via.tented_back is False
 
 
-def test_kicad_layer_selectors_resolve_to_concrete_layer_references(board: Pcb) -> None:
+def test_kicad_layer_selectors_resolve_to_concrete_layer_references(board: Board) -> None:
     through_hole = next(
         pad for pad in board.pads if pad.drill is not None and pad.footprint is not None
     )
@@ -278,7 +278,7 @@ def test_kicad_layer_selectors_resolve_to_concrete_layer_references(board: Pcb) 
     }
 
 
-def test_vias_have_first_class_drills_and_nullable_nets(board: Pcb) -> None:
+def test_vias_have_first_class_drills_and_nullable_nets(board: Board) -> None:
     via = board.vias[0]
 
     assert via.drill in board.drills
@@ -287,7 +287,7 @@ def test_vias_have_first_class_drills_and_nullable_nets(board: Pcb) -> None:
     assert {layer.name for layer in via.layers} >= {"F.Cu", "B.Cu"}
 
 
-def test_drill_slots_are_modeled(board: Pcb) -> None:
+def test_drill_slots_are_modeled(board: Board) -> None:
     slots = [drill for drill in board.drills if drill.shape == PcbDrillShape.SLOT]
 
     assert slots
@@ -295,7 +295,7 @@ def test_drill_slots_are_modeled(board: Pcb) -> None:
     assert all(drill.height > 0 for drill in slots)
 
 
-def test_segments_trace_arcs_and_pour_fills_are_conductors(board: Pcb) -> None:
+def test_segments_trace_arcs_and_pour_fills_are_conductors(board: Board) -> None:
     traces = [item for item in board.conductors if item.kind == PcbConductorKind.TRACE]
     fills = [item for item in board.conductors if item.kind == PcbConductorKind.POUR_FILL]
 
@@ -307,7 +307,7 @@ def test_segments_trace_arcs_and_pour_fills_are_conductors(board: Pcb) -> None:
     assert all(isinstance(fill.data, PcbPolygon) for fill in fills)
 
 
-def test_kicad_zones_produce_pours_with_fill_conductors(board: Pcb) -> None:
+def test_kicad_zones_produce_pours_with_fill_conductors(board: Board) -> None:
     gnd = board.nets[2]
     gnd_pours = board.pours_for_net(gnd)
 
@@ -316,7 +316,7 @@ def test_kicad_zones_produce_pours_with_fill_conductors(board: Pcb) -> None:
     assert board.conductors_for_pour(gnd_pours[0]) == list(gnd_pours[0].fills)
 
 
-def test_artwork_tracks_footprint_ownership_and_purpose(board: Pcb) -> None:
+def test_artwork_tracks_footprint_ownership_and_purpose(board: Board) -> None:
     footprint_artwork = [item for item in board.artwork if item.footprint is not None]
     board_artwork = [item for item in board.artwork if item.footprint is None]
     designators = [item for item in board.artwork if item.purpose == PcbArtworkPurpose.DESIGNATOR]
@@ -367,7 +367,7 @@ def test_hidden_footprint_text_is_not_render_inventory() -> None:
     assert visible.id in inventory_ids
 
 
-def test_board_profile_comes_from_edge_cuts(board: Pcb) -> None:
+def test_board_profile_comes_from_edge_cuts(board: Board) -> None:
     assert board.board_profile is not None
     edge = board.layer_for("Edge.Cuts")
     assert edge is not None
@@ -376,7 +376,7 @@ def test_board_profile_comes_from_edge_cuts(board: Pcb) -> None:
     assert all(element.layer is edge for element in board.board_profile.elements)
 
 
-def test_board_name(board: Pcb) -> None:
+def test_board_name(board: Board) -> None:
     assert board.name == "Debugotron SWD Switch"
 
 
@@ -419,12 +419,12 @@ def test_extract_value_missing() -> None:
     assert extract_value(fp) == ""
 
 
-def _parse_pcb_snippet(body: str, name: str = "test") -> Pcb:
+def _parse_pcb_snippet(body: str, name: str = "test") -> Board:
     parsed = sexpdata.loads(f"(kicad_pcb {body})")
     return parse_kicad_pcb_from_sexpr(list(parsed[1:]), default_name=name)
 
 
-def _keepout_with_layer_selector(selector: str) -> Pcb:
+def _keepout_with_layer_selector(selector: str) -> Board:
     return _parse_pcb_snippet(
         f"""
         (layers

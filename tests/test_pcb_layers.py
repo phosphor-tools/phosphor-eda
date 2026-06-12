@@ -1,6 +1,6 @@
 import pytest
 
-from phosphor_eda.domain.pcb import LayerRole, Pcb, PcbLayer, normalize_roles
+from phosphor_eda.domain.pcb import Board, LayerRole, PcbLayer, normalize_roles
 
 
 def test_normalize_roles_preserves_every_role() -> None:
@@ -45,7 +45,7 @@ def test_layers_do_not_expose_primary_role() -> None:
 
 
 def test_pcb_role_helpers_match_multi_role_layers() -> None:
-    board = Pcb(
+    board = Board(
         name="roles",
         layers=[
             PcbLayer("F.Fab", (LayerRole.FABRICATION, LayerRole.FRONT)),

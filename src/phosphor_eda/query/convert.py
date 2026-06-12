@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from phosphor_eda.domain.project import Project
+from phosphor_eda.domain.project import DesignRule, DiffPair, NetClass, Project
 from phosphor_eda.formats.altium.pcb_parser import parse_altium_pcb
 from phosphor_eda.formats.altium.pcb_project import load_altium_enrichment
 from phosphor_eda.formats.altium.project import parse_prjpcb_file
@@ -19,14 +19,9 @@ from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.dsn.parser import parse_dsn
 from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
 from phosphor_eda.formats.eagle.to_schematic import eagle_to_design
-from phosphor_eda.formats.kicad.board import (
-    parse_kicad_pcb,
-    parse_kicad_pcb_from_sexpr,
-    read_kicad_pcb_sexpr,
-)
+from phosphor_eda.formats.kicad.board import parse_kicad_pcb
 from phosphor_eda.formats.kicad.dru_parser import parse_kicad_dru
 from phosphor_eda.formats.kicad.pro_parser import parse_kicad_pro
-from phosphor_eda.formats.kicad.stackup import parse_kicad_stackup
 from phosphor_eda.formats.kicad.to_schematic import kicad_to_design
 from phosphor_eda.query.format import serialize_design
 
@@ -34,7 +29,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-    from phosphor_eda.domain.pcb import Pcb
+    from phosphor_eda.domain.pcb import Board
     from phosphor_eda.domain.schematic import Schematic
 
 # Matches "Sheetfile" "<value>" in KiCad S-expression text.
@@ -190,19 +185,19 @@ def convert(path: Path) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _load_kicad_pcb(path: Path) -> Pcb:
+def _load_kicad_pcb(path: Path) -> Board:
     return parse_kicad_pcb(path)
 
 
-def _load_altium_pcb(path: Path) -> Pcb:
+def _load_altium_pcb(path: Path) -> Board:
     return parse_altium_pcb(path)
 
 
-def _load_prjpcb(path: Path) -> Pcb:
+def _load_prjpcb(path: Path) -> Board:
     return parse_altium_pcb(resolve_prjpcb_pcbdoc(path))
 
 
-_PCB_LOADERS: dict[str, Callable[[Path], Pcb]] = {
+_PCB_LOADERS: dict[str, Callable[[Path], Board]] = {
     ".kicad_pcb": _load_kicad_pcb,
     ".pcbdoc": _load_altium_pcb,
     ".prjpcb": _load_prjpcb,
@@ -211,8 +206,8 @@ _PCB_LOADERS: dict[str, Callable[[Path], Pcb]] = {
 PCB_EXTENSIONS: frozenset[str] = frozenset(_PCB_LOADERS)
 
 
-def load_pcb(path: Path) -> Pcb:
-    """Parse a PCB layout file into a Pcb board.
+def load_pcb(path: Path) -> Board:
+    """Parse a PCB layout file into a Board board.
 
     Dispatches on extension; ``.prjpcb`` resolves to its referenced
     ``.PcbDoc`` first. Raises ``ValueError`` for unsupported formats.
@@ -316,13 +311,8 @@ def _load_kicad_project(entry: Path) -> Project:
     dru_path = parent / f"{stem}.kicad_dru"
     sch_path = parent / f"{stem}.kicad_sch"
 
-    # Parse PCB and stackup from a single read of the .kicad_pcb file
-    pcb = None
-    stackup = None
-    if pcb_path.exists():
-        sexpr = read_kicad_pcb_sexpr(pcb_path)
-        pcb = parse_kicad_pcb_from_sexpr(sexpr, default_name=stem)
-        stackup = parse_kicad_stackup(sexpr)
+    # Parse PCB (the board parse attaches the stackup)
+    board = parse_kicad_pcb(pcb_path) if pcb_path.exists() else None
 
     # Parse net classes from .kicad_pro
     net_classes = parse_kicad_pro(pro_path) if pro_path.exists() else []
@@ -336,8 +326,7 @@ def _load_kicad_project(entry: Path) -> Project:
     return Project(
         name=stem,
         schematic=schematic,
-        pcb=pcb,
-        stackup=stackup,
+        boards=[board] if board else [],
         net_classes=net_classes,
         design_rules=design_rules,
     )
@@ -346,13 +335,12 @@ def _load_kicad_project(entry: Path) -> Project:
 def _load_altium_project_from_pcb(pcb_path: Path) -> Project:
     """Load an Altium project starting from a .PcbDoc file."""
     ctx = ParseContext()
-    pcb = parse_altium_pcb(pcb_path, ctx)
+    board = parse_altium_pcb(pcb_path, ctx)
     enrichment = load_altium_enrichment(pcb_path, ctx)
 
     return Project(
         name=pcb_path.stem,
-        pcb=pcb,
-        stackup=enrichment.stackup,
+        boards=[board],
         net_classes=enrichment.net_classes,
         design_rules=enrichment.design_rules,
         diff_pairs=enrichment.diff_pairs,
@@ -363,25 +351,36 @@ def _load_altium_project_from_prj(prj_path: Path) -> Project:
     """Load an Altium project starting from a .PrjPcb file."""
     project_info = parse_prjpcb_file(str(prj_path))
 
-    # Find and parse PCB
-    pcb_project = None
+    # Find and parse every referenced PCB that exists.
+    boards: list[Board] = []
+    net_classes: list[NetClass] = []
+    design_rules: list[DesignRule] = []
+    diff_pairs: list[DiffPair] = []
+    seen_pcbdocs: set[Path] = set()
     for pcb_rel in project_info.pcb_paths:
         pcb_abs = prj_path.parent / pcb_rel.replace("\\", "/")
-        if pcb_abs.exists():
-            pcb_project = _load_altium_project_from_pcb(pcb_abs)
-            break
+        if not pcb_abs.exists():
+            continue
+        resolved = pcb_abs.resolve()
+        if resolved in seen_pcbdocs:
+            continue
+        seen_pcbdocs.add(resolved)
+        pcb_project = _load_altium_project_from_pcb(pcb_abs)
+        boards.extend(pcb_project.boards)
+        net_classes.extend(pcb_project.net_classes)
+        design_rules.extend(pcb_project.design_rules)
+        diff_pairs.extend(pcb_project.diff_pairs)
 
     # Parse schematic if available
     schematic = None
     if project_info.schematic_paths:
         schematic = altium_to_design(prj_path, name=prj_path.stem)
 
-    if pcb_project:
-        pcb_project.schematic = schematic
-        pcb_project.name = prj_path.stem
-        return pcb_project
-
     return Project(
         name=prj_path.stem,
         schematic=schematic,
+        boards=boards,
+        net_classes=net_classes,
+        design_rules=design_rules,
+        diff_pairs=diff_pairs,
     )

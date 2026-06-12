@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
+from phosphor_eda.domain.pcb import Board
 from phosphor_eda.domain.project import Project
+from phosphor_eda.formats.altium.pcb_project import AltiumEnrichment
 from phosphor_eda.query.convert import load_project
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -27,14 +29,16 @@ def kicad_project() -> Project:
     return load_project(JETSON_ORIN_PCB)
 
 
-def test_kicad_project_has_pcb(kicad_project: Project) -> None:
-    assert kicad_project.pcb is not None
+def test_kicad_project_has_board(kicad_project: Project) -> None:
+    assert kicad_project.board is not None
 
 
 def test_kicad_project_has_stackup(kicad_project: Project) -> None:
-    assert kicad_project.stackup is not None
+    assert kicad_project.board is not None
+    stackup = kicad_project.board.stackup
+    assert stackup is not None
     # 8-layer board → copper + dielectric layers
-    copper = [ly for ly in kicad_project.stackup.layers if ly.layer_type == "copper"]
+    copper = [ly for ly in stackup.layers if ly.layer_type == "copper"]
     assert len(copper) == 8
 
 
@@ -66,8 +70,8 @@ def kicad_project_from_pro() -> Project:
 def test_kicad_pro_same_result(kicad_project_from_pro: Project) -> None:
     """Loading from .kicad_pro gives same data as loading from .kicad_pcb."""
     p = kicad_project_from_pro
-    assert p.pcb is not None
-    assert p.stackup is not None
+    assert p.board is not None
+    assert p.board.stackup is not None
     assert len(p.net_classes) == 8
     assert len(p.design_rules) >= 15
 
@@ -84,13 +88,15 @@ def altium_project() -> Project:
     return load_project(PI_MX8_PCB)
 
 
-def test_altium_project_has_pcb(altium_project: Project) -> None:
-    assert altium_project.pcb is not None
+def test_altium_project_has_board(altium_project: Project) -> None:
+    assert altium_project.board is not None
 
 
 def test_altium_project_has_stackup(altium_project: Project) -> None:
-    assert altium_project.stackup is not None
-    copper = [ly for ly in altium_project.stackup.layers if ly.layer_type == "copper"]
+    assert altium_project.board is not None
+    stackup = altium_project.board.stackup
+    assert stackup is not None
+    copper = [ly for ly in stackup.layers if ly.layer_type == "copper"]
     assert len(copper) == 10
 
 
@@ -106,6 +112,57 @@ def test_altium_project_has_diff_pairs(altium_project: Project) -> None:
     assert len(altium_project.diff_pairs) == 55
 
 
+def test_altium_prjpcb_loads_all_existing_boards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = tmp_path / "First.PcbDoc"
+    second = tmp_path / "Second.PcbDoc"
+    first.write_text("")
+    second.write_text("")
+    prjpcb = tmp_path / "Project.PrjPcb"
+    prjpcb.write_text(
+        "[Design]\n"
+        "HierarchyMode=1\n\n"
+        "[Document1]\n"
+        "DocumentPath=First.PcbDoc\n\n"
+        "[Document2]\n"
+        "DocumentPath=Second.PcbDoc\n"
+    )
+
+    def board(name: str, path: Path) -> Board:
+        return Board(
+            name=name,
+            layers=[],
+            nets={},
+            footprints=[],
+            pads=[],
+            vias=[],
+            drills=[],
+            conductors=[],
+            artwork=[],
+            pours=[],
+            keepouts=[],
+            source_path=str(path),
+        )
+
+    def fake_parse_altium_pcb(path: Path, _ctx: object) -> Board:
+        return board(path.stem, path)
+
+    def fake_load_altium_enrichment(_path: Path, _ctx: object) -> AltiumEnrichment:
+        return AltiumEnrichment(design_rules=[], net_classes=[], diff_pairs=[])
+
+    monkeypatch.setattr("phosphor_eda.query.convert.parse_altium_pcb", fake_parse_altium_pcb)
+    monkeypatch.setattr(
+        "phosphor_eda.query.convert.load_altium_enrichment",
+        fake_load_altium_enrichment,
+    )
+
+    project = load_project(prjpcb)
+
+    assert [board.name for board in project.boards] == ["First", "Second"]
+    assert project.board is project.boards[0]
+
+
 # ---------------------------------------------------------------------------
 # Simple KiCad project (no .kicad_pro / .kicad_dru)
 # ---------------------------------------------------------------------------
@@ -118,8 +175,8 @@ def simple_project() -> Project:
     return load_project(SWD_SWITCH_PCB)
 
 
-def test_simple_project_has_pcb(simple_project: Project) -> None:
-    assert simple_project.pcb is not None
+def test_simple_project_has_board(simple_project: Project) -> None:
+    assert simple_project.board is not None
 
 
 def test_simple_project_empty_rules(simple_project: Project) -> None:

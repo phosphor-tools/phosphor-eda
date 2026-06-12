@@ -22,7 +22,7 @@ from phosphor_eda.query.classify import is_power_net
 from phosphor_eda.query.trace import trace_from_net
 
 if TYPE_CHECKING:
-    from phosphor_eda.domain.pcb import Pcb
+    from phosphor_eda.domain.pcb import Board
     from phosphor_eda.domain.schematic import Net, Pin, Schematic
 
 # A net with this many pins is a distribution rail even when its name is
@@ -36,7 +36,9 @@ def _is_boundary_net(net: Net) -> bool:
     return is_power_net(net.name, net) or len(net.pins) >= _BOUNDARY_FANOUT
 
 
-def connected_pcb_net_names(board: Pcb, schematic: Schematic, pcb_net_name: str) -> frozenset[str]:
+def connected_pcb_net_names(
+    board: Board, schematic: Schematic, pcb_net_name: str
+) -> frozenset[str]:
     """PCB net names electrically continuous with *pcb_net_name*.
 
     Follows series 2-pin passives through the schematic. The result always
@@ -74,7 +76,7 @@ def connected_pcb_net_names(board: Pcb, schematic: Schematic, pcb_net_name: str)
     return frozenset(names)
 
 
-def _pcb_pad_keys_on_net(board: Pcb, net_name: str) -> set[tuple[str, str]]:
+def _pcb_pad_keys_on_net(board: Board, net_name: str) -> set[tuple[str, str]]:
     return {
         (pad.footprint.reference.upper(), pad.number.upper())
         for pad in board.pads
@@ -85,7 +87,7 @@ def _pcb_pad_keys_on_net(board: Pcb, net_name: str) -> set[tuple[str, str]]:
     }
 
 
-def _pcb_net_names_by_pad_key(board: Pcb) -> dict[tuple[str, str], str]:
+def _pcb_net_names_by_pad_key(board: Board) -> dict[tuple[str, str], str]:
     return {
         (pad.footprint.reference.upper(), pad.number.upper()): pad.net.name
         for pad in board.pads

@@ -19,7 +19,7 @@ from phosphor_eda.render.primitives import PaintMode
 from phosphor_eda.render.svg import Svg, fmt_attrs
 
 if TYPE_CHECKING:
-    from phosphor_eda.domain.pcb import Pcb
+    from phosphor_eda.domain.pcb import Board
     from phosphor_eda.render.inventory import InventoryTags
     from phosphor_eda.render.modes import DerivedLayer
     from phosphor_eda.render.plan import DerivedRenderPlan
@@ -144,7 +144,7 @@ def _view_box_rect(
     return f"<rect {attrs}/>"
 
 
-def append_pcb_metadata(svg: str, board: Pcb) -> str:
+def append_pcb_metadata(svg: str, board: Board) -> str:
     """Append a ``<script id="pcb-metadata">`` block with footprint metadata."""
     metadata_json = _pcb_metadata_json(board)
     if not metadata_json:
@@ -157,7 +157,7 @@ def append_pcb_metadata(svg: str, board: Pcb) -> str:
     return f"{svg}\n{metadata_block}"
 
 
-def _pcb_metadata_json(board: Pcb) -> str:
+def _pcb_metadata_json(board: Board) -> str:
     meta = {
         fp.reference: {"lib": fp.footprint_lib, "value": fp.value}
         for fp in sorted(board.footprints, key=lambda footprint: footprint.reference)

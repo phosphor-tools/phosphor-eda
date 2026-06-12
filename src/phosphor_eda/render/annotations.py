@@ -39,7 +39,7 @@ from phosphor_eda.render.annotation_spec import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from phosphor_eda.domain.pcb import Pcb
+    from phosphor_eda.domain.pcb import Board
 
 __all__ = [
     "ANNOTATION_FONT_PX",
@@ -156,7 +156,7 @@ class ResolvedAnnotations:
 
 
 def resolve_component_target(
-    ref: str, board: Pcb
+    ref: str, board: Board
 ) -> tuple[tuple[float, float], tuple[float, float, float, float]]:
     """Resolve a component ref to (center, bbox).
 
@@ -174,7 +174,7 @@ def resolve_component_target(
     return (fp.x, fp.y), (fp.x - 1, fp.y - 1, fp.x + 1, fp.y + 1)
 
 
-def resolve_pad_target(ref_pad: str, board: Pcb) -> tuple[float, float]:
+def resolve_pad_target(ref_pad: str, board: Board) -> tuple[float, float]:
     """Resolve "U7.10" → pad center coordinates.
 
     Raises ``ValueError`` if the component or pad is not found.
@@ -195,7 +195,7 @@ def resolve_pad_target(ref_pad: str, board: Pcb) -> tuple[float, float]:
     raise ValueError(msg)
 
 
-def resolve_net_target(net_name: str, near_ref: str, board: Pcb) -> tuple[float, float]:
+def resolve_net_target(net_name: str, near_ref: str, board: Board) -> tuple[float, float]:
     """Find the pad on ``near_ref`` that connects to ``net_name``.
 
     Raises ``ValueError`` if no matching pad is found.
@@ -249,7 +249,7 @@ class _PendingPlacement:
 
 def resolve_annotations(
     spec: AnnotationSpec,
-    board: Pcb,
+    board: Board,
     side: str,
     width_px: int = 800,
     font_size: float = ANNOTATION_FONT_PX,
@@ -354,7 +354,7 @@ def resolve_annotations(
 
 def _resolve_boxes(
     spec: AnnotationSpec,
-    board: Pcb,
+    board: Board,
     board_bbox: tuple[float, float, float, float],
     side: str,
     scale: float,
@@ -395,7 +395,7 @@ def _resolve_boxes(
 
 def _resolve_pointers(
     spec: AnnotationSpec,
-    board: Pcb,
+    board: Board,
     board_bbox: tuple[float, float, float, float],
     side: str,
     scale: float,
@@ -426,7 +426,7 @@ def _resolve_pointers(
 
 def _resolve_labels(
     spec: AnnotationSpec,
-    board: Pcb,
+    board: Board,
     board_bbox: tuple[float, float, float, float],
     side: str,
     scale: float,

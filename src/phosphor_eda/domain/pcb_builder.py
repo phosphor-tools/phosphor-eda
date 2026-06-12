@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, NoReturn
 
 from phosphor_eda.domain.pcb import (
-    Pcb,
+    Board,
     PcbArtwork,
     PcbBoardProfile,
     PcbBuildError,
@@ -30,7 +30,7 @@ __all__ = ["PcbBuildError", "PcbBuilder"]
 
 
 class PcbBuilder:
-    """Build a :class:`Pcb` while validating concrete domain references."""
+    """Build a :class:`Board` while validating concrete domain references."""
 
     def __init__(self, name: str, *, metadata: PcbMetadata | None = None) -> None:
         self.name = name
@@ -198,7 +198,7 @@ class PcbBuilder:
         self.board_profile = board_profile
         return board_profile
 
-    def build(self, *, require_board_profile: bool = False) -> Pcb:
+    def build(self, *, require_board_profile: bool = False) -> Board:
         """Return a validated strict PCB domain object."""
         if 0 in self.nets:
             self._fail("net 0 is forbidden; use net=None for unconnected objects")
@@ -208,7 +208,7 @@ class PcbBuilder:
             self._fail("board profile is required")
         # Pad/via drill references were already validated at add time; no need
         # to re-scan every object here.
-        return Pcb(
+        return Board(
             name=self.name,
             layers=list(self.layers),
             nets=dict(self.nets),

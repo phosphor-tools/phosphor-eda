@@ -1,7 +1,7 @@
 import pytest
 
 from phosphor_eda.domain.pcb import (
-    Pcb,
+    Board,
     PcbBuildError,
     PcbClosedPath,
     PcbConductor,
@@ -59,7 +59,7 @@ def test_pour_keepout_and_conductor_helpers() -> None:
         pour=pour,
     )
     pour.fills = (pour_fill,)
-    board = Pcb(
+    board = Board(
         name="area-model",
         layers=[layer],
         nets={},

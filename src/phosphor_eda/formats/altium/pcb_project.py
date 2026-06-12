@@ -1,9 +1,9 @@
 """Project-level enrichment for Altium PcbDoc files.
 
-Parses the Rules6, Classes6, DifferentialPairs6 and Board6 streams into the
-domain enrichment models (design rules, net classes, diff pairs, stackup)
-and exposes ``load_altium_enrichment(path)`` which owns the OLE-stream
-knowledge (stream names, re-open) so callers only orchestrate.
+Parses the Rules6, Classes6, and DifferentialPairs6 streams into domain
+enrichment models (design rules, net classes, diff pairs). Board6/stackup
+parsing is owned by the board parser; ``load_altium_enrichment(path)`` owns
+only the enrichment OLE-stream knowledge so callers only orchestrate.
 """
 
 from __future__ import annotations
@@ -415,15 +415,15 @@ class AltiumEnrichment:
     design_rules: list[DesignRule]
     net_classes: list[NetClass]
     diff_pairs: list[DiffPair]
-    stackup: Stackup | None
 
 
 def load_altium_enrichment(path: Path, ctx: ParseContext | None = None) -> AltiumEnrichment:
     """Read and parse the enrichment streams from a .PcbDoc file.
 
-    Owns the OLE-stream knowledge (stream names, re-open) so callers only
-    orchestrate: open the document once for the Rules6/Classes6/
-    DifferentialPairs6/Board6 streams and turn them into domain enrichment.
+    Owns the enrichment OLE-stream knowledge (stream names, re-open) so callers
+    only orchestrate: open the document once for the Rules6/Classes6/
+    DifferentialPairs6 streams and turn them into domain enrichment. Board6 and
+    stackup parsing are handled by :func:`parse_altium_pcb` and live on the board.
     """
     require_ole_file(path)
     ole = olefile.OleFileIO(str(path))
@@ -437,7 +437,6 @@ def load_altium_enrichment(path: Path, ctx: ParseContext | None = None) -> Altiu
             if ole.exists("DifferentialPairs6/Data")
             else b""
         )
-        board_data = ole.openstream("Board6/Data").read() if ole.exists("Board6/Data") else b""
     finally:
         ole.close()
 
@@ -445,15 +444,8 @@ def load_altium_enrichment(path: Path, ctx: ParseContext | None = None) -> Altiu
     net_classes = parse_altium_classes(classes_data) if classes_data else []
     diff_pairs = parse_altium_diff_pairs(dp_data) if dp_data else []
 
-    stackup = None
-    if board_data:
-        records = read_text_records(board_data)
-        if records:
-            stackup = parse_altium_stackup(records[0], ctx)
-
     return AltiumEnrichment(
         design_rules=design_rules,
         net_classes=net_classes,
         diff_pairs=diff_pairs,
-        stackup=stackup,
     )

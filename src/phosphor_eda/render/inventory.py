@@ -7,8 +7,8 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.pcb import (
+    Board,
     LayerRole,
-    Pcb,
     PcbArc,
     PcbArtwork,
     PcbArtworkKind,
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
 type RenderPoint = tuple[float, float]
 type InventorySource = (
-    Pcb
+    Board
     | PcbBoardProfile
     | PcbBoardProfileElement
     | PcbPad
@@ -115,7 +115,7 @@ class PcbRenderInventory:
     side: str = ""
 
 
-def build_inventory(board: Pcb, *, side: str = "") -> PcbRenderInventory:
+def build_inventory(board: Board, *, side: str = "") -> PcbRenderInventory:
     """Build typed render inventory from domain collections."""
     items: list[InventoryItem] = []
 
@@ -346,7 +346,9 @@ def _purpose_for_pad_layer(layer: PcbLayer) -> InventoryPurpose | None:
     return None
 
 
-def _pad_inventory_layers(board: Pcb, pad: PcbPad) -> tuple[tuple[InventoryPurpose, PcbLayer], ...]:
+def _pad_inventory_layers(
+    board: Board, pad: PcbPad
+) -> tuple[tuple[InventoryPurpose, PcbLayer], ...]:
     pairs: list[tuple[InventoryPurpose, PcbLayer]] = []
     seen: set[tuple[InventoryPurpose, int]] = set()
     for layer in pad.layers:
@@ -389,7 +391,7 @@ def _pad_solder_mask_sides(pad: PcbPad) -> set[str]:
     return copper_sides
 
 
-def _via_solder_mask_layers(board: Pcb, via: PcbVia) -> tuple[PcbLayer, ...]:
+def _via_solder_mask_layers(board: Board, via: PcbVia) -> tuple[PcbLayer, ...]:
     sides: set[str] = set()
     copper_sides = {
         layer.side for layer in via.layers if layer.has_role(LayerRole.COPPER) and layer.side
@@ -401,7 +403,7 @@ def _via_solder_mask_layers(board: Pcb, via: PcbVia) -> tuple[PcbLayer, ...]:
     return _solder_mask_layers_for_sides(board, sides)
 
 
-def _solder_mask_layers_for_sides(board: Pcb, sides: set[str]) -> tuple[PcbLayer, ...]:
+def _solder_mask_layers_for_sides(board: Board, sides: set[str]) -> tuple[PcbLayer, ...]:
     if not sides:
         return ()
     return tuple(

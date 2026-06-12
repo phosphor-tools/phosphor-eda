@@ -1,6 +1,6 @@
 """Domain assembly for the Altium PCB parser.
 
-Turns the intermediate ``ParsedPrimitive`` list into a domain ``Pcb`` via
+Turns the intermediate ``ParsedPrimitive`` list into a domain ``Board`` via
 ``PcbBuilder``: routes each primitive to the right collection (pad, via,
 conductor, artwork, board-profile element), resolves owner footprints and
 parent pours, and derives artwork visibility from footprint metadata.
@@ -12,8 +12,8 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.pcb import (
+    Board,
     LayerRole,
-    Pcb,
     PcbArc,
     PcbArtwork,
     PcbArtworkKind,
@@ -81,7 +81,7 @@ def build_pcb_from_parsed_primitives(
     keepouts: list[PcbKeepout],
     primitives: list[ParsedPrimitive],
     ctx: ParseContext,
-) -> Pcb:
+) -> Board:
     metadata = PcbMetadata(source_format="altium")
     if ctx.issues:
         metadata.properties["parse_issue_count"] = str(len(ctx.issues))

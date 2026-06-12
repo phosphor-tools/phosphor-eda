@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import sexpdata
 
 from phosphor_eda.domain.pcb import (
-    Pcb,
+    Board,
     PcbArtwork,
     PcbArtworkKind,
     PcbBoardProfile,
@@ -28,6 +28,7 @@ from phosphor_eda.domain.pcb_builder import PcbBuilder
 from phosphor_eda.formats.kicad import graphics, pcb_common, sexp
 from phosphor_eda.formats.kicad.footprint import parse_footprint, parse_graphic_item
 from phosphor_eda.formats.kicad.layers import parse_layer_defs, resolve_layers
+from phosphor_eda.formats.kicad.stackup import parse_kicad_stackup
 from phosphor_eda.formats.kicad.zones import parse_zone
 
 if TYPE_CHECKING:
@@ -261,9 +262,11 @@ def _parse_gr_text(builder: PcbBuilder, item: SExpNode, index: int) -> PcbArtwor
     )
 
 
-def parse_kicad_pcb(path: Path) -> Pcb:
+def parse_kicad_pcb(path: Path) -> Board:
     sexpr = read_kicad_pcb_sexpr(path)
-    return parse_kicad_pcb_from_sexpr(sexpr, default_name=path.stem)
+    board = parse_kicad_pcb_from_sexpr(sexpr, default_name=path.stem)
+    board.source_path = str(path)
+    return board
 
 
 def read_kicad_pcb_sexpr(path: Path) -> SExpNode:
@@ -272,7 +275,7 @@ def read_kicad_pcb_sexpr(path: Path) -> SExpNode:
     return list(data[1:]) if data else []
 
 
-def parse_kicad_pcb_from_sexpr(sexpr: SExpNode, *, default_name: str = "") -> Pcb:
+def parse_kicad_pcb_from_sexpr(sexpr: SExpNode, *, default_name: str = "") -> Board:
     title_node = sexp.find_path(sexpr, "title_block", "title")
     builder = PcbBuilder(
         sexp.val(title_node) if title_node else default_name,
@@ -309,4 +312,6 @@ def parse_kicad_pcb_from_sexpr(sexpr: SExpNode, *, default_name: str = "") -> Pc
     builder.set_board_profile(
         PcbBoardProfile(elements=tuple(profile_elements)), source="board profile"
     )
-    return builder.build(require_board_profile=True)
+    board = builder.build(require_board_profile=True)
+    board.stackup = parse_kicad_stackup(sexpr)
+    return board
