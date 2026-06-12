@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from phosphor_eda.domain.project import Project
+from phosphor_eda.domain.project import DesignRule, DiffPair, NetClass, Project
 from phosphor_eda.formats.altium.pcb_parser import parse_altium_pcb
 from phosphor_eda.formats.altium.pcb_project import load_altium_enrichment
 from phosphor_eda.formats.altium.project import parse_prjpcb_file
@@ -351,25 +351,36 @@ def _load_altium_project_from_prj(prj_path: Path) -> Project:
     """Load an Altium project starting from a .PrjPcb file."""
     project_info = parse_prjpcb_file(str(prj_path))
 
-    # Find and parse PCB
-    pcb_project = None
+    # Find and parse every referenced PCB that exists.
+    boards: list[Board] = []
+    net_classes: list[NetClass] = []
+    design_rules: list[DesignRule] = []
+    diff_pairs: list[DiffPair] = []
+    seen_pcbdocs: set[Path] = set()
     for pcb_rel in project_info.pcb_paths:
         pcb_abs = prj_path.parent / pcb_rel.replace("\\", "/")
-        if pcb_abs.exists():
-            pcb_project = _load_altium_project_from_pcb(pcb_abs)
-            break
+        if not pcb_abs.exists():
+            continue
+        resolved = pcb_abs.resolve()
+        if resolved in seen_pcbdocs:
+            continue
+        seen_pcbdocs.add(resolved)
+        pcb_project = _load_altium_project_from_pcb(pcb_abs)
+        boards.extend(pcb_project.boards)
+        net_classes.extend(pcb_project.net_classes)
+        design_rules.extend(pcb_project.design_rules)
+        diff_pairs.extend(pcb_project.diff_pairs)
 
     # Parse schematic if available
     schematic = None
     if project_info.schematic_paths:
         schematic = altium_to_design(prj_path, name=prj_path.stem)
 
-    if pcb_project:
-        pcb_project.schematic = schematic
-        pcb_project.name = prj_path.stem
-        return pcb_project
-
     return Project(
         name=prj_path.stem,
         schematic=schematic,
+        boards=boards,
+        net_classes=net_classes,
+        design_rules=design_rules,
+        diff_pairs=diff_pairs,
     )
