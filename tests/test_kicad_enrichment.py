@@ -13,6 +13,7 @@ from phosphor_eda.domain.schematic import (
     Schematic,
 )
 from phosphor_eda.formats.kicad import kicad_to_design
+from phosphor_eda.query.format import format_component_detail
 
 FIXTURES = Path(__file__).parent / "fixtures"
 ETHERNET_SCH = FIXTURES / "kicad-jetson-orin" / "ethernet.kicad_sch"
@@ -93,6 +94,20 @@ class TestDnp:
     def test_explicit_dnp_no(self, csi: Schematic) -> None:
         fitted = next(c for c in csi.components if not c.dnp)
         assert fitted.dnp_source is None
+
+
+class TestComponentDetailView:
+    def test_detail_shows_enrichment(self, ethernet: Schematic) -> None:
+        detail = format_component_detail(ethernet, "C52")
+        assert "footprint: antmicro-footprints:C_0402_1005Metric" in detail
+        assert "part_number: Murata GRM155R61H104KE14D" in detail
+        assert "datasheet: https://www.murata.com/" in detail
+        assert "parameters:" in detail
+        assert "MPN: GRM155R61H104KE14D (hidden)" in detail
+
+    def test_detail_shows_dnp(self, csi: Schematic) -> None:
+        detail = format_component_detail(csi, "R171")
+        assert "dnp: yes (explicit)" in detail
 
 
 class TestTitleBlock:

@@ -1289,6 +1289,49 @@ class TestJetsonDesignRules:
         assert _count(jetson_db, "SELECT count(*) FROM design_rules") == 33
 
 
+class TestJetsonComponentEnrichment:
+    def test_component_parameters_loaded(self, jetson_db: duckdb.DuckDBPyConnection) -> None:
+        components = _count(jetson_db, "SELECT count(*) FROM components")
+        count = _count(jetson_db, "SELECT count(*) FROM component_parameters")
+        # Every KiCad symbol carries at least the four mandatory properties.
+        assert count >= components * 4
+
+    def test_parameter_join_returns_mpn(self, jetson_db: duckdb.DuckDBPyConnection) -> None:
+        row = jetson_db.execute(
+            """
+            SELECT p.value FROM component_parameters p
+            JOIN components c USING (component_id)
+            WHERE c.reference = 'C52' AND p.name = 'MPN'
+            """
+        ).fetchone()
+        assert row is not None
+
+    def test_component_footprints_loaded(self, jetson_db: duckdb.DuckDBPyConnection) -> None:
+        count = _count(jetson_db, "SELECT count(*) FROM component_footprints WHERE is_current")
+        assert count > 0
+
+    def test_part_numbers_loaded(self, jetson_db: duckdb.DuckDBPyConnection) -> None:
+        count = _count(jetson_db, "SELECT count(*) FROM component_part_numbers")
+        assert count > 0
+
+    def test_dnp_components_flagged(self, jetson_db: duckdb.DuckDBPyConnection) -> None:
+        count = _count(
+            jetson_db,
+            "SELECT count(*) FROM components WHERE dnp AND dnp_source = 'explicit'",
+        )
+        assert count > 0
+
+    def test_lib_columns_populated(self, jetson_db: duckdb.DuckDBPyConnection) -> None:
+        count = _count(jetson_db, "SELECT count(*) FROM components WHERE lib_symbol IS NOT NULL")
+        assert count > 0
+
+    def test_title_blocks_loaded(self, jetson_db: duckdb.DuckDBPyConnection) -> None:
+        row = jetson_db.execute(
+            "SELECT title FROM title_blocks JOIN pages USING (page_id) LIMIT 1"
+        ).fetchone()
+        assert row is not None
+
+
 class TestJetsonSchematic:
     def test_components_count(self, jetson_db: duckdb.DuckDBPyConnection) -> None:
         assert _count(jetson_db, "SELECT count(*) FROM components") == 666

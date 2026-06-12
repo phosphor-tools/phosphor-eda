@@ -289,14 +289,39 @@ def load_project(path: Path) -> Project:
     ext = path.suffix.lower()
 
     if ext in (".kicad_pcb", ".kicad_pro", ".kicad_sch", ".kicad_dru"):
-        return _load_kicad_project(path)
-    if ext == ".pcbdoc":
-        return _load_altium_project_from_pcb(path)
-    if ext == ".prjpcb":
-        return _load_altium_project_from_prj(path)
+        project = _load_kicad_project(path)
+    elif ext == ".pcbdoc":
+        project = _load_altium_project_from_pcb(path)
+    elif ext == ".prjpcb":
+        project = _load_altium_project_from_prj(path)
+    else:
+        supported = ".kicad_pcb, .kicad_pro, .kicad_sch, .PcbDoc, .PrjPcb"
+        raise ValueError(f"Unsupported project entry point: '{ext}'. Supported: {supported}")
 
-    supported = ".kicad_pcb, .kicad_pro, .kicad_sch, .PcbDoc, .PrjPcb"
-    raise ValueError(f"Unsupported project entry point: '{ext}'. Supported: {supported}")
+    _fill_metadata_from_title_block(project)
+    return project
+
+
+def _fill_metadata_from_title_block(project: Project) -> None:
+    """Fill empty ProjectMetadata fields from the root page's title block.
+
+    The root page is the shallowest scope; project files rarely carry
+    name/revision/date themselves, the title block is where designers put
+    them.
+    """
+    schematic = project.schematic
+    if schematic is None or not schematic.pages:
+        return
+    root_page = min(schematic.pages, key=lambda page: len(page.scope_id.path))
+    block = root_page.title_block
+    if block is None:
+        return
+    metadata = project.metadata
+    metadata.name = metadata.name or block.title
+    metadata.revision = metadata.revision or block.revision
+    metadata.date = metadata.date or block.date
+    metadata.organization = metadata.organization or block.company
+    metadata.author = metadata.author or block.metadata.get("Author", "")
 
 
 def _load_kicad_project(entry: Path) -> Project:

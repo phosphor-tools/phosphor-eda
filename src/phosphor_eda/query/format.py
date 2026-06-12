@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from phosphor_eda.domain.schematic import ComponentKind
 from phosphor_eda.formats.common.electrical import ELECTRICAL_KEY, PinElectrical
 from phosphor_eda.query.classify import PASSIVE_PREFIXES, is_power_net, ref_prefix
 from phosphor_eda.query.query import (
@@ -502,14 +503,43 @@ def format_component_detail(design: Schematic, ref: str) -> str:
         f" {comp.description} | Pages: {page_names}"
     )
     lines = [header]
+    lines.extend(_component_enrichment_lines(comp))
 
     for key, value in sorted(_filter_metadata(comp).items()):
         lines.append(f"  {key}: {value}")
+
+    if comp.parameters:
+        lines.append("  parameters:")
+        for parameter in comp.parameters:
+            marker = "" if parameter.visible else " (hidden)"
+            lines.append(f"    {parameter.name}: {parameter.value}{marker}")
 
     for pin in sorted(comp.pins, key=lambda p: p.designator):
         lines.append(_format_pin_line(design, pin, comp, with_metadata=False))
 
     return "\n".join(lines)
+
+
+def _component_enrichment_lines(comp: Component) -> list[str]:
+    """Typed enrichment fields shown in the component detail view."""
+    lines: list[str] = []
+    if comp.dnp:
+        source = f" ({comp.dnp_source})" if comp.dnp_source else ""
+        lines.append(f"  dnp: yes{source}")
+    if comp.exclude_from_bom:
+        lines.append("  exclude_from_bom: yes")
+    if comp.kind is not ComponentKind.STANDARD:
+        lines.append(f"  kind: {comp.kind}")
+    footprint = comp.footprint
+    if footprint is not None:
+        prefix = f"{footprint.library}:" if footprint.library else ""
+        lines.append(f"  footprint: {prefix}{footprint.name}")
+    for part_number in comp.part_numbers:
+        maker = f"{part_number.manufacturer} " if part_number.manufacturer else ""
+        lines.append(f"  part_number: {maker}{part_number.number}")
+    if comp.datasheet:
+        lines.append(f"  datasheet: {comp.datasheet}")
+    return lines
 
 
 def format_net_detail(design: Schematic, name: str) -> str:
