@@ -226,18 +226,22 @@ def link_children(
     """Group records by owner_index and compute derived coordinates.
 
     Returns a dict mapping owner record index → list of child records.
-    Also computes ``coord`` for SheetEntryRec and HarnessEntryRec from
-    their parent's location and size.
+    Also computes ``coord`` for SheetEntryRec from its parent sheet
+    symbol's location and size. Harness entries are not linked here:
+    they live in the Additional stream, where OwnerIndex is relative to
+    the Additional records — ``parse_harness_groups`` resolves them.
     """
     # Build index lookup: record.owner_key → record (for owner resolution).
     by_key: dict[int, AltiumRecord] = {}
     for rec in records:
         by_key[rec.owner_key] = rec
 
-    # Group children by owner_index
+    # Group children by owner_index. Harness entries/types use
+    # Additional-stream-relative owner indices that would collide with
+    # main-stream owner keys, so they are excluded here.
     children: dict[int, list[AltiumRecord]] = {}
     for rec in records:
-        if rec.owner_index >= 0:
+        if rec.owner_index >= 0 and not isinstance(rec, (HarnessEntryRec, HarnessTypeRec)):
             children.setdefault(rec.owner_index, []).append(rec)
 
     # Compute derived coordinates for entries
@@ -245,17 +249,6 @@ def link_children(
         if isinstance(rec, SheetEntryRec) and rec.owner_index >= 0:
             parent = by_key.get(rec.owner_index)
             if isinstance(parent, SheetSymbolRec):
-                rec.coord = compute_entry_coord(
-                    parent.location,
-                    parent.x_size,
-                    rec.side,
-                    rec.distance_from_top,
-                    parent.y_size,
-                )
-
-        elif isinstance(rec, HarnessEntryRec) and rec.owner_index >= 0:
-            parent = by_key.get(rec.owner_index)
-            if isinstance(parent, HarnessConnectorRec):
                 rec.coord = compute_entry_coord(
                     parent.location,
                     parent.x_size,

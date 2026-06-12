@@ -178,6 +178,29 @@ def _connect_point_to_wire_group(
         break
 
 
+def _connect_point_to_signal_harness(
+    point: tuple[int, int],
+    harness_segments: list[tuple[tuple[int, int], tuple[int, int]]],
+    uf: UnionFind[tuple[int, int]],
+) -> None:
+    for seg in harness_segments:
+        if point_on_segment(point, seg[0], seg[1]):
+            uf.union(point, seg[0])
+            break
+
+
+def _harness_port_ends(port: PortRec) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Both candidate wire-attachment points of a port shape.
+
+    Altium stores ``location`` as one corner; the wire can attach there or
+    at the opposite end of the shape (right for horizontal styles 0-3,
+    above for vertical styles 4-7).
+    """
+    base = port.location
+    alt = (base[0], base[1] + port.width) if port.style >= 4 else (base[0] + port.width, base[1])
+    return base, alt
+
+
 def _first_generated_name(group: LocalNetRecordGroup, sheet_name: str, ordinal: int) -> str:
     for label in group.net_labels:
         if label.text:
@@ -216,6 +239,26 @@ def resolve_local_net_groups(
         all_wire_points.update(wire.points)
         for p1, p2 in wire.segments:
             uf.union(p1, p2)
+
+    # --- Step 1.5: Signal harness wires ---
+    # Signal harnesses carry whole harness bundles between harness-typed
+    # sheet entries and ports. Union their segments so those endpoints
+    # share a local net; pins never attach to them, so this cannot merge
+    # ordinary signal nets.
+    harness_segments: list[tuple[tuple[int, int], tuple[int, int]]] = []
+    for signal_harness in sheet.by_type(SignalHarnessRec):
+        for p1, p2 in signal_harness.segments:
+            uf.union(p1, p2)
+            harness_segments.append((p1, p2))
+    # T-junctions between signal harness wires: an endpoint of one wire
+    # landing mid-segment on another.
+    for seg_a in harness_segments:
+        for pt in seg_a:
+            for seg_b in harness_segments:
+                if pt == seg_b[0] or pt == seg_b[1]:
+                    continue
+                if point_on_segment(pt, seg_b[0], seg_b[1]):
+                    uf.union(pt, seg_b[0])
 
     # --- Step 2: T-junction detection ---
     # Check every wire endpoint against the wire index.
@@ -287,6 +330,12 @@ def resolve_local_net_groups(
         loc = _port_wire_coord(port, sheet.wire_index)
         all_named_points.add(loc)
         _connect_point_to_wire_group(loc, sheet, uf)
+        if port.harness_type:
+            # Harness ports attach to signal harness wires at either end
+            # of the port shape.
+            for probe in _harness_port_ends(port):
+                uf.union(loc, probe)
+                _connect_point_to_signal_harness(probe, harness_segments, uf)
         port_points.append((port, loc))
 
     # Sheet entries.
@@ -296,6 +345,8 @@ def resolve_local_net_groups(
         ep = entry.coord
         all_named_points.add(ep)
         _connect_point_to_wire_group(ep, sheet, uf)
+        if entry.harness_type:
+            _connect_point_to_signal_harness(ep, harness_segments, uf)
         sheet_entry_points.append((entry, ep))
 
     # Fallback source coordinates, primarily harness connector entries.
@@ -380,12 +431,27 @@ def resolve_nets(
 # ---------------------------------------------------------------------------
 
 
-def _parse_harness_groups(
-    sheet: SheetRecords,
-) -> list[tuple[str, str, list[tuple[str, tuple[int, int]]]]]:
-    """Parse harness connectors into (harness_type, port_name, [(member, coord)]).
+@dataclass(slots=True)
+class HarnessGroup:
+    """A harness connector, its matched harness port, and its member entries.
 
-    Works with typed records from the Additional stream (215-218).
+    ``port_name`` is the harness port the connector feeds (empty when no port
+    matches). ``members`` pair each harness entry with its wire-side
+    coordinate on the connector box.
+    """
+
+    connector: HarnessConnectorRec
+    harness_type: str
+    port_name: str
+    members: list[tuple[HarnessEntryRec, tuple[int, int]]]
+
+
+def parse_harness_groups(sheet: SheetRecords) -> list[HarnessGroup]:
+    """Parse harness connectors into :class:`HarnessGroup` entries.
+
+    Works with typed records from the Additional stream (215-218). Owner
+    indices in that stream are relative to the Additional records, so the
+    records are re-indexed here rather than relying on ``link_children``.
 
     Each harness connector is matched to its specific port by tracing
     signal harness wire connectivity rather than relying solely on the
@@ -460,12 +526,18 @@ def _parse_harness_groups(
                         uf.union(wire_pt, pt)
                         break
 
-    # Connect each harness port location to signal harness wires
+    # Connect each harness port to signal harness wires; the wire can
+    # attach at either end of the port shape.
     harness_ports: list[PortRec] = [p for p in sheet.by_type(PortRec) if p.harness_type]
     for port in harness_ports:
-        for seg in harness_wire_segments:
-            if point_on_segment(port.location, seg[0], seg[1]):
-                uf.union(port.location, seg[0])
+        for probe in _harness_port_ends(port):
+            seg = next(
+                (s for s in harness_wire_segments if point_on_segment(probe, s[0], s[1])),
+                None,
+            )
+            if seg is not None:
+                uf.union(port.location, probe)
+                uf.union(probe, seg[0])
                 break
 
     # Map each connector to its port by finding which port shares the
@@ -482,21 +554,26 @@ def _parse_harness_groups(
 
     # Fallback: map harness_type -> port_name for connectors that couldn't
     # be matched spatially (e.g. no signal harness wires on this page).
+    # Only unambiguous types qualify — with several same-type ports the
+    # choice would be arbitrary and could name the wrong interface.
     port_names_by_type: dict[str, str] = {}
+    ambiguous_types: set[str] = set()
     for port in harness_ports:
+        if port.harness_type in port_names_by_type:
+            ambiguous_types.add(port.harness_type)
         port_names_by_type[port.harness_type] = port.name
+    for harness_type in ambiguous_types:
+        del port_names_by_type[harness_type]
 
-    result: list[tuple[str, str, list[tuple[str, tuple[int, int]]]]] = []
+    result: list[HarnessGroup] = []
     for ai, conn in connectors.items():
         harness_type = types_by_owner.get(ai, "")
-        if not harness_type:
-            continue
         port_name = port_name_for_connector.get(
             ai,
-            port_names_by_type.get(harness_type, harness_type),
+            port_names_by_type.get(harness_type, ""),
         )
 
-        members: list[tuple[str, tuple[int, int]]] = []
+        members: list[tuple[HarnessEntryRec, tuple[int, int]]] = []
         for entry in entries_by_owner.get(ai, []):
             if not entry.name:
                 continue
@@ -508,10 +585,16 @@ def _parse_harness_groups(
                 entry.distance_from_top,
                 conn.y_size,
             )
-            members.append((entry.name, coord))
+            members.append((entry, coord))
 
-        if members:
-            result.append((harness_type, port_name, members))
+        result.append(
+            HarnessGroup(
+                connector=conn,
+                harness_type=harness_type,
+                port_name=port_name,
+                members=members,
+            )
+        )
 
     return result
 
@@ -524,7 +607,10 @@ def compute_harness_entry_coords(
     Returns (x, y) → synthetic_net_name (``portName:memberName``).
     """
     result: dict[tuple[int, int], str] = {}
-    for _ht, port_name, members in _parse_harness_groups(sheet):
-        for member_name, coord in members:
-            result[coord] = f"{port_name}:{member_name}"
+    for group in parse_harness_groups(sheet):
+        if not group.harness_type:
+            continue
+        prefix = group.port_name or group.harness_type
+        for entry, coord in group.members:
+            result[coord] = f"{prefix}:{entry.name}"
     return result

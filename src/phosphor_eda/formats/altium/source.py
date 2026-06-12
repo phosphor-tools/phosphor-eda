@@ -16,25 +16,21 @@ from phosphor_eda.formats.altium.annotation import (
 )
 from phosphor_eda.formats.altium.project import AltiumProject, parse_prjpcb_file
 from phosphor_eda.formats.altium.records import (
-    AltiumRecord,
     ComponentRec,
     DesignatorRec,
     FileNameRec,
-    HarnessConnectorRec,
-    HarnessEntryRec,
-    HarnessTypeRec,
     ParameterRec,
     PinRec,
     SheetEntryRec,
     SheetNameRec,
     SheetSymbolRec,
-    SignalHarnessRec,
 )
 from phosphor_eda.formats.altium.sheet_builder import (
     LocalNetResolution,
     SheetRecords,
     compute_harness_entry_coords,
     load_sheet,
+    parse_harness_groups,
     resolve_local_net_groups,
 )
 from phosphor_eda.formats.common.diagnostics import ParseContext
@@ -120,6 +116,7 @@ class AltiumHarnessConnector:
     scope_id: ScopeId
     source_index: int
     harness_type: str
+    port_name: str
     location: tuple[int, int]
     x_size: int
     y_size: int
@@ -131,6 +128,7 @@ class AltiumHarnessMember:
     scope_id: ScopeId
     source_index: int
     connector_id: str
+    port_name: str
     name: str
     coord: tuple[int, int]
     side: int
@@ -283,53 +281,31 @@ def _harness_sources(
     sheet_id: str,
     scope_id: ScopeId,
 ) -> tuple[list[AltiumHarnessConnector], dict[int, AltiumHarnessMember]]:
-    additional_records: list[AltiumRecord] = []
-    for rec in sheet.records:
-        if isinstance(
-            rec,
-            (HarnessConnectorRec, HarnessEntryRec, HarnessTypeRec, SignalHarnessRec),
-        ):
-            additional_records.append(rec)
-
-    connectors_by_additional_index: dict[int, HarnessConnectorRec] = {}
-    harness_types_by_owner: dict[int, str] = {}
-    entries_by_owner: dict[int, list[HarnessEntryRec]] = {}
-    for additional_index, rec in enumerate(additional_records):
-        if isinstance(rec, HarnessConnectorRec):
-            connectors_by_additional_index[additional_index] = rec
-        elif isinstance(rec, HarnessTypeRec):
-            harness_types_by_owner[rec.owner_index] = rec.text
-        elif isinstance(rec, HarnessEntryRec):
-            entries_by_owner.setdefault(rec.owner_index, []).append(rec)
-
     connectors: list[AltiumHarnessConnector] = []
     members: dict[int, AltiumHarnessMember] = {}
-    connector_ids_by_additional_index: dict[int, str] = {}
-    for additional_index, connector in connectors_by_additional_index.items():
-        connector_id = _source_id(sheet_id, "harness_connector", connector.index)
-        connector_ids_by_additional_index[additional_index] = connector_id
+    for group in parse_harness_groups(sheet):
+        connector_id = _source_id(sheet_id, "harness_connector", group.connector.index)
         connectors.append(
             AltiumHarnessConnector(
                 id=connector_id,
                 scope_id=scope_id,
-                source_index=connector.index,
-                harness_type=harness_types_by_owner.get(additional_index, ""),
-                location=connector.location,
-                x_size=connector.x_size,
-                y_size=connector.y_size,
+                source_index=group.connector.index,
+                harness_type=group.harness_type,
+                port_name=group.port_name,
+                location=group.connector.location,
+                x_size=group.connector.x_size,
+                y_size=group.connector.y_size,
             ),
         )
-
-    for owner_index, entries in entries_by_owner.items():
-        connector_id = connector_ids_by_additional_index.get(owner_index, "")
-        for entry in entries:
+        for entry, coord in group.members:
             members[entry.index] = AltiumHarnessMember(
                 id=_source_id(sheet_id, "harness_member", entry.index),
                 scope_id=scope_id,
                 source_index=entry.index,
                 connector_id=connector_id,
+                port_name=group.port_name,
                 name=entry.name,
-                coord=entry.coord,
+                coord=coord,
                 side=entry.side,
                 distance_from_top=entry.distance_from_top,
                 has_overline=entry.has_overline,
