@@ -73,7 +73,7 @@ def test_eda_layers_are_built_from_typed_inventory() -> None:
         ),
     )
 
-    layers = build_eda_layers(inventory, settings, warn=lambda _message: None)
+    layers = build_eda_layers(inventory, settings)
 
     roles = {(layer.role.function, layer.role.side) for layer in layers}
     assert ("copper", "front") in roles
@@ -85,9 +85,9 @@ def test_eda_layers_are_built_from_typed_inventory() -> None:
 
 def test_realistic_layers_use_board_material_copper_and_silkscreen() -> None:
     inventory = build_inventory(_board(), side="front")
-    settings = replace(load_render_settings_json('{"extends": "phosphor:review"}'), side="front")
+    settings = replace(load_render_settings_json('{"extends": "phosphor:realistic"}'), side="front")
 
-    layers = build_realistic_layers(inventory, settings, warn=lambda _message: None)
+    layers = build_realistic_layers(inventory, settings)
 
     layer_ids = {layer.id for layer in layers}
     assert {
@@ -124,7 +124,7 @@ def test_eda_layers_use_board_drill_and_solder_mask_cutouts() -> None:
         ),
     )
 
-    layers = build_eda_layers(inventory, settings, warn=lambda _message: None)
+    layers = build_eda_layers(inventory, settings)
 
     copper = next(layer for layer in layers if layer.role.function == "copper")
     silkscreen = next(layer for layer in layers if layer.role.function == "silkscreen")
@@ -138,11 +138,11 @@ def test_eda_layers_use_board_drill_and_solder_mask_cutouts() -> None:
 
 
 def test_realistic_board_material_uses_profile_path_for_orangecrab() -> None:
-    board = parse_kicad_pcb(FIXTURES / "orangecrab.kicad_pcb")
+    board = parse_kicad_pcb(FIXTURES / "kicad-orangecrab/OrangeCrab.kicad_pcb")
     inventory = build_inventory(board, side="front")
-    settings = load_render_settings_json('{"extends": "phosphor:review", "side": "front"}')
+    settings = load_render_settings_json('{"extends": "phosphor:realistic", "side": "front"}')
 
-    layers = build_realistic_layers(inventory, settings, warn=lambda _message: None)
+    layers = build_realistic_layers(inventory, settings)
     substrate = next(layer for layer in layers if layer.id == "realistic:substrate")
     board_path = substrate.primitives[0].d
 
@@ -153,7 +153,7 @@ def test_realistic_board_material_uses_profile_path_for_orangecrab() -> None:
 def test_highlights_match_typed_inventory_tags() -> None:
     inventory = build_inventory(_board(), side="front")
     settings = replace(
-        load_render_settings_json('{"extends": "phosphor:review"}'),
+        load_render_settings_json('{"extends": "phosphor:realistic"}'),
         render_mode="eda",
         side="front",
         source=SourceSelection(layers=[LayerSelectionRule(match=LayerMatch(role="copper"))]),
@@ -170,7 +170,7 @@ def test_highlights_match_typed_inventory_tags() -> None:
 def test_highlight_layers_use_board_and_drill_cutouts() -> None:
     inventory = build_inventory(_board(), side="front")
     settings = replace(
-        load_render_settings_json('{"extends": "phosphor:review"}'),
+        load_render_settings_json('{"extends": "phosphor:realistic"}'),
         render_mode="eda",
         side="front",
         highlights=[HighlightSpec(net="VCC")],
@@ -188,10 +188,63 @@ def test_highlight_layers_use_board_and_drill_cutouts() -> None:
     assert copper.mask.drills
 
 
+def test_net_highlight_matches_expanded_net_group() -> None:
+    """A net highlight with an expansion matches every net in its group and
+    keeps the user's name as the group target."""
+    inventory = build_inventory(_board(), side="front")
+    settings = replace(
+        load_render_settings_json('{"extends": "phosphor:realistic"}'),
+        render_mode="eda",
+        side="front",
+        highlights=[HighlightSpec(net="USB_DP")],
+    )
+
+    groups = build_highlight_layers(
+        inventory,
+        settings,
+        warn=lambda _message: None,
+        net_expansions={"USB_DP": frozenset({"USB_DP", "VCC"})},
+    )
+
+    assert len(groups) == 1
+    assert groups[0].target == "net:USB_DP"
+    assert any(layer.primitives for layer in groups[0].layers)
+
+
+def test_exact_net_highlight_ignores_expansions() -> None:
+    inventory = build_inventory(_board(), side="front")
+    settings = replace(
+        load_render_settings_json('{"extends": "phosphor:realistic"}'),
+        render_mode="eda",
+        side="front",
+        highlights=[HighlightSpec(net="USB_DP", exact=True)],
+    )
+
+    warnings: list[str] = []
+    groups = build_highlight_layers(
+        inventory,
+        settings,
+        warn=warnings.append,
+        net_expansions={"USB_DP": frozenset({"USB_DP", "VCC"})},
+    )
+
+    assert groups == ()
+    assert any("Highlight target not found" in warning for warning in warnings)
+
+
+def test_exact_flag_parses_from_settings_json() -> None:
+    settings = load_render_settings_json(
+        '{"highlights": [{"net": "X", "exact": true}, {"net": "Y"}]}'
+    )
+
+    assert settings.highlights[0].exact is True
+    assert settings.highlights[1].exact is False
+
+
 def test_highlights_do_not_select_drills_from_net_tags() -> None:
     inventory = build_inventory(_board(), side="front")
     settings = replace(
-        load_render_settings_json('{"extends": "phosphor:review"}'),
+        load_render_settings_json('{"extends": "phosphor:realistic"}'),
         render_mode="eda",
         side="front",
         highlights=[HighlightSpec(net="VCC")],

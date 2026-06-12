@@ -468,7 +468,7 @@ def test_cli_render_prjpcb_with_multiple_existing_pcbdocs_reports_clear_error(
 
 def test_cli_render_settings_inline_custom_css_is_injected(tmp_path: Path) -> None:
     settings = {
-        "extends": "phosphor:review",
+        "extends": "phosphor:realistic",
         "custom_css": ".board-fill { fill: rgb(1, 2, 3); }",
     }
     settings_file = tmp_path / "settings.json"
@@ -490,7 +490,7 @@ def test_cli_render_settings_inline_custom_css_is_injected(tmp_path: Path) -> No
 def test_cli_render_explicit_empty_custom_css_clears_settings_css(tmp_path: Path) -> None:
     """--custom-css '' clears custom CSS coming from the settings file."""
     settings = {
-        "extends": "phosphor:review",
+        "extends": "phosphor:realistic",
         "custom_css": ".board-fill { fill: rgb(1, 2, 3); }",
     }
     settings_file = tmp_path / "settings.json"
@@ -521,7 +521,7 @@ def test_cli_render_explicit_empty_custom_css_clears_settings_css(tmp_path: Path
 def test_cli_render_custom_css_is_emitted_after_annotation_styles(tmp_path: Path) -> None:
     """User CSS must come after generated annotation CSS so it can override it."""
     settings = {
-        "extends": "phosphor:review",
+        "extends": "phosphor:realistic",
         "custom_css": ".annotation-label { fill: rgb(1, 2, 3); }",
         "annotations": {
             "pointers": [{"target": "TP3", "label": "SWD"}],
@@ -545,7 +545,7 @@ def test_cli_render_custom_css_is_emitted_after_annotation_styles(tmp_path: Path
 def test_cli_render_settings_from_file(tmp_path: Path) -> None:
     """--render-settings loads highlights and annotations from a JSON file."""
     settings = {
-        "extends": "phosphor:review",
+        "extends": "phosphor:realistic",
         "highlights": [{"net": "/SWDIO_TMS"}],
         "annotations": {
             "pointers": [{"target": "TP3", "label": "SWD"}],
@@ -569,7 +569,7 @@ def test_cli_render_settings_from_file(tmp_path: Path) -> None:
 
 
 def test_cli_render_profile_outputs_json_to_stderr(tmp_path: Path) -> None:
-    settings = {"extends": "phosphor:review"}
+    settings = {"extends": "phosphor:realistic"}
     settings_file = tmp_path / "settings.json"
     settings_file.write_text(json.dumps(settings))
     out_file = tmp_path / "out.svg"
@@ -601,7 +601,7 @@ def test_cli_render_profile_outputs_json_to_stderr(tmp_path: Path) -> None:
 
 def test_cli_render_settings_font_size_sets_annotation_size(tmp_path: Path) -> None:
     settings = {
-        "extends": "phosphor:review",
+        "extends": "phosphor:realistic",
         "fontSizePx": 24,
         "annotations": {
             "pointers": [{"target": "TP3", "label": "SWD"}],
@@ -624,7 +624,7 @@ def test_cli_render_settings_font_size_sets_annotation_size(tmp_path: Path) -> N
 
 def test_cli_render_settings_accepts_packaged_v2_settings(tmp_path: Path) -> None:
     settings = {
-        "extends": "phosphor:simplified-high-contrast",
+        "extends": "phosphor:documentation",
         "fontSizePx": 64,
         "annotations": {
             "pointers": [{"target": "TP3.1", "label": "SWD"}],
@@ -648,7 +648,7 @@ def test_cli_render_settings_accepts_packaged_v2_settings(tmp_path: Path) -> Non
 
 def test_cli_font_size_overrides_render_settings(tmp_path: Path) -> None:
     settings = {
-        "extends": "phosphor:review",
+        "extends": "phosphor:realistic",
         "fontSizePx": 12,
         "annotations": {
             "pointers": [{"target": "TP3", "label": "SWD"}],
@@ -683,7 +683,7 @@ def test_cli_font_size_overrides_render_settings(tmp_path: Path) -> None:
 def test_cli_render_settings_from_stdin(tmp_path: Path) -> None:
     """--render-settings - reads JSON from stdin."""
     settings = {
-        "extends": "phosphor:review",
+        "extends": "phosphor:realistic",
         "highlights": [{"net": "/SWDIO_TMS"}],
     }
     out_file = tmp_path / "out.svg"
@@ -704,7 +704,7 @@ def test_cli_render_settings_from_stdin(tmp_path: Path) -> None:
 def test_cli_render_settings_with_highlight_colors(tmp_path: Path) -> None:
     """Highlight colors from render settings appear in the SVG CSS."""
     settings = {
-        "extends": "phosphor:review",
+        "extends": "phosphor:realistic",
         "highlights": [
             {"net": "/SWDIO_TMS", "color": "#d4a843"},
             {"net": "/SWDCLK_TCK", "color": "#5b8abf"},
@@ -780,6 +780,47 @@ def test_cli_render_unknown_net_warns_on_stderr_and_exits_zero() -> None:
     assert "DOES_NOT_EXIST" in result.stderr
     # The SVG still goes to stdout.
     assert "<svg" in result.stdout
+
+
+def test_cli_render_net_highlight_without_schematic_warns_and_matches_exact() -> None:
+    """A net highlight on a board with no discoverable schematic falls back
+    to exact matching with a warning."""
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["pcb", "render", "-n", "GND", str(FIXTURES / "swd_switch.kicad_pcb")],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "no schematic found" in result.stderr
+    assert "<svg" in result.stdout
+
+
+def test_cli_render_net_highlight_traverses_series_passives_via_schematic() -> None:
+    """Highlighting one side of a series resistor lights the far-side net's
+    copper on every layer (the jetson-orin project has a sibling schematic)."""
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "pcb",
+            "render",
+            "-n",
+            "/CSI/I2C_MUX_SCL",
+            str(FIXTURES / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pcb"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "no schematic found" not in result.stderr
+    # SCL_CAM is the far side of a series resistor from /CSI/I2C_MUX_SCL and
+    # routes on front, back, and inner copper; all of it joins the highlight.
+    assert 'data-net-name="SCL_CAM"' in result.stdout
+    highlight_block = result.stdout.split('data-highlight-target="net:/CSI/I2C_MUX_SCL"')[1]
+    overlay = highlight_block.split("</svg>")[0]
+    assert 'data-role="highlight.copper.front"' in overlay
+    assert 'data-role="highlight.copper.back"' in overlay
+    assert 'data-role="highlight.copper.inner' in overlay
 
 
 def test_cli_list_components_unknown_net_errors(tmp_path: Path) -> None:

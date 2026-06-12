@@ -248,7 +248,14 @@ def _render_pill_label(
 
     for i, line in enumerate(lines):
         ty = start_y + i * line_height
-        fill_attr = label_style.fill if label_style.fill is not None else text_color
+        if label_style.fill is not None:
+            fill_attr = label_style.fill
+        elif label_style.pill_visible is False:
+            # The pill behind the text is hidden, so contrast-against-pill is
+            # meaningless; default to dark text for the light default canvas.
+            fill_attr = "#000"
+        else:
+            fill_attr = text_color
         svg.raw(
             "".join(
                 (

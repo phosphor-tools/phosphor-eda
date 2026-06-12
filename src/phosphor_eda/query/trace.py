@@ -14,7 +14,15 @@ from typing import TYPE_CHECKING
 from phosphor_eda.query.classify import PASSIVE_PREFIXES, is_power_net, ref_prefix
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from phosphor_eda.domain.schematic import Component, Net, Pin, Schematic
+
+type BoundaryPredicate = Callable[["Net"], bool]
+
+
+def _default_boundary(net: Net) -> bool:
+    return is_power_net(net.name, net)
 
 
 @dataclass
@@ -61,6 +69,8 @@ def _same_component(left: Component, right: Component) -> bool:
 def trace_from_net(
     net: Net,
     origin_comp: Component | None = None,
+    *,
+    is_boundary: BoundaryPredicate | None = None,
 ) -> list[TraceResult]:
     """Trace through 2-pin passives reachable from *net*.
 
@@ -74,7 +84,12 @@ def trace_from_net(
     Returns one :class:`TraceResult` per distinct active endpoint found.
     Shunt passives (one pin on a power net) are recorded in each result but
     do not produce their own result entry.
+
+    ``is_boundary`` decides which nets terminate the walk (default: power
+    nets via :func:`is_power_net`); callers can widen it, e.g. to treat
+    high-fanout distribution rails as boundaries.
     """
+    boundary = is_boundary if is_boundary is not None else _default_boundary
     # Classify passives on this net as series or shunt
     series_pins: list[Pin] = []
     net_shunts: list[tuple[Component, Net]] = []
@@ -86,7 +101,7 @@ def trace_from_net(
         if not is_two_pin_passive(comp):
             continue
         other = other_pin(comp, pin)
-        if other.net is not None and is_power_net(other.net.name, other.net):
+        if other.net is not None and boundary(other.net):
             net_shunts.append((comp, other.net))
         else:
             series_pins.append(pin)
@@ -102,6 +117,7 @@ def trace_from_net(
                 net=net,
                 result=seed,
                 visited={net.id},
+                boundary=boundary,
             )
         )
 
@@ -114,6 +130,7 @@ def _walk(
     net: Net,
     result: TraceResult,
     visited: set[str],
+    boundary: BoundaryPredicate,
 ) -> list[TraceResult]:
     """Recursive walk through a chain of 2-pin passives.
 
@@ -132,8 +149,9 @@ def _walk(
         result.terminal_net = net
         return [result]
 
-    # Shunt to power — record but don't follow
-    if is_power_net(exit_net.name, exit_net):
+    # Shunt to a boundary net (power or wider, per the predicate) — record
+    # but don't follow
+    if boundary(exit_net):
         result.shunts.append((passive, exit_net))
         return [result]
 
@@ -165,7 +183,7 @@ def _walk(
     shunts: list[tuple[Component, Net]] = []
     for p in next_passives:
         other = other_pin(p.component, p)
-        if other.net is not None and is_power_net(other.net.name, other.net):
+        if other.net is not None and boundary(other.net):
             shunts.append((p.component, other.net))
         else:
             series_passives.append(p)
@@ -191,6 +209,7 @@ def _walk(
                 net=exit_net,
                 result=_clone_result(result),
                 visited=visited,
+                boundary=boundary,
             )
         )
     return branches

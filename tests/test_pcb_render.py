@@ -26,6 +26,7 @@ from phosphor_eda.render.inventory import (
     select_inventory_items,
 )
 from phosphor_eda.render.settings import (
+    BUNDLED_PRESETS,
     MAX_CUSTOM_CSS_LENGTH,
     CliOverrides,
     HighlightSpec,
@@ -231,7 +232,7 @@ def test_render_settings_reject_old_objects_filter() -> None:
         )
 
 
-@pytest.mark.parametrize("name", ["design", "review", "clean", "high-contrast"])
+@pytest.mark.parametrize("name", BUNDLED_PRESETS)
 def test_builtin_render_settings_use_typed_source_filters(name: str) -> None:
     settings_file = files("phosphor_eda.render.profiles").joinpath(f"{name}.json")
     with as_file(settings_file) as path:
@@ -243,19 +244,7 @@ def test_builtin_render_settings_use_typed_source_filters(name: str) -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "clean",
-        "design",
-        "high-contrast",
-        "print",
-        "print-callout",
-        "review",
-        "review-callout",
-        "simplified-high-contrast",
-    ],
-)
+@pytest.mark.parametrize("name", BUNDLED_PRESETS)
 def test_builtin_render_settings_hide_non_silkscreen_footprint_text(name: str) -> None:
     board = _board()
     copper_layer = next(layer for layer in board.layers if layer.name == "F.Cu")
@@ -326,11 +315,8 @@ def test_builtin_render_settings_hide_non_silkscreen_footprint_text(name: str) -
     assert "text:U1:mech-user" not in selected_ids
 
 
-@pytest.mark.parametrize(
-    "name",
-    ["high-contrast", "print", "print-callout", "simplified-high-contrast"],
-)
-def test_high_contrast_presets_hide_mechanical_artwork_by_default(name: str) -> None:
+@pytest.mark.parametrize("name", BUNDLED_PRESETS)
+def test_presets_hide_mechanical_artwork_by_default(name: str) -> None:
     board = _board()
     mechanical_layer = PcbLayer(
         "Top 3D Body",
@@ -435,6 +421,229 @@ _REJECTED_SETTINGS_DOCUMENTS: list[dict[str, object]] = [
     {"width": 0},
     {"fontSizePx": 0},
 ]
+
+
+def _documentation_settings(
+    *,
+    highlights: tuple[HighlightSpec, ...],
+    tokens: dict[str, object] | None = None,
+) -> RenderSettings:
+    payload: dict[str, object] = {"extends": "phosphor:documentation"}
+    if tokens:
+        payload["tokens"] = tokens
+    base = load_render_settings_json(json.dumps(payload))
+    return resolve_effective_settings(base, CliOverrides(side="front", highlights=highlights))
+
+
+def _marker_paths(svg: str) -> list[str]:
+    import re
+
+    return re.findall(r'<g[^>]*data-role="highlight\.marker"[^>]*>(.*?)</g>', svg, re.S)
+
+
+def test_pad_highlight_draws_marker_ring_when_enabled() -> None:
+    settings = _documentation_settings(highlights=(HighlightSpec(pad="U1.1"),))
+    svg = render_pcb_svg(_board(), settings).svg
+
+    markers = _marker_paths(svg)
+    assert len(markers) == 1
+    assert "A " in markers[0]
+
+
+def test_marker_ring_enforces_minimum_screen_diameter() -> None:
+    import re
+
+    settings = _documentation_settings(
+        highlights=(HighlightSpec(pad="U1.1"),),
+        tokens={"highlight.marker.minDiameterPx": 200},
+    )
+    svg = render_pcb_svg(_board(), settings).svg
+
+    (marker,) = _marker_paths(svg)
+    radii = [float(value) for value in re.findall(r"A ([\d.]+)", marker)]
+    assert radii
+    view_box = re.search(r'viewBox="[\d.\-]+ [\d.\-]+ ([\d.]+)', svg)
+    assert view_box is not None
+    px_per_mm = float(re.search(r'width="(\d+)"', svg).group(1)) / float(view_box.group(1))
+    assert radii[0] * px_per_mm >= 100  # half of minDiameterPx
+
+    # The ring must not collapse to the pad's own size when the minimum is large.
+    assert radii[0] > 1.0
+
+
+def test_marker_ring_absent_for_net_and_component_highlights() -> None:
+    settings = _documentation_settings(
+        highlights=(HighlightSpec(net="VCC"), HighlightSpec(component="U1")),
+    )
+    svg = render_pcb_svg(_board(), settings).svg
+    assert not _marker_paths(svg)
+
+
+def test_marker_ring_disabled_in_realistic_preset() -> None:
+    base = load_render_settings_json(json.dumps({"extends": "phosphor:realistic"}))
+    settings = resolve_effective_settings(
+        base,
+        CliOverrides(side="front", highlights=(HighlightSpec(pad="U1.1"),)),
+    )
+    svg = render_pcb_svg(_board(), settings).svg
+    assert not _marker_paths(svg)
+
+
+def test_marker_ring_uses_highlight_color() -> None:
+    settings = _documentation_settings(
+        highlights=(HighlightSpec(pad="U1.1", color="#00aa11"),),
+    )
+    svg = render_pcb_svg(_board(), settings).svg
+    (marker,) = _marker_paths(svg)
+    assert "#00aa11" in marker
+
+
+def test_hidden_pill_label_text_defaults_to_dark_fill() -> None:
+    """With the pill hidden, text must not keep the white-on-pill contrast color."""
+    from phosphor_eda.render.annotations import parse_annotations, resolve_annotations
+
+    base = load_render_settings_json(
+        json.dumps(
+            {
+                "extends": "phosphor:documentation",
+                "annotations": {"pointers": [{"target": "U1.1", "label": "VCC"}]},
+            }
+        )
+    )
+    settings = resolve_effective_settings(base, CliOverrides(side="front"))
+    board = _board()
+    annotations = resolve_annotations(
+        parse_annotations(settings.annotations),
+        board,
+        settings.side,
+        settings.width,
+        settings.font_size,
+    )
+    svg = render_pcb_svg(board, settings, annotations=annotations).svg
+
+    label_texts = [
+        chunk.split(">")[0]
+        for chunk in svg.split("<text ")
+        if 'class="annotation-label-text"' in chunk.split(">")[0]
+    ]
+    assert label_texts
+    for attrs in label_texts:
+        assert 'fill="#fff"' not in attrs
+
+
+def test_dimming_mode_parses() -> None:
+    for mode in ("off", "on", "auto"):
+        settings = load_render_settings_json(json.dumps({"dimming": {"mode": mode}}))
+        assert settings.dimming.mode == mode
+
+
+def test_dimming_defaults_to_auto() -> None:
+    settings = load_render_settings_json("{}")
+    assert settings.dimming.mode == "auto"
+
+
+def test_dimming_rejects_unknown_mode() -> None:
+    with pytest.raises(ValueError, match=r"dimming\.mode"):
+        _ = load_render_settings_json(json.dumps({"dimming": {"mode": "sometimes"}}))
+
+
+def test_dimming_enabled_is_rejected_with_migration_message() -> None:
+    with pytest.raises(ValueError, match=r"dimming\.enabled is no longer supported"):
+        _ = load_render_settings_json(json.dumps({"dimming": {"enabled": True}}))
+
+
+def test_dimming_rejects_unknown_keys() -> None:
+    with pytest.raises(ValueError, match="unknown dimming key"):
+        _ = load_render_settings_json(json.dumps({"dimming": {"mod": "off"}}))
+
+
+def test_background_parses() -> None:
+    settings = load_render_settings_json(json.dumps({"background": "#fafafa"}))
+    assert settings.background == "#fafafa"
+
+
+def test_background_defaults_to_white_when_resolved() -> None:
+    base = load_render_settings_json("{}")
+    resolved = resolve_effective_settings(base, CliOverrides())
+    assert resolved.background == "#ffffff"
+
+
+def test_background_rejects_empty_and_oversized_values() -> None:
+    with pytest.raises(ValueError, match="background"):
+        _ = load_render_settings_json(json.dumps({"background": ""}))
+    with pytest.raises(ValueError, match="background"):
+        _ = load_render_settings_json(json.dumps({"background": "x" * 65}))
+
+
+def test_render_emits_background_rect_by_default() -> None:
+    svg = render_pcb_svg(_board(), _design_settings()).svg
+    assert 'class="canvas-background"' in svg
+    assert "#ffffff" in svg
+
+
+def test_background_none_omits_rect() -> None:
+    base = load_render_settings_json(json.dumps({"background": "none"}))
+    settings = resolve_effective_settings(base, CliOverrides(side="front"))
+    svg = render_pcb_svg(_board(), settings).svg
+    assert "canvas-background" not in svg
+
+
+def test_auto_dimming_emits_scrim_only_when_highlights_resolve() -> None:
+    plain = render_pcb_svg(_board(), _design_settings()).svg
+    assert "dim-scrim" not in plain
+
+    highlighted = render_pcb_svg(_board(), _design_settings(highlight_nets=("VCC",))).svg
+    assert 'class="dim-scrim"' in highlighted
+    # The scrim paints after base layers and before the highlight overlay.
+    assert highlighted.index("dim-scrim") < highlighted.index("highlight-overlay")
+
+    unresolved = render_pcb_svg(
+        _board(),
+        _design_settings(highlight_nets=("DOES_NOT_EXIST",)),
+    ).svg
+    assert "dim-scrim" not in unresolved
+
+
+def test_dimming_off_suppresses_scrim() -> None:
+    base = load_render_settings_json(
+        json.dumps({"extends": "phosphor:design", "dimming": {"mode": "off"}})
+    )
+    settings = resolve_effective_settings(
+        base,
+        CliOverrides(side="front", highlights=(HighlightSpec(net="VCC"),)),
+    )
+    svg = render_pcb_svg(_board(), settings).svg
+    assert "dim-scrim" not in svg
+
+
+def test_dimming_on_emits_scrim_without_highlights() -> None:
+    base = load_render_settings_json(
+        json.dumps({"extends": "phosphor:design", "dimming": {"mode": "on"}})
+    )
+    settings = resolve_effective_settings(base, CliOverrides(side="front"))
+    svg = render_pcb_svg(_board(), settings).svg
+    assert 'class="dim-scrim"' in svg
+
+
+def test_scrim_tokens_override_fill_and_opacity() -> None:
+    base = load_render_settings_json(
+        json.dumps(
+            {
+                "extends": "phosphor:design",
+                "tokens": {"highlight.dim.fill": "#000000", "highlight.dim.opacity": 0.3},
+            }
+        )
+    )
+    settings = resolve_effective_settings(
+        base,
+        CliOverrides(side="front", highlights=(HighlightSpec(net="VCC"),)),
+    )
+    svg = render_pcb_svg(_board(), settings).svg
+    assert 'class="dim-scrim"' in svg
+    scrim_index = svg.index("dim-scrim")
+    scrim_tag = svg[svg.rindex("<rect", 0, scrim_index) : svg.index(">", scrim_index) + 1]
+    assert "#000000" in scrim_tag
+    assert "0.3" in scrim_tag
 
 
 @pytest.mark.parametrize("document", _REJECTED_SETTINGS_DOCUMENTS)

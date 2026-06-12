@@ -25,7 +25,7 @@ from phosphor_eda.render.drills import drill_geometry
 from phosphor_eda.render.inventory import InventoryItemKind, build_inventory
 
 FIXTURE = Path(__file__).parent / "fixtures" / "swd_switch.kicad_pcb"
-ORANGECRAB_FIXTURE = Path(__file__).parent / "fixtures" / "orangecrab.kicad_pcb"
+ORANGECRAB_FIXTURE = Path(__file__).parent / "fixtures" / "kicad-orangecrab/OrangeCrab.kicad_pcb"
 JETSON_ORIN_FIXTURE = (
     Path(__file__).parent / "fixtures" / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pcb"
 )
@@ -110,6 +110,48 @@ def test_kicad_custom_pad_primitives_are_modeled() -> None:
     bbox_area = (max_x - min_x) * (max_y - min_y)
 
     assert geometry.area < bbox_area
+
+
+def test_kicad10_name_only_net_references_synthesize_numbers() -> None:
+    """KiCad 10 (version 20260206) dropped net numbers: there is no top-level
+    net table and pads/segments/zones carry ``(net "NAME")`` only. Numbers
+    are synthesized in first-appearance order."""
+    parsed = sexpdata.loads(
+        """
+        (kicad_pcb
+          (version 20260206)
+          (layers
+            (0 "F.Cu" signal)
+            (29 "F.Mask" user)
+            (44 "Edge.Cuts" user)
+          )
+          (footprint "Test:Part"
+            (layer "F.Cu")
+            (at 10 10)
+            (property "Reference" "U1")
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net "SIG_A"))
+            (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net "GND"))
+            (pad "3" smd rect (at 4 0) (size 1 1) (layers "F.Cu"))
+          )
+          (segment (start 10 10) (end 12 10) (width 0.2) (layer "F.Cu") (net "SIG_A"))
+          (gr_line (start 0 0) (end 1 0) (layer "Edge.Cuts") (width 0.1))
+        )
+        """
+    )
+    board = parse_kicad_pcb_from_sexpr(list(parsed[1:]), default_name="v10-nets")
+
+    assert {net.name for net in board.nets.values()} == {"SIG_A", "GND"}
+    assert sorted(board.nets) == [1, 2]
+    pads_by_number = {pad.number: pad for pad in board.pads}
+    assert pads_by_number["1"].net is not None
+    assert pads_by_number["1"].net.name == "SIG_A"
+    assert pads_by_number["2"].net is not None
+    assert pads_by_number["2"].net.name == "GND"
+    assert pads_by_number["3"].net is None
+    assert board.conductors[0].net is not None
+    assert board.conductors[0].net.name == "SIG_A"
+    # The same name resolves to the same net object everywhere.
+    assert board.conductors[0].net is pads_by_number["1"].net
 
 
 def test_kicad_pad_rotation_uses_board_coordinate_orientation() -> None:

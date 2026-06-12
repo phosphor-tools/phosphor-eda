@@ -89,7 +89,6 @@ def build_eda_layers(
     inventory: PcbRenderInventory,
     settings: RenderSettings,
     *,
-    warn: Callable[[str], None],
     profiler: RenderProfiler | None = None,
 ) -> tuple[DerivedLayer, ...]:
     """Build EDA derived layers from typed source inventory."""
@@ -106,7 +105,6 @@ def build_eda_layers(
         selected,
         settings,
         namespace="eda",
-        warn=warn,
         board_mask=board_mask,
         silkscreen_masks=silkscreen_masks,
         profiler=profiler,
@@ -117,7 +115,6 @@ def build_realistic_layers(
     inventory: PcbRenderInventory,
     settings: RenderSettings,
     *,
-    warn: Callable[[str], None],
     profiler: RenderProfiler | None = None,
 ) -> tuple[DerivedLayer, ...]:
     """Build front/back realistic visual layers."""
@@ -157,24 +154,20 @@ def build_realistic_layers(
     layers: list[DerivedLayer] = []
     layers.extend(
         _realistic_layer(
-            inventory,
             settings,
             function="substrate",
             primitives=board_primitives,
             source_items=board_items,
-            warn=warn,
             clip=board_clip,
             mask=board_mask,
         )
     )
     layers.extend(
         _realistic_layer(
-            inventory,
             settings,
             function="solder_mask",
             primitives=board_primitives,
             source_items=board_items,
-            warn=warn,
             clip=board_clip,
             mask=solder_mask,
         )
@@ -182,36 +175,30 @@ def build_realistic_layers(
     copper_primitives = _primitives_for_items(copper_items)
     layers.extend(
         _realistic_layer(
-            inventory,
             settings,
             function="covered_copper",
             primitives=copper_primitives,
             source_items=copper_items,
-            warn=warn,
             clip=board_clip,
             mask=solder_mask,
         )
     )
     layers.extend(
         _realistic_layer(
-            inventory,
             settings,
             function="exposed_substrate",
             primitives=board_primitives,
             source_items=board_items,
-            warn=warn,
             clip=board_clip,
             mask=opening_mask,
         )
     )
     layers.extend(
         _realistic_layer(
-            inventory,
             settings,
             function="exposed_copper",
             primitives=copper_primitives,
             source_items=copper_items,
-            warn=warn,
             clip=board_clip,
             mask=opening_mask,
         )
@@ -219,12 +206,10 @@ def build_realistic_layers(
     silkscreen_primitives = _primitives_for_items(silkscreen_items)
     layers.extend(
         _realistic_layer(
-            inventory,
             settings,
             function="silkscreen",
             primitives=silkscreen_primitives,
             source_items=silkscreen_items,
-            warn=warn,
             clip=board_clip,
             mask=solder_mask,
         )
@@ -239,14 +224,23 @@ def build_highlight_layers(
     settings: RenderSettings,
     *,
     warn: Callable[[str], None],
+    net_expansions: Mapping[str, frozenset[str]] | None = None,
     profiler: RenderProfiler | None = None,
 ) -> tuple[HighlightGroup, ...]:
-    """Build highlight overlays for net/component/pad targets."""
+    """Build highlight overlays for net/component/pad targets.
+
+    ``net_expansions`` maps a highlighted net name to the full group of net
+    names electrically continuous with it (schematic-bridged closure); a net
+    highlight matches any name in its group.
+    """
     groups: list[HighlightGroup] = []
     board_mask = _board_layer_mask(inventory)
     silkscreen_masks = _silkscreen_layer_masks(inventory, settings.side)
     for highlight in settings.highlights:
-        selected = tuple(item for item in inventory.items if _matches_highlight(item, highlight))
+        net_names = _highlight_net_names(highlight, net_expansions)
+        selected = tuple(
+            item for item in inventory.items if _matches_highlight(item, highlight, net_names)
+        )
         if not selected:
             warn(f"Highlight target not found: {_highlight_target(highlight)}")
             continue
@@ -255,7 +249,6 @@ def build_highlight_layers(
             selected,
             settings,
             namespace="highlight",
-            warn=warn,
             highlight_color=highlight.color,
             board_mask=board_mask,
             silkscreen_masks=silkscreen_masks,
@@ -271,7 +264,6 @@ def _group_inventory_layers(
     settings: RenderSettings,
     *,
     namespace: str,
-    warn: Callable[[str], None],
     highlight_color: str = "",
     board_mask: LayerMask | None = None,
     silkscreen_masks: dict[str, LayerMask] | None = None,
@@ -283,7 +275,6 @@ def _group_inventory_layers(
         groups[key].append(item)
 
     layers: list[DerivedLayer] = []
-    warned_missing_dimmed_tokens: set[str] = set()
     for key, items in sorted(groups.items(), key=lambda entry: _group_sort_key(entry[0])):
         primitives = _primitives_for_items(tuple(items))
         if not primitives:
@@ -298,10 +289,7 @@ def _group_inventory_layers(
         style = resolve_layer_style(
             settings.tokens,
             role,
-            dimmed=settings.dimming.enabled and namespace == "eda",
-            warn=warn,
             highlight_color=highlight_color,
-            warned_missing_dimmed_tokens=warned_missing_dimmed_tokens,
             eda_layer_order=_copper_order(inventory, key.source_layer_name),
         )
         layers.append(
@@ -326,21 +314,18 @@ def _group_inventory_layers(
 
 
 def _realistic_layer(
-    inventory: PcbRenderInventory,
     settings: RenderSettings,
     *,
     function: str,
     primitives: tuple[SvgPrimitive, ...],
     source_items: tuple[InventoryItem, ...],
-    warn: Callable[[str], None],
     clip: LayerClip | None,
     mask: LayerMask | None,
 ) -> tuple[DerivedLayer, ...]:
     if not primitives:
         return ()
     role = VisualRole(namespace="realistic", function=function)
-    style = resolve_layer_style(settings.tokens, role, dimmed=False, warn=warn)
-    _ = inventory
+    style = resolve_layer_style(settings.tokens, role)
     return (
         DerivedLayer(
             id=f"realistic:{function}",
@@ -494,11 +479,30 @@ def _filter_excluded_components(
     return tuple(item for item in items if item.tags.component_prefix.upper() not in normalized)
 
 
-def _matches_highlight(item: InventoryItem, highlight: HighlightSpec) -> bool:
+def _highlight_net_names(
+    highlight: HighlightSpec,
+    net_expansions: Mapping[str, frozenset[str]] | None,
+) -> frozenset[str]:
+    """Upper-cased net names this highlight matches."""
+    if not highlight.net:
+        return frozenset()
+    if net_expansions is None or highlight.exact:
+        return frozenset({highlight.net.upper()})
+    expanded = net_expansions.get(highlight.net)
+    if expanded is None:
+        return frozenset({highlight.net.upper()})
+    return frozenset(name.upper() for name in expanded)
+
+
+def _matches_highlight(
+    item: InventoryItem,
+    highlight: HighlightSpec,
+    net_names: frozenset[str],
+) -> bool:
     if item.item_kind == InventoryItemKind.DRILL:
         return False
     if highlight.net:
-        return item.tags.net_name.upper() == highlight.net.upper()
+        return item.tags.net_name.upper() in net_names
     if highlight.component:
         return item.tags.component_ref.upper() == highlight.component.upper()
     if highlight.pad:

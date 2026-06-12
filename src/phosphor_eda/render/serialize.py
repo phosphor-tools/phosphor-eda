@@ -69,6 +69,9 @@ def render_pcb_svg_from_derived_plan(
         svg.raw(_escape_style_block_text(plan.custom_css))
         svg.raw("</style>")
 
+    if plan.background:
+        svg.raw(_view_box_rect(plan, css_class="canvas-background", fill=plan.background))
+
     clip_ids_by_signature: dict[_LayerClipSignature, str] = {}
     mask_ids_by_signature: dict[_LayerMaskSignature, str] = {}
     _render_derived_layers(
@@ -79,6 +82,15 @@ def render_pcb_svg_from_derived_plan(
         clip_ids_by_signature=clip_ids_by_signature,
         mask_ids_by_signature=mask_ids_by_signature,
     )
+    if plan.dim_scrim is not None:
+        svg.raw(
+            _view_box_rect(
+                plan,
+                css_class="dim-scrim",
+                fill=plan.dim_scrim.fill,
+                opacity=plan.dim_scrim.opacity,
+            )
+        )
     for group in plan.highlight_groups:
         svg.group_start(attrs={"class": "highlight-overlay", "data-highlight-target": group.target})
         _render_derived_layers(
@@ -111,6 +123,25 @@ def render_pcb_svg_from_derived_plan(
             highlight_layers=sum(len(group.layers) for group in plan.highlight_groups),
         )
     return rendered
+
+
+def _view_box_rect(
+    plan: DerivedRenderPlan,
+    *,
+    css_class: str,
+    fill: str,
+    opacity: float | None = None,
+) -> str:
+    """A full-viewBox rect (canvas background or highlight dim scrim)."""
+    view_box = plan.view_box
+    attrs = (
+        f'class="{css_class}" x="{view_box.x:.4f}" y="{view_box.y:.4f}" '
+        + f'width="{view_box.width:.4f}" height="{view_box.height:.4f}" '
+        + f'fill="{xml_escape(fill, {'"': "&quot;"})}"'
+    )
+    if opacity is not None:
+        attrs += f' opacity="{opacity:g}"'
+    return f"<rect {attrs}/>"
 
 
 def append_pcb_metadata(svg: str, board: Pcb) -> str:

@@ -33,7 +33,7 @@ from phosphor_eda.geometry.pcb_geometry import (
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SWD_SWITCH_PCB = FIXTURES / "swd_switch.kicad_pcb"
-ORANGECRAB_PCB = FIXTURES / "orangecrab.kicad_pcb"
+ORANGECRAB_PCB = FIXTURES / "kicad-orangecrab/OrangeCrab.kicad_pcb"
 PI_MX8_PCB = FIXTURES / "altium" / "pi-mx8" / "PCB" / "PiMX8MP_r0.3.PcbDoc"
 
 

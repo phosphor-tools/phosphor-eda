@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import colorsys
 import hashlib
-from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 
-type WarningCallback = Callable[[str], None]
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 @dataclass(frozen=True)
@@ -66,9 +66,27 @@ _EDA_SILKSCREEN_BACK_COLOR = "#ffff00"
 _EDA_EDGE_COLOR = "#202020"
 _EDA_DRILL_COLOR = "#202020"
 _EDA_KEEPOUT_COLOR = "#cc2e7f"
+_EDA_FABRICATION_COLOR = "#666666"
 _EDA_MECHANICAL_COLOR = "#777777"
 _EDA_TEXT_COLOR = "#777777"
-_DIMMED_DEFAULT_OPACITY = 0.25
+_HIGHLIGHT_NAMESPACE = "highlight"
+_HIGHLIGHT_FILL_BY_SIDE = {
+    "front": "#ff8a00",
+    "back": "#5aa7ff",
+    "bottom": "#5aa7ff",
+    "inner": "#ffe066",
+}
+_HIGHLIGHT_DEFAULT_FILL = "#ff8a00"
+_HIGHLIGHT_DEFAULT_OPACITY = 0.85
+_REALISTIC_DEFAULTS: dict[tuple[str, str], object] = {
+    ("substrate", "fill"): "#b58b55",
+    ("solder_mask", "fill"): "#1f7a3a",
+    ("covered_copper", "fill"): "#145222",
+    ("covered_copper", "opacity"): 0.6,
+    ("exposed_copper", "fill"): "#b87333",
+    ("exposed_copper", "opacity"): 0.9,
+    ("silkscreen", "fill"): "#ffffff",
+}
 _EDA_STYLE_FALLBACK_FUNCTIONS = {
     "assembly": ("fabrication", "mechanical"),
     "courtyard": ("fabrication", "mechanical"),
@@ -110,28 +128,17 @@ def resolve_layer_style(
     tokens: Mapping[str, object],
     role: VisualRole,
     *,
-    dimmed: bool,
-    warn: WarningCallback,
     highlight_color: str = "",
-    warned_missing_dimmed_tokens: set[str] | None = None,
     eda_layer_order: int | None = None,
 ) -> ResolvedStyle:
     """Resolve paint style tokens for a visual layer role."""
     style_values: dict[str, object] = {}
-    dimmed_opacity_explicit = False
     if highlight_color:
         style_values["fill"] = highlight_color
     else:
         fill_resolution = _resolve_optional_token(tokens, role, "fill")
         if fill_resolution is not None:
-            style_values["fill"] = _resolve_dimmed_value(
-                tokens,
-                fill_resolution,
-                "fill",
-                dimmed,
-                warn,
-                warned_missing_dimmed_tokens,
-            )
+            style_values["fill"] = fill_resolution.value
         else:
             default_fill = _resolve_default_value(tokens, role, "fill", eda_layer_order)
             if default_fill is None:
@@ -143,31 +150,11 @@ def resolve_layer_style(
             continue
         resolution = _resolve_optional_token(tokens, role, prop)
         if resolution is not None:
-            if dimmed and prop == "opacity" and _dimmed_token(resolution.token) in tokens:
-                dimmed_opacity_explicit = True
-            style_values[prop] = _resolve_dimmed_value(
-                tokens,
-                resolution,
-                prop,
-                dimmed,
-                warn,
-                warned_missing_dimmed_tokens,
-            )
+            style_values[prop] = resolution.value
         else:
             default_value = _resolve_default_value(tokens, role, prop, eda_layer_order)
             if default_value is not None:
                 style_values[prop] = default_value
-
-    if dimmed and not dimmed_opacity_explicit:
-        opacity = _as_optional_float(style_values.get("opacity"), "opacity")
-        style_values["opacity"] = (
-            _DIMMED_DEFAULT_OPACITY
-            if opacity is None
-            else min(
-                opacity,
-                _DIMMED_DEFAULT_OPACITY,
-            )
-        )
 
     return ResolvedStyle(
         fill=_as_optional_string(style_values.get("fill"), "fill"),
@@ -229,6 +216,8 @@ def _resolve_default_value(
 ) -> object | None:
     if role.namespace == _REALISTIC_NAMESPACE:
         return _resolve_realistic_default_value(tokens, role, prop)
+    if role.namespace == _HIGHLIGHT_NAMESPACE:
+        return _resolve_highlight_default_value(role, prop)
     return _resolve_eda_default_value(role, prop, eda_layer_order)
 
 
@@ -238,7 +227,20 @@ def _resolve_realistic_default_value(
     prop: str,
 ) -> object | None:
     if role.function == "exposed_substrate" and prop == "fill":
-        return tokens.get("realistic.substrate.fill")
+        substrate_fill = tokens.get("realistic.substrate.fill")
+        if substrate_fill is not None:
+            return substrate_fill
+        return _REALISTIC_DEFAULTS[("substrate", "fill")]
+    return _REALISTIC_DEFAULTS.get((role.function, prop))
+
+
+def _resolve_highlight_default_value(role: VisualRole, prop: str) -> object | None:
+    if prop == "fill":
+        return _HIGHLIGHT_FILL_BY_SIDE.get(role.side, _HIGHLIGHT_DEFAULT_FILL)
+    if prop == "opacity":
+        return _HIGHLIGHT_DEFAULT_OPACITY
+    if prop == "stroke":
+        return "none"
     return None
 
 
@@ -262,8 +264,22 @@ def _resolve_eda_default_value(
         return _resolve_eda_keepout_default(prop)
     if role.function in {"designator", "value", "user_text"}:
         return _resolve_eda_text_default(prop)
+    if role.function in {"fabrication", "assembly", "courtyard"}:
+        return _resolve_eda_fabrication_default(prop)
     if role.function in {"mechanical", "unknown"}:
         return _resolve_eda_mechanical_default(prop)
+    return None
+
+
+def _resolve_eda_fabrication_default(prop: str) -> object | None:
+    if prop == "fill":
+        return "none"
+    if prop == "stroke":
+        return _EDA_FABRICATION_COLOR
+    if prop == "strokeWidthMm":
+        return 0.08
+    if prop == "opacity":
+        return 0.8
     return None
 
 
@@ -351,38 +367,6 @@ def _resolve_eda_mechanical_default(prop: str) -> object | None:
     if prop == "opacity":
         return 0.8
     return None
-
-
-def _resolve_dimmed_value(
-    tokens: Mapping[str, object],
-    resolution: _TokenResolution,
-    prop: str,
-    dimmed: bool,
-    warn: WarningCallback,
-    warned_missing_dimmed_tokens: set[str] | None,
-) -> object:
-    if not dimmed:
-        return resolution.value
-
-    dimmed_token = _dimmed_token(resolution.token)
-    if dimmed_token in tokens:
-        return tokens[dimmed_token]
-
-    if prop == "opacity":
-        return _DIMMED_DEFAULT_OPACITY
-
-    if warned_missing_dimmed_tokens is None or dimmed_token not in warned_missing_dimmed_tokens:
-        warn(f"Missing dimmed style token {dimmed_token}; using {resolution.token}")
-        if warned_missing_dimmed_tokens is not None:
-            warned_missing_dimmed_tokens.add(dimmed_token)
-    return resolution.value
-
-
-def _dimmed_token(token: str) -> str:
-    namespace, separator, rest = token.partition(".")
-    if not separator:
-        return f"{token}.dimmed"
-    return f"{namespace}.dimmed.{rest}"
 
 
 def _role_label(role: VisualRole) -> str:

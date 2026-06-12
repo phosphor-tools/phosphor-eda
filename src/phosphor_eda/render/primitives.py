@@ -111,7 +111,7 @@ class SvgPrimitive:
     text: SvgText | None = None
 
 
-def _union_bounds(primitives: tuple[SvgPrimitive, ...]) -> Bounds | None:
+def union_bounds(primitives: tuple[SvgPrimitive, ...]) -> Bounds | None:
     boxes = [primitive.bbox for primitive in primitives if primitive.bbox is not None]
     if not boxes:
         return None
@@ -135,7 +135,7 @@ class LayerMask:
         The mask paints ``board`` white and subtracts ``drills``/``openings``,
         so the viewport only needs to cover the white region.
         """
-        return _union_bounds(self.board)
+        return union_bounds(self.board)
 
 
 @dataclass(frozen=True)

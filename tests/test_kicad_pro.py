@@ -63,6 +63,27 @@ def test_hdmi_class_has_patterns(net_classes) -> None:
     assert any("HDMI" in m for m in hdmi.members)
 
 
+def test_null_net_settings_fields_parse_as_empty(tmp_path: Path) -> None:
+    """Eeschema writes explicit nulls for unused net-settings fields when it
+    generates a .kicad_pro during legacy-project migration."""
+    import json
+
+    pro = tmp_path / "migrated.kicad_pro"
+    pro.write_text(
+        json.dumps(
+            {
+                "net_settings": {
+                    "classes": None,
+                    "netclass_assignments": None,
+                    "netclass_patterns": None,
+                }
+            }
+        )
+    )
+
+    assert parse_kicad_pro(pro) == []
+
+
 def test_null_netclass_assignments_does_not_crash(tmp_path: Path) -> None:
     # KiCad 7+ writes "netclass_assignments": null when nothing is assigned.
     pro = tmp_path / "proj.kicad_pro"

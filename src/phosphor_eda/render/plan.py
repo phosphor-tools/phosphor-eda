@@ -4,19 +4,24 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.pcb import PcbConductorKind
-from phosphor_eda.render.inventory import build_inventory
+from phosphor_eda.geometry.pcb_geometry import circle_path_d
+from phosphor_eda.render.inventory import InventoryTags, build_inventory
 from phosphor_eda.render.modes import (
+    DerivedLayer,
     HighlightGroup,
     build_eda_layers,
     build_highlight_layers,
     build_realistic_layers,
 )
+from phosphor_eda.render.primitives import PaintMode, SvgPrimitive, union_bounds
 from phosphor_eda.render.profiler import profile_span
+from phosphor_eda.render.tokens import ResolvedStyle, VisualRole
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from phosphor_eda.domain.pcb import Pcb
     from phosphor_eda.render.annotations import ResolvedAnnotations
-    from phosphor_eda.render.modes import DerivedLayer
     from phosphor_eda.render.profiler import RenderProfiler
     from phosphor_eda.render.settings import RenderSettings, TokenMap
 
@@ -58,6 +63,14 @@ class AnnotationStyle:
 
 
 @dataclass(frozen=True)
+class DimScrim:
+    """A translucent wash painted over base layers so highlights pop."""
+
+    fill: str = "#ffffff"
+    opacity: float = 0.55
+
+
+@dataclass(frozen=True)
 class DerivedRenderPlan:
     view_box: ViewBox
     width_px: int
@@ -68,6 +81,8 @@ class DerivedRenderPlan:
     warnings: tuple[str, ...]
     annotation_style: AnnotationStyle = field(default_factory=AnnotationStyle)
     custom_css: str = ""
+    background: str = ""
+    dim_scrim: DimScrim | None = None
 
 
 def build_derived_render_plan(
@@ -75,6 +90,7 @@ def build_derived_render_plan(
     *,
     settings: RenderSettings,
     annotations: ResolvedAnnotations | None,
+    net_expansions: Mapping[str, frozenset[str]] | None = None,
     profiler: RenderProfiler | None = None,
 ) -> DerivedRenderPlan:
     # Settings must be fully resolved (resolve_effective_settings) before
@@ -133,7 +149,6 @@ def build_derived_render_plan(
             base_layers = build_realistic_layers(
                 inventory,
                 settings,
-                warn=warnings.append,
                 profiler=profiler,
             )
     else:
@@ -141,7 +156,6 @@ def build_derived_render_plan(
             base_layers = build_eda_layers(
                 inventory,
                 settings,
-                warn=warnings.append,
                 profiler=profiler,
             )
     with profile_span(profiler, "plan.build_highlight_layers"):
@@ -149,8 +163,11 @@ def build_derived_render_plan(
             inventory,
             settings,
             warn=warnings.append,
+            net_expansions=net_expansions,
             profiler=profiler,
         )
+    px_per_mm = width_px / vb_w if vb_w > 0 else 1.0
+    highlight_groups = _append_pad_marker_rings(settings, highlight_groups, px_per_mm)
 
     return DerivedRenderPlan(
         view_box=ViewBox(vb_x, vb_y, vb_w, vb_h),
@@ -162,6 +179,107 @@ def build_derived_render_plan(
         warnings=tuple(warnings),
         annotation_style=annotation_style_for_settings(settings),
         custom_css=settings.custom_css,
+        background=_resolved_background(settings),
+        dim_scrim=_dim_scrim_for_settings(settings, highlight_groups),
+    )
+
+
+_MARKER_DEFAULT_MIN_DIAMETER_PX = 28.0
+_MARKER_DEFAULT_STROKE_WIDTH_PX = 2.5
+_MARKER_DEFAULT_COLOR = "#ff8a00"
+# Ring radius relative to the pad's half extent, so the ring clears the pad.
+_MARKER_PAD_CLEARANCE = 1.6
+
+
+def _append_pad_marker_rings(
+    settings: RenderSettings,
+    groups: tuple[HighlightGroup, ...],
+    px_per_mm: float,
+) -> tuple[HighlightGroup, ...]:
+    """Draw a ring around each highlighted pad with a minimum on-screen size.
+
+    A highlighted 0402 pad is invisible at print scale; the ring keeps the
+    location findable without redrawing the pad at a false size.
+    """
+    enabled = _token_bool(settings.tokens, "highlight.marker.enabled")
+    if not enabled:
+        return groups
+    min_diameter_token = _token_float(settings.tokens, "highlight.marker.minDiameterPx")
+    min_diameter_px = (
+        min_diameter_token if min_diameter_token is not None else _MARKER_DEFAULT_MIN_DIAMETER_PX
+    )
+    stroke_width_token = _token_float(settings.tokens, "highlight.marker.strokeWidthPx")
+    stroke_width_px = (
+        stroke_width_token if stroke_width_token is not None else _MARKER_DEFAULT_STROKE_WIDTH_PX
+    )
+
+    result: list[HighlightGroup] = []
+    for group in groups:
+        if not group.target.startswith("pad:"):
+            result.append(group)
+            continue
+        bounds = union_bounds(
+            tuple(primitive for layer in group.layers for primitive in layer.primitives)
+        )
+        if bounds is None:
+            result.append(group)
+            continue
+        min_x, min_y, max_x, max_y = bounds
+        cx = (min_x + max_x) / 2
+        cy = (min_y + max_y) / 2
+        half_extent = max(max_x - min_x, max_y - min_y) / 2
+        radius = max(half_extent * _MARKER_PAD_CLEARANCE, min_diameter_px / 2 / px_per_mm)
+        marker = DerivedLayer(
+            id=f"highlight:marker:{group.target}",
+            role=VisualRole(namespace="highlight", function="marker"),
+            primitives=(
+                SvgPrimitive(
+                    d=circle_path_d(cx, cy, radius),
+                    source_id=f"marker:{group.target}",
+                    source_layer="",
+                    kind="marker",
+                    tags=InventoryTags(),
+                    bbox=(cx - radius, cy - radius, cx + radius, cy + radius),
+                    paint=PaintMode.STROKE,
+                    stroke_width=stroke_width_px / px_per_mm,
+                ),
+            ),
+            source_layers=(),
+            source_ids=(),
+            style=ResolvedStyle(fill=_marker_color(group)),
+        )
+        result.append(HighlightGroup(target=group.target, layers=(*group.layers, marker)))
+    return tuple(result)
+
+
+def _marker_color(group: HighlightGroup) -> str:
+    """The ring inherits the group's resolved highlight fill."""
+    for layer in group.layers:
+        if layer.style is not None and layer.style.fill not in (None, "none"):
+            return layer.style.fill
+    return _MARKER_DEFAULT_COLOR
+
+
+def _resolved_background(settings: RenderSettings) -> str:
+    """Map the background setting to a paintable fill ('' = no background)."""
+    if settings.background in ("none", "transparent"):
+        return ""
+    return settings.background
+
+
+def _dim_scrim_for_settings(
+    settings: RenderSettings,
+    highlight_groups: tuple[HighlightGroup, ...],
+) -> DimScrim | None:
+    mode = settings.dimming.mode
+    if mode == "off" or (mode == "auto" and not highlight_groups):
+        return None
+    fill = _token_str(settings.tokens, "highlight.dim.fill")
+    opacity = _token_float(settings.tokens, "highlight.dim.opacity")
+    defaults = DimScrim()
+    return DimScrim(
+        fill=fill if fill is not None else defaults.fill,
+        opacity=opacity if opacity is not None else defaults.opacity,
     )
 
 
