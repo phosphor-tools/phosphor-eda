@@ -9,6 +9,7 @@ import sexpdata
 
 from phosphor_eda.domain.pcb import (
     LayerRole,
+    PadStack,
     PcbArc,
     PcbArtwork,
     PcbArtworkKind,
@@ -125,9 +126,12 @@ def parse_pad(
             number=number,
             x=abs_x,
             y=abs_y,
-            width=width,
-            height=height,
-            shape=shape,
+            stack=PadStack.simple(
+                shape,
+                width,
+                height,
+                corner_radius_ratio=sexp.find_num(pad_sexpr, "roundrect_rratio"),
+            ),
             pad_type=(
                 PcbPadType.SMD
                 if native_pad_type == "smd" or drill is None
@@ -138,7 +142,6 @@ def parse_pad(
             footprint=footprint,
             drill=drill,
             rotation=pad_board_rotation,
-            roundrect_rratio=sexp.find_num(pad_sexpr, "roundrect_rratio"),
             pin_function=sexp.find_str(pad_sexpr, "pinfunction"),
             pin_type=sexp.find_str(pad_sexpr, "pintype"),
             custom_shapes=parse_pad_custom_shapes(

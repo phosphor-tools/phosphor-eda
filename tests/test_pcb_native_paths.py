@@ -10,7 +10,7 @@ import math
 
 import pytest
 
-from phosphor_eda.domain.pcb import PcbCircle, PcbLine, PcbPad, PcbPadType
+from phosphor_eda.domain.pcb import PadStack, PcbCircle, PcbLine, PcbPad, PcbPadType
 from phosphor_eda.geometry.pcb_geometry import (
     circle_path_d,
     oval_path_d,
@@ -115,12 +115,9 @@ def _pad(shape: str, *, roundrect_rratio: float = 0.0) -> PcbPad:
         number="1",
         x=0.0,
         y=0.0,
-        width=4.0,
-        height=2.0,
-        shape=shape,
+        stack=PadStack.simple(shape, 4.0, 2.0, corner_radius_ratio=roundrect_rratio),
         pad_type=PcbPadType.SMD,
         layers=(),
-        roundrect_rratio=roundrect_rratio,
     )
 
 
@@ -144,9 +141,7 @@ def test_custom_pad_concatenates_subpaths() -> None:
         number="1",
         x=0.0,
         y=0.0,
-        width=4.0,
-        height=4.0,
-        shape="custom",
+        stack=PadStack.simple("custom", 4.0, 4.0),
         pad_type=PcbPadType.SMD,
         layers=(),
         custom_shapes=(
@@ -166,9 +161,7 @@ def test_custom_pad_annular_circle_uses_opposite_windings() -> None:
         number="1",
         x=0.0,
         y=0.0,
-        width=4.0,
-        height=4.0,
-        shape="custom",
+        stack=PadStack.simple("custom", 4.0, 4.0),
         pad_type=PcbPadType.SMD,
         layers=(),
         custom_shapes=(PcbCircle(cx=0.0, cy=0.0, radius=2.0, width=0.5, fill=False),),
@@ -188,9 +181,7 @@ def test_custom_pad_path_honors_dimension_overrides() -> None:
         number="1",
         x=0.0,
         y=0.0,
-        width=2.0,
-        height=2.0,
-        shape="custom",
+        stack=PadStack.simple("custom", 2.0, 2.0),
         pad_type=PcbPadType.SMD,
         layers=(),
         custom_shapes=(PcbCircle(cx=0.0, cy=0.0, radius=1.0, width=0.0, fill=True),),

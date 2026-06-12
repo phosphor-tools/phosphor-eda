@@ -33,6 +33,7 @@ from phosphor_eda.domain.pcb import (
     PcbShape,
     PcbText,
     PcbVia,
+    copper_layers,
     normalize_roles,
 )
 from phosphor_eda.formats.common.electrical import ELECTRICAL_KEY
@@ -347,7 +348,14 @@ class _ViaRow:
     net_number: int | None
     start_layer: str
     end_layer: str
+    copper_layers: list[str]
     geom: BaseGeometry | None
+
+
+@dataclass(frozen=True, slots=True)
+class _PadRow:
+    pad: PcbPad
+    copper_layers: list[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -457,49 +465,51 @@ _FOOTPRINTS: TableSpec[PcbFootprint] = TableSpec(
     ),
 )
 
-_PADS: TableSpec[PcbPad] = TableSpec(
+_PADS: TableSpec[_PadRow] = TableSpec(
     "pads",
     (
-        col("id", "VARCHAR", lambda pad: pad.id),
+        col("id", "VARCHAR", lambda r: r.pad.id),
         col(
             "reference",
             "VARCHAR",
-            lambda pad: None if pad.footprint is None else pad.footprint.reference,
+            lambda r: None if r.pad.footprint is None else r.pad.footprint.reference,
         ),
-        col("pad_number", "VARCHAR", lambda pad: pad.number),
-        col("net_name", "VARCHAR", lambda pad: _net_fields(pad.net)[0]),
-        col("net_number", "INTEGER", lambda pad: _net_fields(pad.net)[1]),
-        col("x", "DOUBLE", lambda pad: pad.x),
-        col("y", "DOUBLE", lambda pad: pad.y),
-        col("width", "DOUBLE", lambda pad: pad.width),
-        col("height", "DOUBLE", lambda pad: pad.height),
-        col("shape", "VARCHAR", lambda pad: pad.shape),
-        col("pad_type", "VARCHAR", lambda pad: pad.pad_type.value),
-        col("drill_id", "VARCHAR", lambda pad: None if pad.drill is None else pad.drill.id),
-        col("drill", "DOUBLE", lambda pad: None if pad.drill is None else pad.drill.diameter),
-        col("side", "VARCHAR", _pad_side),
-        col("primary_layer", "VARCHAR", lambda pad: _primary_layer(pad.layers)),
-        col("layers", "VARCHAR[]", lambda pad: _layer_names(pad.layers)),
-        col("pin_function", "VARCHAR", lambda pad: pad.pin_function),
-        col("pin_type", "VARCHAR", lambda pad: pad.pin_type),
+        col("pad_number", "VARCHAR", lambda r: r.pad.number),
+        col("net_name", "VARCHAR", lambda r: _net_fields(r.pad.net)[0]),
+        col("net_number", "INTEGER", lambda r: _net_fields(r.pad.net)[1]),
+        col("x", "DOUBLE", lambda r: r.pad.x),
+        col("y", "DOUBLE", lambda r: r.pad.y),
+        col("width", "DOUBLE", lambda r: r.pad.width),
+        col("height", "DOUBLE", lambda r: r.pad.height),
+        col("shape", "VARCHAR", lambda r: r.pad.shape),
+        col("pad_type", "VARCHAR", lambda r: r.pad.pad_type.value),
+        col("drill_id", "VARCHAR", lambda r: None if r.pad.drill is None else r.pad.drill.id),
+        col("drill", "DOUBLE", lambda r: None if r.pad.drill is None else r.pad.drill.diameter),
+        col("side", "VARCHAR", lambda r: _pad_side(r.pad)),
+        col("primary_layer", "VARCHAR", lambda r: _primary_layer(r.pad.layers)),
+        col("layers", "VARCHAR[]", lambda r: _layer_names(r.pad.layers)),
+        col("pin_function", "VARCHAR", lambda r: r.pad.pin_function),
+        col("pin_type", "VARCHAR", lambda r: r.pad.pin_type),
         col(
             "mask_aperture_width",
             "DOUBLE",
-            lambda pad: None if pad.mask_aperture is None else pad.mask_aperture.aperture_width,
+            lambda r: None if r.pad.mask_aperture is None else r.pad.mask_aperture.aperture_width,
         ),
         col(
             "mask_aperture_height",
             "DOUBLE",
-            lambda pad: None if pad.mask_aperture is None else pad.mask_aperture.aperture_height,
+            lambda r: None if r.pad.mask_aperture is None else r.pad.mask_aperture.aperture_height,
         ),
         col(
             "mask_aperture_source",
             "VARCHAR",
-            lambda pad: (
-                None if pad.mask_aperture is None else _null_if_unset(pad.mask_aperture.source)
+            lambda r: (
+                None if r.pad.mask_aperture is None else _null_if_unset(r.pad.mask_aperture.source)
             ),
         ),
-        col("geom", GEOMETRY, lambda pad: _wkb(pad_polygon(pad))),
+        col("stack_mode", "VARCHAR", lambda r: r.pad.stack.mode.value),
+        col("copper_layers", "VARCHAR[]", lambda r: r.copper_layers),
+        col("geom", GEOMETRY, lambda r: _wkb(pad_polygon(r.pad))),
     ),
 )
 
@@ -517,6 +527,8 @@ _VIAS: TableSpec[_ViaRow] = TableSpec(
         col("start_layer", "VARCHAR", lambda r: r.start_layer),
         col("end_layer", "VARCHAR", lambda r: r.end_layer),
         col("layers", "VARCHAR[]", lambda r: _layer_names(r.via.layers)),
+        col("stack_mode", "VARCHAR", lambda r: r.via.stack.mode.value),
+        col("copper_layers", "VARCHAR[]", lambda r: r.copper_layers),
         col("geom", GEOMETRY, lambda r: _wkb(r.geom)),
     ),
 )
@@ -1157,7 +1169,7 @@ def _load_footprints(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
 
 def _load_pads(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
     for pad in pcb.pads:
-        _PADS.insert(con, pad)
+        _PADS.insert(con, _PadRow(pad=pad, copper_layers=copper_layers(pad, pcb)))
 
 
 def _load_vias(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
@@ -1173,6 +1185,7 @@ def _load_vias(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
                 net_number=net_number,
                 start_layer=start_layer,
                 end_layer=end_layer,
+                copper_layers=copper_layers(via, pcb),
                 geom=via_geometry(via)[0],
             ),
         )

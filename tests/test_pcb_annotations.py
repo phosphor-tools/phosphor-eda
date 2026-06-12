@@ -5,6 +5,7 @@ import pytest
 from phosphor_eda.domain.pcb import (
     Board,
     LayerRole,
+    PadStack,
     PcbArtwork,
     PcbArtworkKind,
     PcbArtworkPurpose,
@@ -112,9 +113,7 @@ def _pad(
         number=number,
         x=x,
         y=y,
-        width=1.0,
-        height=1.0,
-        shape="rect",
+        stack=PadStack.simple("rect", 1.0, 1.0),
         pad_type=PcbPadType.SMD,
         layers=(layer,),
         net=net,

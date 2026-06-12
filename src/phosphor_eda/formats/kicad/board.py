@@ -8,6 +8,7 @@ import sexpdata
 
 from phosphor_eda.domain.pcb import (
     Board,
+    PadStack,
     PcbArtwork,
     PcbArtworkKind,
     PcbBoardProfile,
@@ -182,7 +183,7 @@ def _parse_via(builder: PcbBuilder, item: SExpNode, index: int) -> None:
             id=f"via:{index}",
             x=x,
             y=y,
-            diameter=sexp.num(size_node, 1),
+            stack=PadStack.simple("circle", sexp.num(size_node, 1), sexp.num(size_node, 1)),
             layers=layers,
             drill=drill,
             net=pcb_common.resolve_net_node(builder, item, source="via"),

@@ -3,6 +3,9 @@ import pytest
 from phosphor_eda.domain.pcb import (
     Board,
     LayerRole,
+    PadStack,
+    PadStackLayer,
+    PadStackMode,
     PcbArc,
     PcbArtwork,
     PcbArtworkKind,
@@ -28,6 +31,7 @@ from phosphor_eda.domain.pcb import (
     PcbPour,
     PcbVia,
     PcbViaType,
+    copper_layers,
 )
 from phosphor_eda.domain.pcb_builder import PcbBuilder, PcbBuildError
 
@@ -43,9 +47,7 @@ def test_pcb_domain_has_typed_collections_without_generic_geometry_api() -> None
         number="1",
         x=1.0,
         y=2.0,
-        width=0.8,
-        height=0.6,
-        shape="rect",
+        stack=PadStack.simple("rect", 0.8, 0.6),
         pad_type=PcbPadType.THROUGH_HOLE,
         layers=(top,),
         net=net,
@@ -65,7 +67,7 @@ def test_pcb_domain_has_typed_collections_without_generic_geometry_api() -> None
         id="via:1",
         x=3.0,
         y=4.0,
-        diameter=0.8,
+        stack=PadStack.simple("circle", 0.8, 0.8),
         layers=(top,),
         drill=via_drill,
         via_type=PcbViaType.THROUGH,
@@ -129,9 +131,7 @@ def test_pcb_bbox_falls_back_to_pad_extents_when_profile_is_absent() -> None:
         number="1",
         x=5.0,
         y=7.0,
-        width=2.0,
-        height=4.0,
-        shape="rect",
+        stack=PadStack.simple("rect", 2.0, 4.0),
         pad_type=PcbPadType.SMD,
         layers=(layer,),
     )
@@ -220,9 +220,7 @@ def test_pcb_builder_rejects_unresolved_and_selector_references() -> None:
         number="1",
         x=0.0,
         y=0.0,
-        width=1.0,
-        height=1.0,
-        shape="circle",
+        stack=PadStack.simple("circle", 1.0, 1.0),
         pad_type=PcbPadType.SMD,
         layers=(top,),
         footprint=unregistered,
@@ -270,9 +268,7 @@ def test_builder_accepts_unconnected_and_mechanical_drills() -> None:
             number="MT",
             x=1.0,
             y=1.0,
-            width=4.0,
-            height=4.0,
-            shape="circle",
+            stack=PadStack.simple("circle", 4.0, 4.0),
             pad_type=PcbPadType.SMD,
             layers=(top,),
             net=None,
@@ -298,3 +294,152 @@ def test_builder_accepts_unconnected_and_mechanical_drills() -> None:
     assert drill.owner is None
     assert board.pads[0].net is None
     assert 0 not in board.nets
+
+
+def _four_layer_board(vias: list[PcbVia], conductors: list[PcbConductor]) -> Board:
+    layers = [
+        PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT)),
+        PcbLayer("In1.Cu", (LayerRole.COPPER, LayerRole.INNER)),
+        PcbLayer("In2.Cu", (LayerRole.COPPER, LayerRole.INNER)),
+        PcbLayer("B.Cu", (LayerRole.COPPER, LayerRole.BACK)),
+    ]
+    return Board(
+        name="stack-test",
+        layers=layers,
+        nets={},
+        footprints=[],
+        pads=[],
+        vias=vias,
+        drills=[],
+        conductors=conductors,
+        artwork=[],
+        pours=[],
+        keepouts=[],
+    )
+
+
+def _via(stack: PadStack, layers: tuple[PcbLayer, ...], net: PcbNet | None = None) -> PcbVia:
+    drill = PcbDrill(
+        id="d:1",
+        x=0.0,
+        y=0.0,
+        diameter=0.3,
+        shape=PcbDrillShape.ROUND,
+        plating=PcbDrillPlating.PLATED,
+    )
+    return PcbVia(id="v:1", x=0.0, y=0.0, stack=stack, layers=layers, drill=drill, net=net)
+
+
+class TestPadStack:
+    def test_simple_wrap_exposes_scalars(self) -> None:
+        pad = PcbPad(
+            id="p:1",
+            number="1",
+            x=0.0,
+            y=0.0,
+            stack=PadStack.simple("roundrect", 1.2, 0.8, corner_radius_ratio=0.25),
+            pad_type=PcbPadType.SMD,
+            layers=(),
+        )
+        assert pad.width == 1.2
+        assert pad.height == 0.8
+        assert pad.shape == "roundrect"
+        assert pad.roundrect_rratio == 0.25
+        assert pad.stack.mode.value == "simple"
+
+    def test_via_diameter_reads_outer(self) -> None:
+        board = _four_layer_board([], [])
+        via = _via(PadStack.simple("circle", 0.6, 0.6), tuple(board.layers))
+        assert via.diameter == 0.6
+
+    def test_empty_stack_rejected(self) -> None:
+        with pytest.raises(PcbBuildError):
+            PadStack(mode=PadStackMode.SIMPLE, layers=())
+
+
+class TestCopperLayers:
+    def test_smd_pad_keeps_own_copper_layer(self) -> None:
+        board = _four_layer_board([], [])
+        pad = PcbPad(
+            id="p:1",
+            number="1",
+            x=0.0,
+            y=0.0,
+            stack=PadStack.simple("rect", 1.0, 1.0),
+            pad_type=PcbPadType.SMD,
+            layers=(board.layers[0],),
+        )
+        assert copper_layers(pad, board) == ["F.Cu"]
+
+    def test_through_pad_spans_all_copper(self) -> None:
+        board = _four_layer_board([], [])
+        drill = PcbDrill(
+            id="d:p",
+            x=0.0,
+            y=0.0,
+            diameter=0.3,
+            shape=PcbDrillShape.ROUND,
+            plating=PcbDrillPlating.PLATED,
+        )
+        pad = PcbPad(
+            id="p:1",
+            number="1",
+            x=0.0,
+            y=0.0,
+            stack=PadStack.simple("circle", 1.0, 1.0),
+            pad_type=PcbPadType.THROUGH_HOLE,
+            layers=tuple(board.layers),
+            drill=drill,
+        )
+        assert copper_layers(pad, board) == ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+
+    def test_via_span_between_start_and_end(self) -> None:
+        board = _four_layer_board([], [])
+        via = _via(
+            PadStack.simple("circle", 0.6, 0.6),
+            (board.layers[0], board.layers[2]),
+        )
+        assert copper_layers(via, board) == ["F.Cu", "In1.Cu", "In2.Cu"]
+
+    def test_pruning_keeps_connected_and_end_layers(self) -> None:
+        net = PcbNet(number=1, name="SIG")
+        stack = PadStack(
+            mode=PadStackMode.SIMPLE,
+            layers=(PadStackLayer(layer="", shape="circle", size_x=0.6, size_y=0.6),),
+            remove_unused_layers=True,
+            keep_end_layers=True,
+            zone_connected_layers=("In2.Cu",),
+        )
+        board = _four_layer_board([], [])
+        via = _via(stack, tuple(board.layers), net=net)
+        trace = PcbConductor(
+            id="t:1",
+            kind=PcbConductorKind.TRACE,
+            layer=board.layers[1],
+            data=PcbLine(start_x=0.0, start_y=0.0, end_x=5.0, end_y=0.0, width=0.2),
+            net=net,
+        )
+        board.conductors.append(trace)
+        # In1.Cu has a connected trace endpoint, In2.Cu is zone-connected,
+        # F.Cu/B.Cu survive as kept end layers.
+        assert copper_layers(via, board) == ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+
+    def test_pruning_drops_unused_layers(self) -> None:
+        net = PcbNet(number=1, name="SIG")
+        stack = PadStack(
+            mode=PadStackMode.SIMPLE,
+            layers=(PadStackLayer(layer="", shape="circle", size_x=0.6, size_y=0.6),),
+            remove_unused_layers=True,
+            keep_end_layers=False,
+        )
+        board = _four_layer_board([], [])
+        via = _via(stack, tuple(board.layers), net=net)
+        trace = PcbConductor(
+            id="t:1",
+            kind=PcbConductorKind.TRACE,
+            layer=board.layers[0],
+            data=PcbLine(start_x=0.0, start_y=0.0, end_x=5.0, end_y=0.0, width=0.2),
+            net=net,
+        )
+        board.conductors.append(trace)
+        assert copper_layers(via, board) == ["F.Cu"]

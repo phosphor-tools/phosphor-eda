@@ -7,6 +7,7 @@ import pytest
 from shapely import MultiPolygon, Polygon
 
 from phosphor_eda.domain.pcb import (
+    PadStack,
     PcbArc,
     PcbArtworkKind,
     PcbBoardProfile,
@@ -87,7 +88,7 @@ def test_arc_polyline_endpoints() -> None:
 
 def test_via_geometry_radii() -> None:
     drill = PcbDrill("drill:via", 5.0, 5.0, 0.4)
-    via = PcbVia("via:1", 5.0, 5.0, 0.8, (), drill)
+    via = PcbVia("via:1", 5.0, 5.0, PadStack.simple("circle", 0.8, 0.8), (), drill)
 
     copper, drill = via_geometry(via)
 
@@ -293,9 +294,7 @@ def test_pad_polygon_custom_honors_dimension_overrides() -> None:
         number="1",
         x=0.0,
         y=0.0,
-        width=2.0,
-        height=2.0,
-        shape="custom",
+        stack=PadStack.simple("custom", 2.0, 2.0),
         pad_type=PcbPadType.SMD,
         layers=(),
         custom_shapes=(PcbCircle(cx=0.0, cy=0.0, radius=1.0, width=0.0, fill=True),),
@@ -319,9 +318,7 @@ def _pad(
         number="1",
         x=0.0,
         y=0.0,
-        width=width,
-        height=height,
-        shape=shape,
+        stack=PadStack.simple(shape, width, height),
         pad_type=PcbPadType.SMD,
         layers=(),
         rotation=rotation,
