@@ -8,7 +8,9 @@ from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.schematic import (
     Component,
+    ComponentKind,
     ComponentOccurrence,
+    DnpSource,
     Net,
     NetOccurrence,
     Page,
@@ -16,9 +18,16 @@ from phosphor_eda.domain.schematic import (
     PinOccurrence,
     Schematic,
 )
+from phosphor_eda.formats.common.part_fields import resolve_part_fields
 
 if TYPE_CHECKING:
-    from phosphor_eda.domain.schematic import ScopeId
+    from phosphor_eda.domain.schematic import (
+        FootprintModel,
+        LibraryLink,
+        Parameter,
+        ScopeId,
+        TitleBlock,
+    )
     from phosphor_eda.formats.common.net_union import NetUnion
 
 
@@ -32,6 +41,7 @@ class ResolvedPageInput:
     name: str
     scope_id: ScopeId
     source_file: str = ""
+    title_block: TitleBlock | None = None
     metadata: dict[str, str] = field(default_factory=dict)
 
 
@@ -64,6 +74,23 @@ class ResolvedComponentOccurrenceInput:
 
 
 @dataclass(frozen=True, slots=True)
+class ResolvedComponentInfo:
+    """Typed component enrichment supplied by a format resolver.
+
+    ``explicit_dnp`` is the format's native fit flag (KiCad ``dnp``);
+    ``None`` means the format has no such flag and the shared DNP
+    convention ladder decides instead.
+    """
+
+    parameters: tuple[Parameter, ...] = ()
+    lib: LibraryLink | None = None
+    footprints: tuple[FootprintModel, ...] = ()
+    kind: ComponentKind = ComponentKind.STANDARD
+    explicit_dnp: bool | None = None
+    exclude_from_bom: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class ResolvedPinInput:
     id: str
     scope_id: ScopeId
@@ -80,6 +107,7 @@ class ResolvedPinInput:
     pin_metadata: dict[str, str] = field(default_factory=dict)
     pin_occurrence_metadata: dict[str, str] = field(default_factory=dict)
     component_metadata: dict[str, str] = field(default_factory=dict)
+    component_info: ResolvedComponentInfo | None = None
 
 
 type ResolvedNetFactory = Callable[
@@ -146,6 +174,7 @@ def _build_pages(pages: Iterable[ResolvedPageInput]) -> dict[ScopeId, Page]:
             name=page_input.name,
             source_file=page_input.source_file,
             scope_id=page_input.scope_id,
+            title_block=page_input.title_block,
             metadata=dict(page_input.metadata),
         )
     return result
@@ -284,12 +313,15 @@ def _build_components(
                 metadata=dict(pin_input.component_metadata),
             )
             components_by_id[component.id] = component
+            _apply_component_info(component, pin_input.component_info)
         else:
             if not component.part and pin_input.component_part:
                 component.part = pin_input.component_part
             if not component.description and pin_input.component_description:
                 component.description = pin_input.component_description
             _merge_missing_metadata(component.metadata, pin_input.component_metadata)
+            if not component.parameters:
+                _apply_component_info(component, pin_input.component_info)
 
         _append_unique_page(
             component.pages,
@@ -371,6 +403,32 @@ def _build_components(
             )
 
     return list(components_by_id.values())
+
+
+def _apply_component_info(component: Component, info: ResolvedComponentInfo | None) -> None:
+    """Populate a component's typed enrichment fields from resolver evidence.
+
+    Runs the shared recognized-name resolution over the parameter list, then
+    the DNP ladder: a native explicit flag decides when the format has one;
+    otherwise the whole-value convention match does (decision 25).
+    """
+    if info is None:
+        return
+    component.kind = info.kind
+    component.parameters = list(info.parameters)
+    component.lib = info.lib
+    component.footprints = list(info.footprints)
+    component.exclude_from_bom = info.exclude_from_bom
+
+    fields = resolve_part_fields(component.parameters, part=component.part)
+    component.part_numbers = fields.part_numbers
+    component.datasheet = fields.datasheet
+    if info.explicit_dnp is not None:
+        component.dnp = info.explicit_dnp
+        component.dnp_source = DnpSource.EXPLICIT if info.explicit_dnp else None
+    else:
+        component.dnp = fields.dnp_convention
+        component.dnp_source = DnpSource.CONVENTION if fields.dnp_convention else None
 
 
 def _require_union_id(net_union: NetUnion, local_net_id: str) -> str:
