@@ -315,12 +315,14 @@ def _build_components(
             components_by_id[component.id] = component
             _apply_component_info(component, pin_input.component_info)
         else:
+            part_backfilled = False
             if not component.part and pin_input.component_part:
                 component.part = pin_input.component_part
+                part_backfilled = True
             if not component.description and pin_input.component_description:
                 component.description = pin_input.component_description
             _merge_missing_metadata(component.metadata, pin_input.component_metadata)
-            if not component.parameters:
+            if part_backfilled or not component.parameters:
                 _apply_component_info(component, pin_input.component_info)
 
         _append_unique_page(

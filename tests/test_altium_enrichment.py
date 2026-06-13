@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from phosphor_eda.domain.schematic import (
+    Component,
     ComponentKind,
     FootprintModel,
     LibraryLink,
@@ -19,9 +20,9 @@ from phosphor_eda.formats.altium.records import (
     RecordType,
 )
 from phosphor_eda.formats.altium.source import (
-    _component_info,
-    _component_kind,
-    _component_parameters,
+    component_info,
+    component_kind,
+    component_parameters,
 )
 from phosphor_eda.formats.altium.to_schematic import altium_to_design
 from phosphor_eda.formats.common.diagnostics import ParseContext
@@ -41,7 +42,7 @@ def pimx8() -> Schematic:
     return altium_to_design(PIMX8_PRJPCB)
 
 
-def _component(design: Schematic, reference: str):
+def _component(design: Schematic, reference: str) -> Component:
     component = next((c for c in design.components if c.reference == reference), None)
     assert component is not None, f"component {reference} not found"
     return component
@@ -85,7 +86,7 @@ class TestIndirectParameters:
             _param_rec(0, "Value", "10k"),
             _param_rec(1, "Comment", "=value", hidden=False),
         ]
-        parameters = _component_parameters(records)
+        parameters = component_parameters(records)
         assert parameters == (
             Parameter(name="Value", value="10k", visible=False),
             Parameter(name="Comment", value="10k", visible=True, indirect=True),
@@ -97,13 +98,13 @@ class TestIndirectParameters:
             _param_rec(1, "Value", "=Resistance"),
             _param_rec(2, "Comment", "=Value"),
         ]
-        parameters = _component_parameters(records)
+        parameters = component_parameters(records)
         assert parameters[2].value == "4k7"
         assert parameters[2].indirect
 
     def test_unresolvable_reference_keeps_literal_text(self) -> None:
         records = [_param_rec(0, "Comment", "=Missing")]
-        parameters = _component_parameters(records)
+        parameters = component_parameters(records)
         assert parameters == (
             Parameter(name="Comment", value="=Missing", visible=False, indirect=True),
         )
@@ -113,7 +114,7 @@ class TestIndirectParameters:
             _param_rec(0, "A", "=B"),
             _param_rec(1, "B", "=A"),
         ]
-        parameters = _component_parameters(records)
+        parameters = component_parameters(records)
         assert parameters[0].value == "=B"
         assert parameters[1].value == "=A"
 
@@ -184,11 +185,11 @@ class TestComponentKind:
     )
     def test_kind_mapping(self, raw_kind: int, expected: ComponentKind) -> None:
         component = ComponentRec(record_type=RecordType.COMPONENT, index=0, component_kind=raw_kind)
-        assert _component_kind(component) is expected
+        assert component_kind(component) is expected
 
     def test_standard_no_bom_excludes_from_bom(self) -> None:
         component = ComponentRec(record_type=RecordType.COMPONENT, index=0, component_kind=5)
-        info = _component_info(component, (), ())
+        info = component_info(component, (), ())
         assert info.kind is ComponentKind.STANDARD
         assert info.exclude_from_bom is True
         # Altium has no native DNP flag; the convention matcher decides.

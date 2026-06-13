@@ -1305,6 +1305,8 @@ class TestJetsonComponentEnrichment:
             """
         ).fetchone()
         assert row is not None
+        assert row[0] is not None
+        assert str(row[0]).strip() != ""
 
     def test_component_footprints_loaded(self, jetson_db: duckdb.DuckDBPyConnection) -> None:
         count = _count(jetson_db, "SELECT count(*) FROM component_footprints WHERE is_current")
@@ -1330,6 +1332,8 @@ class TestJetsonComponentEnrichment:
             "SELECT title FROM title_blocks JOIN pages USING (page_id) LIMIT 1"
         ).fetchone()
         assert row is not None
+        assert row[0] is not None
+        assert str(row[0]).strip() != ""
 
 
 class TestJetsonSchematic:
