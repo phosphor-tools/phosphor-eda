@@ -28,6 +28,7 @@ from phosphor_eda.domain.pcb_builder import PcbBuilder
 from phosphor_eda.formats.kicad import graphics, pcb_common, sexp
 from phosphor_eda.formats.kicad.footprint import parse_footprint, parse_graphic_item
 from phosphor_eda.formats.kicad.layers import parse_layer_defs, resolve_layers
+from phosphor_eda.formats.kicad.padstack import parse_via_stack
 from phosphor_eda.formats.kicad.stackup import parse_kicad_stackup
 from phosphor_eda.formats.kicad.zones import parse_zone
 
@@ -182,7 +183,7 @@ def _parse_via(builder: PcbBuilder, item: SExpNode, index: int) -> None:
             id=f"via:{index}",
             x=x,
             y=y,
-            diameter=sexp.num(size_node, 1),
+            stack=parse_via_stack(item, diameter=sexp.num(size_node, 1)),
             layers=layers,
             drill=drill,
             net=pcb_common.resolve_net_node(builder, item, source="via"),

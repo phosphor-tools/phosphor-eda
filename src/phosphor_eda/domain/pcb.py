@@ -420,16 +420,86 @@ class PcbDrill:
         self._owner_ref = None if value is None else weakref.ref(value)
 
 
-@dataclass(frozen=True)
-class PcbPadStack:
-    """Altium-only per-layer pad geometry (mid/bottom layers of a stack)."""
+class PadStackMode(StrEnum):
+    """How a pad/via varies its copper geometry across layers."""
 
-    mid_width: float | None = None
-    mid_height: float | None = None
-    bot_width: float | None = None
-    bot_height: float | None = None
-    mid_shape: str = ""
-    bot_shape: str = ""
+    SIMPLE = "simple"
+    TOP_MID_BOTTOM = "top_mid_bottom"
+    PER_LAYER = "per_layer"
+
+
+@dataclass(frozen=True)
+class PadStackLayer:
+    """One copper geometry entry of a padstack.
+
+    ``layer`` is "" for SIMPLE stacks, a tier name ("top"/"mid"/"bottom")
+    for TOP_MID_BOTTOM, or a source copper layer name for PER_LAYER.
+    ``corner_radius_ratio`` is the roundrect radius as a fraction of the
+    smaller pad dimension (KiCad rratio semantics; Altium percent / 100) —
+    stored natively so the source value round-trips exactly.
+    """
+
+    layer: str
+    shape: str
+    size_x: float
+    size_y: float
+    corner_radius_ratio: float = 0.0
+    offset_x: float = 0.0
+    offset_y: float = 0.0
+
+
+@dataclass(frozen=True)
+class PadStack:
+    """Full per-layer copper definition of a pad or via (decision 23).
+
+    ``layers`` is ordered outer-first: the first entry is the top/outer
+    geometry that 2D views and scalar accessors use. ``remove_unused_layers``
+    / ``keep_end_layers`` are KiCad copper-pruning flags;
+    ``zone_connected_layers`` records layers the source tool marked as
+    zone-connected (KiCad ``zone_layer_connections``), which count as used.
+    """
+
+    mode: PadStackMode
+    layers: tuple[PadStackLayer, ...]
+    remove_unused_layers: bool = False
+    keep_end_layers: bool = False
+    zone_connected_layers: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.layers:
+            msg = "PadStack requires at least one layer entry"
+            raise PcbBuildError(msg)
+
+    @property
+    def outer(self) -> PadStackLayer:
+        """The top/outer geometry entry."""
+        return self.layers[0]
+
+    @classmethod
+    def simple(
+        cls,
+        shape: str,
+        size_x: float,
+        size_y: float,
+        corner_radius_ratio: float = 0.0,
+        offset_x: float = 0.0,
+        offset_y: float = 0.0,
+    ) -> PadStack:
+        """Wrap a single uniform geometry as a SIMPLE stack."""
+        return cls(
+            mode=PadStackMode.SIMPLE,
+            layers=(
+                PadStackLayer(
+                    layer="",
+                    shape=shape,
+                    size_x=size_x,
+                    size_y=size_y,
+                    corner_radius_ratio=corner_radius_ratio,
+                    offset_x=offset_x,
+                    offset_y=offset_y,
+                ),
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -450,25 +520,26 @@ class PcbMaskAperture:
 
 @dataclass
 class PcbPad:
-    """A footprint landing/contact on the board."""
+    """A footprint landing/contact on the board.
+
+    Copper geometry lives in ``stack``; the scalar ``width``/``height``/
+    ``shape``/``roundrect_rratio`` accessors read the stack's outer layer,
+    which is what 2D consumers (renderer, SQL outer-layer columns) use.
+    """
 
     id: str
     number: str
     x: float
     y: float
-    width: float
-    height: float
-    shape: str
+    stack: PadStack
     pad_type: PcbPadType
     layers: tuple[PcbLayer, ...]
     net: PcbNet | None = None
     footprint: PcbFootprint | None = None
     drill: PcbDrill | None = None
     rotation: float = 0.0
-    roundrect_rratio: float = 0.0
     pin_function: str = ""
     pin_type: str = ""
-    pad_stack: PcbPadStack | None = None
     mask_aperture: PcbMaskAperture | None = None
     custom_shapes: tuple[PcbLine | PcbArc | PcbCircle | PcbPolygon, ...] = ()
     metadata: PcbObjectMetadata = field(default_factory=PcbObjectMetadata)
@@ -479,15 +550,35 @@ class PcbPad:
         if self.drill is not None:
             self.drill.owner = self
 
+    @property
+    def width(self) -> float:
+        return self.stack.outer.size_x
+
+    @property
+    def height(self) -> float:
+        return self.stack.outer.size_y
+
+    @property
+    def shape(self) -> str:
+        return self.stack.outer.shape
+
+    @property
+    def roundrect_rratio(self) -> float:
+        return self.stack.outer.corner_radius_ratio
+
 
 @dataclass
 class PcbVia:
-    """A conductive interlayer connection."""
+    """A conductive interlayer connection.
+
+    Copper geometry lives in ``stack``; ``diameter`` reads the stack's
+    outer layer.
+    """
 
     id: str
     x: float
     y: float
-    diameter: float
+    stack: PadStack
     layers: tuple[PcbLayer, ...]
     drill: PcbDrill
     net: PcbNet | None = None
@@ -499,6 +590,10 @@ class PcbVia:
     def __post_init__(self) -> None:
         self.layers = tuple(self.layers)
         self.drill.owner = self
+
+    @property
+    def diameter(self) -> float:
+        return self.stack.outer.size_x
 
 
 class PcbPourFillMode(StrEnum):
@@ -794,3 +889,79 @@ def extend_shape_bounds(xs: list[float], ys: list[float], shape: object) -> None
     elif isinstance(shape, PcbPolygon):
         xs.extend(x for x, _y in shape.points)
         ys.extend(y for _x, y in shape.points)
+
+
+# Endpoint-match tolerance for "a trace connects here" checks (mm).
+_COPPER_TOUCH_TOLERANCE = 1e-3
+
+
+def copper_layers(item: PcbPad | PcbVia, board: Board) -> list[str]:
+    """Copper layer names where *item* actually carries copper.
+
+    The base span follows the item: an SMD pad's own copper layers, a
+    through pad across every board copper layer, a via between its start
+    and end layers. With ``remove_unused_layers`` set, spanned layers keep
+    copper only when the source marked them zone-connected, a same-net
+    conductor endpoint lands on the item position on that layer, or they
+    are span ends protected by ``keep_end_layers``.
+    """
+    span = _copper_span(item, board)
+    stack = item.stack
+    if not stack.remove_unused_layers or len(span) < 2:
+        return span
+
+    used = set(stack.zone_connected_layers)
+    used.update(_endpoint_connected_layers(item, board, span))
+    kept: list[str] = []
+    for index, name in enumerate(span):
+        is_end = index in (0, len(span) - 1)
+        if name in used or (is_end and stack.keep_end_layers):
+            kept.append(name)
+    return kept
+
+
+def _copper_span(item: PcbPad | PcbVia, board: Board) -> list[str]:
+    board_copper = [layer.name for layer in board.layers_by_role(LayerRole.COPPER)]
+    if isinstance(item, PcbPad):
+        if item.pad_type is PcbPadType.THROUGH_HOLE:
+            return board_copper
+        return [layer.name for layer in item.layers if layer.has_role(LayerRole.COPPER)]
+
+    item_copper = [layer.name for layer in item.layers if layer.has_role(LayerRole.COPPER)]
+    if not item_copper:
+        return []
+    try:
+        start = board_copper.index(item_copper[0])
+        end = board_copper.index(item_copper[-1])
+    except ValueError:
+        return item_copper
+    if start > end:
+        start, end = end, start
+    return board_copper[start : end + 1]
+
+
+def _endpoint_connected_layers(item: PcbPad | PcbVia, board: Board, span: list[str]) -> set[str]:
+    if item.net is None:
+        return set()
+    span_names = set(span)
+    touched: set[str] = set()
+    for conductor in board.conductors:
+        if conductor.net is not item.net or conductor.layer.name not in span_names:
+            continue
+        if conductor.layer.name in touched:
+            continue
+        if _endpoint_touches(conductor.data, item.x, item.y):
+            touched.add(conductor.layer.name)
+    return touched
+
+
+def _endpoint_touches(shape: PcbLine | PcbArc | PcbCircle | PcbPolygon, x: float, y: float) -> bool:
+    if isinstance(shape, PcbLine | PcbArc):
+        return (
+            abs(shape.start_x - x) <= _COPPER_TOUCH_TOLERANCE
+            and abs(shape.start_y - y) <= _COPPER_TOUCH_TOLERANCE
+        ) or (
+            abs(shape.end_x - x) <= _COPPER_TOUCH_TOLERANCE
+            and abs(shape.end_y - y) <= _COPPER_TOUCH_TOLERANCE
+        )
+    return False

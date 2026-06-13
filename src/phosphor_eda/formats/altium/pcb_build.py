@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from phosphor_eda.domain.pcb import (
     Board,
     LayerRole,
+    PadStack,
     PcbArc,
     PcbArtwork,
     PcbArtworkKind,
@@ -203,16 +204,20 @@ def _add_parsed_pad(
             number=pad.number,
             x=pad.x,
             y=pad.y,
-            width=pad.width,
-            height=pad.height,
-            shape=pad.shape,
+            stack=pad.stack
+            if pad.stack is not None
+            else PadStack.simple(
+                pad.shape,
+                pad.width,
+                pad.height,
+                corner_radius_ratio=pad.roundrect_rratio,
+            ),
             pad_type=PcbPadType.THROUGH_HOLE if drill is not None else PcbPadType.SMD,
             layers=layers,
             net=_net_from_parsed_number(builder, primitive.net_number, primitive.id),
             footprint=_footprint_for_primitive(primitive, footprints_by_index),
             drill=drill,
             rotation=pad.rotation,
-            roundrect_rratio=pad.roundrect_rratio,
             mask_aperture=mask_aperture,
             metadata=primitive.metadata,
         ),
@@ -244,7 +249,9 @@ def _add_parsed_via(
             id=primitive.id,
             x=via.x,
             y=via.y,
-            diameter=via.size,
+            stack=via.stack
+            if via.stack is not None
+            else PadStack.simple("circle", via.size, via.size),
             layers=layers,
             drill=drill,
             net=_net_from_parsed_number(builder, primitive.net_number, primitive.id),

@@ -8,12 +8,14 @@ import sexpdata
 from phosphor_eda.domain.pcb import (
     Board,
     LayerRole,
+    PadStackMode,
     PcbArtworkPurpose,
     PcbConductorKind,
     PcbDrillShape,
     PcbPadType,
     PcbPolygon,
     PcbText,
+    copper_layers,
 )
 from phosphor_eda.domain.project import Stackup
 from phosphor_eda.formats.kicad.board import parse_kicad_pcb, parse_kicad_pcb_from_sexpr
@@ -30,6 +32,10 @@ JETSON_ORIN_FIXTURE = (
     Path(__file__).parent / "fixtures" / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pcb"
 )
 V10_FIXTURE = Path(__file__).parent / "fixtures" / "kicad_v10_nets.kicad_pcb"
+# Hand-written minimal board exercising the KiCad v9 padstack grammar
+# (pcbnew/pcb_io/kicad_sexpr/pcb_io_kicad_sexpr_parser.cpp): pad/via
+# (padstack (mode ...) (layer ...)) nodes plus the copper-pruning tokens.
+PADSTACK_FIXTURE = Path(__file__).parent / "fixtures" / "kicad_padstacks.kicad_pcb"
 
 
 @pytest.fixture(scope="module")
@@ -262,6 +268,119 @@ def test_kicad_via_without_tenting_defaults_false() -> None:
     via = _board_with_via("").vias[0]
     assert via.tented_front is False
     assert via.tented_back is False
+
+
+@pytest.fixture(scope="module")
+def padstack_board() -> Board:
+    return parse_kicad_pcb(PADSTACK_FIXTURE)
+
+
+def test_kicad_pad_padstack_front_inner_back(padstack_board: Board) -> None:
+    pad = next(item for item in padstack_board.pads if item.number == "1")
+    stack = pad.stack
+
+    assert stack.mode is PadStackMode.TOP_MID_BOTTOM
+    assert [layer.layer for layer in stack.layers] == ["top", "mid", "bottom"]
+    top, mid, bottom = stack.layers
+    assert (top.shape, top.size_x, top.size_y) == ("circle", 1.6, 1.6)
+    assert (mid.shape, mid.size_x, mid.size_y) == ("circle", 1.2, 1.2)
+    assert (bottom.shape, bottom.size_x, bottom.size_y) == ("roundrect", 1.4, 1.4)
+    assert bottom.corner_radius_ratio == 0.25
+    # Scalar accessors keep reading the outer (front) geometry.
+    assert pad.width == 1.6
+    assert pad.shape == "circle"
+
+
+def test_kicad_pad_padstack_custom_overrides_and_pruning(padstack_board: Board) -> None:
+    pad = next(item for item in padstack_board.pads if item.number == "2")
+    stack = pad.stack
+
+    assert stack.mode is PadStackMode.PER_LAYER
+    assert [layer.layer for layer in stack.layers] == ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+    outer, in1, in2, back = stack.layers
+    assert (outer.shape, outer.size_x, outer.size_y) == ("rect", 1.5, 1.5)
+    assert (in1.shape, in1.size_x, in1.size_y) == ("circle", 1.0, 1.0)
+    assert (in2.shape, in2.size_x, in2.size_y) == ("oval", 1.0, 1.4)
+    assert (in2.offset_x, in2.offset_y) == (0.1, 0.0)
+    assert (back.shape, back.size_x, back.size_y) == ("rect", 1.2, 1.2)
+    assert stack.remove_unused_layers is True
+    assert stack.keep_end_layers is True
+    assert stack.zone_connected_layers == ("In2.Cu",)
+
+
+def test_kicad_pad_without_padstack_stays_simple(padstack_board: Board) -> None:
+    pad = next(item for item in padstack_board.pads if item.number == "3")
+    stack = pad.stack
+
+    assert stack.mode is PadStackMode.SIMPLE
+    assert len(stack.layers) == 1
+    assert pad.shape == "roundrect"
+    assert pad.roundrect_rratio == 0.25
+    assert stack.remove_unused_layers is False
+    assert stack.keep_end_layers is False
+    assert stack.zone_connected_layers == ()
+
+
+def test_kicad_via_padstack_front_inner_back(padstack_board: Board) -> None:
+    via = next(item for item in padstack_board.vias if item.x == 90)
+    stack = via.stack
+
+    assert stack.mode is PadStackMode.TOP_MID_BOTTOM
+    assert [layer.layer for layer in stack.layers] == ["top", "mid", "bottom"]
+    assert [layer.size_x for layer in stack.layers] == [0.8, 0.5, 0.7]
+    assert all(layer.shape == "circle" for layer in stack.layers)
+    assert via.diameter == 0.8
+
+
+def test_kicad_via_padstack_custom(padstack_board: Board) -> None:
+    via = next(item for item in padstack_board.vias if item.x == 92)
+    stack = via.stack
+
+    assert stack.mode is PadStackMode.PER_LAYER
+    assert [layer.layer for layer in stack.layers] == ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+    assert [layer.size_x for layer in stack.layers] == [0.8, 0.5, 0.55, 0.7]
+    assert [layer.size_y for layer in stack.layers] == [0.8, 0.5, 0.55, 0.7]
+
+
+def test_kicad_via_pruning_flags_shrink_copper_layers(padstack_board: Board) -> None:
+    pruned = next(item for item in padstack_board.vias if item.x == 92)
+    assert pruned.stack.remove_unused_layers is True
+    assert pruned.stack.keep_end_layers is True
+    assert pruned.stack.zone_connected_layers == ("In2.Cu",)
+    # Ends survive via keep_end_layers, In2.Cu via the zone connection;
+    # In1.Cu carries no copper.
+    assert copper_layers(pruned, padstack_board) == ["F.Cu", "In2.Cu", "B.Cu"]
+
+    bare_ends = next(item for item in padstack_board.vias if item.x == 94)
+    assert bare_ends.stack.remove_unused_layers is True
+    assert bare_ends.stack.keep_end_layers is False
+    # Only F.Cu has a same-net trace endpoint at the via position.
+    assert copper_layers(bare_ends, padstack_board) == ["F.Cu"]
+
+
+def test_kicad_bare_pruning_tokens_mean_true() -> None:
+    # Boards from the 5.99/6 era write the flags as bare tokens with no
+    # yes/no argument.
+    parsed = sexpdata.loads(
+        """
+        (kicad_pcb
+          (layers
+            (0 "F.Cu" signal)
+            (31 "B.Cu" signal)
+            (44 "Edge.Cuts" user)
+          )
+          (via (at 5 5) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu")
+            (remove_unused_layers) (keep_end_layers))
+          (gr_line (start 0 0) (end 1 0) (layer "Edge.Cuts") (width 0.1))
+        )
+        """
+    )
+    board = parse_kicad_pcb_from_sexpr(list(parsed[1:]), default_name="bare-pruning")
+    via = board.vias[0]
+
+    assert via.stack.mode is PadStackMode.SIMPLE
+    assert via.stack.remove_unused_layers is True
+    assert via.stack.keep_end_layers is True
 
 
 def test_kicad_layer_selectors_resolve_to_concrete_layer_references(board: Board) -> None:
