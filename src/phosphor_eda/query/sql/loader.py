@@ -78,12 +78,16 @@ if TYPE_CHECKING:
     from phosphor_eda.domain.schematic import (
         Component,
         ComponentOccurrence,
+        FootprintModel,
         Net,
         NetOccurrence,
         Page,
+        Parameter,
+        PartNumber,
         Pin,
         PinOccurrence,
         Schematic,
+        TitleBlock,
     )
 
 
@@ -102,6 +106,12 @@ def _wkb(geom: BaseGeometry | None) -> bytes | None:
 
 def _metadata_json(metadata: PcbMetadata) -> str:
     return json.dumps(asdict(metadata), separators=(",", ":"), sort_keys=True)
+
+
+def _json_or_null(mapping: dict[str, str]) -> str | None:
+    if not mapping:
+        return None
+    return json.dumps(mapping, separators=(",", ":"), sort_keys=True)
 
 
 def _net_fields(net: PcbNet | None) -> tuple[str | None, int | None]:
@@ -400,6 +410,33 @@ class _SourceNameRow:
     occurrence_id: str
     net_id: str
     source_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ComponentParameterRow:
+    component_id: str
+    ord: int
+    parameter: Parameter
+
+
+@dataclass(frozen=True, slots=True)
+class _ComponentFootprintRow:
+    component_id: str
+    ord: int
+    model: FootprintModel
+
+
+@dataclass(frozen=True, slots=True)
+class _ComponentPartNumberRow:
+    component_id: str
+    ord: int
+    part_number: PartNumber
+
+
+@dataclass(frozen=True, slots=True)
+class _TitleBlockRow:
+    page: Page
+    block: TitleBlock
 
 
 # ---------------------------------------------------------------------------
@@ -733,8 +770,53 @@ _COMPONENTS: TableSpec[Component] = TableSpec(
         col("reference", "VARCHAR", lambda c: c.reference, constraint="NOT NULL"),
         col("part", "VARCHAR", lambda c: c.part, constraint="NOT NULL"),
         col("description", "VARCHAR", lambda c: c.description, constraint="NOT NULL"),
+        col("kind", "VARCHAR", lambda c: c.kind.value, constraint="NOT NULL"),
+        col("dnp", "BOOLEAN", lambda c: c.dnp, constraint="NOT NULL"),
+        col("dnp_source", "VARCHAR", lambda c: c.dnp_source.value if c.dnp_source else None),
+        col("exclude_from_bom", "BOOLEAN", lambda c: c.exclude_from_bom, constraint="NOT NULL"),
+        col("datasheet", "VARCHAR", lambda c: _null_if_unset(c.datasheet)),
+        col("lib_symbol", "VARCHAR", lambda c: _null_if_unset(c.lib.symbol) if c.lib else None),
+        col("lib_library", "VARCHAR", lambda c: _null_if_unset(c.lib.library) if c.lib else None),
+        col(
+            "lib_design_item_id",
+            "VARCHAR",
+            lambda c: _null_if_unset(c.lib.design_item_id) if c.lib else None,
+        ),
         col("page_ids", "VARCHAR", lambda c: _page_ids(c.pages)),
         col("page_names", "VARCHAR", lambda c: _page_names(c.pages)),
+    ),
+)
+
+_COMPONENT_PARAMETERS: TableSpec[_ComponentParameterRow] = TableSpec(
+    "component_parameters",
+    (
+        col("component_id", "VARCHAR", lambda r: r.component_id, constraint="NOT NULL"),
+        col("ord", "INTEGER", lambda r: r.ord, constraint="NOT NULL"),
+        col("name", "VARCHAR", lambda r: r.parameter.name, constraint="NOT NULL"),
+        col("value", "VARCHAR", lambda r: r.parameter.value, constraint="NOT NULL"),
+        col("visible", "BOOLEAN", lambda r: r.parameter.visible, constraint="NOT NULL"),
+    ),
+)
+
+_COMPONENT_FOOTPRINTS: TableSpec[_ComponentFootprintRow] = TableSpec(
+    "component_footprints",
+    (
+        col("component_id", "VARCHAR", lambda r: r.component_id, constraint="NOT NULL"),
+        col("ord", "INTEGER", lambda r: r.ord, constraint="NOT NULL"),
+        col("name", "VARCHAR", lambda r: r.model.name, constraint="NOT NULL"),
+        col("library", "VARCHAR", lambda r: _null_if_unset(r.model.library)),
+        col("is_current", "BOOLEAN", lambda r: r.model.is_current, constraint="NOT NULL"),
+        col("description", "VARCHAR", lambda r: _null_if_unset(r.model.description)),
+    ),
+)
+
+_COMPONENT_PART_NUMBERS: TableSpec[_ComponentPartNumberRow] = TableSpec(
+    "component_part_numbers",
+    (
+        col("component_id", "VARCHAR", lambda r: r.component_id, constraint="NOT NULL"),
+        col("ord", "INTEGER", lambda r: r.ord, constraint="NOT NULL"),
+        col("manufacturer", "VARCHAR", lambda r: _null_if_unset(r.part_number.manufacturer)),
+        col("number", "VARCHAR", lambda r: r.part_number.number, constraint="NOT NULL"),
     ),
 )
 
@@ -919,6 +1001,19 @@ _PAGES: TableSpec[Page] = TableSpec(
     ),
 )
 
+_TITLE_BLOCKS: TableSpec[_TitleBlockRow] = TableSpec(
+    "title_blocks",
+    (
+        col("page_id", "VARCHAR", lambda r: r.page.id, constraint="PRIMARY KEY"),
+        col("title", "VARCHAR", lambda r: _null_if_unset(r.block.title)),
+        col("revision", "VARCHAR", lambda r: _null_if_unset(r.block.revision)),
+        col("date", "VARCHAR", lambda r: _null_if_unset(r.block.date)),
+        col("company", "VARCHAR", lambda r: _null_if_unset(r.block.company)),
+        col("comments", "JSON", lambda r: _json_or_null(r.block.comments)),
+        col("metadata", "JSON", lambda r: _json_or_null(r.block.metadata)),
+    ),
+)
+
 _PROJECT: TableSpec[tuple[str, str]] = TableSpec(
     "project",
     (
@@ -947,6 +1042,9 @@ _ORDERED_SPECS = (
     _NET_CLASS_MEMBERS,
     _DESIGN_RULES,
     _COMPONENTS,
+    _COMPONENT_PARAMETERS,
+    _COMPONENT_FOOTPRINTS,
+    _COMPONENT_PART_NUMBERS,
     _COMPONENT_OCCURRENCES,
     _COMPONENT_PAGES,
     _COMPONENT_METADATA,
@@ -962,6 +1060,7 @@ _ORDERED_SPECS = (
     _NET_METADATA,
     _NET_OCCURRENCE_METADATA,
     _PAGES,
+    _TITLE_BLOCKS,
     _PROJECT,
 )
 
@@ -1028,7 +1127,9 @@ def load_database(project: Project) -> duckdb.DuckDBPyConnection:
 
     if project.schematic:
         _load_pages(con, project.schematic)
+        _load_title_blocks(con, project.schematic)
         _load_components(con, project.schematic)
+        _load_component_enrichment(con, project.schematic)
         _load_component_pages(con, project.schematic)
         _load_component_occurrences(con, project.schematic)
         _load_component_occurrence_metadata(con, project.schematic)
@@ -1277,6 +1378,29 @@ def _load_design_rules(con: duckdb.DuckDBPyConnection, project: Project) -> None
 def _load_components(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
     for comp in schematic.components:
         _COMPONENTS.insert(con, comp)
+
+
+def _load_component_enrichment(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    for comp in schematic.components:
+        for ord_, parameter in enumerate(comp.parameters, start=1):
+            _COMPONENT_PARAMETERS.insert(
+                con, _ComponentParameterRow(component_id=comp.id, ord=ord_, parameter=parameter)
+            )
+        for ord_, model in enumerate(comp.footprints, start=1):
+            _COMPONENT_FOOTPRINTS.insert(
+                con, _ComponentFootprintRow(component_id=comp.id, ord=ord_, model=model)
+            )
+        for ord_, part_number in enumerate(comp.part_numbers, start=1):
+            _COMPONENT_PART_NUMBERS.insert(
+                con,
+                _ComponentPartNumberRow(component_id=comp.id, ord=ord_, part_number=part_number),
+            )
+
+
+def _load_title_blocks(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    for page in schematic.pages:
+        if page.title_block is not None:
+            _TITLE_BLOCKS.insert(con, _TitleBlockRow(page=page, block=page.title_block))
 
 
 def _load_component_pages(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:

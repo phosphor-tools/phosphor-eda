@@ -8,7 +8,13 @@ from typing import TYPE_CHECKING
 import sexpdata
 
 import phosphor_eda.formats.kicad.sexp as sexp
-from phosphor_eda.domain.schematic import ScopeId
+from phosphor_eda.domain.schematic import (
+    FootprintModel,
+    LibraryLink,
+    Parameter,
+    ScopeId,
+)
+from phosphor_eda.formats.common.resolved_graph import ResolvedComponentInfo
 from phosphor_eda.formats.kicad.lib_symbols import (
     LibPins,
     lib_description,
@@ -64,6 +70,8 @@ class _PinCandidate:
     component_y: float | None
     component_rotation: float
     component_mirror: bool
+    component_info: ResolvedComponentInfo | None
+    component_attr_metadata: dict[str, str]
     pin_designator: str
     pin_name: str
     pin_type: str
@@ -309,6 +317,86 @@ def _power_symbol_candidates(
     return candidates
 
 
+def _property_visible(prop_node: SExpNode) -> bool:
+    """A property is visible unless its effects carry a hide token.
+
+    KiCad writes ``(effects … hide)`` (v6) or ``(effects … (hide yes))``
+    (v7+).
+    """
+    effects = sexp.find(prop_node[3:], "effects")
+    if effects is None:
+        return True
+    for item in effects[1:]:
+        if isinstance(item, sexpdata.Symbol) and item.value() == "hide":
+            return False
+        if sexp.tag(item) == "hide" and isinstance(item, list):
+            return not (len(item) > 1 and str(item[1]) == "yes")
+    return True
+
+
+def _symbol_parameters(sym_node: SExpNode) -> tuple[Parameter, ...]:
+    """All ``(property …)`` fields of a symbol, in document order."""
+    parameters: list[Parameter] = []
+    for prop_node in sexp.find_all(sym_node[1:], "property"):
+        if len(prop_node) < 3:
+            continue
+        parameters.append(
+            Parameter(
+                name=str(prop_node[1]),
+                value=str(prop_node[2]),
+                visible=_property_visible(prop_node),
+            )
+        )
+    return tuple(parameters)
+
+
+def _bool_attr(sym_node: SExpNode, tag: str) -> bool | None:
+    """Read a ``(tag yes|no)`` symbol attribute; None when absent."""
+    node = sexp.find(sym_node[1:], tag)
+    if node is None or len(node) < 2:
+        return None
+    return sexp.val(node) == "yes"
+
+
+def _library_link(lib_id: str) -> LibraryLink | None:
+    if not lib_id:
+        return None
+    library, sep, symbol = lib_id.partition(":")
+    if not sep:
+        return LibraryLink(symbol=lib_id)
+    return LibraryLink(symbol=symbol, library=library)
+
+
+def _footprint_models(footprint: str) -> tuple[FootprintModel, ...]:
+    if not footprint:
+        return ()
+    library, sep, name = footprint.partition(":")
+    if not sep:
+        return (FootprintModel(name=footprint, is_current=True),)
+    return (FootprintModel(name=name, library=library, is_current=True),)
+
+
+def _component_info(sym_node: SExpNode, lib_id: str, footprint: str) -> ResolvedComponentInfo:
+    in_bom = _bool_attr(sym_node, "in_bom")
+    return ResolvedComponentInfo(
+        parameters=_symbol_parameters(sym_node),
+        lib=_library_link(lib_id),
+        footprints=_footprint_models(footprint),
+        explicit_dnp=_bool_attr(sym_node, "dnp"),
+        exclude_from_bom=in_bom is False,
+    )
+
+
+def _component_attr_metadata(sym_node: SExpNode) -> dict[str, str]:
+    """Non-default fit attributes preserved as metadata keys."""
+    metadata: dict[str, str] = {}
+    if _bool_attr(sym_node, "on_board") is False:
+        metadata["kicad_on_board"] = "no"
+    if _bool_attr(sym_node, "exclude_from_sim") is True:
+        metadata["kicad_exclude_from_sim"] = "yes"
+    return metadata
+
+
 def _pin_candidates(
     data: SExpNode,
     scope_id: ScopeId,
@@ -357,6 +445,8 @@ def _pin_candidates(
             instance_path,
         )
         pin_uuids = _pin_uuids_by_designator(sym_node)
+        component_info = _component_info(sym_node, lib_id, footprint)
+        component_attr_metadata = _component_attr_metadata(sym_node)
 
         unit_pins = resolve_lib_pins(lib_id, lib_pins)
         sym_pins = unit_pins.get(inst_unit, []) + unit_pins.get(0, [])
@@ -381,6 +471,8 @@ def _pin_candidates(
                     component_y=comp_y,
                     component_rotation=comp_rot,
                     component_mirror=mirrored,
+                    component_info=component_info,
+                    component_attr_metadata=component_attr_metadata,
                     pin_designator=pin.number,
                     pin_name=pin.name,
                     pin_type=pin.pin_type,

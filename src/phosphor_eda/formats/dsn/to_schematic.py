@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from phosphor_eda.domain.schematic import Schematic, ScopeId
+from phosphor_eda.domain.schematic import Schematic, ScopeId, TitleBlock
+from phosphor_eda.formats.dsn.parser import DsnSchematicPage, RawTitleBlock
 from phosphor_eda.formats.dsn.pins import normalize_package_name, resolve_pin_name
 from phosphor_eda.formats.dsn.resolver import resolve_dsn_source
 from phosphor_eda.formats.dsn.source import (
@@ -88,6 +89,32 @@ def _global_anchor(raw_page: RawPage, location: tuple[int, int]) -> GraphicInst 
 
 def _source_props(props: dict[str, str]) -> dict[str, str]:
     return dict(props)
+
+
+# Title block prefix-pair names mapped onto typed TitleBlock fields; all
+# other non-empty pairs land in TitleBlock.metadata.
+_TITLE_BLOCK_FIELD_NAMES = frozenset({"Title", "RevCode", "OrgName"})
+
+
+def _page_title_block(raw_page: RawPage) -> TitleBlock | None:
+    """The page's title block, from the first parsed title block record."""
+    if not isinstance(raw_page, DsnSchematicPage) or not raw_page.title_blocks:
+        return None
+    return _title_block(raw_page.title_blocks[0])
+
+
+def _title_block(raw_block: RawTitleBlock) -> TitleBlock:
+    block = TitleBlock(
+        title=raw_block.props.get("Title", ""),
+        revision=raw_block.props.get("RevCode", ""),
+        company=raw_block.props.get("OrgName", ""),
+    )
+    for name, value in raw_block.props.items():
+        if value and name not in _TITLE_BLOCK_FIELD_NAMES:
+            block.metadata[name] = value
+    if raw_block.name:
+        block.metadata["dsn_title_block_symbol"] = raw_block.name
+    return block
 
 
 def _add_page_net_if_missing(
@@ -240,6 +267,7 @@ def _source_page(
         ports=[],
         globals=[],
         off_page_connectors=[],
+        title_block=_page_title_block(raw_page),
     )
     page_nets_by_id: dict[int, DsnPageNet] = {}
     synthetic_nets_by_location: dict[tuple[int, int], DsnPageNet] = {}
@@ -294,6 +322,11 @@ def _source_page(
     for instance_index, raw_inst in enumerate(raw_page.instances):
         pkg = normalize_package_name(raw_inst.package_name)
         component_source_id = f"{page_id}:component:{raw_inst.db_id or instance_index}"
+        # Instance-level evidence shared by every pin of this placement.
+        component_props = dict(raw_inst.props)
+        component_props_list = raw_inst.props_list or tuple(component_props.items())
+        component_x = float(raw_inst.loc_x)
+        component_y = float(raw_inst.loc_y)
         for pin_index, raw_pin in enumerate(raw_inst.pin_connections):
             location = (raw_pin.pin_x, raw_pin.pin_y)
             source_net_id = _pin_source_net_id(
@@ -342,6 +375,10 @@ def _source_page(
                     raw_inst.reference,
                 ),
                 location=location,
+                component_props=component_props,
+                component_props_list=component_props_list,
+                component_x=component_x,
+                component_y=component_y,
             )
             page_source.pin_occurrences.append(pin)
             if page_net is not None:

@@ -358,6 +358,7 @@ def _page_inputs(source: KiCadSourceDesign) -> list[ResolvedPageInput]:
             name=instance.sheet_name,
             source_file=instance.source_file,
             scope_id=instance.scope_id,
+            title_block=instance.title_block,
             metadata={
                 "kicad_sheet_symbol_id": instance.sheet_symbol_id,
             },
@@ -558,6 +559,7 @@ def _pin_inputs(
                     pin_occurrence,
                     component_source_ids_by_component_id.get(component_id, []),
                 ),
+                component_info=pin_occurrence.component_info,
             )
         )
     return result
@@ -643,6 +645,14 @@ def _component_metadata(
         metadata["Footprint"] = pin_occurrence.component_footprint
     if pin_occurrence.component_datasheet:
         metadata["Datasheet"] = pin_occurrence.component_datasheet
+    # Every symbol property lands in the convenience dict; first occurrence
+    # of a name wins. Reference stays a typed identity field only.
+    if pin_occurrence.component_info is not None:
+        for parameter in pin_occurrence.component_info.parameters:
+            if parameter.name == "Reference" or not parameter.value:
+                continue
+            _ = metadata.setdefault(parameter.name, parameter.value)
+    metadata.update(pin_occurrence.component_attr_metadata)
     if component_source_ids:
         metadata["kicad_component_source_ids"] = ",".join(component_source_ids)
     return metadata

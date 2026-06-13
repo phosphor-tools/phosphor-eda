@@ -9,7 +9,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from phosphor_eda.domain.schematic import ScopeId
+from phosphor_eda.domain.schematic import (
+    ComponentKind,
+    FootprintModel,
+    LibraryLink,
+    Parameter,
+    ScopeId,
+    TitleBlock,
+)
 from phosphor_eda.formats.altium.annotation import (
     AnnotationDesignator,
     load_annotation_designators,
@@ -19,6 +26,8 @@ from phosphor_eda.formats.altium.records import (
     ComponentRec,
     DesignatorRec,
     FileNameRec,
+    ImplementationListRec,
+    ImplementationRec,
     ParameterRec,
     PinRec,
     SheetEntryRec,
@@ -35,9 +44,10 @@ from phosphor_eda.formats.altium.sheet_builder import (
 )
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.common.paths import resolve_document_reference
+from phosphor_eda.formats.common.resolved_graph import ResolvedComponentInfo
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
     from pathlib import Path
 
 
@@ -154,6 +164,7 @@ class AltiumPinOccurrence:
     component_part: str = ""
     component_description: str = ""
     component_metadata: dict[str, str] = field(default_factory=dict)
+    component_info: ResolvedComponentInfo | None = None
 
 
 @dataclass(slots=True)
@@ -182,6 +193,7 @@ class AltiumSheetSource:
     harness_connectors: list[AltiumHarnessConnector]
     harness_members: list[AltiumHarnessMember]
     pin_occurrences: list[AltiumPinOccurrence]
+    title_block: TitleBlock | None = None
 
 
 @dataclass(slots=True)
@@ -326,13 +338,136 @@ def _designators_by_owner(sheet: SheetRecords) -> dict[int, str]:
     return result
 
 
-def _component_parameters_by_owner(sheet: SheetRecords) -> dict[int, dict[str, str]]:
-    result: dict[int, dict[str, str]] = {}
-    for parameter in sheet.by_type(ParameterRec):
-        if parameter.owner_index < 0 or not parameter.name or not parameter.text:
+def _resolve_indirect_text(text: str, texts_by_name: dict[str, str]) -> str:
+    """Chase an ``=Name`` reference through same-component parameter texts.
+
+    Returns the referenced parameter's text, following chained references.
+    The literal *text* is kept when the reference is missing or cyclic.
+    """
+    seen: set[str] = set()
+    current = text
+    while current.startswith("="):
+        key = current[1:].strip().lower()
+        if key in seen or key not in texts_by_name:
+            return text
+        seen.add(key)
+        current = texts_by_name[key]
+    return current
+
+
+def component_parameters(records: Sequence[ParameterRec]) -> tuple[Parameter, ...]:
+    """Ordered parameters from one owner's RECORD=41 children, in document order.
+
+    ``=Name`` texts are indirect references to a sibling parameter
+    (case-insensitive); the resolved text is stored as the value with
+    ``indirect=True``.
+    """
+    texts_by_name: dict[str, str] = {}
+    for record in records:
+        if record.name:
+            _ = texts_by_name.setdefault(record.name.lower(), record.text)
+    parameters: list[Parameter] = []
+    for record in records:
+        if not record.name:
             continue
-        result.setdefault(parameter.owner_index, {})[parameter.name] = parameter.text
-    return result
+        indirect = record.text.startswith("=")
+        value = _resolve_indirect_text(record.text, texts_by_name) if indirect else record.text
+        parameters.append(
+            Parameter(
+                name=record.name,
+                value=value,
+                visible=not record.is_hidden,
+                indirect=indirect,
+            )
+        )
+    return tuple(parameters)
+
+
+def _component_parameters_by_owner(sheet: SheetRecords) -> dict[int, tuple[Parameter, ...]]:
+    records_by_owner: dict[int, list[ParameterRec]] = {}
+    for parameter in sheet.by_type(ParameterRec):
+        if parameter.owner_index < 0 or not parameter.name:
+            continue
+        records_by_owner.setdefault(parameter.owner_index, []).append(parameter)
+    return {owner: component_parameters(records) for owner, records in records_by_owner.items()}
+
+
+def _component_footprints_by_owner(sheet: SheetRecords) -> dict[int, tuple[FootprintModel, ...]]:
+    """PCBLIB implementation models per component owner key, in document order.
+
+    Footprints hang off a component as RECORD=44 (implementation list) →
+    RECORD=45 (implementation) children.
+    """
+    models_by_owner: dict[int, list[FootprintModel]] = {}
+    for impl_list in sheet.by_type(ImplementationListRec):
+        if impl_list.owner_index < 0:
+            continue
+        for child in sheet.children.get(impl_list.owner_key, []):
+            if not isinstance(child, ImplementationRec):
+                continue
+            if child.model_type.upper() != "PCBLIB" or not child.model_name:
+                continue
+            models_by_owner.setdefault(impl_list.owner_index, []).append(
+                FootprintModel(
+                    name=child.model_name,
+                    library=child.model_library,
+                    is_current=child.is_current,
+                    description=child.description,
+                )
+            )
+    return {owner: tuple(models) for owner, models in models_by_owner.items()}
+
+
+def _library_link(component: ComponentRec) -> LibraryLink | None:
+    link = LibraryLink(
+        symbol=component.lib_reference,
+        library=component.source_library_name,
+        design_item_id=component.design_item_id,
+        source="database" if component.database_table else "",
+    )
+    if not (link.symbol or link.library or link.design_item_id):
+        return None
+    return link
+
+
+# Altium COMPONENTKIND values, per the Altium Designer SDK ``TComponentKind``
+# enum: eComponentKind_Standard=0, _Mechanical=1, _Graphical=2,
+# _NetTie_InBOM=3, _NetTie_NoBOM=4, _Standard_NoBOM=5, _Jumper=6. Fixture
+# evidence agrees: pi-mx8 title-block drawing components carry 2 and its
+# NetTie_0.2mm components carry 4. Absent → standard.
+_COMPONENT_KINDS: dict[int, ComponentKind] = {
+    0: ComponentKind.STANDARD,
+    1: ComponentKind.MECHANICAL,
+    2: ComponentKind.GRAPHICAL,
+    3: ComponentKind.NET_TIE,
+    4: ComponentKind.NET_TIE,
+    5: ComponentKind.STANDARD,  # standard part excluded from the BOM
+}
+
+# Kind value for a standard part excluded from the BOM (eComponentKind_Standard_NoBOM).
+_KIND_STANDARD_NO_BOM = 5
+
+
+def component_kind(component: ComponentRec) -> ComponentKind:
+    return _COMPONENT_KINDS.get(component.component_kind, ComponentKind.OTHER)
+
+
+def component_info(
+    component: ComponentRec | None,
+    parameters: tuple[Parameter, ...],
+    footprints: tuple[FootprintModel, ...],
+) -> ResolvedComponentInfo:
+    if component is None:
+        return ResolvedComponentInfo(parameters=parameters, footprints=footprints)
+    return ResolvedComponentInfo(
+        parameters=parameters,
+        lib=_library_link(component),
+        footprints=footprints,
+        kind=component_kind(component),
+        # Altium has no native DNP flag — the shared convention matcher decides.
+        explicit_dnp=None,
+        exclude_from_bom=component.component_kind == _KIND_STANDARD_NO_BOM,
+    )
 
 
 def _component_source_id(
@@ -399,26 +534,55 @@ def _apply_multipart_component_identities(sheets: Iterable[AltiumSheetSource]) -
 
 def _component_metadata(
     component: ComponentRec | None,
-    parameters: dict[str, str],
+    parameters: tuple[Parameter, ...],
 ) -> dict[str, str]:
-    metadata = dict(parameters)
+    metadata: dict[str, str] = {}
+    # First occurrence of a parameter name wins (cross-format collision rule);
+    # empty values never land in the convenience dict.
+    for parameter in parameters:
+        if parameter.value:
+            _ = metadata.setdefault(parameter.name, parameter.value)
     if component is None:
         return metadata
     if component.unique_id:
-        metadata["altium_component_unique_id"] = metadata.get(
-            "altium_component_unique_id",
-            component.unique_id,
-        )
-    metadata["altium_current_part_id"] = metadata.get(
-        "altium_current_part_id",
-        str(component.current_part_id),
-    )
-    metadata["altium_part_count"] = metadata.get("altium_part_count", str(component.part_count))
-    metadata["altium_display_mode"] = metadata.get(
-        "altium_display_mode",
-        str(component.display_mode),
-    )
+        _ = metadata.setdefault("altium_component_unique_id", component.unique_id)
+    _ = metadata.setdefault("altium_current_part_id", str(component.current_part_id))
+    _ = metadata.setdefault("altium_part_count", str(component.part_count))
+    _ = metadata.setdefault("altium_display_mode", str(component.display_mode))
     return metadata
+
+
+# Sheet-level parameter names that map onto typed TitleBlock fields
+# (case-insensitive); everything else lands in TitleBlock.metadata.
+_TITLE_BLOCK_FIELD_NAMES = frozenset({"title", "revision", "date", "organization"})
+
+
+def _sheet_title_block(sheet: SheetRecords) -> TitleBlock | None:
+    """Title block from sheet-level (ownerless) RECORD=41 parameters.
+
+    Altium writes ``*`` for sheet parameters left at their print-time
+    placeholder (Time, Date, DocumentFullPathAndName, ...); those count as
+    unset. Returns ``None`` when no parameter carries a real value.
+    """
+    block = TitleBlock()
+    populated = False
+    for record in sheet.sheet_level_parameters:
+        value = record.text
+        if not record.name or not value or value == "*":
+            continue
+        populated = True
+        name = record.name.lower()
+        if name not in _TITLE_BLOCK_FIELD_NAMES:
+            _ = block.metadata.setdefault(record.name, value)
+        elif name == "title":
+            block.title = block.title or value
+        elif name == "revision":
+            block.revision = block.revision or value
+        elif name == "date":
+            block.date = block.date or value
+        else:  # organization
+            block.company = block.company or value
+    return block if populated else None
 
 
 def _pin_is_visible(pin: PinRec, components_by_owner: dict[int, ComponentRec]) -> bool:
@@ -533,6 +697,8 @@ def _source_sheet(
     local_nets_by_id = {local_net.id: local_net for local_net in local_nets}
     components_by_owner = _component_records(sheet)
     component_parameters_by_owner = _component_parameters_by_owner(sheet)
+    component_footprints_by_owner = _component_footprints_by_owner(sheet)
+    component_info_by_owner: dict[int, ResolvedComponentInfo] = {}
     designator_by_owner = _designators_by_owner(sheet)
     no_connect_roots = {
         root
@@ -550,6 +716,15 @@ def _source_sheet(
         local_net_id = root_to_net_id.get(root, "")
         component = components_by_owner.get(pin.owner_index)
         component_reference = designator_by_owner.get(pin.owner_index, "")
+        component_parameters = component_parameters_by_owner.get(pin.owner_index, ())
+        resolved_component_info = component_info_by_owner.get(pin.owner_index)
+        if resolved_component_info is None:
+            resolved_component_info = component_info(
+                component,
+                component_parameters,
+                component_footprints_by_owner.get(pin.owner_index, ()),
+            )
+            component_info_by_owner[pin.owner_index] = resolved_component_info
         pin_id = _source_id(sheet_id, "pin", pin.index)
         occurrence = AltiumPinOccurrence(
             id=pin_id,
@@ -570,10 +745,8 @@ def _source_sheet(
             component_part_id=_component_part_id(component),
             component_part=component.lib_reference if component is not None else "",
             component_description=component.description if component is not None else "",
-            component_metadata=_component_metadata(
-                component,
-                component_parameters_by_owner.get(pin.owner_index, {}),
-            ),
+            component_metadata=_component_metadata(component, component_parameters),
+            component_info=resolved_component_info,
             pin_designator=pin.designator,
             pin_name=pin.name,
             location=pin.location,
@@ -596,6 +769,7 @@ def _source_sheet(
         harness_connectors=harness_connectors,
         harness_members=list(harness_members_by_index.values()),
         pin_occurrences=pin_occurrences,
+        title_block=_sheet_title_block(sheet),
     )
 
 

@@ -11,6 +11,7 @@ import phosphor_eda.formats.kicad.sexp as sexp
 from phosphor_eda.domain.schematic import ScopeId
 from phosphor_eda.formats.kicad.lib_symbols import LibPins, parse_lib_symbols
 from phosphor_eda.formats.kicad.source import KiCadSheetInstance
+from phosphor_eda.formats.kicad.title_block import parse_kicad_title_block
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -140,6 +141,7 @@ def _load_sheet_tree(
         source_file=str(path),
         parent_scope_id=parent_scope_id,
         sheet_symbol_id=sheet_symbol_id,
+        title_block=parse_kicad_title_block(data[1:]),
     )
     sheet_instances.append(instance)
     loaded_sheets.append(LoadedSheet(instance=instance, source_path=path, data=data))

@@ -55,6 +55,16 @@ def test_kicad_project_has_schematic(kicad_project: Project) -> None:
     assert len(kicad_project.schematic.components) > 0
 
 
+def test_kicad_project_metadata_from_title_block(kicad_project: Project) -> None:
+    """Root page title block fills empty ProjectMetadata fields."""
+    assert kicad_project.schematic is not None
+    root = min(kicad_project.schematic.pages, key=lambda page: len(page.scope_id.path))
+    assert root.title_block is not None
+    assert kicad_project.metadata.name == root.title_block.title
+    assert kicad_project.metadata.revision == root.title_block.revision
+    assert kicad_project.metadata.date == root.title_block.date
+
+
 # ---------------------------------------------------------------------------
 # KiCad project (from .kicad_pro entry point)
 # ---------------------------------------------------------------------------

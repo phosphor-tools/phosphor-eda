@@ -6,7 +6,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from phosphor_eda.domain.schematic import ScopeId
+    from phosphor_eda.domain.schematic import ScopeId, TitleBlock
+    from phosphor_eda.formats.common.resolved_graph import ResolvedComponentInfo
 
 type KiCadPoint = tuple[float, float]
 
@@ -19,6 +20,7 @@ class KiCadSheetInstance:
     source_file: str
     parent_scope_id: ScopeId | None = None
     sheet_symbol_id: str = ""
+    title_block: TitleBlock | None = None
 
 
 @dataclass(slots=True)
@@ -116,6 +118,8 @@ class KiCadPinOccurrence:
     component_y: float | None = None
     component_rotation: float = 0.0
     component_mirror: bool = False
+    component_info: ResolvedComponentInfo | None = None
+    component_attr_metadata: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

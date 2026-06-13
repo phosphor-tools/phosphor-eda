@@ -586,6 +586,7 @@ def _page_inputs(source: AltiumSourceDesign) -> list[ResolvedPageInput]:
             name=sheet.name,
             source_file=sheet.source_file,
             scope_id=sheet.scope_id,
+            title_block=sheet.title_block,
         )
         for sheet in source.sheets.values()
     ]
@@ -678,6 +679,7 @@ def _pin_inputs(
                     pin_occurrence,
                     component_source_ids_by_component_id.get(component_id, []),
                 ),
+                component_info=pin_occurrence.component_info,
             )
         )
     return result

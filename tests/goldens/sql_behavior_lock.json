@@ -18,9 +18,13 @@
         "rows": 1,
         "sha256": "2c903fa964ab349af27532eac643da7a6193b7c75e342484ae4143f90056552c"
       },
+      "component_footprints": {
+        "rows": 666,
+        "sha256": "c7aad388cf5dd15fb5c474167ac211033ffcf0812df65ba315a895a5b1294142"
+      },
       "component_metadata": {
-        "rows": 2616,
-        "sha256": "fbfc8513e333af0b2d674e06fea0c600a82a4ff42ce2285cf4165d4da081207f"
+        "rows": 6282,
+        "sha256": "56c426f3f0bcc015df37b0fd76f4a6de3dfe05ff5258cc4e666ed8b2c57781e0"
       },
       "component_occurrence_metadata": {
         "rows": 0,
@@ -34,9 +38,17 @@
         "rows": 666,
         "sha256": "e9718de81e3ef772538cc74443e2797873f0c8f9e20d4eadc2d852b9301d2526"
       },
+      "component_parameters": {
+        "rows": 7170,
+        "sha256": "f1a500045656367c0bd2b855e011a13a552b6bea5ed05b4ad566442d802381eb"
+      },
+      "component_part_numbers": {
+        "rows": 618,
+        "sha256": "7b820e93647c89d4734ef851637b020e6ed3613bd866a25a44c7156684b70f25"
+      },
       "components": {
         "rows": 666,
-        "sha256": "ec53c1a6ab2225f7efd8606f9860966775a1a22d71d29898a8e125e8a6e5942d"
+        "sha256": "d41b8a9f22b7a6065c3539fad13602afc274624a97f68a63b809b69223ea0a41"
       },
       "conductors": {
         "rows": 14390,
@@ -123,8 +135,12 @@
         "sha256": "0bf0399751a0f9001d9bcbfbb7e0efb9e30b00f2aa380a7ab5ae60d9b843febb"
       },
       "project": {
-        "rows": 1,
-        "sha256": "0af97efbc2e98472d2efbd48908c7e419c0a818cbdafc8d85bad65972bb41346"
+        "rows": 4,
+        "sha256": "de2141f08c6c2396dd5b341fc1984ea4ef3cf7636993b74656360a7237ed2815"
+      },
+      "title_blocks": {
+        "rows": 10,
+        "sha256": "a351d903b74b171e3085fb9f856b1f2beb869f17329a97c5ecccc0a18f2d8ade"
       },
       "vias": {
         "rows": 1345,
@@ -151,6 +167,10 @@
         "rows": 1,
         "sha256": "a059c19d3efc26342456fa5c96076cd1eda180791eecc3a1600f5b90f2d784ef"
       },
+      "component_footprints": {
+        "rows": 589,
+        "sha256": "5590ab9efae6eda62a8c8db5edfc7a85840502b6dc836ee9b8a3aba7e8bffa23"
+      },
       "component_metadata": {
         "rows": 4910,
         "sha256": "53c2adae22a8d384c3d8d5854a910f56542ff6eea28821a366559c59876a5451"
@@ -167,9 +187,17 @@
         "rows": 550,
         "sha256": "e9a40516c082a753a1085d76b04568c9c73c38496a36d5094bf7b36e28468de4"
       },
+      "component_parameters": {
+        "rows": 2185,
+        "sha256": "80f8f6949bb06ff1d8bfa0e9075a09d950bab95f2fc410442e35c170bc050876"
+      },
+      "component_part_numbers": {
+        "rows": 1,
+        "sha256": "ecbdc512a8a0291511e4d3bde83b8988105bf1708abd825caa454f0a36c7258d"
+      },
       "components": {
         "rows": 545,
-        "sha256": "f9d1074b0daa8a9825ccb122ac1b4e4b1fef59f888feab9411bc1b75dad9eed1"
+        "sha256": "8b64024a8a45aeaa5c939d4852b159933252b6c90454e9a1dc61dd9fc158e8f3"
       },
       "conductors": {
         "rows": 13473,
@@ -256,8 +284,12 @@
         "sha256": "b8d5a518e608dd23b7395110b8f3d694807ec8a56049dd0f0e7a79a0e0bbd6de"
       },
       "project": {
-        "rows": 1,
-        "sha256": "74657659d2407265725e5b6f8752a1058486895af19597a3e1e32ccb66879957"
+        "rows": 2,
+        "sha256": "6fa04cd370c4242048699411cd41ea793c2be9af61c2c2460375b2e3bf52d91a"
+      },
+      "title_blocks": {
+        "rows": 16,
+        "sha256": "9c7ac6336e1dd6da5a8e3b606f8e5e04d149df534d58fbcf38848aa59a9db30c"
       },
       "vias": {
         "rows": 2278,

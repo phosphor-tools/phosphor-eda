@@ -146,6 +146,8 @@ def extract_sheet_sources(
             component_y=candidate.component_y,
             component_rotation=candidate.component_rotation,
             component_mirror=candidate.component_mirror,
+            component_info=candidate.component_info,
+            component_attr_metadata=candidate.component_attr_metadata,
             pin_designator=candidate.pin_designator,
             pin_name=candidate.pin_name,
             pin_type=candidate.pin_type,
