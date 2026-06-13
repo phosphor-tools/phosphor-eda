@@ -324,6 +324,7 @@ def _source_page(
         component_source_id = f"{page_id}:component:{raw_inst.db_id or instance_index}"
         # Instance-level evidence shared by every pin of this placement.
         component_props = dict(raw_inst.props)
+        component_props_list = raw_inst.props_list or tuple(component_props.items())
         component_x = float(raw_inst.loc_x)
         component_y = float(raw_inst.loc_y)
         for pin_index, raw_pin in enumerate(raw_inst.pin_connections):
@@ -375,6 +376,7 @@ def _source_page(
                 ),
                 location=location,
                 component_props=component_props,
+                component_props_list=component_props_list,
                 component_x=component_x,
                 component_y=component_y,
             )

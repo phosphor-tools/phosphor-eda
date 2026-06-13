@@ -92,7 +92,9 @@ class TestDnp:
         assert r171.dnp_source is DnpSource.EXPLICIT
 
     def test_explicit_dnp_no(self, csi: Schematic) -> None:
-        fitted = next(c for c in csi.components if not c.dnp)
+        # R10 carries an explicit `(dnp no)` in the fixture.
+        fitted = _component(csi, "R10")
+        assert fitted.dnp is False
         assert fitted.dnp_source is None
 
 
@@ -112,7 +114,7 @@ class TestComponentDetailView:
 
 class TestTitleBlock:
     def test_root_page_title_block(self, orangecrab: Schematic) -> None:
-        root = orangecrab.pages[0]
+        root = min(orangecrab.pages, key=lambda page: len(page.scope_id.path))
         assert root.title_block is not None
         assert root.title_block.title == "Orange Crab"
         assert root.title_block.revision == "r0.2.1"
