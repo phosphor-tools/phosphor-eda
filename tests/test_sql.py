@@ -1128,6 +1128,19 @@ class TestTypedTables:
 
 
 class TestPadsAndVias:
+    def test_constructed_pad_and_via_stack_columns(
+        self, constructed_db: duckdb.DuckDBPyConnection
+    ) -> None:
+        pad_row = constructed_db.execute(
+            "SELECT stack_mode, copper_layers FROM pads WHERE id = 'pad:J1:1'"
+        ).fetchone()
+        via_row = constructed_db.execute(
+            "SELECT stack_mode, copper_layers FROM vias WHERE id = 'via:1'"
+        ).fetchone()
+
+        assert pad_row == ("simple", ["F.Cu"])
+        assert via_row == ("simple", ["F.Cu", "B.Cu"])
+
     def test_unconnected_pads_use_nullable_net(self, db: duckdb.DuckDBPyConnection) -> None:
         assert _count(db, "SELECT count(*) FROM pads WHERE net_number IS NULL") > 0
         assert _count(db, "SELECT count(*) FROM pads WHERE net_number = 0") == 0

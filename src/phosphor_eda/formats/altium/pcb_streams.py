@@ -420,6 +420,13 @@ def _altium_pad_stack(
     return None
 
 
+def _pad_mode_name(value: int) -> str:
+    try:
+        return PadMode(value).name
+    except ValueError:
+        return str(value)
+
+
 def _pad_stack_alt_shape(pad: PadRecord, layer_index: int) -> tuple[int | None, int]:
     """Per-layer (alt shape, corner radius pct) from sub6, defaulting when absent."""
     alt_shape = pad.alt_shapes[layer_index] if pad.alt_shapes else None
@@ -764,7 +771,7 @@ def parse_pads(
                         if pad.component == COMPONENT_NONE
                         else pad.component,
                         properties={
-                            "pad_mode": str(pad.layer),
+                            "pad_mode": _pad_mode_name(pad.pad_mode),
                             "shape_alt": "" if pad.shape_alt is None else str(pad.shape_alt),
                         },
                     ),
