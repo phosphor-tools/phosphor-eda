@@ -346,9 +346,10 @@ def _collect_name_evidence(pages: Iterable[DsnPageSource]) -> dict[str, _NameEvi
                 evidence.page_names.append(page_net.name)
         for wire in page.wires:
             evidence = evidence_by_local_id.setdefault(wire.local_net_id, _NameEvidence())
-            evidence.aliases.extend(
-                alias.name for alias in wire.aliases if bus_kind_for_name(alias.name) is None
-            )
+            for alias in wire.aliases:
+                alias_name = alias.name.strip()
+                if alias_name and bus_kind_for_name(alias_name) is None:
+                    evidence.aliases.append(alias_name)
             if wire.db_id > 0:
                 evidence.wire_dbids.append(wire.db_id)
         for port in page.ports:

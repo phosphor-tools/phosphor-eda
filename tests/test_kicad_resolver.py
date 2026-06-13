@@ -265,6 +265,42 @@ def test_bus_labels_promote_to_resolved_buses() -> None:
     assert all(net.name != "DATA[0..1]" for net in design.nets)
 
 
+def test_bus_alias_expansion_uses_label_scope_aliases() -> None:
+    scope_a = _scope("sheet-a")
+    scope_b = _scope("sheet-b")
+    pin_a = _pin(scope_a, "sheet-a:local:a0", "U1")
+    pin_b = _pin(scope_b, "sheet-b:local:b0", "U2")
+    net_a = _local_net(
+        scope_a,
+        "a0",
+        local_labels=[_local_label(scope_a, "sheet-a:local:a0", "SOC.A0")],
+        pins=[pin_a],
+    )
+    net_b = _local_net(
+        scope_b,
+        "b0",
+        local_labels=[_local_label(scope_b, "sheet-b:local:b0", "SOC.B0")],
+        pins=[pin_b],
+    )
+
+    design = resolve_kicad_source(
+        _source(
+            [net_a, net_b],
+            [pin_a, pin_b],
+            bus_labels=[_bus_label(scope_b, "SOC{ADDR}", 1)],
+            bus_aliases=[
+                _bus_alias(scope_b, "ADDR", ("B0",)),
+                _bus_alias(scope_a, "ADDR", ("A0",)),
+            ],
+            sheet_instances=[_sheet(scope_a, "A"), _sheet(scope_b, "B")],
+        )
+    )
+
+    bus = next(bus for bus in design.buses if bus.name == "SOC{ADDR}")
+
+    assert {net.name for net in bus.members} == {"SOC.B0"}
+
+
 def test_local_labels_with_same_text_on_sibling_sheet_instances_do_not_merge() -> None:
     scope_a = _scope("sheet-a")
     scope_b = _scope("sheet-b")

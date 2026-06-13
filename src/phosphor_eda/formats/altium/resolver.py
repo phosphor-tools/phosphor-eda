@@ -11,7 +11,6 @@ from phosphor_eda.domain.buses import (
     build_buses_from_definitions,
     bus_kind_for_name,
     expand_bus_members,
-    member_nets_for_names,
 )
 from phosphor_eda.domain.schematic import Bus, BusKind, NetName, NetNameKind
 from phosphor_eda.formats.altium._helpers import parse_bus_notation
@@ -211,7 +210,7 @@ def _altium_harness_buses(source: AltiumSourceDesign, design: Schematic) -> list
                 id=f"altium:bus:harness:{index:04d}",
                 name=bus_name,
                 kind=BusKind.HARNESS,
-                members=member_nets_for_names(design, [net.name for net in members]),
+                members=list(members),
                 metadata=metadata_by_bus[bus_name],
             )
         )

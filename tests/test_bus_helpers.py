@@ -24,5 +24,11 @@ def test_group_bus_prefixes_members_and_expands_aliases() -> None:
     ]
 
 
+def test_group_bus_alias_cycles_are_skipped() -> None:
+    aliases = {"ADDR": ("CTRL",), "CTRL": ("ADDR",)}
+
+    assert expand_group_bus("SOC{ADDR CLK}", aliases=aliases) == ["SOC.CLK"]
+
+
 def test_expand_bus_members_returns_none_for_scalar_name() -> None:
     assert expand_bus_members("RESET") is None

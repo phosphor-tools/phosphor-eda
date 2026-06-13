@@ -176,12 +176,12 @@
         "sha256": "7e6956fefc022195cf342a0a912f822492ab83dd3bf0ae07b84e8f995bd219ea"
       },
       "bus_members": {
-        "rows": 298,
-        "sha256": "6e3d387438889635b9d0b5b1905d1faf53fb27c78ba6dee240024652632d54f2"
+        "rows": 274,
+        "sha256": "761d5497acd7660282eb77437388f60bf4944e4941321d1c72768837df4d0783"
       },
       "buses": {
         "rows": 25,
-        "sha256": "c40a58a508e8cb59f30870d20ba990119f67c59559741ba7a327e95b8f4d95c5"
+        "sha256": "665e3c257f5cc0a0dd377eefa72fa65b6970d06def3de466627553a69b84fb1c"
       },
       "component_footprints": {
         "rows": 589,

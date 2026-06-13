@@ -50,6 +50,15 @@ def expand_group_bus(
     aliases: Mapping[str, Sequence[str]] | None = None,
 ) -> list[str] | None:
     """Expand KiCad-style ``GROUP{A B}`` notation to member net names."""
+    return _expand_group_bus(name, aliases or {}, alias_stack=frozenset())
+
+
+def _expand_group_bus(
+    name: str,
+    aliases: Mapping[str, Sequence[str]],
+    *,
+    alias_stack: frozenset[str],
+) -> list[str] | None:
     text = _clean(name)
     match = _GROUP_RE.fullmatch(text)
     if match is None:
@@ -58,7 +67,7 @@ def expand_group_bus(
     body = match.group("body")
     members: list[str] = []
     for token in _split_group_body(body):
-        for member in _expand_group_token(token, aliases or {}):
+        for member in _expand_group_token(token, aliases, alias_stack=alias_stack):
             members.append(f"{prefix}.{member}" if prefix else member)
     return members
 
@@ -69,7 +78,16 @@ def expand_bus_members(
     aliases: Mapping[str, Sequence[str]] | None = None,
 ) -> list[str] | None:
     """Expand either vector or group bus notation."""
-    group_members = expand_group_bus(name, aliases=aliases)
+    return _expand_bus_members(name, aliases or {}, alias_stack=frozenset())
+
+
+def _expand_bus_members(
+    name: str,
+    aliases: Mapping[str, Sequence[str]],
+    *,
+    alias_stack: frozenset[str],
+) -> list[str] | None:
+    group_members = _expand_group_bus(name, aliases, alias_stack=alias_stack)
     if group_members is not None:
         return group_members
     return expand_vector_bus(name)
@@ -147,17 +165,30 @@ def _expand_vector_part(part: str) -> list[str] | None:
     return [f"{prefix}{index}" for index in range(start, end + step, step)]
 
 
-def _expand_group_token(token: str, aliases: Mapping[str, Sequence[str]]) -> list[str]:
+def _expand_group_token(
+    token: str,
+    aliases: Mapping[str, Sequence[str]],
+    *,
+    alias_stack: frozenset[str],
+) -> list[str]:
     if token in aliases:
+        if token in alias_stack:
+            return []
+        next_stack = alias_stack | {token}
         members: list[str] = []
         for alias_member in aliases[token]:
-            expanded = expand_bus_members(alias_member, aliases=aliases)
-            members.extend(expanded if expanded is not None else [_clean(alias_member)])
+            members.extend(
+                _expand_group_token(
+                    _clean(alias_member),
+                    aliases,
+                    alias_stack=next_stack,
+                )
+            )
         return members
     vector_members = expand_vector_bus(token)
     if vector_members is not None:
         return vector_members
-    nested_group = expand_group_bus(token, aliases=aliases)
+    nested_group = _expand_group_bus(token, aliases, alias_stack=alias_stack)
     if nested_group is not None:
         return nested_group
     return [_clean(token)]

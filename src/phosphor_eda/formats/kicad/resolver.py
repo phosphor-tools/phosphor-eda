@@ -98,17 +98,17 @@ def resolve_kicad_source(source: KiCadSourceDesign, ctx: ParseContext | None = N
 
 
 def _kicad_bus_definitions(source: KiCadSourceDesign) -> list[BusDefinition]:
-    aliases = _kicad_bus_aliases(source)
     definitions: list[BusDefinition] = []
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str, str, ScopeId]] = set()
     bus_index = 0
     for label in source.bus_labels:
+        aliases = _kicad_bus_aliases_for_scope(source, label.scope_id)
         name = _clean_name(label.name)
         kind = bus_kind_for_name(name, aliases=aliases)
         member_names = tuple(expand_bus_members(name, aliases=aliases) or ())
-        if kind is None or not member_names or (kind.value, name) in seen:
+        if kind is None or not member_names or (kind.value, name, label.scope_id) in seen:
             continue
-        seen.add((kind.value, name))
+        seen.add((kind.value, name, label.scope_id))
         bus_index += 1
         definitions.append(
             BusDefinition(
@@ -127,11 +127,11 @@ def _kicad_bus_definitions(source: KiCadSourceDesign) -> list[BusDefinition]:
     return definitions
 
 
-def _kicad_bus_aliases(source: KiCadSourceDesign) -> dict[str, tuple[str, ...]]:
-    aliases: dict[str, tuple[str, ...]] = {}
-    for alias in source.bus_aliases:
-        aliases[alias.name] = alias.members
-    return aliases
+def _kicad_bus_aliases_for_scope(
+    source: KiCadSourceDesign,
+    scope_id: ScopeId,
+) -> dict[str, tuple[str, ...]]:
+    return {alias.name: alias.members for alias in source.bus_aliases if alias.scope_id == scope_id}
 
 
 def _merge_repeated_logical_pins(
