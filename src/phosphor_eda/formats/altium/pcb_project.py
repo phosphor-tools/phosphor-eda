@@ -1,9 +1,9 @@
 """Project-level enrichment for Altium PcbDoc files.
 
-Parses the Rules6, Classes6, DifferentialPairs6 and Board6 streams into the
-domain enrichment models (design rules, net classes, diff pairs, stackup)
-and exposes ``load_altium_enrichment(path)`` which owns the OLE-stream
-knowledge (stream names, re-open) so callers only orchestrate.
+Parses the Rules6, Classes6, and DifferentialPairs6 streams into domain
+enrichment models (design rules, net classes, diff pairs). Board6/stackup
+parsing is owned by the board parser; ``load_altium_enrichment(path)`` owns
+only the enrichment OLE-stream knowledge so callers only orchestrate.
 """
 
 from __future__ import annotations
@@ -420,10 +420,10 @@ class AltiumEnrichment:
 def load_altium_enrichment(path: Path, ctx: ParseContext | None = None) -> AltiumEnrichment:
     """Read and parse the enrichment streams from a .PcbDoc file.
 
-    Owns the OLE-stream knowledge (stream names, re-open) so callers only
-    orchestrate: open the document once for the Rules6/Classes6/
-    DifferentialPairs6 streams and turn them into domain enrichment.
-    The stackup is parsed by :func:`parse_altium_pcb` and lives on the board.
+    Owns the enrichment OLE-stream knowledge (stream names, re-open) so callers
+    only orchestrate: open the document once for the Rules6/Classes6/
+    DifferentialPairs6 streams and turn them into domain enrichment. Board6 and
+    stackup parsing are handled by :func:`parse_altium_pcb` and live on the board.
     """
     require_ole_file(path)
     ole = olefile.OleFileIO(str(path))

@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
+from phosphor_eda.domain.pcb import Board
 from phosphor_eda.domain.project import Project
+from phosphor_eda.formats.altium.pcb_project import AltiumEnrichment
 from phosphor_eda.query.convert import load_project
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -56,7 +58,7 @@ def test_kicad_project_has_schematic(kicad_project: Project) -> None:
 def test_kicad_project_metadata_from_title_block(kicad_project: Project) -> None:
     """Root page title block fills empty ProjectMetadata fields."""
     assert kicad_project.schematic is not None
-    root = kicad_project.schematic.pages[0]
+    root = min(kicad_project.schematic.pages, key=lambda page: len(page.scope_id.path))
     assert root.title_block is not None
     assert kicad_project.metadata.name == root.title_block.title
     assert kicad_project.metadata.revision == root.title_block.revision
@@ -118,6 +120,57 @@ def test_altium_project_has_design_rules(altium_project: Project) -> None:
 
 def test_altium_project_has_diff_pairs(altium_project: Project) -> None:
     assert len(altium_project.diff_pairs) == 55
+
+
+def test_altium_prjpcb_loads_all_existing_boards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = tmp_path / "First.PcbDoc"
+    second = tmp_path / "Second.PcbDoc"
+    first.write_text("")
+    second.write_text("")
+    prjpcb = tmp_path / "Project.PrjPcb"
+    prjpcb.write_text(
+        "[Design]\n"
+        "HierarchyMode=1\n\n"
+        "[Document1]\n"
+        "DocumentPath=First.PcbDoc\n\n"
+        "[Document2]\n"
+        "DocumentPath=Second.PcbDoc\n"
+    )
+
+    def board(name: str, path: Path) -> Board:
+        return Board(
+            name=name,
+            layers=[],
+            nets={},
+            footprints=[],
+            pads=[],
+            vias=[],
+            drills=[],
+            conductors=[],
+            artwork=[],
+            pours=[],
+            keepouts=[],
+            source_path=str(path),
+        )
+
+    def fake_parse_altium_pcb(path: Path, _ctx: object) -> Board:
+        return board(path.stem, path)
+
+    def fake_load_altium_enrichment(_path: Path, _ctx: object) -> AltiumEnrichment:
+        return AltiumEnrichment(design_rules=[], net_classes=[], diff_pairs=[])
+
+    monkeypatch.setattr("phosphor_eda.query.convert.parse_altium_pcb", fake_parse_altium_pcb)
+    monkeypatch.setattr(
+        "phosphor_eda.query.convert.load_altium_enrichment",
+        fake_load_altium_enrichment,
+    )
+
+    project = load_project(prjpcb)
+
+    assert [board.name for board in project.boards] == ["First", "Second"]
+    assert project.board is project.boards[0]
 
 
 # ---------------------------------------------------------------------------

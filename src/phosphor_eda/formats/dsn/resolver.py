@@ -599,6 +599,7 @@ def _component_info(pin_occurrence: DsnPinOccurrence) -> ResolvedComponentInfo:
     shared DNP convention ladder decides from the parameters.
     """
     props = pin_occurrence.component_props
+    prop_entries = pin_occurrence.component_props_list or tuple(props.items())
     footprint = props.get(_FOOTPRINT_PROP_KEY, "")
     lib: LibraryLink | None = None
     if pin_occurrence.component_part or _design_item_id(props):
@@ -607,7 +608,7 @@ def _component_info(pin_occurrence: DsnPinOccurrence) -> ResolvedComponentInfo:
             design_item_id=_design_item_id(props),
         )
     return ResolvedComponentInfo(
-        parameters=tuple(Parameter(name=name, value=value) for name, value in props.items()),
+        parameters=tuple(Parameter(name=name, value=value) for name, value in prop_entries),
         lib=lib,
         footprints=(FootprintModel(name=footprint, is_current=True),) if footprint else (),
     )

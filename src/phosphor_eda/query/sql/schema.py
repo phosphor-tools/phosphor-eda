@@ -99,6 +99,27 @@ INDEX_DDL: dict[str, str] = {
     "idx_component_metadata_component_id": """
         CREATE INDEX idx_component_metadata_component_id ON component_metadata(component_id)
     """,
+    "idx_component_parameters_component_id": """
+        CREATE INDEX idx_component_parameters_component_id ON component_parameters(component_id)
+    """,
+    "idx_component_parameters_component_id_ord": """
+        CREATE INDEX idx_component_parameters_component_id_ord
+        ON component_parameters(component_id, ord)
+    """,
+    "idx_component_footprints_component_id": """
+        CREATE INDEX idx_component_footprints_component_id ON component_footprints(component_id)
+    """,
+    "idx_component_footprints_component_id_ord": """
+        CREATE INDEX idx_component_footprints_component_id_ord
+        ON component_footprints(component_id, ord)
+    """,
+    "idx_component_part_numbers_component_id": """
+        CREATE INDEX idx_component_part_numbers_component_id ON component_part_numbers(component_id)
+    """,
+    "idx_component_part_numbers_component_id_ord": """
+        CREATE INDEX idx_component_part_numbers_component_id_ord
+        ON component_part_numbers(component_id, ord)
+    """,
     "idx_component_occurrence_metadata_occurrence_id": """
         CREATE INDEX idx_component_occurrence_metadata_occurrence_id
         ON component_occurrence_metadata(occurrence_id)
