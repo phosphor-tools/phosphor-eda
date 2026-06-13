@@ -1,6 +1,15 @@
 """Tests for schematic dataclass defaults and basic relationships."""
 
-from phosphor_eda.domain.schematic import Component, Net, Page, Pin, Schematic, ScopeId
+from phosphor_eda.domain.schematic import (
+    Bus,
+    BusKind,
+    Component,
+    Net,
+    Page,
+    Pin,
+    Schematic,
+    ScopeId,
+)
 
 
 def test_pin_defaults() -> None:
@@ -84,10 +93,22 @@ def test_pin_no_connect() -> None:
     assert pin.net is None
 
 
-def test_net_bus_property() -> None:
-    net = Net(id="net-data0", name="DATA0", bus="DATA[0..7]")
+def test_design_holds_buses_as_relationships() -> None:
+    data0 = Net(id="net-data0", name="DATA0")
+    data1 = Net(id="net-data1", name="DATA1")
+    bus = Bus(
+        id="bus-data",
+        name="DATA[0..1]",
+        kind=BusKind.VECTOR,
+        members=[data0, data1],
+        metadata={"source": "constructed"},
+    )
+    design = Schematic(name="TEST", nets=[data0, data1], buses=[bus])
 
-    assert net.bus == "DATA[0..7]"
+    assert design.buses == [bus]
+    assert bus.members == [data0, data1]
+    assert bus.kind is BusKind.VECTOR
+    assert not hasattr(data0, "bus")
 
 
 def test_scope_id_string_is_path_like() -> None:

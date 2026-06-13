@@ -30,6 +30,8 @@ from phosphor_eda.domain.pcb import (
 from phosphor_eda.domain.pcb_builder import PcbBuilder
 from phosphor_eda.domain.project import Project
 from phosphor_eda.domain.schematic import (
+    Bus,
+    BusKind,
     Component,
     ComponentOccurrence,
     Net,
@@ -307,12 +309,20 @@ def _constructed_schematic() -> Schematic:
     control_page.components = [controller, duplicate_b]
     power_page.nets = [sync, reset_power]
     control_page.nets = [sync, reset_control]
+    control_bus = Bus(
+        id="bus:control",
+        name="CTRL{SYNC RESET}",
+        kind=BusKind.GROUP,
+        members=[sync, reset_control],
+        metadata={"source_format": "constructed", "source_id": "control/bus-1"},
+    )
 
     return Schematic(
         name="Constructed SQL",
         pages=[power_page, control_page],
         components=[controller, duplicate_a, duplicate_b],
         nets=[sync, reset_power, reset_control],
+        buses=[control_bus],
     )
 
 
@@ -807,6 +817,32 @@ class TestConstructedSchematicSql:
                 "control/local-8,power/local-12",
             ),
             ("net:sync", "SYNC", "source_scope_ids", "/root/control,/root/power"),
+        ]
+
+    def test_buses_and_members_are_normalized(
+        self, constructed_db: duckdb.DuckDBPyConnection
+    ) -> None:
+        bus_rows = constructed_db.execute(
+            """
+            SELECT bus_id, name, kind, member_count, members
+            FROM buses
+            ORDER BY bus_id
+            """
+        ).fetchall()
+        assert bus_rows == [
+            ("bus:control", "CTRL{SYNC RESET}", "group", 2, "SYNC,RESET"),
+        ]
+
+        member_rows = constructed_db.execute(
+            """
+            SELECT bus_id, name, kind, net_id, net_name, ord
+            FROM bus_members
+            ORDER BY bus_id, ord
+            """
+        ).fetchall()
+        assert member_rows == [
+            ("bus:control", "CTRL{SYNC RESET}", "group", "net:sync", "SYNC", 1),
+            ("bus:control", "CTRL{SYNC RESET}", "group", "net:reset:control", "RESET", 2),
         ]
 
     def test_net_summary_groups_schematic_by_net_id_with_name_joined_pcb_counts(

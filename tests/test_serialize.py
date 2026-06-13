@@ -7,14 +7,16 @@ from typing import TYPE_CHECKING
 import pytest
 
 from phosphor_eda.domain.schematic import (
-    Component as DomainComponent,
-)
-from phosphor_eda.domain.schematic import (
+    Bus,
+    BusKind,
     ComponentOccurrence,
     NetOccurrence,
     PinOccurrence,
     Schematic,
     ScopeId,
+)
+from phosphor_eda.domain.schematic import (
+    Component as DomainComponent,
 )
 from phosphor_eda.domain.schematic import (
     Net as DomainNet,
@@ -106,7 +108,6 @@ class Net(DomainNet):
         pages: list[DomainPage] | None = None,
         occurrences: list[NetOccurrence] | None = None,
         aliases: set[str] | None = None,
-        bus: str | None = None,
         metadata: dict[str, str] | None = None,
     ) -> None:
         super().__init__(
@@ -116,7 +117,6 @@ class Net(DomainNet):
             pages=pages or [],
             occurrences=occurrences or [],
             aliases=aliases or set(),
-            bus=bus,
             metadata=metadata or {},
         )
 
@@ -190,6 +190,31 @@ def _simple_design():
         nets=[net_gnd, net_sclk],
         components=[comp_r1, comp_u7],
         metadata={"Revision": "1.0"},
+    )
+
+
+def _bus_design() -> Schematic:
+    page = Page(name="Digital")
+    comp = Component(reference="U1", part="MCU", description="Controller", pages=[page])
+    data0 = Net(name="DATA0", pages=[page])
+    data1 = Net(name="DATA1", pages=[page])
+    reset = Net(name="RESET", pages=[page])
+    pin_d0 = Pin(designator="1", name="D0", component=comp, net=data0)
+    pin_d1 = Pin(designator="2", name="D1", component=comp, net=data1)
+    pin_rst = Pin(designator="3", name="RST", component=comp, net=reset)
+    comp.pins = [pin_d0, pin_d1, pin_rst]
+    data0.pins = [pin_d0]
+    data1.pins = [pin_d1]
+    reset.pins = [pin_rst]
+    page.components = [comp]
+    page.nets = [data0, data1, reset]
+    bus = Bus(id="bus:data", name="DATA[0..1]", kind=BusKind.VECTOR, members=[data0, data1])
+    return Schematic(
+        name="BUS",
+        pages=[page],
+        nets=[data0, data1, reset],
+        components=[comp],
+        buses=[bus],
     )
 
 
@@ -695,6 +720,19 @@ def test_format_net_table():
     assert "NET" in table
     assert "ADC_SCLK" in table
     assert "GND" in table
+
+
+def test_filter_nets_by_bus_membership():
+    design = _bus_design()
+
+    assert [net.name for net in filter_nets(design, bus="DATA[0..1]")] == ["DATA0", "DATA1"]
+    assert filter_nets(design, bus="MISSING") == []
+
+
+def test_net_detail_shows_bus_membership():
+    detail = format_net_detail(_bus_design(), "DATA0")
+
+    assert "Bus: DATA[0..1] (vector)" in detail
 
 
 def test_format_page_table():

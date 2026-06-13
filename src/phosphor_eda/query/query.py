@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from phosphor_eda.domain.buses import bus_memberships
 from phosphor_eda.query.classify import PASSIVE_PREFIXES, is_power_net, ref_prefix
 from phosphor_eda.query.trace import trace_from_net
 
@@ -43,6 +44,7 @@ def filter_nets(
     min_pins: int | None = None,
     multi_page: bool = False,
     trace: bool = False,
+    bus: str | None = None,
 ) -> list[Net]:
     """Filter nets from a design.  All criteria are AND-composed."""
     result = list(design.nets)
@@ -61,6 +63,13 @@ def filter_nets(
 
     if multi_page:
         result = [n for n in result if len(_net_pages(n)) > 1]
+
+    if bus is not None:
+        result = [
+            n
+            for n in result
+            if any(member_bus.name == bus for member_bus in bus_memberships(design, n))
+        ]
 
     if components:
         _require_components(design, components)

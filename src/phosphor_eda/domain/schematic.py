@@ -217,7 +217,6 @@ class Net:
     occurrences: list[NetOccurrence] = field(default_factory=list)
     names: list[NetName] = field(default_factory=list)
     aliases: set[str] = field(default_factory=set)
-    bus: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)
 
     @override
@@ -236,6 +235,34 @@ class NetOccurrence:
     source_local_net_id: str
     source_names: set[str] = field(default_factory=set)
     metadata: dict[str, str] = field(default_factory=dict)
+
+
+class BusKind(StrEnum):
+    """How a source schematic groups bus member nets."""
+
+    VECTOR = "vector"
+    GROUP = "group"
+    HARNESS = "harness"
+
+
+@dataclass(repr=False)
+class Bus:
+    """A resolved source bus and the nets that belong to it.
+
+    Buses are one-way grouping relationships over already-resolved nets. A net
+    can belong to multiple buses, so membership lives here rather than on
+    :class:`Net`.
+    """
+
+    id: str
+    name: str
+    kind: BusKind
+    members: list[Net] = field(default_factory=list)
+    metadata: dict[str, str] = field(default_factory=dict)
+
+    @override
+    def __repr__(self) -> str:
+        return f"Bus({self.id!r}, {self.name!r}, kind={self.kind!r}, members={len(self.members)})"
 
 
 @dataclass
@@ -261,4 +288,5 @@ class Schematic:
     pages: list[Page] = field(default_factory=list)
     nets: list[Net] = field(default_factory=list)
     components: list[Component] = field(default_factory=list)
+    buses: list[Bus] = field(default_factory=list)
     metadata: dict[str, str] = field(default_factory=dict)

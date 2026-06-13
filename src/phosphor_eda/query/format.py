@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from phosphor_eda.domain.buses import bus_memberships
 from phosphor_eda.domain.schematic import ComponentKind
 from phosphor_eda.formats.common.electrical import ELECTRICAL_KEY, PinElectrical
 from phosphor_eda.query.classify import PASSIVE_PREFIXES, is_power_net, ref_prefix
@@ -555,6 +556,9 @@ def format_net_detail(design: Schematic, name: str) -> str:
 
     for key, value in sorted(_filter_default_net_metadata(net).items()):
         lines.append(f"  [{key}: {value}]")
+
+    for bus in bus_memberships(design, net):
+        lines.append(f"  Bus: {bus.name} ({bus.kind.value})")
 
     for pin in sorted(net.pins, key=lambda p: (_pin_label(design, p, net), p.designator)):
         ref_pin = _pin_label(design, pin, net)

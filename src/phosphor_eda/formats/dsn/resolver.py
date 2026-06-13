@@ -6,6 +6,12 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from phosphor_eda.domain.buses import (
+    BusDefinition,
+    build_buses_from_definitions,
+    bus_kind_for_name,
+    expand_bus_members,
+)
 from phosphor_eda.domain.schematic import (
     FootprintModel,
     LibraryLink,
@@ -88,7 +94,7 @@ def resolve_dsn_source(source: DsnSourceDesign, ctx: ParseContext | None = None)
     metadata = {"dsn_resolver": "source"}
     if ctx is not None and ctx.issues:
         metadata["parse_issue_count"] = str(len(ctx.issues))
-    return build_resolved_schematic(
+    design = build_resolved_schematic(
         name=source.name,
         pages=_page_inputs(source.pages),
         local_nets=_local_net_inputs(local_refs, name_evidence),
@@ -103,6 +109,41 @@ def resolve_dsn_source(source: DsnSourceDesign, ctx: ParseContext | None = None)
         net_ordering=_order_dsn_nets,
         metadata=metadata,
     )
+    design.buses = build_buses_from_definitions(design, _dsn_bus_definitions(source))
+    return design
+
+
+def _dsn_bus_definitions(source: DsnSourceDesign) -> list[BusDefinition]:
+    definitions: list[BusDefinition] = []
+    seen: set[tuple[str, str]] = set()
+    bus_index = 0
+    for page in source.pages:
+        for wire in page.wires:
+            if not wire.is_bus:
+                continue
+            for alias in wire.aliases:
+                name = alias.name.strip()
+                kind = bus_kind_for_name(name)
+                member_names = tuple(expand_bus_members(name) or ())
+                if kind is None or not member_names or (kind.value, name) in seen:
+                    continue
+                seen.add((kind.value, name))
+                bus_index += 1
+                definitions.append(
+                    BusDefinition(
+                        id=f"dsn:bus:{kind.value}:{bus_index:04d}",
+                        name=name,
+                        kind=kind,
+                        member_names=member_names,
+                        metadata={
+                            "source_format": "dsn",
+                            "source_id": alias.id,
+                            "source_kind": "wire_alias",
+                            "source_page": page.name,
+                        },
+                    )
+                )
+    return definitions
 
 
 def _collect_local_refs(pages: Iterable[DsnPageSource]) -> list[_LocalNetRef]:
@@ -305,7 +346,9 @@ def _collect_name_evidence(pages: Iterable[DsnPageSource]) -> dict[str, _NameEvi
                 evidence.page_names.append(page_net.name)
         for wire in page.wires:
             evidence = evidence_by_local_id.setdefault(wire.local_net_id, _NameEvidence())
-            evidence.aliases.extend(alias.name for alias in wire.aliases)
+            evidence.aliases.extend(
+                alias.name for alias in wire.aliases if bus_kind_for_name(alias.name) is None
+            )
             if wire.db_id > 0:
                 evidence.wire_dbids.append(wire.db_id)
         for port in page.ports:

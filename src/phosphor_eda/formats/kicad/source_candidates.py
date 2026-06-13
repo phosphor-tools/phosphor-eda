@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import sexpdata
 
 import phosphor_eda.formats.kicad.sexp as sexp
+from phosphor_eda.domain.buses import bus_kind_for_name
 from phosphor_eda.domain.schematic import (
     FootprintModel,
     LibraryLink,
@@ -92,10 +93,30 @@ class _SheetPinCandidate:
 
 
 @dataclass(slots=True)
+class _BusLabelCandidate:
+    id: str
+    scope_id: ScopeId
+    source_index: int
+    name: str
+    location: KiCadPoint
+    kind: str
+
+
+@dataclass(slots=True)
+class _BusAliasCandidate:
+    id: str
+    scope_id: ScopeId
+    name: str
+    members: tuple[str, ...]
+
+
+@dataclass(slots=True)
 class SheetCandidates:
     local_labels: list[_LabelCandidate]
     global_labels: list[_LabelCandidate]
     hierarchical_labels: list[_LabelCandidate]
+    bus_labels: list[_BusLabelCandidate]
+    bus_aliases: list[_BusAliasCandidate]
     power_symbols: list[_PowerCandidate]
     sheet_symbols: list[KiCadSheetSymbol]
     sheet_pins: list[_SheetPinCandidate]
@@ -131,6 +152,8 @@ def extract_source_candidates(
         "hierarchical_label",
         wire_graph,
     )
+    bus_label_candidates = _bus_label_candidates(data, scope_id)
+    bus_alias_candidates = _bus_alias_candidates(data, scope_id)
     sheet_symbols, sheet_pin_candidates = _sheet_symbol_sources(
         data,
         scope_id,
@@ -154,6 +177,8 @@ def extract_source_candidates(
         local_labels=local_label_candidates,
         global_labels=global_label_candidates,
         hierarchical_labels=hierarchical_label_candidates,
+        bus_labels=bus_label_candidates,
+        bus_aliases=bus_alias_candidates,
         power_symbols=power_candidates,
         sheet_symbols=sheet_symbols,
         sheet_pins=sheet_pin_candidates,
@@ -195,6 +220,58 @@ def _label_candidates(
             ),
         )
     return candidates
+
+
+def _bus_label_candidates(data: SExpNode, scope_id: ScopeId) -> list[_BusLabelCandidate]:
+    candidates: list[_BusLabelCandidate] = []
+    label_specs = (
+        ("label", "local_label"),
+        ("global_label", "global_label"),
+        ("hierarchical_label", "hierarchical_label"),
+    )
+    for tag_name, id_kind in label_specs:
+        for index, label in enumerate(sexp.find_all(data[1:], tag_name)):
+            label_name = strip_kicad_markup(str(label[1]))
+            if bus_kind_for_name(label_name) is None:
+                continue
+            at_node = sexp.find(label[2:], "at")
+            if at_node is None:
+                continue
+            source_key = _node_value(label[2:], "uuid") or str(index)
+            candidates.append(
+                _BusLabelCandidate(
+                    id=_source_id(scope_id, f"bus_{id_kind}", source_key),
+                    scope_id=scope_id,
+                    source_index=index,
+                    name=label_name,
+                    location=point_from_at(at_node),
+                    kind=id_kind,
+                )
+            )
+    return candidates
+
+
+def _bus_alias_candidates(data: SExpNode, scope_id: ScopeId) -> list[_BusAliasCandidate]:
+    aliases: list[_BusAliasCandidate] = []
+    for index, alias_node in enumerate(sexp.find_all(data[1:], "bus_alias")):
+        if len(alias_node) < 2:
+            continue
+        name = strip_kicad_markup(str(alias_node[1]))
+        members_node = sexp.find(alias_node[2:], "members")
+        if members_node is None:
+            continue
+        members = tuple(strip_kicad_markup(str(member)) for member in members_node[1:])
+        if not name or not members:
+            continue
+        aliases.append(
+            _BusAliasCandidate(
+                id=_source_id(scope_id, "bus_alias", f"{index}:{name}"),
+                scope_id=scope_id,
+                name=name,
+                members=members,
+            )
+        )
+    return aliases
 
 
 def _sheet_symbol_sources(

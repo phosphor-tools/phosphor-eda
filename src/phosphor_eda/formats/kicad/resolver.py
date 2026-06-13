@@ -5,6 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from phosphor_eda.domain.buses import (
+    BusDefinition,
+    build_buses_from_definitions,
+    bus_kind_for_name,
+    expand_bus_members,
+)
 from phosphor_eda.formats.common.electrical import (
     KICAD_ELECTRICAL_MAP,
     set_pin_electrical,
@@ -68,7 +74,7 @@ def resolve_kicad_source(source: KiCadSourceDesign, ctx: ParseContext | None = N
     if ctx is not None and ctx.issues:
         metadata["parse_issue_count"] = str(len(ctx.issues))
 
-    return build_resolved_schematic(
+    design = build_resolved_schematic(
         name=source.name,
         pages=_page_inputs(source),
         local_nets=_local_net_inputs(source.local_nets),
@@ -87,6 +93,45 @@ def resolve_kicad_source(source: KiCadSourceDesign, ctx: ParseContext | None = N
         include_net=_include_kicad_net,
         metadata=metadata,
     )
+    design.buses = build_buses_from_definitions(design, _kicad_bus_definitions(source))
+    return design
+
+
+def _kicad_bus_definitions(source: KiCadSourceDesign) -> list[BusDefinition]:
+    aliases = _kicad_bus_aliases(source)
+    definitions: list[BusDefinition] = []
+    seen: set[tuple[str, str]] = set()
+    bus_index = 0
+    for label in source.bus_labels:
+        name = _clean_name(label.name)
+        kind = bus_kind_for_name(name, aliases=aliases)
+        member_names = tuple(expand_bus_members(name, aliases=aliases) or ())
+        if kind is None or not member_names or (kind.value, name) in seen:
+            continue
+        seen.add((kind.value, name))
+        bus_index += 1
+        definitions.append(
+            BusDefinition(
+                id=f"kicad:bus:{kind.value}:{bus_index:04d}",
+                name=name,
+                kind=kind,
+                member_names=member_names,
+                metadata={
+                    "source_format": "kicad",
+                    "source_id": label.id,
+                    "source_kind": label.kind,
+                    "source_scope": str(label.scope_id),
+                },
+            )
+        )
+    return definitions
+
+
+def _kicad_bus_aliases(source: KiCadSourceDesign) -> dict[str, tuple[str, ...]]:
+    aliases: dict[str, tuple[str, ...]] = {}
+    for alias in source.bus_aliases:
+        aliases[alias.name] = alias.members
+    return aliases
 
 
 def _merge_repeated_logical_pins(
@@ -496,6 +541,8 @@ def _sheet_pin_names(local_net: KiCadLocalNet) -> list[str]:
 
 def _mergeable_name(name: str) -> str | None:
     cleaned = _clean_name(name)
+    if bus_kind_for_name(cleaned) is not None:
+        return None
     return cleaned or None
 
 

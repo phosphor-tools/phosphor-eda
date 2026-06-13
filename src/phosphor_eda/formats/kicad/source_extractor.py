@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 from phosphor_eda.formats.kicad.source import (
+    KiCadBusAlias,
+    KiCadBusLabel,
     KiCadGlobalLabel,
     KiCadHierarchicalLabel,
     KiCadLocalLabel,
@@ -32,6 +34,8 @@ class _ExtractedSheet:
     local_labels: list[KiCadLocalLabel]
     global_labels: list[KiCadGlobalLabel]
     hierarchical_labels: list[KiCadHierarchicalLabel]
+    bus_labels: list[KiCadBusLabel]
+    bus_aliases: list[KiCadBusAlias]
     power_symbols: list[KiCadPowerSymbol]
     sheet_symbols: list[KiCadSheetSymbol]
     sheet_pins: list[KiCadSheetPin]
@@ -96,6 +100,26 @@ def extract_sheet_sources(
             local_net_id=root_to_net_id[wire_graph.find(candidate.location)],
         )
         for candidate in candidates.hierarchical_labels
+    ]
+    bus_labels = [
+        KiCadBusLabel(
+            id=candidate.id,
+            scope_id=candidate.scope_id,
+            source_index=candidate.source_index,
+            name=candidate.name,
+            location=candidate.location,
+            kind=candidate.kind,
+        )
+        for candidate in candidates.bus_labels
+    ]
+    bus_aliases = [
+        KiCadBusAlias(
+            id=candidate.id,
+            scope_id=candidate.scope_id,
+            name=candidate.name,
+            members=candidate.members,
+        )
+        for candidate in candidates.bus_aliases
     ]
     power_symbols = [
         KiCadPowerSymbol(
@@ -175,6 +199,8 @@ def extract_sheet_sources(
         local_labels=local_labels,
         global_labels=global_labels,
         hierarchical_labels=hierarchical_labels,
+        bus_labels=bus_labels,
+        bus_aliases=bus_aliases,
         power_symbols=power_symbols,
         sheet_symbols=sheet_symbols,
         sheet_pins=sheet_pins,

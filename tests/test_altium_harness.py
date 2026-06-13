@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from phosphor_eda.domain.schematic import Schematic
+from phosphor_eda.domain.schematic import BusKind, Schematic
 from phosphor_eda.formats.altium.source import AltiumSheetSource, load_project_source_sheets
 from phosphor_eda.formats.altium.to_schematic import altium_to_design
 
@@ -102,3 +102,10 @@ def test_harness_nets_resolve_across_sheets(pimx8_design: Schematic):
         assert expected_pins[member] <= pins, f"{member}: {pins}"
         pages = {page.name for page in net.pages}
         assert {"06_8MPLUS_IO", "11_WIFI_BLE_Module"} <= pages
+
+
+def test_harness_promoted_to_bus(pimx8_design: Schematic):
+    bus = next(bus for bus in pimx8_design.buses if bus.name == "WIFI_SDIO")
+
+    assert bus.kind is BusKind.HARNESS
+    assert {net.name for net in bus.members} == set(SDIO_MEMBERS)

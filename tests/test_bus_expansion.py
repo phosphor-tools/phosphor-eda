@@ -5,7 +5,7 @@ Bus notation like ``D[0..7]`` expands into individual signal names
 evidence and must not create aggregate-name public connectivity.
 """
 
-from phosphor_eda.domain.schematic import ScopeId
+from phosphor_eda.domain.schematic import BusKind, ScopeId
 from phosphor_eda.formats.altium._helpers import parse_bus_notation
 from phosphor_eda.formats.altium.enums import SheetEntrySide
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode, AltiumProject
@@ -354,6 +354,9 @@ def test_bus_sheet_entry_aggregate_name_does_not_merge_member_nets():
         net for net in design.nets if any(pin.component.reference == "PARENT" for pin in net.pins)
     )
     assert {pin.component.reference for pin in parent_public_net.pins} == {"PARENT"}
+    bus = next(bus for bus in design.buses if bus.name == "D[0..1]")
+    assert bus.kind is BusKind.VECTOR
+    assert {net.name for net in bus.members} == {"D0", "D1"}
 
 
 def test_bus_port_aggregate_name_does_not_merge_member_port_nets():

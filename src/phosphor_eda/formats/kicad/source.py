@@ -96,6 +96,24 @@ class KiCadSheetPin:
 
 
 @dataclass(slots=True)
+class KiCadBusLabel:
+    id: str
+    scope_id: ScopeId
+    source_index: int
+    name: str
+    location: KiCadPoint
+    kind: str
+
+
+@dataclass(slots=True)
+class KiCadBusAlias:
+    id: str
+    scope_id: ScopeId
+    name: str
+    members: tuple[str, ...]
+
+
+@dataclass(slots=True)
 class KiCadPinOccurrence:
     id: str
     scope_id: ScopeId
@@ -147,6 +165,8 @@ class KiCadSourceDesign:
     local_labels: list[KiCadLocalLabel]
     global_labels: list[KiCadGlobalLabel]
     hierarchical_labels: list[KiCadHierarchicalLabel]
+    bus_labels: list[KiCadBusLabel]
+    bus_aliases: list[KiCadBusAlias]
     power_symbols: list[KiCadPowerSymbol]
     sheet_symbols: list[KiCadSheetSymbol]
     sheet_pins: list[KiCadSheetPin]

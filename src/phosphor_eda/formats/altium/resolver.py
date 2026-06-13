@@ -6,7 +6,14 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from phosphor_eda.domain.schematic import NetName, NetNameKind
+from phosphor_eda.domain.buses import (
+    BusDefinition,
+    build_buses_from_definitions,
+    bus_kind_for_name,
+    expand_bus_members,
+    member_nets_for_names,
+)
+from phosphor_eda.domain.schematic import Bus, BusKind, NetName, NetNameKind
 from phosphor_eda.formats.altium._helpers import parse_bus_notation
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode
 from phosphor_eda.formats.common.net_union import NetUnion
@@ -25,7 +32,7 @@ from phosphor_eda.formats.common.spatial import UnionFind
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from phosphor_eda.domain.schematic import Schematic, ScopeId
+    from phosphor_eda.domain.schematic import Net, Schematic, ScopeId
     from phosphor_eda.formats.altium.annotation import AnnotationDesignator
     from phosphor_eda.formats.altium.project import AltiumProject
     from phosphor_eda.formats.altium.source import (
@@ -101,7 +108,7 @@ def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None =
         if symbol.unique_id
     }
 
-    return build_resolved_schematic(
+    design = build_resolved_schematic(
         name=source.name,
         pages=_page_inputs(source),
         local_nets=_local_net_inputs(local_refs),
@@ -123,6 +130,100 @@ def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None =
         include_net=_include_altium_net,
         metadata=metadata,
     )
+    design.buses = _altium_buses(source, design)
+    return design
+
+
+def _altium_buses(source: AltiumSourceDesign, design: Schematic) -> list[Bus]:
+    buses = build_buses_from_definitions(design, _altium_bus_definitions(source))
+    buses.extend(_altium_harness_buses(source, design))
+    return buses
+
+
+def _altium_bus_definitions(source: AltiumSourceDesign) -> list[BusDefinition]:
+    definitions: list[BusDefinition] = []
+    seen: set[tuple[BusKind, str]] = set()
+    bus_index = 0
+    for sheet in source.sheets.values():
+        for local_net in sheet.local_nets:
+            sources: list[tuple[str, str, str]] = []
+            sources.extend((label.id, label.name, label.kind) for label in local_net.net_labels)
+            sources.extend((port.id, port.name, port.kind) for port in local_net.ports)
+            sources.extend((entry.id, entry.name, entry.kind) for entry in local_net.sheet_entries)
+            for source_id, raw_name, source_kind in sources:
+                name = _clean_name(raw_name)
+                kind = bus_kind_for_name(name)
+                if kind is None or (kind, name) in seen:
+                    continue
+                seen.add((kind, name))
+                member_names = tuple(expand_bus_members(name) or ())
+                if not member_names:
+                    continue
+                bus_index += 1
+                definitions.append(
+                    BusDefinition(
+                        id=f"altium:bus:{kind.value}:{bus_index:04d}",
+                        name=name,
+                        kind=kind,
+                        member_names=member_names,
+                        metadata={
+                            "source_format": "altium",
+                            "source_id": source_id,
+                            "source_kind": source_kind,
+                            "source_sheet": sheet.name,
+                        },
+                    )
+                )
+    return definitions
+
+
+def _altium_harness_buses(source: AltiumSourceDesign, design: Schematic) -> list[Bus]:
+    nets_by_local_id = _nets_by_source_local_id(design)
+    members_by_bus: dict[str, list[Net]] = {}
+    metadata_by_bus: dict[str, dict[str, str]] = {}
+    seen_by_bus: dict[str, set[str]] = {}
+    for sheet in source.sheets.values():
+        for local_net in sheet.local_nets:
+            net = nets_by_local_id.get(local_net.id)
+            if net is None:
+                continue
+            for member in local_net.harness_members:
+                bus_name = _clean_name(member.port_name)
+                if not bus_name:
+                    continue
+                seen_net_ids = seen_by_bus.setdefault(bus_name, set())
+                if net.id in seen_net_ids:
+                    continue
+                seen_net_ids.add(net.id)
+                members_by_bus.setdefault(bus_name, []).append(net)
+                metadata_by_bus.setdefault(
+                    bus_name,
+                    {
+                        "source_format": "altium",
+                        "source_kind": "harness",
+                        "source_sheet": sheet.name,
+                    },
+                )
+    buses: list[Bus] = []
+    for index, (bus_name, members) in enumerate(members_by_bus.items(), start=1):
+        buses.append(
+            Bus(
+                id=f"altium:bus:harness:{index:04d}",
+                name=bus_name,
+                kind=BusKind.HARNESS,
+                members=member_nets_for_names(design, [net.name for net in members]),
+                metadata=metadata_by_bus[bus_name],
+            )
+        )
+    return buses
+
+
+def _nets_by_source_local_id(design: Schematic) -> dict[str, Net]:
+    result: dict[str, Net] = {}
+    for net in design.nets:
+        for occurrence in net.occurrences:
+            result[occurrence.source_local_net_id] = net
+    return result
 
 
 def _collect_local_refs(source: AltiumSourceDesign) -> list[_LocalNetRef]:

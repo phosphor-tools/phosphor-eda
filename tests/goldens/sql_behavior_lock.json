@@ -1,6 +1,6 @@
 {
   "jetson-orin": {
-    "serialize_sha256": "936896c8506a26ce4ab68611f05e62c66ad5cd7197108487edd413cd3fc41d8a",
+    "serialize_sha256": "513ed63eecd8083345b1d080647f76b786b570f7f6d7b1f3d965bcb8924b4a3a",
     "tables": {
       "artwork": {
         "rows": 149352,
@@ -16,7 +16,15 @@
       },
       "boards": {
         "rows": 1,
-        "sha256": "3fba3eac8551336a66ceeeab07a6c66cbbc01ee5416adc7f46306f32b1bd0a39"
+        "sha256": "b7accb12e59e9158940da5abeca5c552b6596fa015d39f679441f1b527de3e2b"
+      },
+      "bus_members": {
+        "rows": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "buses": {
+        "rows": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       "component_footprints": {
         "rows": 666,
@@ -116,7 +124,7 @@
       },
       "pages": {
         "rows": 10,
-        "sha256": "0358cf64773c46ffaf2291bc29aebb32e70664edf806adcb24ee05e87c94f582"
+        "sha256": "1b391b523a3d93aa6081721f8cdd8ce522c194d269b46b60d4e76bc6d3c43bfb"
       },
       "pin_occurrence_metadata": {
         "rows": 2670,
@@ -165,7 +173,15 @@
       },
       "boards": {
         "rows": 1,
-        "sha256": "78db5c7f88840a2a3796d5ef00c1f39219d072f71beb90554c617a00040c779c"
+        "sha256": "7e6956fefc022195cf342a0a912f822492ab83dd3bf0ae07b84e8f995bd219ea"
+      },
+      "bus_members": {
+        "rows": 298,
+        "sha256": "6e3d387438889635b9d0b5b1905d1faf53fb27c78ba6dee240024652632d54f2"
+      },
+      "buses": {
+        "rows": 25,
+        "sha256": "c40a58a508e8cb59f30870d20ba990119f67c59559741ba7a327e95b8f4d95c5"
       },
       "component_footprints": {
         "rows": 589,

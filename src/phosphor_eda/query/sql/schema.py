@@ -169,6 +169,15 @@ INDEX_DDL: dict[str, str] = {
         CREATE INDEX idx_net_occurrence_source_names_source_name
         ON net_occurrence_source_names(source_name)
     """,
+    "idx_buses_name": """
+        CREATE INDEX idx_buses_name ON buses(name)
+    """,
+    "idx_bus_members_bus_id": """
+        CREATE INDEX idx_bus_members_bus_id ON bus_members(bus_id)
+    """,
+    "idx_bus_members_net_id": """
+        CREATE INDEX idx_bus_members_net_id ON bus_members(net_id)
+    """,
 }
 
 VIEW_DDL: dict[str, str] = {
