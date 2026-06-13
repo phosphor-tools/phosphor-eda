@@ -28,6 +28,10 @@ class WireAlias:
 @dataclass(kw_only=True)
 class Wire:
     type_id: int = 0
+    # Persistent wire dbid (allocated monotonically, survives saves). The
+    # minimum dbid over a net's wire cluster is the number in Capture's
+    # stored N##### autoname.
+    db_id: int = 0
     wire_id: int = 0
     color: int = 0
     start_x: int = 0

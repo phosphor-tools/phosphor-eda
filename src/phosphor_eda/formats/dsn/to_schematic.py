@@ -129,12 +129,14 @@ def _add_page_net_if_missing(
     if page_net is not None:
         return page_net
 
+    # Nets without a page net list entry have no stored name; Capture's
+    # autoname is recovered later from the cluster's seed-wire dbid.
     page_net = DsnPageNet(
         id=_local_net_id(page_id, net_id),
         scope_id=scope_id,
         net_id=net_id,
-        name=f"N{net_id:08d}",
-        name_key=dsn_name_key(f"N{net_id:08d}"),
+        name="",
+        name_key="",
     )
     page_nets_by_id[net_id] = page_net
     page_source.nets.append(page_net)
@@ -169,6 +171,25 @@ def _synthetic_net_at(
     return page_net
 
 
+def _graphic_net_name(graphic: GraphicInst, ctx: ParseContext | None, kind: str) -> str:
+    """The net name a power symbol or off-page connector carries.
+
+    The graphic's own ``name`` is the symbol name (``VCC_ARROW``,
+    ``OFFPAGE_4``) — never a net name. The net name rides in the
+    ``_net_name`` string index; when it's missing the symbol name is the
+    only spelling available and is used with a diagnostic.
+    """
+    net_name = graphic.props.get("_net_name", "")
+    if net_name:
+        return net_name
+    if ctx is not None:
+        ctx.warn(
+            f"dsn_{kind}_net_name",
+            f"{kind} symbol {graphic.name!r} carries no net name; falling back to the symbol name",
+        )
+    return graphic.name
+
+
 def _graphic_sources(
     *,
     raw_page: RawPage,
@@ -179,6 +200,7 @@ def _graphic_sources(
     page_id: str,
     scope_id: ScopeId,
     kind: str,
+    ctx: ParseContext | None = None,
 ) -> None:
     for index, graphic in enumerate(graphics):
         location = (graphic.loc_x, graphic.loc_y)
@@ -225,27 +247,31 @@ def _graphic_sources(
                 page_source.ports.append(port)
                 page_net.port_ids.append(port.id)
             elif kind == "global":
+                net_name = _graphic_net_name(graphic, ctx, kind)
                 global_ = DsnGlobal(
                     id=object_id,
                     scope_id=scope_id,
                     local_net_id=local_net_id,
                     source_net_id=net_id,
-                    name=graphic.name,
-                    name_key=dsn_name_key(graphic.name),
+                    name=net_name,
+                    name_key=dsn_name_key(net_name),
                     location=location,
+                    symbol=graphic.name,
                     props=_source_props(graphic.props),
                 )
                 page_source.globals.append(global_)
                 page_net.global_ids.append(global_.id)
             elif kind == "off_page_connector":
+                net_name = _graphic_net_name(graphic, ctx, kind)
                 connector = DsnOffPageConnector(
                     id=object_id,
                     scope_id=scope_id,
                     local_net_id=local_net_id,
                     source_net_id=net_id,
-                    name=graphic.name,
-                    name_key=dsn_name_key(graphic.name),
+                    name=net_name,
+                    name_key=dsn_name_key(net_name),
                     location=location,
+                    symbol=graphic.name,
                     props=_source_props(graphic.props),
                 )
                 page_source.off_page_connectors.append(connector)
@@ -315,6 +341,7 @@ def _source_page(
             aliases=aliases,
             is_bus=raw_wire.is_bus,
             color=raw_wire.color,
+            db_id=raw_wire.db_id,
         )
         page_source.wires.append(wire)
         page_net.wire_ids.append(wire.id)
@@ -401,6 +428,7 @@ def _source_page(
         page_id=page_id,
         scope_id=scope_id,
         kind="global",
+        ctx=ctx,
     )
     _graphic_sources(
         raw_page=raw_page,
@@ -411,6 +439,7 @@ def _source_page(
         page_id=page_id,
         scope_id=scope_id,
         kind="off_page_connector",
+        ctx=ctx,
     )
     return page_source
 

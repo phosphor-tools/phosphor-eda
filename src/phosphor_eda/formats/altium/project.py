@@ -24,6 +24,7 @@ class AltiumProject:
     allow_sheet_entry_net_names: bool = True
     append_sheet_number_to_local_nets: bool = False
     name_nets_hierarchically: bool = False
+    netlist_single_pin_nets: bool = False
     power_port_names_take_priority: bool = False
     schematic_paths: list[str] = field(default_factory=list)
     pcb_paths: list[str] = field(default_factory=list)
@@ -67,6 +68,11 @@ def parse_prjpcb(content: str) -> AltiumProject:
             "Design",
             "NameNetsHierarchically",
             fallback=project.name_nets_hierarchically,
+        )
+        project.netlist_single_pin_nets = parser.getboolean(
+            "Design",
+            "NetlistSinglePinNets",
+            fallback=project.netlist_single_pin_nets,
         )
         project.power_port_names_take_priority = parser.getboolean(
             "Design",

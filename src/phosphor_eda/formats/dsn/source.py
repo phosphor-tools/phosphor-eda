@@ -41,6 +41,9 @@ class DsnWire:
     aliases: list[DsnWireAlias]
     is_bus: bool = False
     color: int = 0
+    # Persistent wire dbid; min over a net cluster yields the stored
+    # N##### autoname. 0 means the dbid was not parsed.
+    db_id: int = 0
     kind: str = field(default="wire", init=False)
 
 
@@ -80,6 +83,13 @@ class DsnPort:
 
 @dataclass(slots=True)
 class DsnGlobal:
+    """A power symbol occurrence.
+
+    ``name`` is the net name the symbol carries (its net-name property),
+    not the graphic symbol name (``VCC_ARROW``, ``VCC_BAR``); the symbol
+    name lives in ``symbol``.
+    """
+
     id: str
     scope_id: ScopeId
     local_net_id: str
@@ -87,12 +97,19 @@ class DsnGlobal:
     name: str
     name_key: str
     location: DsnPoint
+    symbol: str = ""
     props: dict[str, str] = field(default_factory=dict)
     kind: str = field(default="global", init=False)
 
 
 @dataclass(slots=True)
 class DsnOffPageConnector:
+    """An off-page connector occurrence.
+
+    ``name`` is the net name the connector carries, not the graphic symbol
+    name (``OFFPAGELEFT-L``); the symbol name lives in ``symbol``.
+    """
+
     id: str
     scope_id: ScopeId
     local_net_id: str
@@ -100,6 +117,7 @@ class DsnOffPageConnector:
     name: str
     name_key: str
     location: DsnPoint
+    symbol: str = ""
     props: dict[str, str] = field(default_factory=dict)
     kind: str = field(default="off_page_connector", init=False)
 

@@ -401,4 +401,6 @@ def test_bus_aggregate_name_is_not_used_as_final_net_name():
         _bus_source([_bus_sheet("A", [aggregate_net], [aggregate_pin])], AltiumHierarchyMode.FLAT),
     )
 
-    assert design.nets[0].name == "__auto_A_bus"
+    # The aggregate name is rejected, so the net falls through to Altium's
+    # autoname from its single member pin (BUS, 1).
+    assert design.nets[0].name == "NetBUS_1"

@@ -183,10 +183,12 @@ def test_page_net_ids_determine_base_electrical_groups() -> None:
 
 
 def test_same_named_globals_merge_case_insensitively_and_preserve_spelling_aliases() -> None:
+    # Entry-less page nets carry no stored name; the power symbols' net
+    # names (Vcc/vCC) are the only name evidence and pick the canonical.
     scope_a = _scope("PowerA")
     scope_b = _scope("PowerB")
-    net_a = _net("PowerA", scope_a, 1, "N00000001")
-    net_b = _net("PowerB", scope_b, 2, "N00000002")
+    net_a = _net("PowerA", scope_a, 1, "")
+    net_b = _net("PowerB", scope_b, 2, "")
     pin_a = _pin("PowerA", scope_a, 1, "U1")
     pin_b = _pin("PowerB", scope_b, 2, "U2")
 
@@ -263,8 +265,8 @@ def test_off_page_connectors_merge_only_within_known_folder_scope() -> None:
 def test_aliases_are_provenance_not_global_merge_keys() -> None:
     scope_a = _scope("A")
     scope_b = _scope("B")
-    net_a = _net("A", scope_a, 1, "N00000001")
-    net_b = _net("B", scope_b, 2, "N00000002")
+    net_a = _net("A", scope_a, 1, "")
+    net_b = _net("B", scope_b, 2, "")
     pin_a = _pin("A", scope_a, 1, "U1")
     pin_b = _pin("B", scope_b, 2, "U2")
 
