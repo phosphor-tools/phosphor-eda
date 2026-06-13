@@ -11,6 +11,7 @@ from phosphor_eda.domain.buses import (
     bus_kind_for_name,
     expand_bus_members,
 )
+from phosphor_eda.domain.schematic import NetName, NetNameKind
 from phosphor_eda.formats.common.electrical import (
     KICAD_ELECTRICAL_MAP,
     set_pin_electrical,
@@ -25,6 +26,7 @@ from phosphor_eda.formats.common.resolved_graph import (
     ResolvedPinInput,
     build_resolved_schematic,
 )
+from phosphor_eda.formats.kicad.lib_symbols import strip_kicad_markup
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -34,18 +36,36 @@ if TYPE_CHECKING:
     from phosphor_eda.formats.kicad.source import (
         KiCadLocalNet,
         KiCadPinOccurrence,
+        KiCadPowerSymbol,
         KiCadSourceDesign,
     )
 
 
 @dataclass(slots=True)
-class _NameEvidence:
-    global_labels: list[str]
-    power_symbols: list[str]
-    local_labels: list[str]
-    hierarchical_labels: list[str]
-    sheet_pins: list[str]
-    generated: list[str]
+class _NameCandidate:
+    name: str
+    kind: NetNameKind
+    scope: ScopeId | None
+    source: str
+    priority: int
+    path_length: int = 0
+    source_index: int = 0
+    sheet_pin_direction: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class _NameDecision:
+    name: str
+    names: tuple[NetName, ...]
+
+
+_GLOBAL_LABEL_PRIORITY = 7
+_GLOBAL_POWER_PIN_PRIORITY = 6
+_LOCAL_POWER_PIN_PRIORITY = 5
+_LOCAL_LABEL_PRIORITY = 4
+_HIERARCHICAL_LABEL_PRIORITY = 3
+_SHEET_PIN_PRIORITY = 2
+_PIN_PRIORITY = 1
 
 
 def resolve_kicad_source(source: KiCadSourceDesign, ctx: ParseContext | None = None) -> Schematic:
@@ -55,6 +75,10 @@ def resolve_kicad_source(source: KiCadSourceDesign, ctx: ParseContext | None = N
     ``parse_issue_count`` in the resulting schematic metadata.
     """
     pin_occurrences = list(source.pin_occurrences)
+    pins_by_local_net_id = _pins_by_local_net_id(pin_occurrences)
+    sheet_names_by_scope = {
+        instance.scope_id: instance.sheet_name for instance in source.sheet_instances
+    }
     component_ids_by_source_id = _component_ids_by_source_id(pin_occurrences)
     component_source_ids_by_component_id = _component_source_ids_by_component_id(
         pin_occurrences,
@@ -86,6 +110,9 @@ def resolve_kicad_source(source: KiCadSourceDesign, ctx: ParseContext | None = N
         net_union=net_union,
         net_factory=lambda net_index, root_id, group_local_nets: _kicad_net_input_for_group(
             local_nets_by_id,
+            pins_by_local_net_id,
+            sheet_names_by_scope,
+            source.schematic_version,
             net_index,
             root_id,
             group_local_nets,
@@ -93,11 +120,17 @@ def resolve_kicad_source(source: KiCadSourceDesign, ctx: ParseContext | None = N
         include_net=_include_kicad_net,
         metadata=metadata,
     )
-    design.buses = build_buses_from_definitions(design, _kicad_bus_definitions(source))
+    design.buses = build_buses_from_definitions(
+        design,
+        _kicad_bus_definitions(source, sheet_names_by_scope),
+    )
     return design
 
 
-def _kicad_bus_definitions(source: KiCadSourceDesign) -> list[BusDefinition]:
+def _kicad_bus_definitions(
+    source: KiCadSourceDesign,
+    sheet_names_by_scope: dict[ScopeId, str],
+) -> list[BusDefinition]:
     aliases = _kicad_bus_aliases(source)
     definitions: list[BusDefinition] = []
     seen: set[tuple[str, str]] = set()
@@ -105,7 +138,12 @@ def _kicad_bus_definitions(source: KiCadSourceDesign) -> list[BusDefinition]:
     for label in source.bus_labels:
         name = _clean_name(label.name)
         kind = bus_kind_for_name(name, aliases=aliases)
-        member_names = tuple(expand_bus_members(name, aliases=aliases) or ())
+        member_names = tuple(
+            _compose_name(member_name, label.scope_id, sheet_names_by_scope, prepend_path=True)
+            if label.kind != "global_label"
+            else _escape_net_name(member_name)
+            for member_name in expand_bus_members(name, aliases=aliases) or ()
+        )
         if kind is None or not member_names or (kind.value, name) in seen:
             continue
         seen.add((kind.value, name))
@@ -181,15 +219,20 @@ def _merge_global_labels(net_union: NetUnion, local_nets: Iterable[KiCadLocalNet
 
 
 def _merge_power_symbols(net_union: NetUnion, local_nets: Iterable[KiCadLocalNet]) -> None:
-    ids_by_name: dict[str, list[str]] = {}
+    ids_by_name: dict[tuple[ScopeId | None, str], list[str]] = {}
     for local_net in local_nets:
         for symbol in local_net.power_symbols:
             name = _mergeable_name(symbol.name)
             if name is not None:
-                ids_by_name.setdefault(name, []).append(local_net.id)
+                scope_key = symbol.scope_id if _is_local_power_symbol(symbol) else None
+                ids_by_name.setdefault((scope_key, name), []).append(local_net.id)
 
     for net_ids in ids_by_name.values():
         _merge_ids(net_union, net_ids)
+
+
+def _is_local_power_symbol(symbol: KiCadPowerSymbol) -> bool:
+    return symbol.power_kind == "local"
 
 
 def _merge_hierarchical_sheet_pins(source: KiCadSourceDesign, net_union: NetUnion) -> None:
@@ -425,18 +468,25 @@ def _local_net_inputs(local_nets: Iterable[KiCadLocalNet]) -> list[ResolvedLocal
 
 def _kicad_net_input_for_group(
     local_nets_by_id: dict[str, KiCadLocalNet],
+    pins_by_local_net_id: dict[str, list[KiCadPinOccurrence]],
+    sheet_names_by_scope: dict[ScopeId, str],
+    schematic_version: int,
     net_index: int,
     root_id: str,
     group_local_nets: tuple[ResolvedLocalNetInput, ...],
 ) -> ResolvedNetInput:
     kicad_local_nets = [local_nets_by_id[local_net.id] for local_net in group_local_nets]
-    name = select_kicad_net_name(kicad_local_nets)
-    aliases = _all_alias_names(kicad_local_nets)
-    aliases.discard(name)
+    decision = _select_kicad_net_names(
+        kicad_local_nets,
+        pins_by_local_net_id=pins_by_local_net_id,
+        sheet_names_by_scope=sheet_names_by_scope,
+        schematic_version=schematic_version,
+        net_index=net_index,
+    )
     return ResolvedNetInput(
         id=f"net:{net_index:04d}",
-        name=name,
-        aliases=frozenset(aliases),
+        name=decision.name,
+        names=decision.names,
         metadata={
             "kicad_root_local_net_id": root_id,
         },
@@ -454,59 +504,323 @@ def _include_kicad_net(
 
 def select_kicad_net_name(local_nets: Iterable[KiCadLocalNet]) -> str:
     """Select a public net name using KiCad source-name priority."""
-    evidence = _combined_name_evidence(local_nets)
-    for names in (
-        evidence.global_labels,
-        evidence.power_symbols,
-        evidence.local_labels,
-        evidence.hierarchical_labels,
-        evidence.sheet_pins,
-        evidence.generated,
-    ):
-        for name in names:
-            if name:
-                return name
-    return "__auto_net"
+    decision = _select_kicad_net_names(
+        tuple(local_nets),
+        pins_by_local_net_id={},
+        sheet_names_by_scope={},
+        schematic_version=20231120,
+        net_index=0,
+    )
+    return decision.name
 
 
-def _combined_name_evidence(local_nets: Iterable[KiCadLocalNet]) -> _NameEvidence:
-    global_labels: list[str] = []
-    power_symbols: list[str] = []
-    local_labels: list[str] = []
-    hierarchical_labels: list[str] = []
-    sheet_pins: list[str] = []
-    generated: list[str] = []
+def _select_kicad_net_names(
+    local_nets: Iterable[KiCadLocalNet],
+    *,
+    pins_by_local_net_id: dict[str, list[KiCadPinOccurrence]],
+    sheet_names_by_scope: dict[ScopeId, str],
+    schematic_version: int,
+    net_index: int,
+) -> _NameDecision:
+    nets = tuple(local_nets)
+    label_candidates = _label_name_candidates(nets, sheet_names_by_scope)
+    if label_candidates:
+        candidates = _dedupe_candidates(label_candidates)
+        canonical = min(candidates, key=_candidate_sort_key)
+        return _NameDecision(
+            name=canonical.name,
+            names=tuple(_net_name(candidate) for candidate in candidates),
+        )
 
-    for local_net in local_nets:
-        global_labels.extend(_global_label_names(local_net))
-        power_symbols.extend(_power_symbol_names(local_net))
-        local_labels.extend(_local_label_names(local_net))
-        hierarchical_labels.extend(_hierarchical_label_names(local_net))
-        sheet_pins.extend(_sheet_pin_names(local_net))
-        generated_name = _clean_name(local_net.generated_name)
-        if generated_name:
-            generated.append(generated_name)
+    pin_candidates = _pin_name_candidates(
+        nets,
+        pins_by_local_net_id,
+        schematic_version=schematic_version,
+    )
+    if pin_candidates:
+        candidates = _dedupe_candidates(pin_candidates)
+        canonical = min(candidates, key=_candidate_sort_key)
+        return _NameDecision(
+            name=canonical.name,
+            names=tuple(_net_name(candidate) for candidate in candidates),
+        )
 
-    return _NameEvidence(
-        global_labels=_dedupe(global_labels),
-        power_symbols=_dedupe(power_symbols),
-        local_labels=_dedupe(local_labels),
-        hierarchical_labels=_dedupe(hierarchical_labels),
-        sheet_pins=_dedupe(sheet_pins),
-        generated=_dedupe(generated),
+    synthesized = _synthesized_name(nets, net_index)
+    return _NameDecision(
+        name=synthesized,
+        names=(
+            NetName(
+                name=synthesized,
+                kind=NetNameKind.SYNTHESIZED,
+                scope=None,
+                source="synthesized",
+            ),
+        ),
     )
 
 
-def _all_alias_names(local_nets: Iterable[KiCadLocalNet]) -> set[str]:
-    evidence = _combined_name_evidence(local_nets)
-    names: set[str] = set()
-    names.update(evidence.global_labels)
-    names.update(evidence.power_symbols)
-    names.update(evidence.local_labels)
-    names.update(evidence.hierarchical_labels)
-    names.update(evidence.sheet_pins)
-    names.update(evidence.generated)
-    return names
+def _label_name_candidates(
+    local_nets: Iterable[KiCadLocalNet],
+    sheet_names_by_scope: dict[ScopeId, str],
+) -> list[_NameCandidate]:
+    candidates: list[_NameCandidate] = []
+    for local_net in local_nets:
+        for label in local_net.global_labels:
+            name = _mergeable_name(label.name)
+            if name is not None:
+                candidates.append(
+                    _candidate(
+                        name=_escape_net_name(name),
+                        kind=NetNameKind.LABEL,
+                        scope=label.scope_id,
+                        source="global_label",
+                        priority=_GLOBAL_LABEL_PRIORITY,
+                        source_index=label.source_index,
+                    )
+                )
+        for symbol in local_net.power_symbols:
+            name = _mergeable_name(symbol.name)
+            if name is not None:
+                is_local_power = _is_local_power_symbol(symbol)
+                candidates.append(
+                    _candidate(
+                        name=_compose_name(
+                            name,
+                            symbol.scope_id,
+                            sheet_names_by_scope,
+                            prepend_path=is_local_power,
+                        ),
+                        kind=NetNameKind.LABEL,
+                        scope=symbol.scope_id,
+                        source="power_symbol",
+                        priority=(
+                            _LOCAL_POWER_PIN_PRIORITY
+                            if is_local_power
+                            else _GLOBAL_POWER_PIN_PRIORITY
+                        ),
+                        source_index=symbol.source_index,
+                    )
+                )
+        for label in local_net.local_labels:
+            name = _mergeable_name(label.name)
+            if name is not None:
+                candidates.append(
+                    _candidate(
+                        name=_compose_name(
+                            name,
+                            label.scope_id,
+                            sheet_names_by_scope,
+                            prepend_path=True,
+                        ),
+                        kind=NetNameKind.LABEL,
+                        scope=label.scope_id,
+                        source="local_label",
+                        priority=_LOCAL_LABEL_PRIORITY,
+                        source_index=label.source_index,
+                    )
+                )
+        for label in local_net.hierarchical_labels:
+            name = _mergeable_name(label.name)
+            if name is not None:
+                candidates.append(
+                    _candidate(
+                        name=_compose_name(
+                            name,
+                            label.scope_id,
+                            sheet_names_by_scope,
+                            prepend_path=True,
+                        ),
+                        kind=NetNameKind.LABEL,
+                        scope=label.scope_id,
+                        source="hierarchical_label",
+                        priority=_HIERARCHICAL_LABEL_PRIORITY,
+                        source_index=label.source_index,
+                    )
+                )
+        for sheet_pin in local_net.sheet_pins:
+            name = _mergeable_name(sheet_pin.name)
+            if name is not None:
+                candidates.append(
+                    _candidate(
+                        name=_compose_name(
+                            name,
+                            sheet_pin.scope_id,
+                            sheet_names_by_scope,
+                            prepend_path=True,
+                        ),
+                        kind=NetNameKind.LABEL,
+                        scope=sheet_pin.scope_id,
+                        source="sheet_pin",
+                        priority=_SHEET_PIN_PRIORITY,
+                        source_index=sheet_pin.source_index,
+                        sheet_pin_direction=sheet_pin.direction,
+                    )
+                )
+    return candidates
+
+
+def _pin_name_candidates(
+    local_nets: Iterable[KiCadLocalNet],
+    pins_by_local_net_id: dict[str, list[KiCadPinOccurrence]],
+    *,
+    schematic_version: int,
+) -> list[_NameCandidate]:
+    pins = [pin for local_net in local_nets for pin in pins_by_local_net_id.get(local_net.id, [])]
+    if not pins:
+        return []
+
+    force_unconnected = len(pins) == 1 or any(pin.no_connect for pin in pins)
+    return [
+        _candidate(
+            name=_pin_default_net_name(
+                pin,
+                force_unconnected=force_unconnected or pin.no_connect,
+                schematic_version=schematic_version,
+            ),
+            kind=NetNameKind.TOOL_AUTO,
+            scope=None,
+            source="pin",
+            priority=_PIN_PRIORITY,
+            source_index=pin.source_index,
+        )
+        for pin in pins
+    ]
+
+
+def _candidate(
+    *,
+    name: str,
+    kind: NetNameKind,
+    scope: ScopeId | None,
+    source: str,
+    priority: int,
+    source_index: int = 0,
+    sheet_pin_direction: str = "",
+) -> _NameCandidate:
+    return _NameCandidate(
+        name=name,
+        kind=kind,
+        scope=scope,
+        source=source,
+        priority=priority,
+        path_length=len(scope.path) if scope is not None else 0,
+        source_index=source_index,
+        sheet_pin_direction=sheet_pin_direction,
+    )
+
+
+def _candidate_sort_key(candidate: _NameCandidate) -> tuple[int, int, int, int, str, int]:
+    sheet_pin_rank = 0 if candidate.sheet_pin_direction.lower() == "output" else 1
+    pad_rank = 1 if "-Pad" in candidate.name else 0
+    return (
+        -candidate.priority,
+        pad_rank,
+        sheet_pin_rank,
+        candidate.path_length,
+        candidate.name,
+        candidate.source_index,
+    )
+
+
+def _net_name(candidate: _NameCandidate) -> NetName:
+    return NetName(
+        name=candidate.name,
+        kind=candidate.kind,
+        scope=candidate.scope,
+        source=candidate.source,
+    )
+
+
+def _dedupe_candidates(candidates: Iterable[_NameCandidate]) -> list[_NameCandidate]:
+    result: list[_NameCandidate] = []
+    seen: set[tuple[str, NetNameKind, ScopeId | None, str]] = set()
+    for candidate in candidates:
+        key = (candidate.name, candidate.kind, candidate.scope, candidate.source)
+        if candidate.name and key not in seen:
+            seen.add(key)
+            result.append(candidate)
+    return result
+
+
+def _compose_name(
+    name: str,
+    scope_id: ScopeId,
+    sheet_names_by_scope: dict[ScopeId, str],
+    *,
+    prepend_path: bool,
+) -> str:
+    escaped_name = _escape_net_name(name)
+    if not prepend_path:
+        return escaped_name
+    return f"{_sheet_path_prefix(scope_id, sheet_names_by_scope)}{escaped_name}"
+
+
+def _sheet_path_prefix(scope_id: ScopeId, sheet_names_by_scope: dict[ScopeId, str]) -> str:
+    if not scope_id.path:
+        return "/"
+    names: list[str] = []
+    for index in range(1, len(scope_id.path) + 1):
+        ancestor = type(scope_id)(path=scope_id.path[:index])
+        sheet_name = sheet_names_by_scope.get(ancestor) or scope_id.path[index - 1]
+        names.append(_escape_net_name(sheet_name))
+    return "/" + "/".join(names) + "/"
+
+
+def _escape_net_name(name: str) -> str:
+    return _clean_name(name).replace("\r", "").replace("\n", "").replace("/", "{slash}")
+
+
+def _pin_default_net_name(
+    pin: KiCadPinOccurrence,
+    *,
+    force_unconnected: bool,
+    schematic_version: int,
+) -> str:
+    prefix = "unconnected-(" if force_unconnected else "Net-("
+    ref = _escape_net_name(pin.component_reference)
+    pin_name = _escape_net_name(pin.pin_net_name)
+    pad = _escape_net_name(pin.pin_designator)
+
+    if force_unconnected:
+        if (
+            _unconnected_uses_pin_name_without_pad(schematic_version)
+            and pin_name
+            and pin_name != pad
+        ):
+            return f"{prefix}{ref}{_unit_suffix(pin)}-{pin_name})"
+        if _unconnected_uses_pin_name_with_pad(schematic_version) and pin_name and pin_name != pad:
+            return f"{prefix}{ref}{_unit_suffix(pin)}-{pin_name}-Pad{pad})"
+        return f"{prefix}{ref}-Pad{pad})"
+
+    if pin_name and pin_name != pad:
+        return f"{prefix}{ref}{_unit_suffix(pin)}-{pin_name})"
+    return f"{prefix}{ref}-Pad{pad})"
+
+
+def _unit_suffix(pin: KiCadPinOccurrence) -> str:
+    if not pin.component_has_multiple_units:
+        return ""
+    if pin.component_unit <= 0:
+        return ""
+    if pin.component_unit <= 26:
+        return chr(ord("A") + pin.component_unit - 1)
+    return str(pin.component_unit)
+
+
+def _unconnected_uses_pin_name_without_pad(schematic_version: int) -> bool:
+    return 20230121 <= schematic_version < 20231120
+
+
+def _unconnected_uses_pin_name_with_pad(schematic_version: int) -> bool:
+    return schematic_version >= 20231120
+
+
+def _synthesized_name(local_nets: Iterable[KiCadLocalNet], net_index: int) -> str:
+    for local_net in local_nets:
+        name = _clean_name(local_net.generated_name)
+        if name:
+            return name
+    return f"__kicad_net_{net_index:04d}"
 
 
 def _source_names(local_net: KiCadLocalNet) -> set[str]:
@@ -541,9 +855,15 @@ def _sheet_pin_names(local_net: KiCadLocalNet) -> list[str]:
 
 def _mergeable_name(name: str) -> str | None:
     cleaned = _clean_name(name)
-    if bus_kind_for_name(cleaned) is not None:
+    if _is_bus_name(cleaned):
         return None
     return cleaned or None
+
+
+def _is_bus_name(name: str) -> bool:
+    if "${" in name:
+        return False
+    return bus_kind_for_name(strip_kicad_markup(name)) is not None
 
 
 def _clean_name(name: str) -> str:
@@ -609,6 +929,15 @@ def _pin_inputs(
                 component_info=pin_occurrence.component_info,
             )
         )
+    return result
+
+
+def _pins_by_local_net_id(
+    pin_occurrences: Iterable[KiCadPinOccurrence],
+) -> dict[str, list[KiCadPinOccurrence]]:
+    result: dict[str, list[KiCadPinOccurrence]] = {}
+    for pin_occurrence in pin_occurrences:
+        result.setdefault(pin_occurrence.local_net_id, []).append(pin_occurrence)
     return result
 
 

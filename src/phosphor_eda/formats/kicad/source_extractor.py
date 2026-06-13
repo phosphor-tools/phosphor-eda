@@ -21,8 +21,11 @@ from phosphor_eda.formats.kicad.source_candidates import extract_source_candidat
 from phosphor_eda.formats.kicad.wire_graph import build_wire_graph
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from phosphor_eda.domain.schematic import ScopeId
-    from phosphor_eda.formats.kicad.lib_symbols import LibPins
+    from phosphor_eda.formats.common.diagnostics import ParseContext
+    from phosphor_eda.formats.kicad.lib_symbols import LibPins, LibPowerKinds
     from phosphor_eda.formats.kicad.sheet_loader import LoadedSheet
     from phosphor_eda.formats.kicad.source import KiCadPoint
 
@@ -49,8 +52,11 @@ def extract_sheet_sources(
     loaded: LoadedSheet,
     lib_pins: LibPins,
     lib_descs: dict[str, str],
+    lib_power_kinds: LibPowerKinds,
     loaded_scopes: set[ScopeId],
     root_uuid: str = "",
+    text_variables: Mapping[str, str] | None = None,
+    ctx: ParseContext | None = None,
 ) -> _ExtractedSheet:
     scope_id = loaded.instance.scope_id
     data = loaded.data
@@ -61,8 +67,11 @@ def extract_sheet_sources(
         scope_id,
         lib_pins,
         lib_descs,
+        lib_power_kinds,
         wire_graph,
         root_uuid,
+        text_variables,
+        ctx,
     )
 
     root_to_points = wire_graph.root_to_points()
@@ -131,6 +140,7 @@ def extract_sheet_sources(
             lib_id=candidate.lib_id,
             location=candidate.location,
             local_net_id=root_to_net_id[wire_graph.find(candidate.location)],
+            power_kind=candidate.power_kind,
         )
         for candidate in candidates.power_symbols
     ]
@@ -161,6 +171,7 @@ def extract_sheet_sources(
             component_source_id=candidate.component_source_id,
             component_identity_source_id=candidate.component_identity_source_id,
             component_unit=candidate.component_unit,
+            component_has_multiple_units=candidate.component_has_multiple_units,
             component_reference=candidate.component_reference,
             component_value=candidate.component_value,
             component_footprint=candidate.component_footprint,
@@ -174,6 +185,7 @@ def extract_sheet_sources(
             component_attr_metadata=candidate.component_attr_metadata,
             pin_designator=candidate.pin_designator,
             pin_name=candidate.pin_name,
+            pin_net_name=candidate.pin_net_name,
             pin_type=candidate.pin_type,
             location=candidate.location,
             no_connect=candidate.no_connect,

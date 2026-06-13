@@ -92,8 +92,8 @@ def test_unwired_same_name_sig_in_nets_stay_separate(design):
     assert r1_net is not None
     assert r2_net is not None
     assert r1_net.id != r2_net.id
-    assert r1_net.name == "SIG_IN"
-    assert r2_net.name == "SIG_IN"
+    assert r1_net.name == "/ChildSheet/SIG_IN"
+    assert r2_net.name == "/SIG_IN"
 
 
 def test_vcc_net(design):

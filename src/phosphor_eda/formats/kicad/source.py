@@ -66,6 +66,7 @@ class KiCadPowerSymbol:
     lib_id: str
     location: KiCadPoint
     local_net_id: str
+    power_kind: str = "global"
     kind: str = field(default="power_symbol", init=False)
 
 
@@ -122,9 +123,11 @@ class KiCadPinOccurrence:
     component_source_id: str
     component_identity_source_id: str
     component_unit: int
+    component_has_multiple_units: bool
     component_reference: str
     pin_designator: str
     pin_name: str
+    pin_net_name: str
     location: KiCadPoint
     pin_type: str = ""
     no_connect: bool = False
@@ -170,3 +173,4 @@ class KiCadSourceDesign:
     power_symbols: list[KiCadPowerSymbol]
     sheet_symbols: list[KiCadSheetSymbol]
     sheet_pins: list[KiCadSheetPin]
+    schematic_version: int = 20231120

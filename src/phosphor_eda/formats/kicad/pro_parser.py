@@ -1,4 +1,4 @@
-"""Parse a KiCad .kicad_pro project file for net classes.
+"""Parse a KiCad .kicad_pro project file for net classes and text variables.
 
 The .kicad_pro file is JSON with a `net_settings` object containing:
 - `classes`: array of net class definitions
@@ -73,6 +73,14 @@ def parse_kicad_pro(path: Path) -> list[NetClass]:
             net_classes[class_name].members.append(pattern)
 
     return list(net_classes.values())
+
+
+def parse_kicad_text_variables(path: Path) -> dict[str, str]:
+    """Parse KiCad project text variables from a .kicad_pro file."""
+    text = path.read_text(encoding="utf-8")
+    data: object = json.loads(text)
+    variables = _json_dict(_json_dict(data).get("text_variables"))
+    return {name: value for name, value in variables.items() if isinstance(value, str)}
 
 
 # json.loads output is inherently untyped; isinstance() narrows `object` only

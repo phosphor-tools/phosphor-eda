@@ -41,15 +41,34 @@ PROJECTS = {
 }
 
 
-def _canon_value(value: object) -> str:
+def _canon_value(table: str, column: str, value: object) -> str:
+    if table == "boards" and column == "source_path" and isinstance(value, str):
+        value = _canon_fixture_path(value)
     if isinstance(value, bytes):
         return value.hex()
     return repr(value)
 
 
+def _canon_fixture_path(value: str) -> str:
+    path = Path(value)
+    if not path.is_absolute():
+        path = (Path.cwd() / path).resolve()
+    try:
+        return path.relative_to(FIXTURES.resolve()).as_posix()
+    except ValueError:
+        return value
+
+
 def _table_digest(con: duckdb.DuckDBPyConnection, table: str) -> dict[str, object]:
-    rows = con.execute(f"SELECT * FROM {table}").fetchall()  # noqa: S608 - table names come from TABLE_DDL
-    lines = sorted("|".join(_canon_value(v) for v in row) for row in rows)
+    cursor = con.execute(f"SELECT * FROM {table}")  # noqa: S608 - table names come from TABLE_DDL
+    rows = cursor.fetchall()
+    columns = [column[0] for column in cursor.description]
+    lines = sorted(
+        "|".join(
+            _canon_value(table, column, value) for column, value in zip(columns, row, strict=True)
+        )
+        for row in rows
+    )
     digest = hashlib.sha256("\n".join(lines).encode()).hexdigest()
     return {"rows": len(rows), "sha256": digest}
 

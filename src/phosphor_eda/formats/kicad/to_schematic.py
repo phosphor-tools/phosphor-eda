@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 import phosphor_eda.formats.kicad.sexp as sexp
 from phosphor_eda.formats.common.diagnostics import ParseContext
+from phosphor_eda.formats.kicad.pro_parser import parse_kicad_text_variables
 from phosphor_eda.formats.kicad.resolver import resolve_kicad_source
 from phosphor_eda.formats.kicad.sheet_loader import (
     ParseContextSheetWarningReporter,
@@ -74,14 +75,18 @@ def kicad_to_source(
     # at a non-existent child page.
     loaded_scopes = {instance.scope_id for instance in sheet_tree.sheet_instances}
     root_uuid = _root_uuid(sheet_tree)
+    text_variables = _project_text_variables(path)
 
     for loaded in sheet_tree.sheets:
         extracted = extract_sheet_sources(
             loaded,
             sheet_tree.lib_pins,
             sheet_tree.lib_descs,
+            sheet_tree.lib_power_kinds,
             loaded_scopes,
             root_uuid,
+            text_variables,
+            ctx,
         )
         local_nets.extend(extracted.local_nets)
         pin_occurrences.extend(extracted.pin_occurrences)
@@ -109,6 +114,7 @@ def kicad_to_source(
         power_symbols=power_symbols,
         sheet_symbols=sheet_symbols,
         sheet_pins=sheet_pins,
+        schematic_version=_root_version(sheet_tree),
     )
 
 
@@ -119,3 +125,24 @@ def _root_uuid(sheet_tree: LoadedSheetTree) -> str:
             uuid_node = sexp.find(list(loaded.data[1:]), "uuid")
             return sexp.val(uuid_node) if uuid_node is not None else ""
     return ""
+
+
+def _root_version(sheet_tree: LoadedSheetTree) -> int:
+    """The integer KiCad schematic file version from the root sheet."""
+    for loaded in sheet_tree.sheets:
+        if loaded.instance.scope_id != sheet_tree.root_scope_id:
+            continue
+        version_node = sexp.find(list(loaded.data[1:]), "version")
+        if version_node is None:
+            return 0
+        try:
+            return int(sexp.val(version_node))
+        except ValueError:
+            return 0
+    return 0
+
+
+def _project_text_variables(path: Path) -> dict[str, str]:
+    """Read sibling KiCad project text variables when a project file exists."""
+    project_path = path.with_suffix(".kicad_pro")
+    return parse_kicad_text_variables(project_path) if project_path.exists() else {}

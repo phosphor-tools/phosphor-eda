@@ -20,12 +20,14 @@ class LibPin:
 
     number: str
     name: str
+    net_name: str
     pin_type: str
     x: float
     y: float
 
 
 type LibPins = dict[str, dict[int, list[LibPin]]]
+type LibPowerKinds = dict[str, str]
 
 # KiCad overline: ~{TEXT} means TEXT with overline bar.
 # Bare ~ means "no name" (unnamed pin).
@@ -41,14 +43,18 @@ def strip_kicad_markup(name: str) -> str:
     return _OVERLINE_RE.sub(r"\1", name)
 
 
-def parse_lib_symbols(lib_syms: SExpNode) -> tuple[LibPins, dict[str, str]]:
+def parse_lib_symbols(lib_syms: SExpNode) -> tuple[LibPins, dict[str, str], LibPowerKinds]:
     """Parse embedded lib_symbols into per-unit pin definitions and descriptions."""
     pins_result: LibPins = {}
     desc_result: dict[str, str] = {}
+    power_kinds: LibPowerKinds = {}
     for sym in lib_syms[1:]:
         if sexp.tag(sym) != "symbol" or not isinstance(sym, list):
             continue
         lib_id = str(sym[1])
+        power_kind = _symbol_power_kind(sym)
+        if power_kind:
+            power_kinds[lib_id] = power_kind
         desc = sexp.find_property(sym[2:], "ki_description")
         if desc:
             desc_result[lib_id] = desc
@@ -63,7 +69,7 @@ def parse_lib_symbols(lib_syms: SExpNode) -> tuple[LibPins, dict[str, str]]:
                 if sexp.tag(elem) != "pin" or not isinstance(elem, list):
                     continue
                 pin_type = str(elem[1])
-                pnum = pname = ""
+                pnum = pname = pnet_name = ""
                 px = py = 0.0
                 for pe in elem[3:]:
                     if not isinstance(pe, list):
@@ -72,15 +78,25 @@ def parse_lib_symbols(lib_syms: SExpNode) -> tuple[LibPins, dict[str, str]]:
                     if tag_name == "number":
                         pnum = sexp.val(pe)
                     elif tag_name == "name":
-                        pname = strip_kicad_markup(sexp.val(pe))
+                        pnet_name = sexp.val(pe)
+                        if pnet_name == "~":
+                            pnet_name = ""
+                        pname = strip_kicad_markup(pnet_name)
                     elif tag_name == "at":
                         px = sexp.num(pe, 1)
                         py = sexp.num(pe, 2)
                 units.setdefault(unit_num, []).append(
-                    LibPin(number=pnum, name=pname, pin_type=pin_type, x=px, y=py)
+                    LibPin(
+                        number=pnum,
+                        name=pname,
+                        net_name=pnet_name,
+                        pin_type=pin_type,
+                        x=px,
+                        y=py,
+                    )
                 )
         pins_result[lib_id] = units
-    return pins_result, desc_result
+    return pins_result, desc_result, power_kinds
 
 
 def resolve_lib_pins(lib_id: str, lib_pins: LibPins) -> dict[int, list[LibPin]]:
@@ -95,6 +111,18 @@ def resolve_lib_pins(lib_id: str, lib_pins: LibPins) -> dict[int, list[LibPin]]:
     return {}
 
 
+def resolve_lib_power_kind(lib_id: str, lib_power_kinds: LibPowerKinds) -> str:
+    """Resolve whether a library symbol is a global or local power symbol."""
+    if lib_id in lib_power_kinds:
+        return lib_power_kinds[lib_id]
+    base = lib_id.split(":")[-1] if ":" in lib_id else lib_id
+    for key, power_kind in lib_power_kinds.items():
+        key_base = _LIB_ID_SUFFIX_RE.sub("", key)
+        if key_base == base:
+            return power_kind
+    return ""
+
+
 def lib_description(lib_id: str, lib_descs: dict[str, str]) -> str:
     """Resolve a placed instance's lib_id to its library description."""
     if lib_id in lib_descs:
@@ -105,6 +133,15 @@ def lib_description(lib_id: str, lib_descs: dict[str, str]) -> str:
         if key_base == base:
             return description
     return ""
+
+
+def _symbol_power_kind(sym: SExpNode) -> str:
+    power_node = sexp.find(sym[2:], "power")
+    if power_node is None:
+        return ""
+    if len(power_node) > 1 and str(power_node[1]) == "local":
+        return "local"
+    return "global"
 
 
 def transform_pin(
