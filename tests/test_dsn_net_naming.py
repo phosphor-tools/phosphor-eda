@@ -310,6 +310,20 @@ def test_stored_autoname_form_is_classified_tool_auto() -> None:
     assert _net_named(design.nets, "N1234").names[0].kind is NetNameKind.LABEL
 
 
+def test_alias_grade_autoname_form_is_classified_tool_auto() -> None:
+    scope = _scope("Main")
+    net = _net("Main", scope, 1, "")
+
+    design = resolve_dsn_source(
+        _source([_page("Main", scope, [net], wires=[_wire("Main", scope, 1, 500, alias="N12345")])])
+    )
+
+    resolved = _net_named(design.nets, "N12345")
+    [name] = resolved.names
+    assert name.kind is NetNameKind.TOOL_AUTO
+    assert name.source == "wire_alias"
+
+
 def test_power_symbol_contributes_net_name_not_symbol_name() -> None:
     # The graphic's own name is the symbol (VCC_ARROW); the net name rides
     # in the _net_name string index.

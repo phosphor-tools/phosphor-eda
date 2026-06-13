@@ -496,7 +496,7 @@ def _group_evidence_names(
         for local_net in group:
             evidence = evidence_by_local_id.get(local_net.id, _NameEvidence())
             for name in names_of(evidence):
-                add(name, NetNameKind.LABEL, local_net.scope_id, source_label)
+                add(name, _stored_name_kind(name), local_net.scope_id, source_label)
     return entries
 
 

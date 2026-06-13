@@ -44,6 +44,8 @@ PROJECTS = {
 def _canon_value(value: object) -> str:
     if isinstance(value, bytes):
         return value.hex()
+    if isinstance(value, str):
+        return repr(value.replace(str(FIXTURES.resolve()), "$FIXTURES"))
     return repr(value)
 
 
@@ -61,6 +63,7 @@ def _project_snapshot(project: Project) -> dict[str, object]:
     finally:
         con.close()
     serialized = serialize_design(project.schematic) if project.schematic else ""
+    serialized = serialized.replace(str(FIXTURES.resolve()), "$FIXTURES")
     return {
         "serialize_sha256": hashlib.sha256(serialized.encode()).hexdigest(),
         "tables": tables,
