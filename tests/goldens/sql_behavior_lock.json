@@ -18,6 +18,14 @@
         "rows": 1,
         "sha256": "2c903fa964ab349af27532eac643da7a6193b7c75e342484ae4143f90056552c"
       },
+      "bus_members": {
+        "rows": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "buses": {
+        "rows": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
       "component_footprints": {
         "rows": 666,
         "sha256": "c7aad388cf5dd15fb5c474167ac211033ffcf0812df65ba315a895a5b1294142"
@@ -166,6 +174,14 @@
       "boards": {
         "rows": 1,
         "sha256": "a059c19d3efc26342456fa5c96076cd1eda180791eecc3a1600f5b90f2d784ef"
+      },
+      "bus_members": {
+        "rows": 274,
+        "sha256": "761d5497acd7660282eb77437388f60bf4944e4941321d1c72768837df4d0783"
+      },
+      "buses": {
+        "rows": 25,
+        "sha256": "665e3c257f5cc0a0dd377eefa72fa65b6970d06def3de466627553a69b84fb1c"
       },
       "component_footprints": {
         "rows": 589,

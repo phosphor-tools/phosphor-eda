@@ -2,10 +2,12 @@
 
 import pytest
 
-from phosphor_eda.domain.schematic import Net, ScopeId
+from phosphor_eda.domain.schematic import BusKind, Net, ScopeId
 from phosphor_eda.formats.common.resolved_graph import ResolutionInputError
 from phosphor_eda.formats.kicad.resolver import resolve_kicad_source, select_kicad_net_name
 from phosphor_eda.formats.kicad.source import (
+    KiCadBusAlias,
+    KiCadBusLabel,
     KiCadGlobalLabel,
     KiCadHierarchicalLabel,
     KiCadLocalLabel,
@@ -169,6 +171,8 @@ def _source(
     local_nets: list[KiCadLocalNet],
     pins: list[KiCadPinOccurrence],
     *,
+    bus_labels: list[KiCadBusLabel] | None = None,
+    bus_aliases: list[KiCadBusAlias] | None = None,
     sheet_instances: list[KiCadSheetInstance] | None = None,
     sheet_symbols: list[KiCadSheetSymbol] | None = None,
 ) -> KiCadSourceDesign:
@@ -183,6 +187,8 @@ def _source(
         local_labels=[label for net in local_nets for label in net.local_labels],
         global_labels=[label for net in local_nets for label in net.global_labels],
         hierarchical_labels=[label for net in local_nets for label in net.hierarchical_labels],
+        bus_labels=bus_labels or [],
+        bus_aliases=bus_aliases or [],
         power_symbols=[symbol for net in local_nets for symbol in net.power_symbols],
         sheet_symbols=sheet_symbols or [],
         sheet_pins=[pin for net in local_nets for pin in net.sheet_pins],
@@ -198,6 +204,101 @@ def _net_for_reference(nets: list[Net], reference: str) -> Net:
 
 def _refs(net: Net) -> set[str]:
     return {pin.component.reference for pin in net.pins}
+
+
+def _bus_label(scope_id: ScopeId, name: str, index: int = 1) -> KiCadBusLabel:
+    return KiCadBusLabel(
+        id=f"{_scope_key(scope_id)}:bus_label:{index}",
+        scope_id=scope_id,
+        source_index=index,
+        name=name,
+        location=(float(index), 5.0),
+        kind="local_label",
+    )
+
+
+def _bus_alias(scope_id: ScopeId, name: str, members: tuple[str, ...]) -> KiCadBusAlias:
+    return KiCadBusAlias(
+        id=f"{_scope_key(scope_id)}:bus_alias:{name}",
+        scope_id=scope_id,
+        name=name,
+        members=members,
+    )
+
+
+def test_bus_labels_promote_to_resolved_buses() -> None:
+    scope = _scope()
+    d0_pin = _pin(scope, "root:local:d0", "U1", designator="1")
+    d1_pin = _pin(scope, "root:local:d1", "U2", designator="1")
+    clk_pin = _pin(scope, "root:local:clk", "U3", designator="1")
+    d0 = _local_net(
+        scope, "d0", local_labels=[_local_label(scope, "root:local:d0", "DATA0")], pins=[d0_pin]
+    )
+    d1 = _local_net(
+        scope, "d1", local_labels=[_local_label(scope, "root:local:d1", "DATA1")], pins=[d1_pin]
+    )
+    clk = _local_net(
+        scope,
+        "clk",
+        local_labels=[_local_label(scope, "root:local:clk", "SOC.CLK")],
+        pins=[clk_pin],
+    )
+
+    design = resolve_kicad_source(
+        _source(
+            [d0, d1, clk],
+            [d0_pin, d1_pin, clk_pin],
+            bus_labels=[
+                _bus_label(scope, "DATA[0..1]", 1),
+                _bus_label(scope, "SOC{ADDR CLK}", 2),
+            ],
+            bus_aliases=[_bus_alias(scope, "ADDR", ("DATA[0..1]",))],
+        )
+    )
+
+    vector_bus = next(bus for bus in design.buses if bus.name == "DATA[0..1]")
+    group_bus = next(bus for bus in design.buses if bus.name == "SOC{ADDR CLK}")
+    assert vector_bus.kind is BusKind.VECTOR
+    assert {net.name for net in vector_bus.members} == {"DATA0", "DATA1"}
+    assert group_bus.kind is BusKind.GROUP
+    assert {net.name for net in group_bus.members} == {"SOC.CLK"}
+    assert all(net.name != "DATA[0..1]" for net in design.nets)
+
+
+def test_bus_alias_expansion_uses_label_scope_aliases() -> None:
+    scope_a = _scope("sheet-a")
+    scope_b = _scope("sheet-b")
+    pin_a = _pin(scope_a, "sheet-a:local:a0", "U1")
+    pin_b = _pin(scope_b, "sheet-b:local:b0", "U2")
+    net_a = _local_net(
+        scope_a,
+        "a0",
+        local_labels=[_local_label(scope_a, "sheet-a:local:a0", "SOC.A0")],
+        pins=[pin_a],
+    )
+    net_b = _local_net(
+        scope_b,
+        "b0",
+        local_labels=[_local_label(scope_b, "sheet-b:local:b0", "SOC.B0")],
+        pins=[pin_b],
+    )
+
+    design = resolve_kicad_source(
+        _source(
+            [net_a, net_b],
+            [pin_a, pin_b],
+            bus_labels=[_bus_label(scope_b, "SOC{ADDR}", 1)],
+            bus_aliases=[
+                _bus_alias(scope_b, "ADDR", ("B0",)),
+                _bus_alias(scope_a, "ADDR", ("A0",)),
+            ],
+            sheet_instances=[_sheet(scope_a, "A"), _sheet(scope_b, "B")],
+        )
+    )
+
+    bus = next(bus for bus in design.buses if bus.name == "SOC{ADDR}")
+
+    assert {net.name for net in bus.members} == {"SOC.B0"}
 
 
 def test_local_labels_with_same_text_on_sibling_sheet_instances_do_not_merge() -> None:

@@ -2,7 +2,7 @@
 
 import pytest
 
-from phosphor_eda.domain.schematic import Net, ScopeId
+from phosphor_eda.domain.schematic import BusKind, Net, ScopeId
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.common.raw_models import (
     GraphicInst,
@@ -130,6 +130,8 @@ def _wire_alias(
     scope_id: ScopeId,
     net_id: int,
     name: str,
+    *,
+    is_bus: bool = False,
 ) -> DsnWire:
     local_net_id = f"page:{page_name}:net:{net_id}"
     return DsnWire(
@@ -140,6 +142,7 @@ def _wire_alias(
         start=(0, 0),
         end=(1, 1),
         points=[],
+        is_bus=is_bus,
         aliases=[
             DsnWireAlias(
                 id=f"{local_net_id}:alias:1",
@@ -165,6 +168,56 @@ def _net_for_reference(nets: list[Net], reference: str) -> Net:
 
 def _refs(net: Net) -> set[str]:
     return {pin.component.reference for pin in net.pins}
+
+
+def test_bus_wire_alias_promotes_to_bus_without_naming_scalar_net() -> None:
+    scope = _scope("Main")
+    data0 = _net("Main", scope, 1, "DATA0")
+    data1 = _net("Main", scope, 2, "DATA1")
+    bus_carrier = _net("Main", scope, 3, "")
+    pin0 = _pin("Main", scope, 1, "U1")
+    pin1 = _pin("Main", scope, 2, "U2")
+
+    design = resolve_dsn_source(
+        _source(
+            [
+                _page(
+                    "Main",
+                    scope,
+                    [data0, data1, bus_carrier],
+                    pins=[pin0, pin1],
+                    wires=[_wire_alias("Main", scope, 3, "DATA[0..1]", is_bus=True)],
+                )
+            ]
+        )
+    )
+
+    bus = next(bus for bus in design.buses if bus.name == "DATA[0..1]")
+    assert bus.kind is BusKind.VECTOR
+    assert {net.name for net in bus.members} == {"DATA0", "DATA1"}
+    assert all(net.name != "DATA[0..1]" for net in design.nets)
+
+
+def test_wire_alias_name_evidence_is_stripped() -> None:
+    scope = _scope("Main")
+    net = _net("Main", scope, 1, "")
+    pin = _pin("Main", scope, 1, "U1")
+
+    design = resolve_dsn_source(
+        _source(
+            [
+                _page(
+                    "Main",
+                    scope,
+                    [net],
+                    pins=[pin],
+                    wires=[_wire_alias("Main", scope, 1, " SIG ")],
+                )
+            ]
+        )
+    )
+
+    assert _net_for_reference(design.nets, "U1").name == "SIG"
 
 
 def test_page_net_ids_determine_base_electrical_groups() -> None:

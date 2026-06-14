@@ -1,5 +1,8 @@
 {
   "indexes": {
+    "idx_bus_members_bus_id": "\n        CREATE INDEX idx_bus_members_bus_id ON bus_members(bus_id)\n    ",
+    "idx_bus_members_net_id": "\n        CREATE INDEX idx_bus_members_net_id ON bus_members(net_id)\n    ",
+    "idx_buses_name": "\n        CREATE INDEX idx_buses_name ON buses(name)\n    ",
     "idx_component_footprints_component_id": "\n        CREATE INDEX idx_component_footprints_component_id ON component_footprints(component_id)\n    ",
     "idx_component_footprints_component_id_ord": "\n        CREATE INDEX idx_component_footprints_component_id_ord\n        ON component_footprints(component_id, ord)\n    ",
     "idx_component_metadata_component_id": "\n        CREATE INDEX idx_component_metadata_component_id ON component_metadata(component_id)\n    ",
@@ -39,6 +42,8 @@
     "board": "\n        CREATE TABLE board (\n            name VARCHAR,\n            total_thickness_mm DOUBLE,\n            copper_finish VARCHAR,\n            layer_count INTEGER,\n            geom GEOMETRY\n        )\n    ",
     "board_profile": "\n        CREATE TABLE board_profile (\n            id VARCHAR,\n            kind VARCHAR,\n            layer VARCHAR,\n            is_cutout BOOLEAN,\n            geom GEOMETRY\n        )\n    ",
     "boards": "\n        CREATE TABLE boards (\n            board_id VARCHAR PRIMARY KEY,\n            name VARCHAR,\n            source_path VARCHAR,\n            layer_count INTEGER,\n            total_thickness_mm DOUBLE\n        )\n    ",
+    "bus_members": "\n        CREATE TABLE bus_members (\n            bus_id VARCHAR NOT NULL,\n            name VARCHAR NOT NULL,\n            kind VARCHAR NOT NULL,\n            net_id VARCHAR NOT NULL,\n            net_name VARCHAR NOT NULL,\n            ord INTEGER NOT NULL\n        )\n    ",
+    "buses": "\n        CREATE TABLE buses (\n            bus_id VARCHAR PRIMARY KEY,\n            name VARCHAR NOT NULL,\n            kind VARCHAR NOT NULL,\n            member_count INTEGER NOT NULL,\n            members VARCHAR,\n            metadata JSON\n        )\n    ",
     "component_footprints": "\n        CREATE TABLE component_footprints (\n            component_id VARCHAR NOT NULL,\n            ord INTEGER NOT NULL,\n            name VARCHAR NOT NULL,\n            library VARCHAR,\n            is_current BOOLEAN NOT NULL,\n            description VARCHAR\n        )\n    ",
     "component_metadata": "\n        CREATE TABLE component_metadata (\n            component_id VARCHAR NOT NULL,\n            reference VARCHAR NOT NULL,\n            key VARCHAR NOT NULL,\n            value VARCHAR NOT NULL\n        )\n    ",
     "component_occurrence_metadata": "\n        CREATE TABLE component_occurrence_metadata (\n            occurrence_id VARCHAR NOT NULL,\n            component_id VARCHAR NOT NULL,\n            key VARCHAR NOT NULL,\n            value VARCHAR NOT NULL\n        )\n    ",

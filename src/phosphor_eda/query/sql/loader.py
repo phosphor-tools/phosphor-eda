@@ -63,6 +63,8 @@ from phosphor_eda.query.sql.schema import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from shapely.geometry.base import BaseGeometry
 
     from phosphor_eda.domain.pcb import (
@@ -77,6 +79,7 @@ if TYPE_CHECKING:
     )
     from phosphor_eda.domain.project import DesignRule, NetClass, Project
     from phosphor_eda.domain.schematic import (
+        Bus,
         Component,
         ComponentOccurrence,
         FootprintModel,
@@ -262,6 +265,11 @@ def _csv(values: set[str]) -> str | None:
     return ",".join(sorted(values)) if values else None
 
 
+def _ordered_csv(values: Iterable[str]) -> str | None:
+    items = list(values)
+    return ",".join(items) if items else None
+
+
 def _null_if_unset[FalsyT: (float, str)](value: FalsyT) -> FalsyT | None:
     """Map a falsy sentinel (0.0 / "") to SQL NULL.
 
@@ -418,6 +426,13 @@ class _SourceNameRow:
     occurrence_id: str
     net_id: str
     source_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class _BusMemberRow:
+    bus: Bus
+    net: Net
+    ord: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -1001,6 +1016,30 @@ _NET_OCCURRENCE_METADATA: TableSpec[_OccKeyValueRow] = TableSpec(
     ),
 )
 
+_BUSES: TableSpec[Bus] = TableSpec(
+    "buses",
+    (
+        col("bus_id", "VARCHAR", lambda bus: bus.id, constraint="PRIMARY KEY"),
+        col("name", "VARCHAR", lambda bus: bus.name, constraint="NOT NULL"),
+        col("kind", "VARCHAR", lambda bus: bus.kind.value, constraint="NOT NULL"),
+        col("member_count", "INTEGER", lambda bus: len(bus.members), constraint="NOT NULL"),
+        col("members", "VARCHAR", lambda bus: _ordered_csv(member.name for member in bus.members)),
+        col("metadata", "JSON", lambda bus: _json_or_null(bus.metadata)),
+    ),
+)
+
+_BUS_MEMBERS: TableSpec[_BusMemberRow] = TableSpec(
+    "bus_members",
+    (
+        col("bus_id", "VARCHAR", lambda r: r.bus.id, constraint="NOT NULL"),
+        col("name", "VARCHAR", lambda r: r.bus.name, constraint="NOT NULL"),
+        col("kind", "VARCHAR", lambda r: r.bus.kind.value, constraint="NOT NULL"),
+        col("net_id", "VARCHAR", lambda r: r.net.id, constraint="NOT NULL"),
+        col("net_name", "VARCHAR", lambda r: r.net.name, constraint="NOT NULL"),
+        col("ord", "INTEGER", lambda r: r.ord, constraint="NOT NULL"),
+    ),
+)
+
 _PAGES: TableSpec[Page] = TableSpec(
     "pages",
     (
@@ -1071,6 +1110,8 @@ _ORDERED_SPECS = (
     _NET_OCCURRENCE_SOURCE_NAMES,
     _NET_METADATA,
     _NET_OCCURRENCE_METADATA,
+    _BUSES,
+    _BUS_MEMBERS,
     _PAGES,
     _TITLE_BLOCKS,
     _PROJECT,
@@ -1153,6 +1194,7 @@ def load_database(project: Project) -> duckdb.DuckDBPyConnection:
         _load_net_occurrence_source_names(con, project.schematic)
         _load_net_occurrence_metadata(con, project.schematic)
         _load_net_metadata(con, project.schematic)
+        _load_buses(con, project.schematic)
         _load_pins(con, project.schematic)
         _load_pin_occurrences(con, project.schematic)
 
@@ -1543,6 +1585,13 @@ def _load_net_metadata(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> 
             _NET_METADATA.insert(
                 con, _KeyValueRow(owner_id=net.id, ref=net.name, key=key, value=value)
             )
+
+
+def _load_buses(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    for bus in schematic.buses:
+        _BUSES.insert(con, bus)
+        for index, net in enumerate(bus.members, start=1):
+            _BUS_MEMBERS.insert(con, _BusMemberRow(bus=bus, net=net, ord=index))
 
 
 def _load_pages(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:

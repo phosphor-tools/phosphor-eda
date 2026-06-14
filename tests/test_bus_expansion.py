@@ -5,14 +5,15 @@ Bus notation like ``D[0..7]`` expands into individual signal names
 evidence and must not create aggregate-name public connectivity.
 """
 
-from phosphor_eda.domain.schematic import ScopeId
+from phosphor_eda.domain.schematic import BusKind, Net, NetOccurrence, Page, Schematic, ScopeId
 from phosphor_eda.formats.altium._helpers import parse_bus_notation
 from phosphor_eda.formats.altium.enums import SheetEntrySide
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode, AltiumProject
 from phosphor_eda.formats.altium.records import AltiumRecord, WireRec
-from phosphor_eda.formats.altium.resolver import resolve_altium_source
+from phosphor_eda.formats.altium.resolver import _altium_harness_buses, resolve_altium_source
 from phosphor_eda.formats.altium.sheet_builder import SheetRecords
 from phosphor_eda.formats.altium.source import (
+    AltiumHarnessMember,
     AltiumLocalNet,
     AltiumPinOccurrence,
     AltiumPort,
@@ -70,6 +71,20 @@ def _bus_entry(
         distance_from_top=0,
         harness_type="",
         io_type=0,
+    )
+
+
+def _harness_member(sheet: str, bus_name: str, signal_name: str) -> AltiumHarnessMember:
+    return AltiumHarnessMember(
+        id=f"{sheet}:harness:{bus_name}:{signal_name}",
+        scope_id=_scope(sheet),
+        source_index=1,
+        connector_id=f"{sheet}:connector:{bus_name}",
+        port_name=bus_name,
+        name=signal_name,
+        coord=(1, 25),
+        side=SheetEntrySide.LEFT,
+        distance_from_top=0,
     )
 
 
@@ -354,6 +369,56 @@ def test_bus_sheet_entry_aggregate_name_does_not_merge_member_nets():
         net for net in design.nets if any(pin.component.reference == "PARENT" for pin in net.pins)
     )
     assert {pin.component.reference for pin in parent_public_net.pins} == {"PARENT"}
+    bus = next(bus for bus in design.buses if bus.name == "D[0..1]")
+    assert bus.kind is BusKind.VECTOR
+    assert {net.name for net in bus.members} == {"D0", "D1"}
+
+
+def test_harness_bus_members_keep_resolved_net_identity_for_duplicate_names():
+    scope = _scope("Harness")
+    page = Page(id="page:harness", name="Harness", scope_id=scope)
+    harness_net = Net(id="net:harness", name="SIG")
+    unrelated_net = Net(id="net:unrelated", name="SIG")
+    harness_net.occurrences.append(
+        NetOccurrence(
+            id="net:harness:occ:1",
+            net=harness_net,
+            page=page,
+            scope_id=scope,
+            source_local_net_id="Harness:local:harness",
+        )
+    )
+    unrelated_net.occurrences.append(
+        NetOccurrence(
+            id="net:unrelated:occ:1",
+            net=unrelated_net,
+            page=page,
+            scope_id=scope,
+            source_local_net_id="Harness:local:unrelated",
+        )
+    )
+    design = Schematic(name="Harness", pages=[page], nets=[harness_net, unrelated_net])
+    local_net = AltiumLocalNet(
+        id="Harness:local:harness",
+        scope_id=scope,
+        wire_points=set(),
+        pin_ids=[],
+        net_labels=[],
+        power_ports=[],
+        ports=[],
+        sheet_entries=[],
+        harness_members=[_harness_member("Harness", "CTRL", "SIG")],
+        generated_name="SIG",
+    )
+    source = _bus_source(
+        [_bus_sheet("Harness", [local_net], [])],
+        AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
+    )
+
+    buses = _altium_harness_buses(source, design)
+
+    assert len(buses) == 1
+    assert [net.id for net in buses[0].members] == ["net:harness"]
 
 
 def test_bus_port_aggregate_name_does_not_merge_member_port_nets():
