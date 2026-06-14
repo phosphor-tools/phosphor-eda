@@ -86,13 +86,7 @@ def _table_select_expressions(table: str) -> list[tuple[str, str]]:
             expressions.append(
                 (
                     name,
-                    "CASE "
-                    f"WHEN {name} IS NULL THEN NULL "
-                    "ELSE printf("
-                    "'%s|%.6f|%.6f|%.6f|%.6f|%.6f|%.6f', "
-                    f"ST_GeometryType({name}), ST_XMin({name}), ST_YMin({name}), "
-                    f"ST_XMax({name}), ST_YMax({name}), ST_Area({name}), ST_Length({name})"
-                    ") END",
+                    f"CASE WHEN {name} IS NULL THEN NULL ELSE ST_AsWKB({name}) END",
                 )
             )
         else:
