@@ -7,6 +7,8 @@ from phosphor_eda.domain.schematic import (
     Net,
     NetOccurrence,
     Page,
+    Parameter,
+    PartNumber,
     Pin,
     PinOccurrence,
     Schematic,
@@ -14,6 +16,7 @@ from phosphor_eda.domain.schematic import (
 )
 from phosphor_eda.formats.common.net_union import NetUnion
 from phosphor_eda.formats.common.resolved_graph import (
+    ResolvedComponentInfo,
     ResolvedComponentOccurrenceInput,
     ResolvedLocalNetInput,
     ResolvedNetInput,
@@ -270,3 +273,60 @@ def test_resolved_graph_preserves_distinct_pin_ids_with_same_designator() -> Non
     assert [pin.id for pin in component.pins] == ["pin:u1:first:1", "pin:u1:second:1"]
     assert [pin.designator for pin in component.pins] == ["1", "1"]
     assert {pin.net.name for pin in component.pins if pin.net is not None} == {"FIRST", "SECOND"}
+
+
+def test_resolved_graph_recomputes_enrichment_when_part_is_backfilled() -> None:
+    scope = ScopeId(path=("root",))
+    info = ResolvedComponentInfo(
+        parameters=(Parameter(name="MPN", value="SN74LVC2G66DCUR"),),
+    )
+    pins = [
+        ResolvedPinInput(
+            id="source:u1:a:pin-1",
+            scope_id=scope,
+            local_net_id=None,
+            component_id="component:u1",
+            component_reference="U1",
+            component_part="",
+            component_description="Switch",
+            pin_id="pin:u1:1",
+            pin_designator="1",
+            pin_name="A",
+            no_connect=False,
+            component_info=info,
+            component_occurrence=ResolvedComponentOccurrenceInput(source_id="source:u1:a"),
+        ),
+        ResolvedPinInput(
+            id="source:u1:a:pin-2",
+            scope_id=scope,
+            local_net_id=None,
+            component_id="component:u1",
+            component_reference="U1",
+            component_part="DNP",
+            component_description="Switch",
+            pin_id="pin:u1:2",
+            pin_designator="2",
+            pin_name="B",
+            no_connect=False,
+            component_info=info,
+            component_occurrence=ResolvedComponentOccurrenceInput(source_id="source:u1:a"),
+        ),
+    ]
+
+    design = build_resolved_schematic(
+        name="late-part",
+        pages=[ResolvedPageInput(id="page:root", name="Root", scope_id=scope)],
+        local_nets=[],
+        pins=pins,
+        net_union=NetUnion(()),
+        net_factory=lambda net_index, _union_id, _grouped_nets: ResolvedNetInput(
+            id=f"net:{net_index}",
+            name="",
+        ),
+        include_net=lambda _union_id, _grouped_nets, _pins: True,
+    )
+
+    [component] = design.components
+    assert component.part == "DNP"
+    assert component.dnp is True
+    assert component.part_numbers == [PartNumber(manufacturer="", number="SN74LVC2G66DCUR")]

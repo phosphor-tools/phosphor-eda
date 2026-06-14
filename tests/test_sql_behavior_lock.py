@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -34,6 +35,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 GOLDEN = Path(__file__).parent / "goldens" / "sql_behavior_lock.json"
 
 _UPDATE = os.environ.get("PHOSPHOR_UPDATE_GOLDENS") == "1"
+_COLUMN_RE = re.compile(r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s+(?P<type>[A-Z]+)\b")
 
 PROJECTS = {
     "pi-mx8": FIXTURES / "altium/pi-mx8/PiMX8MP_r0.3_release.PrjPcb",
@@ -46,6 +48,10 @@ def _canon_value(table: str, column: str, value: object) -> str:
         value = _canon_fixture_path(value)
     if isinstance(value, bytes):
         return value.hex()
+    if isinstance(value, float):
+        return f"{value:.6f}"
+    if isinstance(value, str):
+        return repr(value.replace(FIXTURES.as_posix(), "<fixtures>"))
     return repr(value)
 
 
@@ -59,10 +65,47 @@ def _canon_fixture_path(value: str) -> str:
         return value
 
 
+def _canon_serialized(value: str) -> str:
+    return value.replace(FIXTURES.as_posix(), "<fixtures>")
+
+
+def _table_select_expressions(table: str) -> list[tuple[str, str]]:
+    if table not in TABLE_DDL:
+        allowed = ", ".join(sorted(TABLE_DDL))
+        raise ValueError(f"table {table!r} is not in the SQL behavior-lock allowlist: {allowed}")
+
+    expressions: list[tuple[str, str]] = []
+    for line in TABLE_DDL[table].splitlines():
+        if "CREATE TABLE" in line:
+            continue
+        match = _COLUMN_RE.match(line)
+        if match is None:
+            continue
+        name = match["name"]
+        if match["type"] == "GEOMETRY":
+            expressions.append(
+                (
+                    name,
+                    "CASE "
+                    f"WHEN {name} IS NULL THEN NULL "
+                    "ELSE printf("
+                    "'%s|%.6f|%.6f|%.6f|%.6f|%.6f|%.6f', "
+                    f"ST_GeometryType({name}), ST_XMin({name}), ST_YMin({name}), "
+                    f"ST_XMax({name}), ST_YMax({name}), ST_Area({name}), ST_Length({name})"
+                    ") END",
+                )
+            )
+        else:
+            expressions.append((name, name))
+    return expressions
+
+
 def _table_digest(con: duckdb.DuckDBPyConnection, table: str) -> dict[str, object]:
-    cursor = con.execute(f"SELECT * FROM {table}")  # noqa: S608 - table names come from TABLE_DDL
-    rows = cursor.fetchall()
-    columns = [column[0] for column in cursor.description]
+    select_expressions = _table_select_expressions(table)
+    expressions = ", ".join(expression for _, expression in select_expressions)
+    columns = [column for column, _ in select_expressions]
+    quoted_table = table.replace('"', '""')
+    rows = con.execute(f'SELECT {expressions} FROM "{quoted_table}"').fetchall()
     lines = sorted(
         "|".join(
             _canon_value(table, column, value) for column, value in zip(columns, row, strict=True)
@@ -81,7 +124,7 @@ def _project_snapshot(project: Project) -> dict[str, object]:
         con.close()
     serialized = serialize_design(project.schematic) if project.schematic else ""
     return {
-        "serialize_sha256": hashlib.sha256(serialized.encode()).hexdigest(),
+        "serialize_sha256": hashlib.sha256(_canon_serialized(serialized).encode()).hexdigest(),
         "tables": tables,
     }
 

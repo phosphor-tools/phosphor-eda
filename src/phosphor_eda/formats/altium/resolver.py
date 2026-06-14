@@ -11,7 +11,6 @@ from phosphor_eda.domain.buses import (
     build_buses_from_definitions,
     bus_kind_for_name,
     expand_bus_members,
-    member_nets_for_names,
 )
 from phosphor_eda.domain.schematic import Bus, BusKind, NetName, NetNameKind
 from phosphor_eda.formats.altium._helpers import parse_bus_notation
@@ -211,7 +210,7 @@ def _altium_harness_buses(source: AltiumSourceDesign, design: Schematic) -> list
                 id=f"altium:bus:harness:{index:04d}",
                 name=bus_name,
                 kind=BusKind.HARNESS,
-                members=member_nets_for_names(design, [net.name for net in members]),
+                members=list(members),
                 metadata=metadata_by_bus[bus_name],
             )
         )
@@ -976,7 +975,7 @@ def _parent_dir(source_file_key: str) -> str:
 
 
 def _collect_name_evidence(refs: Iterable[_LocalNetRef]) -> _NameEvidence:
-    """Collect per-tier name candidates in document order, deduped by name."""
+    """Collect per-tier name candidates in document order."""
     labels: list[_NameCandidate] = []
     powers: list[_NameCandidate] = []
     sheet_entries: list[_NameCandidate] = []
@@ -1013,11 +1012,11 @@ def _collect_name_evidence(refs: Iterable[_LocalNetRef]) -> _NameEvidence:
             )
 
     return _NameEvidence(
-        labels=_dedupe_candidates(labels),
-        powers=_dedupe_candidates(powers),
-        sheet_entries=_dedupe_candidates(sheet_entries),
-        ports=_dedupe_candidates(ports),
-        harness_members=_dedupe_candidates(harness_members),
+        labels=labels,
+        powers=powers,
+        sheet_entries=sheet_entries,
+        ports=ports,
+        harness_members=harness_members,
     )
 
 
@@ -1032,17 +1031,6 @@ def _append_candidate(
     if name is None:
         return
     candidates.append(_NameCandidate(name=name, kind=kind, scope=scope, source=source))
-
-
-def _dedupe_candidates(candidates: list[_NameCandidate]) -> list[_NameCandidate]:
-    result: list[_NameCandidate] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        if candidate.name in seen:
-            continue
-        seen.add(candidate.name)
-        result.append(candidate)
-    return result
 
 
 def _all_source_names(refs: Iterable[_LocalNetRef]) -> set[str]:

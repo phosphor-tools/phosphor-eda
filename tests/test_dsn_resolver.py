@@ -198,6 +198,28 @@ def test_bus_wire_alias_promotes_to_bus_without_naming_scalar_net() -> None:
     assert all(net.name != "DATA[0..1]" for net in design.nets)
 
 
+def test_wire_alias_name_evidence_is_stripped() -> None:
+    scope = _scope("Main")
+    net = _net("Main", scope, 1, "")
+    pin = _pin("Main", scope, 1, "U1")
+
+    design = resolve_dsn_source(
+        _source(
+            [
+                _page(
+                    "Main",
+                    scope,
+                    [net],
+                    pins=[pin],
+                    wires=[_wire_alias("Main", scope, 1, " SIG ")],
+                )
+            ]
+        )
+    )
+
+    assert _net_for_reference(design.nets, "U1").name == "SIG"
+
+
 def test_page_net_ids_determine_base_electrical_groups() -> None:
     scope = _scope("Main")
     net_a = _net("Main", scope, 1, "SIG")

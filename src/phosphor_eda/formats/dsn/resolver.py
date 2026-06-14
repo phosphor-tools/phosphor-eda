@@ -346,9 +346,10 @@ def _collect_name_evidence(pages: Iterable[DsnPageSource]) -> dict[str, _NameEvi
                 evidence.page_names.append(page_net.name)
         for wire in page.wires:
             evidence = evidence_by_local_id.setdefault(wire.local_net_id, _NameEvidence())
-            evidence.aliases.extend(
-                alias.name for alias in wire.aliases if bus_kind_for_name(alias.name) is None
-            )
+            for alias in wire.aliases:
+                alias_name = alias.name.strip()
+                if alias_name and bus_kind_for_name(alias_name) is None:
+                    evidence.aliases.append(alias_name)
             if wire.db_id > 0:
                 evidence.wire_dbids.append(wire.db_id)
         for port in page.ports:
@@ -539,7 +540,7 @@ def _group_evidence_names(
         for local_net in group:
             evidence = evidence_by_local_id.get(local_net.id, _NameEvidence())
             for name in names_of(evidence):
-                add(name, NetNameKind.LABEL, local_net.scope_id, source_label)
+                add(name, _stored_name_kind(name), local_net.scope_id, source_label)
     return entries
 
 
@@ -642,6 +643,7 @@ def _component_info(pin_occurrence: DsnPinOccurrence) -> ResolvedComponentInfo:
     shared DNP convention ladder decides from the parameters.
     """
     props = pin_occurrence.component_props
+    prop_entries = pin_occurrence.component_props_list or tuple(props.items())
     footprint = props.get(_FOOTPRINT_PROP_KEY, "")
     lib: LibraryLink | None = None
     if pin_occurrence.component_part or _design_item_id(props):
@@ -650,7 +652,7 @@ def _component_info(pin_occurrence: DsnPinOccurrence) -> ResolvedComponentInfo:
             design_item_id=_design_item_id(props),
         )
     return ResolvedComponentInfo(
-        parameters=tuple(Parameter(name=name, value=value) for name, value in props.items()),
+        parameters=tuple(Parameter(name=name, value=value) for name, value in prop_entries),
         lib=lib,
         footprints=(FootprintModel(name=footprint, is_current=True),) if footprint else (),
     )

@@ -257,6 +257,22 @@ def test_case_insensitively_equal_labels_tie_break_by_document_order() -> None:
     }
 
 
+def test_same_text_labels_preserve_each_observation() -> None:
+    local_net, pins = _local_net(
+        "A",
+        "net",
+        [("U1", "1")],
+        labels=[_label("A", "SDA", 1), _label("A", "SDA", 2)],
+    )
+    net = _resolve_single_net([_sheet("A", [local_net], pins)])
+
+    assert net.name == "SDA"
+    assert [(name.name, name.source) for name in net.names] == [
+        ("SDA", "A:label:1"),
+        ("SDA", "A:label:2"),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Priority ladder
 # ---------------------------------------------------------------------------

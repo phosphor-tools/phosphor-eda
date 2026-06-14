@@ -155,12 +155,19 @@ def _props_from_pairs(
     pairs: list[tuple[int, int]],
     string_list: list[str],
 ) -> dict[str, str]:
-    props: dict[str, str] = {}
+    return dict(_prop_entries_from_pairs(pairs, string_list))
+
+
+def _prop_entries_from_pairs(
+    pairs: list[tuple[int, int]],
+    string_list: list[str],
+) -> tuple[tuple[str, str], ...]:
+    entries: list[tuple[str, str]] = []
     for name_idx, value_idx in pairs:
         name = string_list[name_idx] if 0 <= name_idx < len(string_list) else f"idx:{name_idx}"
         value = string_list[value_idx] if 0 <= value_idx < len(string_list) else f"idx:{value_idx}"
-        props[name] = value
-    return props
+        entries.append((name, value))
+    return tuple(entries)
 
 
 def _parse_graphic_inst(
@@ -381,7 +388,8 @@ def parse_page(
 
         inst = PlacedInstance()
 
-        inst.props = _props_from_pairs(pairs, string_list)
+        inst.props_list = _prop_entries_from_pairs(pairs, string_list)
+        inst.props = dict(inst.props_list)
 
         # Parse body to get package name, dbId, reference, and pin connections
         try:
