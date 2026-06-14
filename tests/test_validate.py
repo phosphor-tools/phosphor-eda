@@ -520,6 +520,12 @@ def test_clean_names_no_markup_findings():
     assert not any(f.category == Category.NAME_RESIDUAL_MARKUP for f in findings)
 
 
+def test_kicad_overline_net_name_is_not_residual_markup():
+    net = Net(name="/~{USB_BOOT}")
+    findings = validate_design(_simple_design(nets=[net]))
+    assert not any(f.category == Category.NAME_RESIDUAL_MARKUP for f in findings)
+
+
 # --- Removed port checks ---
 
 

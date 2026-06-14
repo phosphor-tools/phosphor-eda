@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from phosphor_eda.formats.kicad.pro_parser import parse_kicad_pro
+from phosphor_eda.formats.kicad.pro_parser import parse_kicad_pro, parse_kicad_text_variables
 
 FIXTURE = (
     Path(__file__).parent / "fixtures" / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pro"
@@ -82,6 +82,16 @@ def test_null_net_settings_fields_parse_as_empty(tmp_path: Path) -> None:
     )
 
     assert parse_kicad_pro(pro) == []
+
+
+def test_text_variables_parse_from_project_file(tmp_path: Path) -> None:
+    pro = tmp_path / "proj.kicad_pro"
+    pro.write_text(
+        '{"text_variables": {"NET": "PDC_MISO", "PATH": "USB/DP"}, "net_settings": {}}',
+        encoding="utf-8",
+    )
+
+    assert parse_kicad_text_variables(pro) == {"NET": "PDC_MISO", "PATH": "USB/DP"}
 
 
 def test_null_netclass_assignments_does_not_crash(tmp_path: Path) -> None:

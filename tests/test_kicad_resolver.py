@@ -2,7 +2,7 @@
 
 import pytest
 
-from phosphor_eda.domain.schematic import BusKind, Net, ScopeId
+from phosphor_eda.domain.schematic import BusKind, Net, NetNameKind, ScopeId
 from phosphor_eda.formats.common.resolved_graph import ResolutionInputError
 from phosphor_eda.formats.kicad.resolver import resolve_kicad_source, select_kicad_net_name
 from phosphor_eda.formats.kicad.source import (
@@ -78,7 +78,14 @@ def _hier_label(
     )
 
 
-def _power_symbol(scope_id: ScopeId, net_id: str, name: str, index: int = 1) -> KiCadPowerSymbol:
+def _power_symbol(
+    scope_id: ScopeId,
+    net_id: str,
+    name: str,
+    index: int = 1,
+    *,
+    power_kind: str = "global",
+) -> KiCadPowerSymbol:
     return KiCadPowerSymbol(
         id=f"{net_id}:power:{index}",
         scope_id=scope_id,
@@ -86,6 +93,7 @@ def _power_symbol(scope_id: ScopeId, net_id: str, name: str, index: int = 1) -> 
         name=name,
         reference=f"#PWR{index}",
         lib_id=f"power:{name}",
+        power_kind=power_kind,
         location=(float(index), 40.0),
         local_net_id=net_id,
     )
@@ -118,13 +126,17 @@ def _pin(
     reference: str,
     *,
     designator: str = "1",
+    pin_name: str | None = None,
+    pin_net_name: str | None = None,
     component_source_id: str = "",
     component_identity_source_id: str = "",
     component_unit: int = 1,
+    component_has_multiple_units: bool = False,
     index: int = 1,
 ) -> KiCadPinOccurrence:
     source_id = component_source_id or f"{_scope_key(scope_id)}:component:{reference}"
     identity_source_id = component_identity_source_id or source_id
+    resolved_pin_name = pin_name if pin_name is not None else f"{reference}-{designator}"
     return KiCadPinOccurrence(
         id=f"{net_id}:pin:{reference}:{designator}:{index}",
         scope_id=scope_id,
@@ -133,9 +145,11 @@ def _pin(
         component_source_id=source_id,
         component_identity_source_id=identity_source_id,
         component_unit=component_unit,
+        component_has_multiple_units=component_has_multiple_units,
         component_reference=reference,
         pin_designator=designator,
-        pin_name=f"{reference}-{designator}",
+        pin_name=resolved_pin_name,
+        pin_net_name=pin_net_name if pin_net_name is not None else resolved_pin_name,
         location=(float(index), 60.0),
     )
 
@@ -175,6 +189,7 @@ def _source(
     bus_aliases: list[KiCadBusAlias] | None = None,
     sheet_instances: list[KiCadSheetInstance] | None = None,
     sheet_symbols: list[KiCadSheetSymbol] | None = None,
+    schematic_version: int = 20231120,
 ) -> KiCadSourceDesign:
     instances = sheet_instances or [_sheet(_scope(), "Root")]
     return KiCadSourceDesign(
@@ -192,6 +207,7 @@ def _source(
         power_symbols=[symbol for net in local_nets for symbol in net.power_symbols],
         sheet_symbols=sheet_symbols or [],
         sheet_pins=[pin for net in local_nets for pin in net.sheet_pins],
+        schematic_version=schematic_version,
     )
 
 
@@ -259,10 +275,285 @@ def test_bus_labels_promote_to_resolved_buses() -> None:
     vector_bus = next(bus for bus in design.buses if bus.name == "DATA[0..1]")
     group_bus = next(bus for bus in design.buses if bus.name == "SOC{ADDR CLK}")
     assert vector_bus.kind is BusKind.VECTOR
-    assert {net.name for net in vector_bus.members} == {"DATA0", "DATA1"}
+    assert {net.name for net in vector_bus.members} == {"/DATA0", "/DATA1"}
     assert group_bus.kind is BusKind.GROUP
-    assert {net.name for net in group_bus.members} == {"SOC.CLK"}
+    assert {net.name for net in group_bus.members} == {"/SOC.CLK"}
     assert all(net.name != "DATA[0..1]" for net in design.nets)
+
+
+def test_kicad_local_label_names_are_path_qualified_and_escaped() -> None:
+    child = _scope("child")
+    net_id = "child:local:out"
+    pin = _pin(child, net_id, "U1")
+
+    design = resolve_kicad_source(
+        _source(
+            [
+                _local_net(
+                    child,
+                    "out",
+                    local_labels=[_local_label(child, net_id, "OUT/N")],
+                    pins=[pin],
+                )
+            ],
+            [pin],
+            sheet_instances=[_sheet(_scope(), "Root"), _sheet(child, "Amp/Left")],
+        )
+    )
+
+    resolved = _net_for_reference(design.nets, "U1")
+    assert resolved.name == "/Amp{slash}Left/OUT{slash}N"
+    assert len(resolved.names) == 1
+    assert resolved.names[0].name == "/Amp{slash}Left/OUT{slash}N"
+    assert resolved.names[0].kind is NetNameKind.LABEL
+    assert resolved.names[0].scope == child
+    assert resolved.names[0].source == "local_label"
+
+
+def test_kicad_local_driver_wins_across_hierarchy_with_winning_path() -> None:
+    root = _scope()
+    child = _scope("child")
+    symbol_id = "root:sheet_symbol:child"
+    parent_id = "root:local:parent"
+    child_id = "child:local:child"
+    parent_pin = _pin(root, parent_id, "PARENT")
+    child_pin = _pin(child, child_id, "CHILD")
+    sheet_pin = _sheet_pin(root, parent_id, "SIG", symbol_id, child)
+
+    design = resolve_kicad_source(
+        _source(
+            [
+                _local_net(
+                    root,
+                    "parent",
+                    local_labels=[_local_label(root, parent_id, "SIG")],
+                    sheet_pins=[sheet_pin],
+                    pins=[parent_pin],
+                ),
+                _local_net(
+                    child,
+                    "child",
+                    hierarchical_labels=[_hier_label(child, child_id, "SIG")],
+                    pins=[child_pin],
+                ),
+            ],
+            [parent_pin, child_pin],
+            sheet_instances=[
+                _sheet(root, "Root"),
+                _sheet(child, "Child", sheet_symbol_id=symbol_id),
+            ],
+        )
+    )
+
+    resolved = _net_for_reference(design.nets, "PARENT")
+    assert _refs(resolved) == {"PARENT", "CHILD"}
+    assert resolved.name == "/SIG"
+    assert {entry.name for entry in resolved.names} >= {"/SIG", "/Child/SIG"}
+
+
+def test_kicad_local_power_names_are_path_qualified_and_beat_local_labels() -> None:
+    child = _scope("sheet-a")
+    net_id = "sheet-a:local:rail"
+    pin = _pin(child, net_id, "U1")
+
+    design = resolve_kicad_source(
+        _source(
+            [
+                _local_net(
+                    child,
+                    "rail",
+                    local_labels=[_local_label(child, net_id, "LOCAL")],
+                    power_symbols=[
+                        _power_symbol(child, net_id, "VCC", power_kind="local"),
+                    ],
+                    pins=[pin],
+                )
+            ],
+            [pin],
+            sheet_instances=[
+                _sheet(_scope(), "Root"),
+                _sheet(child, "Sheet/A"),
+            ],
+        )
+    )
+
+    resolved = _net_for_reference(design.nets, "U1")
+    assert resolved.name == "/Sheet{slash}A/VCC"
+    assert {entry.name for entry in resolved.names} >= {
+        "/Sheet{slash}A/VCC",
+        "/Sheet{slash}A/LOCAL",
+    }
+
+
+def test_kicad_local_power_symbols_do_not_merge_across_sibling_sheets() -> None:
+    scope_a = _scope("sheet-a")
+    scope_b = _scope("sheet-b")
+    net_a_id = "sheet-a:local:vcc-a"
+    net_b_id = "sheet-b:local:vcc-b"
+    pin_a = _pin(scope_a, net_a_id, "A1")
+    pin_b = _pin(scope_b, net_b_id, "B1")
+
+    design = resolve_kicad_source(
+        _source(
+            [
+                _local_net(
+                    scope_a,
+                    "vcc-a",
+                    power_symbols=[_power_symbol(scope_a, net_a_id, "VCC", power_kind="local")],
+                    pins=[pin_a],
+                ),
+                _local_net(
+                    scope_b,
+                    "vcc-b",
+                    power_symbols=[_power_symbol(scope_b, net_b_id, "VCC", power_kind="local")],
+                    pins=[pin_b],
+                ),
+            ],
+            [pin_a, pin_b],
+            sheet_instances=[
+                _sheet(_scope(), "Root"),
+                _sheet(scope_a, "A"),
+                _sheet(scope_b, "B"),
+            ],
+        )
+    )
+
+    net_a = _net_for_reference(design.nets, "A1")
+    net_b = _net_for_reference(design.nets, "B1")
+    assert net_a.name == "/A/VCC"
+    assert net_b.name == "/B/VCC"
+    assert _refs(net_a) == {"A1"}
+    assert _refs(net_b) == {"B1"}
+
+
+def test_kicad_anonymous_net_uses_best_pin_auto_name() -> None:
+    root = _scope()
+    net_id = "root:local:anonymous"
+    diode_pin = _pin(root, net_id, "D1", designator="1", pin_name="K", index=1)
+    resistor_pin = _pin(root, net_id, "R1", designator="1", pin_name="1", index=2)
+
+    design = resolve_kicad_source(
+        _source(
+            [_local_net(root, "anonymous", pins=[diode_pin, resistor_pin])],
+            [diode_pin, resistor_pin],
+        )
+    )
+
+    resolved = _net_for_reference(design.nets, "D1")
+    assert resolved.name == "Net-(D1-K)"
+    assert resolved.names[0].kind is NetNameKind.TOOL_AUTO
+    assert resolved.names[0].source == "pin"
+
+
+def test_kicad_pin_auto_name_preserves_raw_overline_markup() -> None:
+    root = _scope()
+    net_id = "root:local:anonymous"
+    reset_pin = _pin(
+        root,
+        net_id,
+        "U5",
+        designator="23",
+        pin_name="RESET",
+        pin_net_name="~{RESET}",
+        index=1,
+    )
+    pad_pin = _pin(root, net_id, "TP1", designator="1", pin_name="1", index=2)
+
+    design = resolve_kicad_source(
+        _source(
+            [_local_net(root, "anonymous", pins=[reset_pin, pad_pin])],
+            [reset_pin, pad_pin],
+        )
+    )
+
+    resolved = _net_for_reference(design.nets, "U5")
+    assert resolved.name == "Net-(U5-~{RESET})"
+    assert {pin.name for pin in resolved.pins} >= {"RESET", "1"}
+
+
+def test_kicad_pin_auto_name_adds_unit_letter_only_for_multi_unit_symbols() -> None:
+    root = _scope()
+    single_id = "root:local:single"
+    multi_id = "root:local:multi"
+    single_pin = _pin(
+        root,
+        single_id,
+        "D1",
+        designator="1",
+        pin_name="K",
+        component_source_id="root:component:d1",
+        component_identity_source_id="root:component_instance:d1",
+    )
+    multi_pin = _pin(
+        root,
+        multi_id,
+        "U1",
+        designator="1",
+        pin_name="OUT",
+        component_source_id="root:component:u1-unit-a",
+        component_identity_source_id="root:component_instance:u1",
+        component_unit=1,
+        component_has_multiple_units=True,
+    )
+
+    design = resolve_kicad_source(
+        _source(
+            [
+                _local_net(root, "single", pins=[single_pin]),
+                _local_net(root, "multi", pins=[multi_pin]),
+            ],
+            [single_pin, multi_pin],
+        )
+    )
+
+    assert _net_for_reference(design.nets, "D1").name == "unconnected-(D1-K-Pad1)"
+    assert _net_for_reference(design.nets, "U1").name == "unconnected-(U1A-OUT-Pad1)"
+
+
+def test_kicad_single_pin_net_uses_versioned_unconnected_auto_name() -> None:
+    root = _scope()
+    net_id = "root:local:anonymous"
+    pin = _pin(root, net_id, "U1", designator="6", pin_name="LV")
+
+    design = resolve_kicad_source(
+        _source(
+            [_local_net(root, "anonymous", pins=[pin])],
+            [pin],
+            schematic_version=20231120,
+        )
+    )
+
+    resolved = _net_for_reference(design.nets, "U1")
+    assert resolved.name == "unconnected-(U1-LV-Pad6)"
+    assert resolved.names[0].kind is NetNameKind.TOOL_AUTO
+    assert resolved.names[0].source == "pin"
+
+
+@pytest.mark.parametrize(
+    ("schematic_version", "expected"),
+    [
+        (20211123, "unconnected-(U1-Pad6)"),
+        (20230121, "unconnected-(U1-LV)"),
+        (20231120, "unconnected-(U1-LV-Pad6)"),
+    ],
+)
+def test_kicad_unconnected_pin_auto_names_follow_file_version(
+    schematic_version: int,
+    expected: str,
+) -> None:
+    root = _scope()
+    net_id = "root:local:anonymous"
+    pin = _pin(root, net_id, "U1", designator="6", pin_name="LV")
+
+    design = resolve_kicad_source(
+        _source(
+            [_local_net(root, "anonymous", pins=[pin])],
+            [pin],
+            schematic_version=schematic_version,
+        )
+    )
+
+    assert _net_for_reference(design.nets, "U1").name == expected
 
 
 def test_bus_alias_expansion_uses_label_scope_aliases() -> None:
@@ -298,7 +589,7 @@ def test_bus_alias_expansion_uses_label_scope_aliases() -> None:
 
     bus = next(bus for bus in design.buses if bus.name == "SOC{ADDR}")
 
-    assert {net.name for net in bus.members} == {"SOC.B0"}
+    assert {net.name for net in bus.members} == {"/B/SOC.B0"}
 
 
 def test_local_labels_with_same_text_on_sibling_sheet_instances_do_not_merge() -> None:
@@ -388,7 +679,7 @@ def test_local_and_hierarchical_labels_with_same_text_on_same_sheet_instance_mer
 
     resolved = _net_for_reference(design.nets, "LOCAL1")
     assert _refs(resolved) == {"LOCAL1", "HIER1"}
-    assert resolved.name == "SIG"
+    assert resolved.name == "/A/SIG"
 
 
 def test_global_labels_with_same_text_merge_across_design() -> None:
@@ -652,13 +943,14 @@ def test_final_name_priority_and_aliases_are_isolated() -> None:
     resolved = _net_for_reference(design.nets, "U1")
 
     assert resolved.name == "GLOBAL"
-    assert {"VCC", "LOCAL", "HIER", "PIN", "__auto_root_mixed"}.issubset(resolved.aliases)
+    assert {"VCC", "/LOCAL", "/HIER", "/PIN"}.issubset(resolved.aliases)
+    assert "__auto_root_mixed" not in resolved.aliases
 
 
-def test_name_priority_falls_back_to_generated_local_net_name() -> None:
+def test_name_priority_falls_back_to_kicad_pin_auto_name() -> None:
     root = _scope()
     net_id = "root:local:anonymous"
-    pin = _pin(root, net_id, "U1")
+    pin = _pin(root, net_id, "U1", pin_name="1")
 
     design = resolve_kicad_source(
         _source(
@@ -666,7 +958,7 @@ def test_name_priority_falls_back_to_generated_local_net_name() -> None:
         )
     )
 
-    assert _net_for_reference(design.nets, "U1").name == "__auto_root_anon"
+    assert _net_for_reference(design.nets, "U1").name == "unconnected-(U1-Pad1)"
 
 
 def test_name_priority_falls_back_through_each_evidence_class() -> None:
@@ -706,9 +998,9 @@ def test_name_priority_falls_back_through_each_evidence_class() -> None:
     )
 
     assert select_kicad_net_name([power_net]) == "VCC"
-    assert select_kicad_net_name([local_net]) == "LOCAL"
-    assert select_kicad_net_name([hierarchical_net]) == "HIER"
-    assert select_kicad_net_name([sheet_pin_net]) == "PIN"
+    assert select_kicad_net_name([local_net]) == "/LOCAL"
+    assert select_kicad_net_name([hierarchical_net]) == "/HIER"
+    assert select_kicad_net_name([sheet_pin_net]) == "/PIN"
 
 
 def test_multi_unit_symbols_become_one_logical_component_when_source_identifiers_match() -> None:

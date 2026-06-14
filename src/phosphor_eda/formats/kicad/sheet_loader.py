@@ -9,7 +9,7 @@ import sexpdata
 
 import phosphor_eda.formats.kicad.sexp as sexp
 from phosphor_eda.domain.schematic import ScopeId
-from phosphor_eda.formats.kicad.lib_symbols import LibPins, parse_lib_symbols
+from phosphor_eda.formats.kicad.lib_symbols import LibPins, LibPowerKinds, parse_lib_symbols
 from phosphor_eda.formats.kicad.source import KiCadSheetInstance
 from phosphor_eda.formats.kicad.title_block import parse_kicad_title_block
 
@@ -55,6 +55,7 @@ class LoadedSheetTree:
     sheet_instances: list[KiCadSheetInstance]
     lib_pins: LibPins
     lib_descs: dict[str, str]
+    lib_power_kinds: LibPowerKinds
 
 
 def load_sheet_tree(
@@ -73,6 +74,7 @@ def load_sheet_tree(
     sheet_instances: list[KiCadSheetInstance] = []
     lib_pins: LibPins = {}
     lib_descs: dict[str, str] = {}
+    lib_power_kinds: LibPowerKinds = {}
     root_scope = ScopeId(path=())
     reporter = warning_reporter or NullSheetWarningReporter()
 
@@ -86,6 +88,7 @@ def load_sheet_tree(
         sheet_instances=sheet_instances,
         lib_pins=lib_pins,
         lib_descs=lib_descs,
+        lib_power_kinds=lib_power_kinds,
         ancestor_files=(path.resolve(),),
         warning_reporter=reporter,
     )
@@ -96,6 +99,7 @@ def load_sheet_tree(
         sheet_instances=sheet_instances,
         lib_pins=lib_pins,
         lib_descs=lib_descs,
+        lib_power_kinds=lib_power_kinds,
     )
 
 
@@ -129,6 +133,7 @@ def _load_sheet_tree(
     sheet_instances: list[KiCadSheetInstance],
     lib_pins: LibPins,
     lib_descs: dict[str, str],
+    lib_power_kinds: LibPowerKinds,
     ancestor_files: tuple[Path, ...],
     warning_reporter: SheetWarningReporter,
 ) -> None:
@@ -148,13 +153,16 @@ def _load_sheet_tree(
 
     lib_syms_node = sexp.find(data[1:], "lib_symbols")
     if lib_syms_node is not None:
-        sheet_lib_pins, sheet_lib_descs = parse_lib_symbols(lib_syms_node)
+        sheet_lib_pins, sheet_lib_descs, sheet_lib_power_kinds = parse_lib_symbols(lib_syms_node)
         for key, value in sheet_lib_pins.items():
             if key not in lib_pins:
                 lib_pins[key] = value
         for key, value in sheet_lib_descs.items():
             if key not in lib_descs:
                 lib_descs[key] = value
+        for key, value in sheet_lib_power_kinds.items():
+            if key not in lib_power_kinds:
+                lib_power_kinds[key] = value
 
     for sheet_index, sheet_node in enumerate(sexp.find_all(data[1:], "sheet")):
         sheet_uuid = _node_value(sheet_node[1:], "uuid") or f"sheet-{sheet_index}"
@@ -189,6 +197,7 @@ def _load_sheet_tree(
             sheet_instances=sheet_instances,
             lib_pins=lib_pins,
             lib_descs=lib_descs,
+            lib_power_kinds=lib_power_kinds,
             ancestor_files=(*ancestor_files, child_resolved_path),
             warning_reporter=warning_reporter,
         )

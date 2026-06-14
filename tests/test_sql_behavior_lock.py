@@ -36,6 +36,7 @@ GOLDEN = Path(__file__).parent / "goldens" / "sql_behavior_lock.json"
 
 _UPDATE = os.environ.get("PHOSPHOR_UPDATE_GOLDENS") == "1"
 _COLUMN_RE = re.compile(r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s+(?P<type>[A-Z]+)\b")
+_GEOMETRY_DECIMAL_PLACES = 6
 
 PROJECTS = {
     "pi-mx8": FIXTURES / "altium/pi-mx8/PiMX8MP_r0.3_release.PrjPcb",
@@ -43,7 +44,11 @@ PROJECTS = {
 }
 
 
-def _canon_value(value: object) -> str:
+def _canon_value(table: str, column: str, value: object, *, is_geometry: bool) -> str:
+    if table == "boards" and column == "source_path" and isinstance(value, str):
+        value = _canon_fixture_path(value)
+    if is_geometry and isinstance(value, str):
+        return _canon_geojson(value)
     if isinstance(value, bytes):
         return value.hex()
     if isinstance(value, float):
@@ -53,16 +58,45 @@ def _canon_value(value: object) -> str:
     return repr(value)
 
 
+def _canon_geojson(value: str) -> str:
+    return json.dumps(
+        _canon_geojson_value(json.loads(value)),
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _canon_geojson_value(value: object) -> object:
+    if isinstance(value, float):
+        rounded = round(value, _GEOMETRY_DECIMAL_PLACES)
+        return 0.0 if rounded == 0 else rounded
+    if isinstance(value, list):
+        return [_canon_geojson_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _canon_geojson_value(item) for key, item in value.items()}
+    return value
+
+
+def _canon_fixture_path(value: str) -> str:
+    path = Path(value)
+    if not path.is_absolute():
+        path = (Path.cwd() / path).resolve()
+    try:
+        return path.relative_to(FIXTURES.resolve()).as_posix()
+    except ValueError:
+        return value
+
+
 def _canon_serialized(value: str) -> str:
     return value.replace(FIXTURES.as_posix(), "<fixtures>")
 
 
-def _table_select_expressions(table: str) -> list[str]:
+def _table_select_expressions(table: str) -> list[tuple[str, str, bool]]:
     if table not in TABLE_DDL:
         allowed = ", ".join(sorted(TABLE_DDL))
         raise ValueError(f"table {table!r} is not in the SQL behavior-lock allowlist: {allowed}")
 
-    expressions: list[str] = []
+    expressions: list[tuple[str, str, bool]] = []
     for line in TABLE_DDL[table].splitlines():
         if "CREATE TABLE" in line:
             continue
@@ -71,25 +105,35 @@ def _table_select_expressions(table: str) -> list[str]:
             continue
         name = match["name"]
         if match["type"] == "GEOMETRY":
+            # DuckDB Spatial's WKB bytes can vary across platforms for the same
+            # loaded geometry. Normalized GeoJSON keeps full coordinate content
+            # while avoiding platform-specific binary serialization.
             expressions.append(
-                "CASE "
-                f"WHEN {name} IS NULL THEN NULL "
-                "ELSE printf("
-                "'%s|%.6f|%.6f|%.6f|%.6f|%.6f|%.6f', "
-                f"ST_GeometryType({name}), ST_XMin({name}), ST_YMin({name}), "
-                f"ST_XMax({name}), ST_YMax({name}), ST_Area({name}), ST_Length({name})"
-                ") END"
+                (
+                    name,
+                    f"CASE WHEN {name} IS NULL THEN NULL ELSE "
+                    f"ST_AsGeoJSON(ST_Normalize({name}))::VARCHAR END",
+                    True,
+                )
             )
         else:
-            expressions.append(name)
+            expressions.append((name, name, False))
     return expressions
 
 
 def _table_digest(con: duckdb.DuckDBPyConnection, table: str) -> dict[str, object]:
-    expressions = ", ".join(_table_select_expressions(table))
+    select_expressions = _table_select_expressions(table)
+    expressions = ", ".join(expression for _, expression, _ in select_expressions)
+    columns = [(column, is_geometry) for column, _, is_geometry in select_expressions]
     quoted_table = table.replace('"', '""')
     rows = con.execute(f'SELECT {expressions} FROM "{quoted_table}"').fetchall()
-    lines = sorted("|".join(_canon_value(v) for v in row) for row in rows)
+    lines = sorted(
+        "|".join(
+            _canon_value(table, column, value, is_geometry=is_geometry)
+            for (column, is_geometry), value in zip(columns, row, strict=True)
+        )
+        for row in rows
+    )
     digest = hashlib.sha256("\n".join(lines).encode()).hexdigest()
     return {"rows": len(rows), "sha256": digest}
 

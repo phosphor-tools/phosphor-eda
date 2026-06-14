@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -18,8 +19,10 @@ from phosphor_eda.domain.schematic import (
 from phosphor_eda.formats.common.resolved_graph import ResolvedComponentInfo
 from phosphor_eda.formats.kicad.lib_symbols import (
     LibPins,
+    LibPowerKinds,
     lib_description,
     resolve_lib_pins,
+    resolve_lib_power_kind,
     strip_kicad_markup,
     transform_pin,
 )
@@ -31,7 +34,12 @@ from phosphor_eda.formats.kicad.source import (
 from phosphor_eda.formats.kicad.wire_graph import WireGraph, point_from_at
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from phosphor_eda.formats.common.diagnostics import ParseContext
     from phosphor_eda.formats.kicad.sexp import SExpNode
+
+_TEXT_VARIABLE_RE = re.compile(r"\$\{([^}]+)\}")
 
 
 @dataclass(slots=True)
@@ -51,6 +59,7 @@ class _PowerCandidate:
     name: str
     reference: str
     lib_id: str
+    power_kind: str
     location: KiCadPoint
 
 
@@ -62,6 +71,7 @@ class _PinCandidate:
     component_source_id: str
     component_identity_source_id: str
     component_unit: int
+    component_has_multiple_units: bool
     component_reference: str
     component_value: str
     component_footprint: str
@@ -75,6 +85,7 @@ class _PinCandidate:
     component_attr_metadata: dict[str, str]
     pin_designator: str
     pin_name: str
+    pin_net_name: str
     pin_type: str
     location: KiCadPoint
     no_connect: bool
@@ -128,15 +139,23 @@ def extract_source_candidates(
     scope_id: ScopeId,
     lib_pins: LibPins,
     lib_descs: dict[str, str],
+    lib_power_kinds: LibPowerKinds,
     wire_graph: WireGraph,
     root_uuid: str = "",
+    text_variables: Mapping[str, str] | None = None,
+    ctx: ParseContext | None = None,
 ) -> SheetCandidates:
+    variables = text_variables or {}
+    warned_variables: set[str] = set()
     local_label_candidates = _label_candidates(
         data,
         scope_id,
         "label",
         "local_label",
         wire_graph,
+        variables,
+        ctx,
+        warned_variables,
     )
     global_label_candidates = _label_candidates(
         data,
@@ -144,6 +163,9 @@ def extract_source_candidates(
         "global_label",
         "global_label",
         wire_graph,
+        variables,
+        ctx,
+        warned_variables,
     )
     hierarchical_label_candidates = _label_candidates(
         data,
@@ -151,18 +173,25 @@ def extract_source_candidates(
         "hierarchical_label",
         "hierarchical_label",
         wire_graph,
+        variables,
+        ctx,
+        warned_variables,
     )
-    bus_label_candidates = _bus_label_candidates(data, scope_id)
+    bus_label_candidates = _bus_label_candidates(data, scope_id, variables, ctx, warned_variables)
     bus_alias_candidates = _bus_alias_candidates(data, scope_id)
     sheet_symbols, sheet_pin_candidates = _sheet_symbol_sources(
         data,
         scope_id,
         wire_graph,
+        variables,
+        ctx,
+        warned_variables,
     )
     power_candidates = _power_symbol_candidates(
         data,
         scope_id,
         lib_pins,
+        lib_power_kinds,
         wire_graph,
     )
     pin_candidates = _pin_candidates(
@@ -192,17 +221,50 @@ def _atom_text(value: object) -> str:
     return str(value)
 
 
+def _resolve_text_variables(
+    text: str,
+    text_variables: Mapping[str, str],
+    ctx: ParseContext | None,
+    warned_variables: set[str],
+) -> str:
+    if "${" not in text:
+        return text
+
+    def replace(match: re.Match[str]) -> str:
+        variable_name = match.group(1)
+        value = text_variables.get(variable_name)
+        if value is not None:
+            return value
+        if ctx is not None and variable_name not in warned_variables:
+            warned_variables.add(variable_name)
+            ctx.warn(
+                category="kicad_unresolved_text_variable",
+                message=(f"Unresolved KiCad text variable ${{{variable_name}}} in text '{text}'"),
+            )
+        return match.group(0)
+
+    return _TEXT_VARIABLE_RE.sub(replace, text)
+
+
 def _label_candidates(
     data: SExpNode,
     scope_id: ScopeId,
     tag_name: str,
     id_kind: str,
     wire_graph: WireGraph,
+    text_variables: Mapping[str, str],
+    ctx: ParseContext | None,
+    warned_variables: set[str],
 ) -> list[_LabelCandidate]:
     candidates: list[_LabelCandidate] = []
     for index, label in enumerate(sexp.find_all(data[1:], tag_name)):
-        label_name = strip_kicad_markup(str(label[1]))
-        if "{" in label_name:
+        label_name = _resolve_text_variables(
+            _atom_text(label[1]),
+            text_variables,
+            ctx,
+            warned_variables,
+        )
+        if _is_bus_label_text(label_name):
             continue
         at_node = sexp.find(label[2:], "at")
         if at_node is None:
@@ -222,7 +284,13 @@ def _label_candidates(
     return candidates
 
 
-def _bus_label_candidates(data: SExpNode, scope_id: ScopeId) -> list[_BusLabelCandidate]:
+def _bus_label_candidates(
+    data: SExpNode,
+    scope_id: ScopeId,
+    text_variables: Mapping[str, str],
+    ctx: ParseContext | None,
+    warned_variables: set[str],
+) -> list[_BusLabelCandidate]:
     candidates: list[_BusLabelCandidate] = []
     label_specs = (
         ("label", "local_label"),
@@ -231,8 +299,14 @@ def _bus_label_candidates(data: SExpNode, scope_id: ScopeId) -> list[_BusLabelCa
     )
     for tag_name, id_kind in label_specs:
         for index, label in enumerate(sexp.find_all(data[1:], tag_name)):
-            label_name = strip_kicad_markup(str(label[1]))
-            if bus_kind_for_name(label_name) is None:
+            label_name = _resolve_text_variables(
+                _atom_text(label[1]),
+                text_variables,
+                ctx,
+                warned_variables,
+            )
+            bus_name = _bus_syntax_text(label_name)
+            if bus_name is None:
                 continue
             at_node = sexp.find(label[2:], "at")
             if at_node is None:
@@ -243,7 +317,7 @@ def _bus_label_candidates(data: SExpNode, scope_id: ScopeId) -> list[_BusLabelCa
                     id=_source_id(scope_id, f"bus_{id_kind}", source_key),
                     scope_id=scope_id,
                     source_index=index,
-                    name=label_name,
+                    name=bus_name,
                     location=point_from_at(at_node),
                     kind=id_kind,
                 )
@@ -278,6 +352,9 @@ def _sheet_symbol_sources(
     data: SExpNode,
     scope_id: ScopeId,
     wire_graph: WireGraph,
+    text_variables: Mapping[str, str],
+    ctx: ParseContext | None,
+    warned_variables: set[str],
 ) -> tuple[list[KiCadSheetSymbol], list[_SheetPinCandidate]]:
     symbols: list[KiCadSheetSymbol] = []
     pins: list[_SheetPinCandidate] = []
@@ -309,8 +386,13 @@ def _sheet_symbol_sources(
         for pin_index, pin_node in enumerate(sexp.find_all(sheet_node[1:], "pin")):
             if len(pin_node) < 3:
                 continue
-            pin_name = strip_kicad_markup(str(pin_node[1]))
-            if "{" in pin_name:
+            pin_name = _resolve_text_variables(
+                _atom_text(pin_node[1]),
+                text_variables,
+                ctx,
+                warned_variables,
+            )
+            if _is_bus_label_text(pin_name):
                 continue
             at_pin = sexp.find(pin_node[3:], "at")
             if at_pin is None:
@@ -333,10 +415,22 @@ def _sheet_symbol_sources(
     return symbols, pins
 
 
+def _is_bus_label_text(text: str) -> bool:
+    return _bus_syntax_text(text) is not None
+
+
+def _bus_syntax_text(text: str) -> str | None:
+    if "${" in text:
+        return None
+    stripped = strip_kicad_markup(text)
+    return stripped if bus_kind_for_name(stripped) is not None else None
+
+
 def _power_symbol_candidates(
     data: SExpNode,
     scope_id: ScopeId,
     lib_pins: LibPins,
+    lib_power_kinds: LibPowerKinds,
     wire_graph: WireGraph,
 ) -> list[_PowerCandidate]:
     candidates: list[_PowerCandidate] = []
@@ -349,6 +443,7 @@ def _power_symbol_candidates(
             continue
         lib_id_node = sexp.find(sym_node[1:], "lib_id")
         lib_id = sexp.val(lib_id_node) if lib_id_node is not None else ""
+        power_kind = resolve_lib_power_kind(lib_id, lib_power_kinds) or "global"
         at_node = sexp.find(sym_node[1:], "at")
         if at_node is None:
             continue
@@ -388,6 +483,7 @@ def _power_symbol_candidates(
                     name=value,
                     reference=ref,
                     lib_id=lib_id,
+                    power_kind=power_kind,
                     location=location,
                 ),
             )
@@ -526,6 +622,7 @@ def _pin_candidates(
         component_attr_metadata = _component_attr_metadata(sym_node)
 
         unit_pins = resolve_lib_pins(lib_id, lib_pins)
+        has_multiple_units = len([unit for unit in unit_pins if unit != 0]) > 1
         sym_pins = unit_pins.get(inst_unit, []) + unit_pins.get(0, [])
         for pin in sym_pins:
             location = transform_pin(pin.x, pin.y, comp_x, comp_y, comp_rot, mirror)
@@ -539,6 +636,7 @@ def _pin_candidates(
                     component_source_id=component_source_id,
                     component_identity_source_id=component_identity_source_id,
                     component_unit=inst_unit,
+                    component_has_multiple_units=has_multiple_units,
                     component_reference=ref,
                     component_value=value,
                     component_footprint=footprint,
@@ -552,6 +650,7 @@ def _pin_candidates(
                     component_attr_metadata=component_attr_metadata,
                     pin_designator=pin.number,
                     pin_name=pin.name,
+                    pin_net_name=pin.net_name,
                     pin_type=pin.pin_type,
                     location=location,
                     no_connect=pin.pin_type == "no_connect"

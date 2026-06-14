@@ -89,8 +89,9 @@ _MAJOR_IC_THRESHOLD = 20
 # If a major IC has more than this fraction unconnected, flag it
 _HIGH_UNCONNECTED_FRACTION = 0.80
 
-# Pattern for residual Altium markup or non-printable chars
-_BAD_NAME_RE = re.compile(r"[\\~\x00-\x1f\x7f-\x9f]")
+# Pattern for residual Altium markup or non-printable chars. KiCad overline
+# spans (`~{NAME}`) are valid net-name text and must pass through unchanged.
+_BAD_NAME_RE = re.compile(r"[\\\x00-\x1f\x7f-\x9f]|~(?!\{[^}\r\n]*\})")
 
 
 def _append_duplicate_id_findings(

@@ -23,6 +23,7 @@ REPEATED_ROOT = FIXTURES / "kicad-repeated-sheet" / "root.kicad_sch"
 def test_source_keeps_kicad_identifier_kinds_distinct() -> None:
     source = kicad_to_source(HIERARCHY_ROOT)
 
+    assert source.schematic_version == 20230121
     assert [label.name for label in source.local_labels] == ["SIG_IN"]
     assert source.global_labels == []
     assert [label.name for label in source.hierarchical_labels] == ["SIG_IN"]
@@ -176,6 +177,226 @@ def test_multi_pin_power_symbol_attaches_evidence_to_each_local_net(tmp_path: Pa
     assert {pin.component.reference for pin in vcc_net.pins} == {"J1", "J2"}
     assert len(vcc_net.occurrences) == 2
     assert all("VCC" in occurrence.source_names for occurrence in vcc_net.occurrences)
+
+
+def _write_single_pin_label_schematic(path: Path, label_name: str) -> None:
+    path.write_text(
+        f"""
+(kicad_sch (version 20231120) (generator eeschema)
+  (uuid 10000000-0000-0000-0000-000000000001)
+  (paper "A4")
+  (lib_symbols
+    (symbol "Test:OnePin" (pin_names (offset 0)) (in_bom yes) (on_board yes)
+      (property "Reference" "J" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (property "Value" "OnePin" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (symbol "OnePin_1_1"
+        (pin passive line (at 0 0 0) (length 0)
+          (name "~" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27))))
+        )
+      )
+    )
+  )
+  (symbol (lib_id "Test:OnePin") (at 10 10 0) (unit 1)
+    (uuid 10000000-0000-0000-0000-000000000011)
+    (property "Reference" "J1" (at 10 10 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "Probe" (at 10 10 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid 10000000-0000-0000-0000-000000000021))
+  )
+  (label "{label_name}" (at 10 10 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid 10000000-0000-0000-0000-000000000031)
+  )
+  (sheet_instances (path "/" (page "1")))
+)
+""",
+        encoding="utf-8",
+    )
+
+
+def test_project_text_variables_are_resolved_in_kicad_net_names(tmp_path: Path) -> None:
+    schematic_path = tmp_path / "textvars.kicad_sch"
+    project_path = tmp_path / "textvars.kicad_pro"
+    _write_single_pin_label_schematic(schematic_path, "${NET}")
+    project_path.write_text(
+        '{"text_variables": {"NET": "USB/DP"}, "net_settings": {}}',
+        encoding="utf-8",
+    )
+
+    source = kicad_to_source(schematic_path)
+
+    assert [label.name for label in source.local_labels] == ["USB/DP"]
+    [net] = resolve_kicad_source(source).nets
+    assert net.name == "/USB{slash}DP"
+
+
+def test_unresolved_project_text_variables_are_reported(tmp_path: Path) -> None:
+    schematic_path = tmp_path / "missing_textvar.kicad_sch"
+    _write_single_pin_label_schematic(schematic_path, "${MISSING}")
+    ctx = ParseContext()
+
+    source = kicad_to_source(schematic_path, ctx=ctx)
+
+    assert [label.name for label in source.local_labels] == ["${MISSING}"]
+    assert len(ctx.issues) == 1
+    assert ctx.issues[0].category == "kicad_unresolved_text_variable"
+    assert "MISSING" in ctx.issues[0].message
+
+
+def test_local_power_symbol_kind_is_extracted_from_kicad_lib_symbol(tmp_path: Path) -> None:
+    schematic_path = tmp_path / "local_power.kicad_sch"
+    schematic_path.write_text(
+        """
+(kicad_sch (version 20250227) (generator eeschema)
+  (uuid 10000000-0000-0000-0000-000000000001)
+  (paper "A4")
+  (lib_symbols
+    (symbol "Test:OnePin" (pin_names (offset 0)) (in_bom yes) (on_board yes)
+      (property "Reference" "J" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (property "Value" "OnePin" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (symbol "OnePin_1_1"
+        (pin passive line (at 0 0 0) (length 0)
+          (name "~" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27))))
+        )
+      )
+    )
+    (symbol "power:VLOCAL" (power local) (pin_names (offset 0)) (in_bom yes) (on_board yes)
+      (property "Reference" "#PWR" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (property "Value" "VLOCAL" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (symbol "VLOCAL_1_1"
+        (pin power_in line (at 0 0 90) (length 0) hide
+          (name "VLOCAL" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27))))
+        )
+      )
+    )
+  )
+  (symbol (lib_id "Test:OnePin") (at 10 10 0) (unit 1)
+    (uuid 10000000-0000-0000-0000-000000000011)
+    (property "Reference" "J1" (at 10 10 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "Probe" (at 10 10 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid 10000000-0000-0000-0000-000000000021))
+  )
+  (symbol (lib_id "power:VLOCAL") (at 10 10 0) (unit 1)
+    (uuid 10000000-0000-0000-0000-000000000012)
+    (property "Reference" "#PWR01" (at 10 10 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "VLOCAL" (at 10 10 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid 10000000-0000-0000-0000-000000000022))
+  )
+  (sheet_instances (path "/" (page "1")))
+)
+""",
+        encoding="utf-8",
+    )
+
+    source = kicad_to_source(schematic_path)
+
+    [symbol] = source.power_symbols
+    assert symbol.power_kind == "local"
+    [net] = resolve_kicad_source(source).nets
+    assert net.name == "/VLOCAL"
+
+
+def test_overline_label_markup_is_preserved_in_kicad_net_name(tmp_path: Path) -> None:
+    schematic_path = tmp_path / "overline_label.kicad_sch"
+    schematic_path.write_text(
+        """
+(kicad_sch (version 20231120) (generator eeschema)
+  (uuid 10000000-0000-0000-0000-000000000001)
+  (paper "A4")
+  (lib_symbols
+    (symbol "Test:OnePin" (pin_names (offset 0)) (in_bom yes) (on_board yes)
+      (property "Reference" "J" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (property "Value" "OnePin" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (symbol "OnePin_1_1"
+        (pin passive line (at 0 0 0) (length 0)
+          (name "~" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27))))
+        )
+      )
+    )
+  )
+  (symbol (lib_id "Test:OnePin") (at 10 10 0) (unit 1)
+    (uuid 10000000-0000-0000-0000-000000000011)
+    (property "Reference" "J1" (at 10 10 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "Probe" (at 10 10 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid 10000000-0000-0000-0000-000000000021))
+  )
+  (label "~{CS}" (at 10 10 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid 10000000-0000-0000-0000-000000000031)
+  )
+  (sheet_instances (path "/" (page "1")))
+)
+""",
+        encoding="utf-8",
+    )
+
+    design = resolve_kicad_source(kicad_to_source(schematic_path))
+
+    [net] = design.nets
+    assert net.name == "/~{CS}"
+    assert net.names[0].name == "/~{CS}"
+
+
+def test_overline_pin_markup_is_preserved_for_kicad_auto_net_name(tmp_path: Path) -> None:
+    schematic_path = tmp_path / "overline_pin.kicad_sch"
+    schematic_path.write_text(
+        """
+(kicad_sch (version 20231120) (generator eeschema)
+  (uuid 10000000-0000-0000-0000-000000000001)
+  (paper "A4")
+  (lib_symbols
+    (symbol "Test:RawPin" (pin_names (offset 0)) (in_bom yes) (on_board yes)
+      (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (property "Value" "RawPin" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (symbol "RawPin_1_1"
+        (pin passive line (at 0 0 0) (length 0)
+          (name "~{RESET}" (effects (font (size 1.27 1.27))))
+          (number "23" (effects (font (size 1.27 1.27))))
+        )
+      )
+    )
+    (symbol "Test:PadPin" (pin_names (offset 0)) (in_bom yes) (on_board yes)
+      (property "Reference" "TP" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (property "Value" "PadPin" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (symbol "PadPin_1_1"
+        (pin passive line (at 0 0 0) (length 0)
+          (name "1" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27))))
+        )
+      )
+    )
+  )
+  (symbol (lib_id "Test:RawPin") (at 10 10 0) (unit 1)
+    (uuid 10000000-0000-0000-0000-000000000011)
+    (property "Reference" "U5" (at 10 10 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "RawPin" (at 10 10 0) (effects (font (size 1.27 1.27))))
+    (pin "23" (uuid 10000000-0000-0000-0000-000000000021))
+  )
+  (symbol (lib_id "Test:PadPin") (at 10 10 0) (unit 1)
+    (uuid 10000000-0000-0000-0000-000000000012)
+    (property "Reference" "TP1" (at 10 10 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "PadPin" (at 10 10 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid 10000000-0000-0000-0000-000000000022))
+  )
+  (sheet_instances (path "/" (page "1")))
+)
+""",
+        encoding="utf-8",
+    )
+
+    source = kicad_to_source(schematic_path)
+
+    raw_pin = next(pin for pin in source.pin_occurrences if pin.component_reference == "U5")
+    assert raw_pin.pin_name == "RESET"
+    assert raw_pin.pin_net_name == "~{RESET}"
+
+    design = resolve_kicad_source(source)
+    [net] = design.nets
+    assert net.name == "Net-(U5-~{RESET})"
+    assert {pin.name for pin in net.pins} >= {"RESET", "1"}
 
 
 def test_sheet_traversal_skips_ancestor_file_cycles(
