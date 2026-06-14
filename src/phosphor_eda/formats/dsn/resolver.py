@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from phosphor_eda.domain.schematic import FootprintModel, LibraryLink, Parameter
+from phosphor_eda.domain.schematic import (
+    FootprintModel,
+    LibraryLink,
+    NetName,
+    NetNameKind,
+    Parameter,
+)
 from phosphor_eda.formats.common.net_union import NetUnion
 from phosphor_eda.formats.common.resolved_graph import (
     ResolutionInputError,
@@ -17,13 +24,15 @@ from phosphor_eda.formats.common.resolved_graph import (
     ResolvedPinInput,
     build_resolved_schematic,
 )
+from phosphor_eda.formats.dsn.source import dsn_name_key
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable
 
     from phosphor_eda.domain.schematic import Net, Schematic, ScopeId
     from phosphor_eda.formats.common.diagnostics import ParseContext
     from phosphor_eda.formats.dsn.source import (
+        DsnHierarchyMapping,
         DsnPageNet,
         DsnPageSource,
         DsnPinOccurrence,
@@ -38,11 +47,23 @@ class _LocalNetRef:
 
 @dataclass(slots=True)
 class _NameEvidence:
+    """Per-local-net name evidence; graphic *symbol* names are never included."""
+
     page_names: list[str] = field(default_factory=list)
-    globals: list[str] = field(default_factory=list)
-    off_page_connectors: list[str] = field(default_factory=list)
+    power_nets: list[str] = field(default_factory=list)
+    off_page_nets: list[str] = field(default_factory=list)
     ports: list[str] = field(default_factory=list)
     aliases: list[str] = field(default_factory=list)
+    wire_dbids: list[int] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class _NetNameDecision:
+    """The resolved canonical name and full evidence list for one net cluster."""
+
+    name: str
+    names: tuple[NetName, ...]
+    metadata: dict[str, str] = field(default_factory=dict)
 
 
 def resolve_dsn_source(source: DsnSourceDesign, ctx: ParseContext | None = None) -> Schematic:
@@ -63,6 +84,7 @@ def resolve_dsn_source(source: DsnSourceDesign, ctx: ParseContext | None = None)
     _merge_known_scope_off_page_connectors(source.pages, net_union, local_net_ids)
 
     name_evidence = _collect_name_evidence(source.pages)
+    name_decisions = _resolve_net_names(source, local_refs, net_union, name_evidence, ctx)
     metadata = {"dsn_resolver": "source"}
     if ctx is not None and ctx.issues:
         metadata["parse_issue_count"] = str(len(ctx.issues))
@@ -72,11 +94,10 @@ def resolve_dsn_source(source: DsnSourceDesign, ctx: ParseContext | None = None)
         local_nets=_local_net_inputs(local_refs, name_evidence),
         pins=_pin_inputs(pin_occurrences),
         net_union=net_union,
-        net_factory=lambda net_index, root_id, group_local_nets: _dsn_net_input_for_group(
-            name_evidence,
+        net_factory=lambda net_index, root_id, _group_local_nets: _dsn_net_input_for_group(
+            name_decisions,
             net_index,
             root_id,
-            group_local_nets,
         ),
         include_net=_include_dsn_net,
         net_ordering=_order_dsn_nets,
@@ -280,19 +301,22 @@ def _collect_name_evidence(pages: Iterable[DsnPageSource]) -> dict[str, _NameEvi
     for page in pages:
         for page_net in page.nets:
             evidence = evidence_by_local_id.setdefault(page_net.id, _NameEvidence())
-            evidence.page_names.append(page_net.name)
+            if page_net.name:
+                evidence.page_names.append(page_net.name)
         for wire in page.wires:
             evidence = evidence_by_local_id.setdefault(wire.local_net_id, _NameEvidence())
             evidence.aliases.extend(alias.name for alias in wire.aliases)
+            if wire.db_id > 0:
+                evidence.wire_dbids.append(wire.db_id)
         for port in page.ports:
             evidence = evidence_by_local_id.setdefault(port.local_net_id, _NameEvidence())
             evidence.ports.append(port.name)
         for global_ in page.globals:
             evidence = evidence_by_local_id.setdefault(global_.local_net_id, _NameEvidence())
-            evidence.globals.append(global_.name)
+            evidence.power_nets.append(global_.name)
         for connector in page.off_page_connectors:
             evidence = evidence_by_local_id.setdefault(connector.local_net_id, _NameEvidence())
-            evidence.off_page_connectors.append(connector.name)
+            evidence.off_page_nets.append(connector.name)
     return evidence_by_local_id
 
 
@@ -316,23 +340,241 @@ def _local_net_inputs(
 
 
 def _dsn_net_input_for_group(
-    name_evidence: dict[str, _NameEvidence],
+    name_decisions: dict[str, _NetNameDecision],
     net_index: int,
     root_id: str,
-    group_local_nets: tuple[ResolvedLocalNetInput, ...],
 ) -> ResolvedNetInput:
-    evidences = [name_evidence.get(local_net.id, _NameEvidence()) for local_net in group_local_nets]
-    name = _select_net_name(root_id, evidences)
-    aliases = _all_alias_names(evidences)
-    aliases.discard(name)
+    decision = name_decisions[root_id]
+    metadata = {"dsn_root_local_net_id": root_id}
+    metadata.update(decision.metadata)
     return ResolvedNetInput(
         id=f"dsn:net:{net_index:04d}",
-        name=name,
-        aliases=frozenset(aliases),
-        metadata={
-            "dsn_root_local_net_id": root_id,
-        },
+        name=decision.name,
+        names=decision.names,
+        metadata=metadata,
     )
+
+
+# Capture autonames are "N" + decimal seed-wire dbid, zero-padded to a
+# minimum of five digits (N00529); corpus maxima reach ten digits.
+_AUTONAME_FORM = re.compile(r"N\d{5,}")
+
+
+def _is_autoname_form(name: str) -> bool:
+    return _AUTONAME_FORM.fullmatch(name) is not None
+
+
+def _stored_name_kind(name: str) -> NetNameKind:
+    return NetNameKind.TOOL_AUTO if _is_autoname_form(name) else NetNameKind.LABEL
+
+
+def _resolve_net_names(
+    source: DsnSourceDesign,
+    local_refs: list[_LocalNetRef],
+    net_union: NetUnion,
+    evidence_by_local_id: dict[str, _NameEvidence],
+    ctx: ParseContext | None,
+) -> dict[str, _NetNameDecision]:
+    """Decide each net cluster's canonical name from stored evidence.
+
+    Capture materializes every resolved net name into the DSN, so this
+    reads rather than reconstructs: a page net list name wins outright;
+    anonymous clusters take the ``N{min seed-wire dbid:05d}`` autoname
+    (validated against the Hierarchy mapping when one exists); remaining
+    clusters are reconciled against leftover mapping autonames by
+    elimination; only then is a name synthesized, flagged and diagnosed.
+    """
+    groups: dict[str, list[DsnPageNet]] = {}
+    for ref in local_refs:
+        groups.setdefault(net_union.find(ref.local_net.id), []).append(ref.local_net)
+
+    mappings = source.hierarchy_mappings
+    mapping_keys = {mapping.name_key for mapping in mappings}
+
+    decisions: dict[str, _NetNameDecision] = {}
+    unresolved: list[str] = []
+    claimed_keys: set[str] = set()
+
+    for root_id, group in groups.items():
+        evidence_names = _group_evidence_names(group, evidence_by_local_id)
+        seed_dbid = _min_seed_wire_dbid(group, evidence_by_local_id)
+        derived = f"N{seed_dbid:05d}" if seed_dbid is not None else ""
+
+        canonical = ""
+        metadata: dict[str, str] = {}
+        if evidence_names:
+            # The page net list name is the materialized resolved name and
+            # wins outright; _group_evidence_names lists page names first.
+            # When a cluster carries several stored names (hierarchical
+            # block occurrences), the Hierarchy mapping holds the one
+            # Capture resolved to — prefer it.
+            canonical = _select_canonical(evidence_names, mapping_keys)
+        elif derived and (not mappings or dsn_name_key(derived) in mapping_keys):
+            # An anonymous cluster carries Capture's autoname: N + the
+            # minimum seed-wire dbid. When a Hierarchy mapping exists it
+            # must confirm the derivation (a missing entry means the seed
+            # wire was deleted and the derived number is stale).
+            canonical = derived
+            evidence_names.append(
+                NetName(
+                    name=derived,
+                    kind=NetNameKind.TOOL_AUTO,
+                    scope=None,
+                    source="seed_wire_dbid",
+                )
+            )
+            metadata["dsn_seed_wire_dbid"] = str(seed_dbid)
+
+        if canonical:
+            if mappings and dsn_name_key(canonical) in mapping_keys:
+                evidence_names.append(
+                    NetName(
+                        name=canonical,
+                        kind=_stored_name_kind(canonical),
+                        scope=None,
+                        source="hierarchy_mapping",
+                    )
+                )
+            claimed_keys.add(dsn_name_key(canonical))
+            decisions[root_id] = _NetNameDecision(
+                name=canonical,
+                names=tuple(evidence_names),
+                metadata=metadata,
+            )
+        else:
+            unresolved.append(root_id)
+
+    _resolve_unnamed_groups(groups, unresolved, mappings, claimed_keys, decisions, ctx)
+    return decisions
+
+
+def _select_canonical(evidence_names: list[NetName], mapping_keys: set[str]) -> str:
+    """The strongest evidence name, preferring one the Hierarchy mapping confirms.
+
+    Stored page names always beat alias-grade evidence: the mapping
+    preference only arbitrates within the strongest source present.
+    """
+    page_entries = [entry for entry in evidence_names if entry.source == "page_net"]
+    pool = page_entries or evidence_names
+    if mapping_keys:
+        for entry in pool:
+            if dsn_name_key(entry.name) in mapping_keys:
+                return entry.name
+    return pool[0].name
+
+
+def _group_evidence_names(
+    group: list[DsnPageNet],
+    evidence_by_local_id: dict[str, _NameEvidence],
+) -> list[NetName]:
+    """Typed name evidence for a cluster, strongest source first.
+
+    Page net list names lead (they are Capture's stored resolved name);
+    wire aliases, power-symbol net names, off-page connector net names,
+    and port names follow as alias-grade evidence.
+    """
+    entries: list[NetName] = []
+    seen: set[tuple[str, NetNameKind, ScopeId | None, str]] = set()
+
+    def add(name: str, kind: NetNameKind, scope: ScopeId | None, source: str) -> None:
+        key = (name, kind, scope, source)
+        if name and key not in seen:
+            seen.add(key)
+            entries.append(NetName(name=name, kind=kind, scope=scope, source=source))
+
+    for local_net in group:
+        evidence = evidence_by_local_id.get(local_net.id, _NameEvidence())
+        for name in evidence.page_names:
+            add(name, _stored_name_kind(name), local_net.scope_id, "page_net")
+    label_sources: tuple[tuple[Callable[[_NameEvidence], list[str]], str], ...] = (
+        (lambda evidence: evidence.aliases, "wire_alias"),
+        (lambda evidence: evidence.power_nets, "power_symbol"),
+        (lambda evidence: evidence.off_page_nets, "off_page_connector"),
+        (lambda evidence: evidence.ports, "port"),
+    )
+    for names_of, source_label in label_sources:
+        for local_net in group:
+            evidence = evidence_by_local_id.get(local_net.id, _NameEvidence())
+            for name in names_of(evidence):
+                add(name, _stored_name_kind(name), local_net.scope_id, source_label)
+    return entries
+
+
+def _min_seed_wire_dbid(
+    group: list[DsnPageNet],
+    evidence_by_local_id: dict[str, _NameEvidence],
+) -> int | None:
+    """The cluster's minimum seed-wire dbid — the number in its autoname."""
+    dbids = [
+        dbid
+        for local_net in group
+        for dbid in evidence_by_local_id.get(local_net.id, _NameEvidence()).wire_dbids
+    ]
+    return min(dbids) if dbids else None
+
+
+def _resolve_unnamed_groups(
+    groups: dict[str, list[DsnPageNet]],
+    unresolved: list[str],
+    mappings: list[DsnHierarchyMapping],
+    claimed_keys: set[str],
+    decisions: dict[str, _NetNameDecision],
+    ctx: ParseContext | None,
+) -> None:
+    """Name the clusters no stored evidence reached.
+
+    A mapping-only autoname (its seed wire was deleted) is adopted by
+    elimination when exactly one leftover autoname and one unnamed cluster
+    remain; anything else gets a synthesized placeholder plus a diagnostic.
+    Bus objects (``…[a..b]``) stay in the mapping but are not net names.
+    """
+    leftover_autonames = [
+        mapping
+        for mapping in mappings
+        if _is_autoname_form(mapping.name) and mapping.name_key not in claimed_keys
+    ]
+    if len(unresolved) == 1 and len(leftover_autonames) == 1:
+        root_id = unresolved[0]
+        mapping = leftover_autonames[0]
+        decisions[root_id] = _NetNameDecision(
+            name=mapping.name,
+            names=(
+                NetName(
+                    name=mapping.name,
+                    kind=NetNameKind.TOOL_AUTO,
+                    scope=None,
+                    source="hierarchy_mapping",
+                ),
+            ),
+        )
+        return
+
+    for root_id in unresolved:
+        name = _synthesized_name(root_id, groups[root_id])
+        if ctx is not None:
+            ctx.warn(
+                "dsn_net_name_synthesized",
+                f"net {root_id!r} has no stored name in the DSN; synthesized placeholder {name!r}",
+            )
+        decisions[root_id] = _NetNameDecision(
+            name=name,
+            names=(
+                NetName(
+                    name=name,
+                    kind=NetNameKind.SYNTHESIZED,
+                    scope=None,
+                    source="synthesized",
+                ),
+            ),
+        )
+
+
+def _synthesized_name(root_id: str, group: list[DsnPageNet]) -> str:
+    """Placeholder for a net Capture stored no name for (N{page-net id:08d})."""
+    net_ids = [local_net.net_id for local_net in group if local_net.net_id >= 0]
+    if net_ids:
+        return f"N{min(net_ids):08d}"
+    return root_id
 
 
 # OrCAD CIS designs name the internal part-database key column either
@@ -423,61 +665,14 @@ def _pin_inputs(pin_occurrences: Iterable[DsnPinOccurrence]) -> list[ResolvedPin
     return result
 
 
-def _select_net_name(root_id: str, evidences: Iterable[_NameEvidence]) -> str:
-    generated_page_names: list[str] = []
-    non_generated_page_names: list[str] = []
-    globals_: list[str] = []
-    off_page_connectors: list[str] = []
-    ports: list[str] = []
-    aliases: list[str] = []
-    for evidence in evidences:
-        globals_.extend(evidence.globals)
-        off_page_connectors.extend(evidence.off_page_connectors)
-        ports.extend(evidence.ports)
-        aliases.extend(evidence.aliases)
-        for page_name in evidence.page_names:
-            if _is_generated_page_net_name(page_name):
-                generated_page_names.append(page_name)
-            else:
-                non_generated_page_names.append(page_name)
-
-    for names in (
-        globals_,
-        off_page_connectors,
-        ports,
-        non_generated_page_names,
-        aliases,
-        generated_page_names,
-    ):
-        for name in _dedupe(names):
-            if name:
-                return name
-    return root_id
-
-
-def _all_alias_names(evidences: Iterable[_NameEvidence]) -> set[str]:
-    names: set[str] = set()
-    for evidence in evidences:
-        names.update(name for name in evidence.page_names if name)
-        names.update(name for name in evidence.globals if name)
-        names.update(name for name in evidence.off_page_connectors if name)
-        names.update(name for name in evidence.ports if name)
-        names.update(name for name in evidence.aliases if name)
-    return names
-
-
 def _source_names(evidence: _NameEvidence) -> set[str]:
     names: set[str] = set()
     names.update(name for name in evidence.page_names if name)
-    names.update(name for name in evidence.globals if name)
-    names.update(name for name in evidence.off_page_connectors if name)
+    names.update(name for name in evidence.power_nets if name)
+    names.update(name for name in evidence.off_page_nets if name)
     names.update(name for name in evidence.ports if name)
     names.update(name for name in evidence.aliases if name)
     return names
-
-
-def _is_generated_page_net_name(name: str) -> bool:
-    return len(name) == 9 and name.startswith("N") and name[1:].isdigit()
 
 
 def _component_identity(pin_occurrence: DsnPinOccurrence) -> str:
@@ -501,14 +696,3 @@ def _include_dsn_net(
 
 def _scope_key(scope_id: ScopeId) -> str:
     return "root" if not scope_id.path else "/".join(scope_id.path)
-
-
-def _dedupe(names: Iterable[str]) -> list[str]:
-    result: list[str] = []
-    seen: set[str] = set()
-    for name in names:
-        if not name or name in seen:
-            continue
-        seen.add(name)
-        result.append(name)
-    return result

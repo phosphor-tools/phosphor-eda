@@ -352,8 +352,12 @@ def parse_page(
         parsed_wire = False
 
         try:
-            r.skip(4)  # unknown_0
-            wire.wire_id = r.read_uint32()  # this IS the net_id from page net list
+            # OpenOrCadParser's StructWire marks these 8 bytes "might be
+            # swapped" — confirmed: the first u32 is the persistent wire
+            # dbid (seed of N##### autonames), the second is the runtime
+            # page-net id matching the page net list.
+            wire.db_id = r.read_uint32()
+            wire.wire_id = r.read_uint32()
             wire.color = r.read_uint32()
             wire.start_x = r.read_int32()
             wire.start_y = r.read_int32()

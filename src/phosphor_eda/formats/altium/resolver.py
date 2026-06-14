@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from phosphor_eda.domain.schematic import NetName, NetNameKind
 from phosphor_eda.formats.altium._helpers import parse_bus_notation
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode
 from phosphor_eda.formats.common.net_union import NetUnion
@@ -25,6 +27,7 @@ if TYPE_CHECKING:
 
     from phosphor_eda.domain.schematic import Schematic, ScopeId
     from phosphor_eda.formats.altium.annotation import AnnotationDesignator
+    from phosphor_eda.formats.altium.project import AltiumProject
     from phosphor_eda.formats.altium.source import (
         AltiumLocalNet,
         AltiumPinOccurrence,
@@ -42,14 +45,25 @@ class _LocalNetRef:
     local_net: AltiumLocalNet
 
 
+@dataclass(frozen=True, slots=True)
+class _NameCandidate:
+    """One piece of net-name evidence, in document order."""
+
+    name: str
+    kind: NetNameKind
+    scope: ScopeId | None
+    source: str
+
+
 @dataclass(slots=True)
 class _NameEvidence:
-    labels: list[str]
-    powers: list[str]
-    ports: list[str]
-    sheet_entries: list[str]
-    harness_members: list[str]
-    generated: str
+    """Per-tier name candidates collected across a resolved net's local nets."""
+
+    labels: list[_NameCandidate]
+    powers: list[_NameCandidate]
+    sheet_entries: list[_NameCandidate]
+    ports: list[_NameCandidate]
+    harness_members: list[_NameCandidate]
 
 
 def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None = None) -> Schematic:
@@ -58,6 +72,7 @@ def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None =
     Non-fatal issues accumulated on *ctx* are surfaced as
     ``parse_issue_count`` in the resulting schematic metadata.
     """
+    _warn_unverified_naming_options(source.project, ctx)
     local_refs = _collect_local_refs(source)
     net_union = NetUnion(ref.local_net.id for ref in local_refs)
     local_net_by_id = {ref.local_net.id: ref for ref in local_refs}
@@ -70,6 +85,7 @@ def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None =
     _merge_hierarchy(source, local_refs, local_net_by_id, net_union, effective_mode, ctx)
 
     component_source_ids_by_component_id = _component_source_ids_by_component_id(pin_occurrences)
+    members_by_local_net = _net_members_by_local_net(pin_occurrences)
 
     metadata = {
         "altium_hierarchy_mode": source.project.hierarchy_mode.name,
@@ -99,6 +115,7 @@ def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None =
         net_factory=lambda net_index, root_id, group_local_nets: _altium_net_input_for_group(
             source,
             local_net_by_id,
+            members_by_local_net,
             net_index,
             root_id,
             group_local_nets,
@@ -606,22 +623,155 @@ def _local_net_inputs(local_refs: Iterable[_LocalNetRef]) -> list[ResolvedLocalN
 def _altium_net_input_for_group(
     source: AltiumSourceDesign,
     local_net_by_id: dict[str, _LocalNetRef],
+    members_by_local_net: dict[str, list[tuple[str, str]]],
     net_index: int,
     root_id: str,
     group_local_nets: tuple[ResolvedLocalNetInput, ...],
 ) -> ResolvedNetInput:
     refs = [local_net_by_id[local_net.id] for local_net in group_local_nets]
-    name = _select_net_name(source, refs)
-    aliases = _all_source_names(refs)
-    aliases.discard(name)
+    evidence = _collect_name_evidence(refs)
+    names = [
+        *evidence.labels,
+        *evidence.powers,
+        *evidence.sheet_entries,
+        *evidence.ports,
+        *evidence.harness_members,
+    ]
+    canonical = _select_canonical(source.project, evidence)
+    if canonical is None:
+        members = [
+            member
+            for local_net in group_local_nets
+            for member in members_by_local_net.get(local_net.id, [])
+        ]
+        canonical = _autoname_candidate(members, net_index)
+        names.append(canonical)
     return ResolvedNetInput(
         id=f"net:{net_index:04d}",
-        name=name,
-        aliases=frozenset(aliases),
+        name=canonical.name,
+        names=tuple(
+            NetName(
+                name=candidate.name,
+                kind=candidate.kind,
+                scope=candidate.scope,
+                source=candidate.source,
+            )
+            for candidate in names
+        ),
         metadata={
             "altium_root_local_net_id": root_id,
         },
     )
+
+
+def _select_canonical(
+    project: AltiumProject,
+    evidence: _NameEvidence,
+) -> _NameCandidate | None:
+    """Pick the canonical name per Altium's priority ladder, or ``None``.
+
+    Documented ladder: net labels > power ports (order swapped by
+    ``PowerPortNamesTakePriority`` — documented behavior only, no
+    conflicting corpus sample exists) > sheet entries (gated by
+    ``AllowSheetEntryNetNames``) > ports (gated by ``AllowPortNetNames``)
+    > harness ``Bundle.Signal`` fallback. Within the winning tier the
+    case-insensitive alphabetical minimum wins; ties break by document
+    order (single corpus witness — an approximation).
+    """
+    label_tiers = [evidence.labels, evidence.powers]
+    if project.power_port_names_take_priority:
+        label_tiers.reverse()
+    tiers = [
+        *label_tiers,
+        evidence.sheet_entries if project.allow_sheet_entry_net_names else [],
+        evidence.ports if project.allow_port_net_names else [],
+        evidence.harness_members,
+    ]
+    for tier in tiers:
+        if tier:
+            return min(
+                enumerate(tier),
+                key=lambda item: (item[1].name.casefold(), item[0]),
+            )[1]
+    return None
+
+
+_DIGIT_RUN = re.compile(r"([0-9]+)")
+
+
+def _natural_key(text: str) -> tuple[tuple[int, int, str], ...]:
+    """Natural-sort key: digit runs compare numerically, text runs lexically."""
+    key: list[tuple[int, int, str]] = []
+    for index, run in enumerate(_DIGIT_RUN.split(text)):
+        if not run:
+            continue
+        if index % 2 == 1:  # odd indices are the captured digit runs
+            key.append((0, int(run), ""))
+        else:
+            key.append((1, 0, run))
+    return tuple(key)
+
+
+def _autoname_candidate(
+    members: list[tuple[str, str]],
+    net_index: int,
+) -> _NameCandidate:
+    """Altium's autoname: ``Net<designator>_<pin>`` over the natural-sort
+    minimum member ``(designator, pin)`` pair (709/709 corpus fit)."""
+    if not members:
+        # Unreachable for included nets (inclusion requires a pin); kept as a
+        # flagged synthetic fallback rather than an assertion.
+        return _NameCandidate(
+            name=f"__net_{net_index:04d}",
+            kind=NetNameKind.SYNTHESIZED,
+            scope=None,
+            source="altium:synthesized",
+        )
+    designator, pin = min(
+        members,
+        key=lambda member: (_natural_key(member[0]), _natural_key(member[1])),
+    )
+    return _NameCandidate(
+        name=f"Net{designator}_{pin}",
+        kind=NetNameKind.TOOL_AUTO,
+        scope=None,
+        source="altium:autoname",
+    )
+
+
+def _net_members_by_local_net(
+    pin_occurrences: Iterable[AltiumPinOccurrence],
+) -> dict[str, list[tuple[str, str]]]:
+    """Map local net id to its member ``(designator, pin)`` pairs."""
+    result: dict[str, list[tuple[str, str]]] = {}
+    for pin_occurrence in pin_occurrences:
+        if not pin_occurrence.local_net_id:
+            continue
+        result.setdefault(pin_occurrence.local_net_id, []).append(
+            (pin_occurrence.component_reference, pin_occurrence.pin_designator)
+        )
+    return result
+
+
+def _warn_unverified_naming_options(project: AltiumProject, ctx: ParseContext | None) -> None:
+    """Warn when a project enables a naming option we have no verified sample for.
+
+    ``AppendSheetNumberToLocalNets`` and ``NameNetsHierarchically`` are 0 in
+    every corpus project; their exact output formats are undocumented, so the
+    resolver proceeds without the suffix/prefix transform.
+    """
+    if ctx is None:
+        return
+    unverified = (
+        ("AppendSheetNumberToLocalNets", project.append_sheet_number_to_local_nets),
+        ("NameNetsHierarchically", project.name_nets_hierarchically),
+    )
+    for option, enabled in unverified:
+        if enabled:
+            ctx.warn(
+                "unverified_naming_option",
+                f"naming option {option} unverified; net names computed without it",
+            )
 
 
 def _include_altium_net(
@@ -724,60 +874,63 @@ def _parent_dir(source_file_key: str) -> str:
     return head if sep else ""
 
 
-def _select_net_name(source: AltiumSourceDesign, refs: Iterable[_LocalNetRef]) -> str:
-    evidence = _combined_name_evidence(refs)
-    priority_groups: list[list[str]]
-    if source.project.power_port_names_take_priority:
-        priority_groups = [
-            evidence.powers,
-            evidence.labels,
-            evidence.ports if source.project.allow_port_net_names else [],
-            evidence.sheet_entries if source.project.allow_sheet_entry_net_names else [],
-            evidence.harness_members,
-        ]
-    else:
-        priority_groups = [
-            evidence.labels,
-            evidence.powers,
-            evidence.ports if source.project.allow_port_net_names else [],
-            evidence.sheet_entries if source.project.allow_sheet_entry_net_names else [],
-            evidence.harness_members,
-        ]
-
-    for names in priority_groups:
-        for name in names:
-            if name:
-                return name
-    if evidence.generated:
-        return evidence.generated
-    return "__auto_net"
-
-
-def _combined_name_evidence(refs: Iterable[_LocalNetRef]) -> _NameEvidence:
-    labels: list[str] = []
-    powers: list[str] = []
-    ports: list[str] = []
-    sheet_entries: list[str] = []
-    harness_members: list[str] = []
-    generated = ""
+def _collect_name_evidence(refs: Iterable[_LocalNetRef]) -> _NameEvidence:
+    """Collect per-tier name candidates in document order."""
+    labels: list[_NameCandidate] = []
+    powers: list[_NameCandidate] = []
+    sheet_entries: list[_NameCandidate] = []
+    ports: list[_NameCandidate] = []
+    harness_members: list[_NameCandidate] = []
 
     for ref in refs:
-        labels.extend(_label_names(ref.local_net))
-        powers.extend(_power_names(ref.local_net))
-        ports.extend(_port_names(ref.local_net))
-        sheet_entries.extend(_sheet_entry_names(ref.local_net))
-        harness_members.extend(_harness_member_names(ref.local_net))
-        if not generated:
-            generated = _clean_name(ref.local_net.generated_name)
+        scope = ref.local_net.scope_id
+        for label in ref.local_net.net_labels:
+            _append_candidate(labels, label.name, NetNameKind.LABEL, scope, label.id)
+        for power_port in ref.local_net.power_ports:
+            _append_candidate(powers, power_port.name, NetNameKind.LABEL, scope, power_port.id)
+        for entry in ref.local_net.sheet_entries:
+            if entry.harness_type:
+                continue
+            _append_candidate(sheet_entries, entry.name, NetNameKind.LABEL, scope, entry.id)
+        for port in ref.local_net.ports:
+            if port.harness_type:
+                continue
+            _append_candidate(ports, port.name, NetNameKind.LABEL, scope, port.id)
+        for member in ref.local_net.harness_members:
+            member_name = _mergeable_name(member.name)
+            if member_name is None:
+                continue
+            port_name = _clean_name(member.port_name)
+            qualified = f"{port_name}.{member_name}" if port_name else member_name
+            harness_members.append(
+                _NameCandidate(
+                    name=qualified,
+                    kind=NetNameKind.TOOL_AUTO,
+                    scope=scope,
+                    source=member.id,
+                )
+            )
 
     return _NameEvidence(
-        labels=_dedupe(labels),
-        powers=_dedupe(powers),
-        ports=_dedupe(ports),
-        sheet_entries=_dedupe(sheet_entries),
-        harness_members=_dedupe(harness_members),
-        generated=generated,
+        labels=labels,
+        powers=powers,
+        sheet_entries=sheet_entries,
+        ports=ports,
+        harness_members=harness_members,
     )
+
+
+def _append_candidate(
+    candidates: list[_NameCandidate],
+    raw_name: str,
+    kind: NetNameKind,
+    scope: ScopeId,
+    source: str,
+) -> None:
+    name = _mergeable_name(raw_name)
+    if name is None:
+        return
+    candidates.append(_NameCandidate(name=name, kind=kind, scope=scope, source=source))
 
 
 def _all_source_names(refs: Iterable[_LocalNetRef]) -> set[str]:
@@ -822,15 +975,16 @@ def _sheet_entry_names(local_net: AltiumLocalNet) -> list[str]:
 
 
 def _harness_member_names(local_net: AltiumLocalNet) -> list[str]:
-    """Qualified ``port:member`` names — bare member names (CLK, CS) are too
-    generic to use as net names or merge keys across unrelated harnesses."""
+    """Qualified ``Bundle.Signal`` names (Altium's harness fallback form) —
+    bare member names (CLK, CS) are too generic to use as net names or merge
+    keys across unrelated harnesses."""
     names: list[str] = []
     for member in local_net.harness_members:
         name = _mergeable_name(member.name)
         if name is None:
             continue
         port_name = _clean_name(member.port_name)
-        names.append(f"{port_name}:{name}" if port_name else name)
+        names.append(f"{port_name}.{name}" if port_name else name)
     return _dedupe(names)
 
 
