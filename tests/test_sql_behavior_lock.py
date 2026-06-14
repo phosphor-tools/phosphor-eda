@@ -83,10 +83,14 @@ def _table_select_expressions(table: str) -> list[tuple[str, str]]:
             continue
         name = match["name"]
         if match["type"] == "GEOMETRY":
+            # DuckDB Spatial's WKB bytes can vary across platforms for the same
+            # loaded geometry. Normalized GeoJSON keeps full coordinate content
+            # while avoiding platform-specific binary serialization.
             expressions.append(
                 (
                     name,
-                    f"CASE WHEN {name} IS NULL THEN NULL ELSE ST_AsHEXWKB({name}) END",
+                    f"CASE WHEN {name} IS NULL THEN NULL ELSE "
+                    f"ST_AsGeoJSON(ST_Normalize({name}))::VARCHAR END",
                 )
             )
         else:
