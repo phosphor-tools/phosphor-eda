@@ -86,7 +86,7 @@ def _table_select_expressions(table: str) -> list[tuple[str, str]]:
             expressions.append(
                 (
                     name,
-                    f"CASE WHEN {name} IS NULL THEN NULL ELSE ST_AsWKB({name}) END",
+                    f"CASE WHEN {name} IS NULL THEN NULL ELSE ST_AsHEXWKB({name}) END",
                 )
             )
         else:
