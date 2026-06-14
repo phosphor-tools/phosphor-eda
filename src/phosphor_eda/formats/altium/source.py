@@ -355,7 +355,7 @@ def _resolve_indirect_text(text: str, texts_by_name: dict[str, str]) -> str:
     return current
 
 
-def _component_parameters(records: Sequence[ParameterRec]) -> tuple[Parameter, ...]:
+def component_parameters(records: Sequence[ParameterRec]) -> tuple[Parameter, ...]:
     """Ordered parameters from one owner's RECORD=41 children, in document order.
 
     ``=Name`` texts are indirect references to a sibling parameter
@@ -389,7 +389,7 @@ def _component_parameters_by_owner(sheet: SheetRecords) -> dict[int, tuple[Param
         if parameter.owner_index < 0 or not parameter.name:
             continue
         records_by_owner.setdefault(parameter.owner_index, []).append(parameter)
-    return {owner: _component_parameters(records) for owner, records in records_by_owner.items()}
+    return {owner: component_parameters(records) for owner, records in records_by_owner.items()}
 
 
 def _component_footprints_by_owner(sheet: SheetRecords) -> dict[int, tuple[FootprintModel, ...]]:
@@ -448,11 +448,11 @@ _COMPONENT_KINDS: dict[int, ComponentKind] = {
 _KIND_STANDARD_NO_BOM = 5
 
 
-def _component_kind(component: ComponentRec) -> ComponentKind:
+def component_kind(component: ComponentRec) -> ComponentKind:
     return _COMPONENT_KINDS.get(component.component_kind, ComponentKind.OTHER)
 
 
-def _component_info(
+def component_info(
     component: ComponentRec | None,
     parameters: tuple[Parameter, ...],
     footprints: tuple[FootprintModel, ...],
@@ -463,7 +463,7 @@ def _component_info(
         parameters=parameters,
         lib=_library_link(component),
         footprints=footprints,
-        kind=_component_kind(component),
+        kind=component_kind(component),
         # Altium has no native DNP flag — the shared convention matcher decides.
         explicit_dnp=None,
         exclude_from_bom=component.component_kind == _KIND_STANDARD_NO_BOM,
@@ -717,14 +717,14 @@ def _source_sheet(
         component = components_by_owner.get(pin.owner_index)
         component_reference = designator_by_owner.get(pin.owner_index, "")
         component_parameters = component_parameters_by_owner.get(pin.owner_index, ())
-        component_info = component_info_by_owner.get(pin.owner_index)
-        if component_info is None:
-            component_info = _component_info(
+        resolved_component_info = component_info_by_owner.get(pin.owner_index)
+        if resolved_component_info is None:
+            resolved_component_info = component_info(
                 component,
                 component_parameters,
                 component_footprints_by_owner.get(pin.owner_index, ()),
             )
-            component_info_by_owner[pin.owner_index] = component_info
+            component_info_by_owner[pin.owner_index] = resolved_component_info
         pin_id = _source_id(sheet_id, "pin", pin.index)
         occurrence = AltiumPinOccurrence(
             id=pin_id,
@@ -746,7 +746,7 @@ def _source_sheet(
             component_part=component.lib_reference if component is not None else "",
             component_description=component.description if component is not None else "",
             component_metadata=_component_metadata(component, component_parameters),
-            component_info=component_info,
+            component_info=resolved_component_info,
             pin_designator=pin.designator,
             pin_name=pin.name,
             location=pin.location,

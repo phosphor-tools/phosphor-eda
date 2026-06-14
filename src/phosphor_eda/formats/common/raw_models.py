@@ -67,6 +67,7 @@ class PlacedInstance:
     pin_connections: list[PinConnection] = field(default_factory=list)
     # Arbitrary name-value properties from parsed binary data.
     props: dict[str, str] = field(default_factory=dict)
+    props_list: tuple[tuple[str, str], ...] = field(default_factory=tuple)
 
 
 @dataclass(kw_only=True)
