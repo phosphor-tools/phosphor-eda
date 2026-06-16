@@ -10,7 +10,7 @@ Replaces the raw-dict iteration in ``netlist.py`` and the inner loop of
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -23,6 +23,8 @@ from phosphor_eda.formats.altium.record_factory import (
 from phosphor_eda.formats.altium.record_parser import read_schematic_records
 from phosphor_eda.formats.altium.records import (
     AltiumRecord,
+    BusEntryRec,
+    BusRec,
     HarnessConnectorRec,
     HarnessEntryRec,
     HarnessTypeRec,
@@ -87,6 +89,7 @@ class SheetRecords:
     records: list[AltiumRecord]
     children: dict[int, list[AltiumRecord]]
     wire_index: WireIndex
+    bus_index: WireIndex = field(default_factory=lambda: WireIndex([]))
     name: str = ""
 
     def by_type[R: AltiumRecord](self, cls: type[R]) -> Iterator[R]:
@@ -124,12 +127,24 @@ class LocalNetRecordGroup:
 
 
 @dataclass(slots=True)
+class GenericBusRecordGroup:
+    """One generic Altium bus backbone with aggregate name evidence."""
+
+    root: tuple[int, int]
+    name: str
+    source_index: int
+    location: tuple[int, int]
+    member_roots_by_name: dict[str, tuple[int, int]]
+
+
+@dataclass(slots=True)
 class LocalNetResolution:
     """Sheet-local net grouping plus coordinate lookup evidence."""
 
     groups: list[LocalNetRecordGroup]
     coord_to_root: dict[tuple[int, int], tuple[int, int]]
     no_connect_wire_coords: set[tuple[int, int]]
+    generic_bus_groups: list[GenericBusRecordGroup]
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +164,9 @@ def load_sheet(
     children = link_children(records)
 
     wire_recs = [r for r in records if isinstance(r, WireRec)]
+    bus_recs = [r for r in records if isinstance(r, BusRec)]
     wire_index = WireIndex(wire_recs)
+    bus_index = WireIndex(bus_recs)
 
     # Derive sheet name from path
     name = Path(schdoc_path).stem
@@ -158,6 +175,7 @@ def load_sheet(
         records=records,
         children=children,
         wire_index=wire_index,
+        bus_index=bus_index,
         name=name,
     )
 
@@ -176,6 +194,16 @@ def _connect_point_to_wire_group(
     for wire, seg_idx in touches:
         uf.union(point, wire.segments[seg_idx][0])
         break
+
+
+def _segment_start_touching(
+    point: tuple[int, int],
+    index: WireIndex,
+) -> tuple[int, int] | None:
+    touches = index.segments_touching(point[0], point[1])
+    for wire, seg_idx in touches:
+        return wire.segments[seg_idx][0]
+    return None
 
 
 def _connect_point_to_signal_harness(
@@ -231,14 +259,21 @@ def resolve_local_net_groups(
     by the source extractor, not here.
     """
     uf: UnionFind[tuple[int, int]] = UnionFind()
+    bus_uf: UnionFind[tuple[int, int]] = UnionFind()
 
     # --- Step 1: Collect wire segments and union consecutive points ---
     all_wire_points: set[tuple[int, int]] = set()
+    all_bus_points: set[tuple[int, int]] = set()
 
     for wire in sheet.by_type(WireRec):
         all_wire_points.update(wire.points)
         for p1, p2 in wire.segments:
             uf.union(p1, p2)
+
+    for bus in sheet.by_type(BusRec):
+        all_bus_points.update(bus.points)
+        for p1, p2 in bus.segments:
+            bus_uf.union(p1, p2)
 
     # --- Step 1.5: Signal harness wires ---
     # Signal harnesses carry whole harness bundles between harness-typed
@@ -272,6 +307,15 @@ def resolve_local_net_groups(
             uf.union(pt, seg[0])
             break  # Only need to connect to one segment
 
+    for pt in list(all_bus_points):
+        touches = sheet.bus_index.segments_touching(pt[0], pt[1])
+        for bus, seg_idx in touches:
+            seg = bus.segments[seg_idx]
+            if pt == seg[0] or pt == seg[1]:
+                continue
+            bus_uf.union(pt, seg[0])
+            break
+
     # --- Step 3: Add junctions (explicit connection markers) ---
     for junc in sheet.by_type(JunctionRec):
         jp = junc.location
@@ -296,6 +340,8 @@ def resolve_local_net_groups(
     port_points: list[tuple[PortRec, tuple[int, int]]] = []
     sheet_entry_points: list[tuple[SheetEntryRec, tuple[int, int]]] = []
     extra_points: dict[tuple[int, int], str] = {}
+    bus_label_points: list[tuple[NetLabelRec, tuple[int, int]]] = []
+    bus_entry_points: list[tuple[tuple[int, int], tuple[int, int]]] = []
 
     # Net labels
     label_groups: dict[str, list[tuple[int, int]]] = {}
@@ -303,6 +349,12 @@ def resolve_local_net_groups(
         if not label.text:
             continue
         lp = label.location
+        bus_segment_start = _segment_start_touching(lp, sheet.bus_index)
+        if bus_segment_start is not None and parse_bus_notation(label.text) is not None:
+            bus_uf.union(lp, bus_segment_start)
+            all_bus_points.add(lp)
+            bus_label_points.append((label, lp))
+            continue
         all_named_points.add(lp)
         _connect_point_to_wire_group(lp, sheet, uf)
         label_points.append((label, lp))
@@ -357,6 +409,26 @@ def resolve_local_net_groups(
             _connect_point_to_wire_group(ep, sheet, uf)
             extra_points[ep] = ename
 
+    # Generic bus entries connect one endpoint to a bus backbone and the
+    # other endpoint to a scalar member wire. Keep that as bus membership
+    # evidence; do not union the bus backbone into scalar connectivity.
+    for entry in sheet.by_type(BusEntryRec):
+        endpoints = (entry.location, entry.corner)
+        first_bus_start = _segment_start_touching(endpoints[0], sheet.bus_index)
+        second_bus_start = _segment_start_touching(endpoints[1], sheet.bus_index)
+        if first_bus_start is not None and second_bus_start is None:
+            bus_point, member_point = endpoints[0], endpoints[1]
+            bus_uf.union(bus_point, first_bus_start)
+        elif second_bus_start is not None and first_bus_start is None:
+            bus_point, member_point = endpoints[1], endpoints[0]
+            bus_uf.union(bus_point, second_bus_start)
+        else:
+            continue
+        _connect_point_to_wire_group(member_point, sheet, uf)
+        all_bus_points.add(bus_point)
+        all_wire_points.add(member_point)
+        bus_entry_points.append((bus_point, member_point))
+
     # --- Step 5: Build group records after all unions ---
     coord_to_root = {pt: uf.find(pt) for pt in all_wire_points | all_named_points}
     groups_by_root: dict[tuple[int, int], LocalNetRecordGroup] = {}
@@ -404,10 +476,42 @@ def resolve_local_net_groups(
     for ordinal, group in enumerate(groups):
         group.generated_name = _first_generated_name(group, sheet.name, ordinal)
 
+    bus_entries_by_root: dict[tuple[int, int], list[tuple[tuple[int, int], tuple[int, int]]]] = {}
+    for bus_point, member_point in bus_entry_points:
+        bus_root = bus_uf.find(bus_point)
+        bus_entries_by_root.setdefault(bus_root, []).append((bus_point, member_point))
+
+    generic_bus_groups: list[GenericBusRecordGroup] = []
+    for label, point in bus_label_points:
+        member_names = parse_bus_notation(label.text)
+        if not member_names:
+            continue
+        bus_root = bus_uf.find(point)
+        entries = sorted(
+            bus_entries_by_root.get(bus_root, []),
+            key=lambda item: (item[0][1], item[0][0], item[1][1], item[1][0]),
+        )
+        member_roots_by_name: dict[str, tuple[int, int]] = {}
+        for member_name, (_bus_point, member_point) in zip(member_names, entries, strict=False):
+            member_root = coord_to_root.get(member_point)
+            if member_root is None:
+                continue
+            _ = member_roots_by_name.setdefault(member_name, member_root)
+        generic_bus_groups.append(
+            GenericBusRecordGroup(
+                root=bus_root,
+                name=label.text,
+                source_index=label.index,
+                location=label.location,
+                member_roots_by_name=member_roots_by_name,
+            )
+        )
+
     return LocalNetResolution(
         groups=groups,
         coord_to_root=coord_to_root,
         no_connect_wire_coords=nc_wire_coords,
+        generic_bus_groups=generic_bus_groups,
     )
 
 
