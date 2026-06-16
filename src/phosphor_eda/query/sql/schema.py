@@ -190,6 +190,16 @@ INDEX_DDL: dict[str, str] = {
         CREATE INDEX idx_net_occurrence_source_names_source_name
         ON net_occurrence_source_names(source_name)
     """,
+    "idx_schematic_directives_net_id": """
+        CREATE INDEX idx_schematic_directives_net_id ON schematic_directives(net_id)
+    """,
+    "idx_schematic_directives_occurrence_id": """
+        CREATE INDEX idx_schematic_directives_occurrence_id
+        ON schematic_directives(occurrence_id)
+    """,
+    "idx_schematic_directives_kind": """
+        CREATE INDEX idx_schematic_directives_kind ON schematic_directives(kind)
+    """,
     "idx_buses_name": """
         CREATE INDEX idx_buses_name ON buses(name)
     """,

@@ -85,7 +85,18 @@ class TitleBlock:
     title: str = ""
     revision: str = ""
     date: str = ""
-    company: str = ""
+    organization: str = ""
+    org_address: str = ""
+    document_number: str = ""
+    sheet_number: str = ""
+    sheet_total: str = ""
+    author: str = ""
+    drawn_by: str = ""
+    checked_by: str = ""
+    approved_by: str = ""
+    created_date: str = ""
+    modified_date: str = ""
+    cage_code: str = ""
     comments: dict[str, str] = field(default_factory=dict)
     metadata: dict[str, str] = field(default_factory=dict)
 
@@ -201,6 +212,29 @@ class NetName:
     source: str = ""
 
 
+class SchematicDirectiveKind(StrEnum):
+    """Schematic-side assignment directives anchored to source net evidence."""
+
+    NET_CLASS = "net_class"
+    COMPONENT_CLASS = "component_class"
+    DIFF_PAIR = "diff_pair"
+    DIFF_PAIR_CLASS = "diff_pair_class"
+
+
+@dataclass(frozen=True)
+class SchematicDirective:
+    """A source-anchored net/class assignment from schematic markup."""
+
+    kind: SchematicDirectiveKind
+    value: str
+    source: str
+    source_id: str = ""
+    native_name: str = ""
+    x: float | None = None
+    y: float | None = None
+    metadata: dict[str, str] = field(default_factory=dict)
+
+
 @dataclass(repr=False)
 class Net:
     """A resolved electrical connection between pins.
@@ -217,6 +251,7 @@ class Net:
     occurrences: list[NetOccurrence] = field(default_factory=list)
     names: list[NetName] = field(default_factory=list)
     aliases: set[str] = field(default_factory=set)
+    directives: list[SchematicDirective] = field(default_factory=list)
     metadata: dict[str, str] = field(default_factory=dict)
 
     @override
@@ -234,6 +269,7 @@ class NetOccurrence:
     scope_id: ScopeId
     source_local_net_id: str
     source_names: set[str] = field(default_factory=set)
+    directives: list[SchematicDirective] = field(default_factory=list)
     metadata: dict[str, str] = field(default_factory=dict)
 
 

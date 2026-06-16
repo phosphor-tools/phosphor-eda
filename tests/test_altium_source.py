@@ -1,18 +1,29 @@
 """Tests for Altium-native source connectivity extraction."""
 
-from pathlib import Path
+from __future__ import annotations
 
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from phosphor_eda.domain.schematic import SchematicDirectiveKind
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode
 from phosphor_eda.formats.altium.records import (
     FileNameRec,
+    ParameterRec,
+    ParameterSetRec,
     RecordType,
     SheetNameRec,
     SheetSymbolRec,
+    WireRec,
 )
 from phosphor_eda.formats.altium.sheet_builder import SheetRecords
 from phosphor_eda.formats.altium.source import load_project_source_sheets
 from phosphor_eda.formats.altium.to_schematic import altium_to_source
+from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.common.spatial import WireIndex
+
+if TYPE_CHECKING:
+    import pytest
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 QFSAE_PRJPCB = FIXTURES / "altium/qfsae-debugger/Debugger.PrjPcb"
@@ -52,6 +63,68 @@ def _records_sheet(name: str, child_files: list[str]) -> SheetRecords:
             ]
         )
     return SheetRecords(records=records, children={}, wire_index=WireIndex([]), name=name)
+
+
+def _parameter_set_sheet(location: tuple[int, int] = (50, 0)) -> SheetRecords:
+    wire = WireRec(
+        record_type=RecordType.WIRE,
+        index=1,
+        owner_index=-1,
+        points=[(0, 0), (100, 0)],
+    )
+    parameter_set = ParameterSetRec(
+        record_type=RecordType.PARAMETER_SET,
+        index=2,
+        owner_index=-1,
+        location=location,
+        name="DIFFPAIR",
+    )
+    differential_pair = ParameterRec(
+        record_type=RecordType.PARAMETER,
+        index=3,
+        owner_index=parameter_set.owner_key,
+        name="DifferentialPair",
+        text="True",
+    )
+    differential_pair_class = ParameterRec(
+        record_type=RecordType.PARAMETER,
+        index=4,
+        owner_index=parameter_set.owner_key,
+        name="DifferentialPairClassName",
+        text="LVDS",
+    )
+    records = [wire, parameter_set, differential_pair, differential_pair_class]
+    return SheetRecords(
+        records=records,
+        children={parameter_set.owner_key: [differential_pair, differential_pair_class]},
+        wire_index=WireIndex([wire]),
+        name="Directives",
+    )
+
+
+def _sheet_level_parameter(index: int, name: str, text: str) -> ParameterRec:
+    return ParameterRec(
+        record_type=RecordType.PARAMETER,
+        index=index,
+        owner_index=-1,
+        name=name,
+        text=text,
+    )
+
+
+def _load_records_sheet(
+    monkeypatch: pytest.MonkeyPatch,
+    records: SheetRecords,
+    source_file: str,
+    ctx: ParseContext | None = None,
+):
+    monkeypatch.setattr(
+        "phosphor_eda.formats.altium.source.load_sheet",
+        lambda _path, ctx: records,
+    )
+    _project, sheets = load_project_source_sheets(Path(source_file), ctx=ctx)
+    [sheet] = sheets.values()
+    return sheet
 
 
 def test_altium_to_source_preserves_project_options():
@@ -124,6 +197,88 @@ def test_source_local_net_ids_are_not_final_net_names():
         assert local_net.id not in source_names
         assert "GND" not in local_net.id.upper()
         assert "VCC3V3" not in local_net.id.upper()
+
+
+def test_altium_sheet_title_block_maps_typed_fields_and_preserves_raw_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    records = [
+        _sheet_level_parameter(1, "Title", "*"),
+        _sheet_level_parameter(2, "CompanyName", "Acme Hardware"),
+        _sheet_level_parameter(3, "Address2", "Floor 2"),
+        _sheet_level_parameter(4, "Address1", "12 Main St"),
+        _sheet_level_parameter(5, "SheetNumber", "3"),
+        _sheet_level_parameter(6, "SheetTotal", "9"),
+        _sheet_level_parameter(7, "DrawnBy", "Drafter"),
+        _sheet_level_parameter(8, "CheckedBy", "Checker"),
+        _sheet_level_parameter(9, "ApprovedBy", "Approver"),
+        _sheet_level_parameter(10, "ModifiedDate", "2026-06-16"),
+        _sheet_level_parameter(11, "Author", "~"),
+    ]
+    sheet = _load_records_sheet(
+        monkeypatch,
+        SheetRecords(records=records, children={}, wire_index=WireIndex([]), name="Sheet"),
+        "Sheet.SchDoc",
+    )
+
+    block = sheet.title_block
+
+    assert block is not None
+    assert block.title == ""
+    assert block.organization == "Acme Hardware"
+    assert block.org_address == "12 Main St\nFloor 2"
+    assert block.sheet_number == "3"
+    assert block.sheet_total == "9"
+    assert block.drawn_by == "Drafter"
+    assert block.checked_by == "Checker"
+    assert block.approved_by == "Approver"
+    assert block.modified_date == "2026-06-16"
+    assert block.author == ""
+    assert block.metadata["Title"] == "*"
+    assert block.metadata["Author"] == "~"
+
+
+def test_parameter_set_diff_pair_directives_attach_to_touched_local_net(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    ctx = ParseContext()
+    sheet = _load_records_sheet(
+        monkeypatch,
+        _parameter_set_sheet(),
+        "Directives.SchDoc",
+        ctx,
+    )
+
+    [local_net] = sheet.local_nets
+    assert [
+        (directive.kind, directive.value, directive.native_name)
+        for directive in local_net.directives
+    ] == [
+        (SchematicDirectiveKind.DIFF_PAIR, "true", "DifferentialPair"),
+        (SchematicDirectiveKind.DIFF_PAIR_CLASS, "LVDS", "DifferentialPairClassName"),
+    ]
+    assert {directive.source_id for directive in local_net.directives} == {
+        f"{sheet.id}:parameter_set:2",
+    }
+    assert all(directive.source == "altium" for directive in local_net.directives)
+    assert local_net.directives[0].metadata["DifferentialPair"] == "True"
+    assert ctx.issues == []
+
+
+def test_unresolved_parameter_set_diff_pair_records_diagnostic_without_attaching_directive(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    ctx = ParseContext()
+    sheet = _load_records_sheet(
+        monkeypatch,
+        _parameter_set_sheet(location=(50, 50)),
+        "Directives.SchDoc",
+        ctx,
+    )
+
+    assert sheet.local_nets
+    assert all(not local_net.directives for local_net in sheet.local_nets)
+    assert [issue.category for issue in ctx.issues] == ["altium_unresolved_directive_anchor"]
 
 
 def test_multipart_component_source_identity_uses_component_not_part_record():

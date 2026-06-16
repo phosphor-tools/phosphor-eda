@@ -91,9 +91,14 @@ def _source_props(props: dict[str, str]) -> dict[str, str]:
     return dict(props)
 
 
-# Title block prefix-pair names mapped onto typed TitleBlock fields; all
-# other non-empty pairs land in TitleBlock.metadata.
-_TITLE_BLOCK_FIELD_NAMES = frozenset({"Title", "RevCode", "OrgName"})
+# Title block prefix-pair names mapped onto typed TitleBlock fields; all raw
+# non-empty pairs still land in TitleBlock.metadata.
+_TITLE_BLOCK_PLACEHOLDERS = frozenset({"", "*", "~"})
+
+
+def _title_value(value: str) -> str:
+    text = value.strip()
+    return "" if text in _TITLE_BLOCK_PLACEHOLDERS else text
 
 
 def _page_title_block(raw_page: RawPage) -> TitleBlock | None:
@@ -104,14 +109,37 @@ def _page_title_block(raw_page: RawPage) -> TitleBlock | None:
 
 
 def _title_block(raw_block: RawTitleBlock) -> TitleBlock:
-    block = TitleBlock(
-        title=raw_block.props.get("Title", ""),
-        revision=raw_block.props.get("RevCode", ""),
-        company=raw_block.props.get("OrgName", ""),
-    )
+    block = TitleBlock()
+    address_lines: dict[int, str] = {}
     for name, value in raw_block.props.items():
-        if value and name not in _TITLE_BLOCK_FIELD_NAMES:
+        if value:
             block.metadata[name] = value
+        typed_value = _title_value(value)
+        if not typed_value:
+            continue
+        name_key = name.casefold()
+        if name_key == "title":
+            block.title = block.title or typed_value
+        elif name_key == "revcode":
+            block.revision = block.revision or typed_value
+        elif name_key == "date":
+            block.date = block.date or typed_value
+        elif name_key == "orgname":
+            block.organization = block.organization or typed_value
+        elif name_key == "author":
+            block.author = block.author or typed_value
+        elif name_key == "doc":
+            block.document_number = block.document_number or typed_value
+        elif name_key == "page number":
+            block.sheet_number = block.sheet_number or typed_value
+        elif name_key == "page count":
+            block.sheet_total = block.sheet_total or typed_value
+        elif name_key == "cage code":
+            block.cage_code = block.cage_code or typed_value
+        elif name_key.startswith("orgaddr") and name_key[7:].isdigit():
+            address_lines.setdefault(int(name_key[7:]), typed_value)
+    if address_lines:
+        block.org_address = "\n".join(value for _number, value in sorted(address_lines.items()))
     if raw_block.name:
         block.metadata["dsn_title_block_symbol"] = raw_block.name
     return block

@@ -119,5 +119,5 @@ class TestTitleBlock:
         assert root.title_block.title == "Orange Crab"
         assert root.title_block.revision == "r0.2.1"
         assert root.title_block.date == "2020-11-01"
-        assert root.title_block.company == "Good Stuff Department"
+        assert root.title_block.organization == "Good Stuff Department"
         assert root.title_block.comments["4"] == "Designed by: Greg Davill"

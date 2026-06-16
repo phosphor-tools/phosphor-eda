@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from phosphor_eda.domain.schematic import ScopeId, TitleBlock
+    from phosphor_eda.domain.schematic import SchematicDirective, ScopeId, TitleBlock
     from phosphor_eda.formats.common.resolved_graph import ResolvedComponentInfo
 
 type KiCadPoint = tuple[float, float]
@@ -115,6 +115,19 @@ class KiCadBusAlias:
 
 
 @dataclass(slots=True)
+class KiCadNetclassFlag:
+    id: str
+    scope_id: ScopeId
+    source_index: int
+    local_net_id: str
+    location: KiCadPoint
+    rotation: float
+    net_class: str = ""
+    component_class: str = ""
+    metadata: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class KiCadPinOccurrence:
     id: str
     scope_id: ScopeId
@@ -155,6 +168,8 @@ class KiCadLocalNet:
     power_symbols: list[KiCadPowerSymbol]
     sheet_pins: list[KiCadSheetPin]
     generated_name: str
+    netclass_flags: list[KiCadNetclassFlag] = field(default_factory=list)
+    directives: list[SchematicDirective] = field(default_factory=list)
 
 
 @dataclass(slots=True)
