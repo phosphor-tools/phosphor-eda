@@ -105,6 +105,33 @@ class PageNetEntry:
 
 
 @dataclass
+class DsnNetBundleMember:
+    """A named member from OrCAD Capture's NetBundleMapData stream."""
+
+    name: str = ""
+    wire_type: int = 0
+
+
+@dataclass
+class DsnNetBundleMap:
+    """A net group from OrCAD Capture's NetBundleMapData stream."""
+
+    name: str = ""
+    members: list[DsnNetBundleMember] = field(default_factory=list)
+
+
+@dataclass
+class DsnBusEntry:
+    """A page-level OrCAD bus-entry graphic."""
+
+    color: int = 0
+    start_x: int = 0
+    start_y: int = 0
+    end_x: int = 0
+    end_y: int = 0
+
+
+@dataclass
 class SchematicPage:
     """A single schematic page within a design."""
 
@@ -116,6 +143,7 @@ class SchematicPage:
     ports: list[GraphicInst] = field(default_factory=list)
     globals: list[GraphicInst] = field(default_factory=list)
     off_page_connectors: list[GraphicInst] = field(default_factory=list)
+    bus_entries: list[DsnBusEntry] = field(default_factory=list)
     # Internal: coordinate -> set of net_ids, used by build_netlist
     wire_net_map: dict[tuple[int, int], set[int]] = field(default_factory=dict)
 
@@ -135,6 +163,9 @@ class ParsedDesign:
     # Cache data: symbol_name -> [pin_name_1, pin_name_2, ...]
     # Pin order matches T0x10 pin_number (1-indexed: pin_number=1 -> index 0)
     symbol_pin_names: dict[str, list[str]] = field(default_factory=dict)
+
+    # OrCAD Capture NetBundleMapData stream: design-level net groups.
+    net_bundle_maps: list[DsnNetBundleMap] = field(default_factory=list)
 
 
 @dataclass
