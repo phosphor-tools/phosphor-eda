@@ -11,6 +11,7 @@ from phosphor_eda.domain.schematic import (
     BusKind,
     ComponentOccurrence,
     NetOccurrence,
+    PartNumber,
     PinOccurrence,
     Schematic,
     SchematicDirective,
@@ -86,6 +87,7 @@ class Component(DomainComponent):
         pins: list[DomainPin] | None = None,
         pages: list[DomainPage] | None = None,
         occurrences: list[ComponentOccurrence] | None = None,
+        part_numbers: list[PartNumber] | None = None,
         metadata: dict[str, str] | None = None,
     ) -> None:
         super().__init__(
@@ -96,6 +98,7 @@ class Component(DomainComponent):
             pins=pins or [],
             pages=pages or [],
             occurrences=occurrences or [],
+            part_numbers=part_numbers or [],
             metadata=metadata or {},
         )
 
@@ -158,6 +161,7 @@ def _simple_design():
         part="AD7768-1",
         description="IC - ADC - Single",
         pages=[page],
+        part_numbers=[PartNumber(manufacturer="Analog Devices", number="AD7768-1BCPZ")],
         metadata={"mfr": "Analog Devices", "mfr_pn": "AD7768-1BCPZ"},
     )
     comp_r1 = Component(
@@ -368,10 +372,36 @@ def test_serialize_contains_summary():
 
 def test_serialize_contains_component_section():
     text = serialize_design(_simple_design())
-    assert "COMPONENT: U7 | AD7768-1 | IC - ADC - Single | Pages: ADC" in text
+    assert (
+        "COMPONENT: U7 | MPN: Analog Devices AD7768-1BCPZ | "
+        "SYMBOL: AD7768-1 | Desc: IC - ADC - Single | Pages: ADC"
+    ) in text
+    assert "COMPONENT: R1 | SYMBOL: 10k | Desc: Resistor | Pages: ADC" in text
     assert "mfr: Analog Devices" in text
     assert "Pin 10" in text
     assert "-> ADC_SCLK" in text
+
+
+def test_component_header_prefers_typed_part_numbers_over_metadata():
+    page = Page(name="P")
+    comp = Component(
+        reference="U1",
+        part="LIB_SYMBOL",
+        description="Controller",
+        pages=[page],
+        part_numbers=[PartNumber(manufacturer="TI", number="TM4C123GH6PMI")],
+        metadata={"mfr": "Old Vendor", "mfr_pn": "STALE-LIB-PART"},
+    )
+    page.components = [comp]
+    design = Schematic(name="T", pages=[page], components=[comp])
+
+    header = next(
+        line for line in serialize_design(design).splitlines() if line.startswith("COMPONENT:")
+    )
+
+    assert header == (
+        "COMPONENT: U1 | MPN: TI TM4C123GH6PMI | SYMBOL: LIB_SYMBOL | Desc: Controller | Pages: P"
+    )
 
 
 def test_serialize_no_connect_vs_unconnected():
@@ -441,7 +471,7 @@ def test_serialize_normal_output_hides_ids_and_scope_paths():
 
 def test_serialize_multi_page_logical_component_is_single_block():
     text = serialize_design(_multi_page_component_design())
-    assert text.count("COMPONENT: U7 | AD7768-1 | ADC | Pages: A, B") == 1
+    assert text.count("COMPONENT: U7 | SYMBOL: AD7768-1 | Desc: ADC | Pages: A, B") == 1
 
 
 def test_net_detail_qualifies_duplicate_component_references_only_when_ambiguous():
@@ -866,7 +896,10 @@ def test_single_instance_design_shows_no_physical_designator_suffix():
     for line in component_lines:
         assert "[" not in line
     detail = format_component_detail(design, "U7")
-    assert detail.splitlines()[0] == "COMPONENT: U7 | AD7768-1 | IC - ADC - Single | Pages: ADC"
+    assert detail.splitlines()[0] == (
+        "COMPONENT: U7 | MPN: Analog Devices AD7768-1BCPZ | "
+        "SYMBOL: AD7768-1 | Desc: IC - ADC - Single | Pages: ADC"
+    )
 
 
 def test_format_component_detail():
