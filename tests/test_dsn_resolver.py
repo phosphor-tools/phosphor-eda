@@ -5,6 +5,8 @@ import pytest
 from phosphor_eda.domain.schematic import BusKind, Net, ScopeId
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.common.raw_models import (
+    DsnNetBundleMap,
+    DsnNetBundleMember,
     GraphicInst,
     PageNetEntry,
     ParsedDesign,
@@ -15,7 +17,9 @@ from phosphor_eda.formats.common.raw_models import (
 from phosphor_eda.formats.common.resolved_graph import ResolutionInputError
 from phosphor_eda.formats.dsn.resolver import resolve_dsn_source
 from phosphor_eda.formats.dsn.source import (
+    DsnBundleMember,
     DsnGlobal,
+    DsnNetBundle,
     DsnOffPageConnector,
     DsnPageNet,
     DsnPageSource,
@@ -156,7 +160,7 @@ def _wire_alias(
 
 
 def _source(pages: list[DsnPageSource]) -> DsnSourceDesign:
-    return DsnSourceDesign(name="Board", pages=pages, hierarchy_mappings=[])
+    return DsnSourceDesign(name="Board", pages=pages, hierarchy_mappings=[], net_bundles=[])
 
 
 def _net_for_reference(nets: list[Net], reference: str) -> Net:
@@ -196,6 +200,104 @@ def test_bus_wire_alias_promotes_to_bus_without_naming_scalar_net() -> None:
     assert bus.kind is BusKind.VECTOR
     assert {net.name for net in bus.members} == {"DATA0", "DATA1"}
     assert all(net.name != "DATA[0..1]" for net in design.nets)
+
+
+def test_net_bundle_map_promotes_group_bus_membership() -> None:
+    scope = _scope("Main")
+    sda = _net("Main", scope, 1, "SDA")
+    scl = _net("Main", scope, 2, "SCL")
+
+    source = DsnSourceDesign(
+        name="Board",
+        pages=[
+            _page(
+                "Main",
+                scope,
+                [sda, scl],
+                pins=[_pin("Main", scope, 1, "U1"), _pin("Main", scope, 2, "U2")],
+            )
+        ],
+        hierarchy_mappings=[],
+        net_bundles=[
+            DsnNetBundle(
+                id="net_bundle_map:0",
+                name="I2C",
+                name_key=dsn_name_key("I2C"),
+                members=(
+                    DsnBundleMember(name="SDA", name_key=dsn_name_key("SDA"), wire_type=1),
+                    DsnBundleMember(name="SCL", name_key=dsn_name_key("SCL"), wire_type=1),
+                ),
+                source_kind="net_bundle_map",
+            )
+        ],
+    )
+
+    design = resolve_dsn_source(source)
+
+    bus = next(bus for bus in design.buses if bus.name == "I2C")
+    assert bus.kind is BusKind.GROUP
+    assert [net.name for net in bus.members] == ["SDA", "SCL"]
+    assert bus.metadata["source_format"] == "dsn"
+    assert bus.metadata["source_kind"] == "net_bundle_map"
+
+
+def test_net_bundle_map_members_resolve_against_dsn_name_keys() -> None:
+    scope = _scope("Main")
+
+    source = DsnSourceDesign(
+        name="Board",
+        pages=[
+            _page(
+                "Main",
+                scope,
+                [_net("Main", scope, 1, "SDA"), _net("Main", scope, 2, "SCL")],
+                pins=[_pin("Main", scope, 1, "U1"), _pin("Main", scope, 2, "U2")],
+            )
+        ],
+        hierarchy_mappings=[],
+        net_bundles=[
+            DsnNetBundle(
+                id="net_bundle_map:0",
+                name="I2C",
+                name_key=dsn_name_key("I2C"),
+                members=(
+                    DsnBundleMember(name="sda", name_key=dsn_name_key("sda"), wire_type=1),
+                    DsnBundleMember(name="scl", name_key=dsn_name_key("scl"), wire_type=1),
+                ),
+            )
+        ],
+    )
+
+    design = resolve_dsn_source(source)
+
+    bus = next(bus for bus in design.buses if bus.name == "I2C")
+    assert [net.name for net in bus.members] == ["SDA", "SCL"]
+
+
+def test_dsn_to_design_carries_raw_net_bundle_maps_to_group_bus() -> None:
+    raw = ParsedDesign(
+        pages=[
+            SchematicPage(
+                name="Main",
+                nets=[PageNetEntry(name="SIG_A", net_id=1), PageNetEntry(name="SIG_B", net_id=2)],
+            )
+        ],
+        net_bundle_maps=[
+            DsnNetBundleMap(
+                name="PAIR",
+                members=[
+                    DsnNetBundleMember(name="SIG_A", wire_type=1),
+                    DsnNetBundleMember(name="SIG_B", wire_type=1),
+                ],
+            )
+        ],
+    )
+
+    design = dsn_to_design(raw, name="Board")
+
+    bus = next(bus for bus in design.buses if bus.name == "PAIR")
+    assert bus.kind is BusKind.GROUP
+    assert {net.name for net in bus.members} == {"SIG_A", "SIG_B"}
 
 
 def test_wire_alias_name_evidence_is_stripped() -> None:

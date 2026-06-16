@@ -173,6 +173,30 @@ def _altium_bus_definitions(source: AltiumSourceDesign) -> list[BusDefinition]:
                         },
                     )
                 )
+        for bus_line in sheet.generic_bus_lines:
+            name = _clean_name(bus_line.name)
+            kind = bus_kind_for_name(name)
+            if kind is None or (kind, name) in seen:
+                continue
+            seen.add((kind, name))
+            member_names = tuple(expand_bus_members(name) or ())
+            if not member_names:
+                continue
+            bus_index += 1
+            definitions.append(
+                BusDefinition(
+                    id=f"altium:bus:{kind.value}:{bus_index:04d}",
+                    name=name,
+                    kind=kind,
+                    member_names=member_names,
+                    metadata={
+                        "source_format": "altium",
+                        "source_id": bus_line.id,
+                        "source_kind": bus_line.kind,
+                        "source_sheet": sheet.name,
+                    },
+                )
+            )
     return definitions
 
 
@@ -195,7 +219,7 @@ def _altium_harness_buses(source: AltiumSourceDesign, design: Schematic) -> list
                     continue
                 seen_net_ids.add(net.id)
                 members_by_bus.setdefault(bus_name, []).append(net)
-                metadata_by_bus.setdefault(
+                _ = metadata_by_bus.setdefault(
                     bus_name,
                     {
                         "source_format": "altium",
@@ -1062,6 +1086,18 @@ def _collect_name_evidence(refs: Iterable[_LocalNetRef]) -> _NameEvidence:
                     source=member.id,
                 )
             )
+        for member_name in ref.local_net.generic_bus_members:
+            name = _mergeable_name(member_name)
+            if name is None:
+                continue
+            harness_members.append(
+                _NameCandidate(
+                    name=name,
+                    kind=NetNameKind.TOOL_AUTO,
+                    scope=scope,
+                    source="altium:generic_bus_member",
+                )
+            )
 
     return _NameEvidence(
         labels=labels,
@@ -1093,6 +1129,7 @@ def _all_source_names(refs: Iterable[_LocalNetRef]) -> set[str]:
         names.update(_port_names(ref.local_net))
         names.update(_sheet_entry_names(ref.local_net))
         names.update(_harness_member_names(ref.local_net))
+        names.update(_generic_bus_member_names(ref.local_net))
     return names
 
 
@@ -1138,6 +1175,10 @@ def _harness_member_names(local_net: AltiumLocalNet) -> list[str]:
         port_name = _clean_name(member.port_name)
         names.append(f"{port_name}.{name}" if port_name else name)
     return _dedupe(names)
+
+
+def _generic_bus_member_names(local_net: AltiumLocalNet) -> list[str]:
+    return _dedupe(_mergeable_name(name) or "" for name in local_net.generic_bus_members)
 
 
 def _mergeable_name(name: str) -> str | None:

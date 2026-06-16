@@ -28,6 +28,34 @@ class WireGraph:
             merge_all=merge_all,
         )
 
+    def touches_wire(self, point: KiCadPoint) -> bool:
+        return point_touches_segments(point, self.segments)
+
+    def find(self, point: KiCadPoint) -> KiCadPoint:
+        return self.uf.find(point)
+
+    def root_to_points(self) -> dict[KiCadPoint, set[KiCadPoint]]:
+        return group_wire_points(self.uf, self.points)
+
+
+@dataclass(slots=True)
+class BusGraph:
+    uf: UnionFind[KiCadPoint]
+    segments: list[tuple[KiCadPoint, KiCadPoint]]
+    points: set[KiCadPoint]
+
+    def connect_point(self, point: KiCadPoint, *, merge_all: bool = False) -> None:
+        connect_point(
+            self.uf,
+            point,
+            self.segments,
+            self.points,
+            merge_all=merge_all,
+        )
+
+    def touches_bus(self, point: KiCadPoint) -> bool:
+        return point_touches_segments(point, self.segments)
+
     def find(self, point: KiCadPoint) -> KiCadPoint:
         return self.uf.find(point)
 
@@ -59,8 +87,46 @@ def build_wire_graph(data: SExpNode) -> WireGraph:
     return graph
 
 
+def build_bus_graph(data: SExpNode) -> BusGraph:
+    graph = BusGraph(uf=UnionFind(), segments=[], points=set())
+
+    for bus_node in sexp.find_all(data[1:], "bus"):
+        pts_node = sexp.find(bus_node[1:], "pts")
+        if pts_node is None:
+            continue
+        points: list[KiCadPoint] = []
+        for xy in sexp.find_all(pts_node[1:], "xy"):
+            points.append((round(sexp.num(xy, 1), 4), round(sexp.num(xy, 2), 4)))
+        for index in range(len(points) - 1):
+            graph.uf.union(points[index], points[index + 1])
+            graph.segments.append((points[index], points[index + 1]))
+            graph.points.add(points[index])
+            graph.points.add(points[index + 1])
+
+    for junc in sexp.find_all(data[1:], "junction"):
+        at_node = sexp.find(junc[1:], "at")
+        if at_node is not None:
+            graph.connect_point(point_from_at(at_node), merge_all=True)
+
+    return graph
+
+
 def point_from_at(at_node: SExpNode) -> KiCadPoint:
     return round(sexp.num(at_node, 1), 4), round(sexp.num(at_node, 2), 4)
+
+
+def points_from_pts_node(pts_node: SExpNode) -> list[KiCadPoint]:
+    return [
+        (round(sexp.num(xy, 1), 4), round(sexp.num(xy, 2), 4))
+        for xy in sexp.find_all(pts_node[1:], "xy")
+    ]
+
+
+def point_touches_segments(
+    point: KiCadPoint,
+    segments: list[tuple[KiCadPoint, KiCadPoint]],
+) -> bool:
+    return any(point_on_segment(point, start, end, tol=0.01) for start, end in segments)
 
 
 def connect_point(

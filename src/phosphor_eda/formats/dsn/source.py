@@ -48,6 +48,33 @@ class DsnWire:
 
 
 @dataclass(slots=True)
+class DsnBusEntry:
+    id: str
+    scope_id: ScopeId
+    start: DsnPoint
+    end: DsnPoint
+    color: int = 0
+    kind: str = field(default="bus_entry", init=False)
+
+
+@dataclass(frozen=True, slots=True)
+class DsnBundleMember:
+    name: str
+    name_key: str
+    wire_type: int = 0
+
+
+@dataclass(slots=True)
+class DsnNetBundle:
+    id: str
+    name: str
+    name_key: str
+    members: tuple[DsnBundleMember, ...]
+    source_kind: str = "net_bundle_map"
+    kind: str = field(default="net_bundle", init=False)
+
+
+@dataclass(slots=True)
 class DsnPinOccurrence:
     id: str
     scope_id: ScopeId
@@ -148,6 +175,7 @@ class DsnPageSource:
     ports: list[DsnPort]
     globals: list[DsnGlobal]
     off_page_connectors: list[DsnOffPageConnector]
+    bus_entries: list[DsnBusEntry] = field(default_factory=list)
     title_block: TitleBlock | None = None
 
 
@@ -164,3 +192,4 @@ class DsnSourceDesign:
     name: str
     pages: list[DsnPageSource]
     hierarchy_mappings: list[DsnHierarchyMapping]
+    net_bundles: list[DsnNetBundle] = field(default_factory=list)

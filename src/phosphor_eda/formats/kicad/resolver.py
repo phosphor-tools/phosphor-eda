@@ -34,6 +34,8 @@ if TYPE_CHECKING:
     from phosphor_eda.domain.schematic import Schematic, ScopeId
     from phosphor_eda.formats.common.diagnostics import ParseContext
     from phosphor_eda.formats.kicad.source import (
+        KiCadBusEntry,
+        KiCadBusLabel,
         KiCadLocalNet,
         KiCadPinOccurrence,
         KiCadPowerSymbol,
@@ -85,6 +87,7 @@ def resolve_kicad_source(source: KiCadSourceDesign, ctx: ParseContext | None = N
         component_ids_by_source_id,
     )
     local_nets_by_id = {local_net.id: local_net for local_net in source.local_nets}
+    bus_labels_by_id = {label.id: label for label in source.bus_labels}
     _validate_source_refs(source, local_nets_by_id)
     net_union = NetUnion(local_net.id for local_net in source.local_nets)
 
@@ -92,6 +95,7 @@ def resolve_kicad_source(source: KiCadSourceDesign, ctx: ParseContext | None = N
     _merge_same_scope_names(net_union, source.local_nets)
     _merge_global_labels(net_union, source.local_nets)
     _merge_power_symbols(net_union, source.local_nets)
+    _merge_bus_entry_members(source, net_union, sheet_names_by_scope, bus_labels_by_id)
     _merge_hierarchical_sheet_pins(source, net_union)
 
     metadata = {"kicad_root_source_file": source.root_source_file}
@@ -112,6 +116,7 @@ def resolve_kicad_source(source: KiCadSourceDesign, ctx: ParseContext | None = N
             local_nets_by_id,
             pins_by_local_net_id,
             sheet_names_by_scope,
+            bus_labels_by_id,
             source.schematic_version,
             net_index,
             root_id,
@@ -231,6 +236,22 @@ def _merge_power_symbols(net_union: NetUnion, local_nets: Iterable[KiCadLocalNet
         _merge_ids(net_union, net_ids)
 
 
+def _merge_bus_entry_members(
+    source: KiCadSourceDesign,
+    net_union: NetUnion,
+    sheet_names_by_scope: dict[ScopeId, str],
+    bus_labels_by_id: dict[str, KiCadBusLabel],
+) -> None:
+    ids_by_member: dict[str, list[str]] = {}
+    for entry in source.bus_entries:
+        member_name = _bus_entry_member_net_name(entry, bus_labels_by_id, sheet_names_by_scope)
+        if member_name is not None:
+            ids_by_member.setdefault(member_name, []).append(entry.local_net_id)
+
+    for net_ids in ids_by_member.values():
+        _merge_ids(net_union, net_ids)
+
+
 def _is_local_power_symbol(symbol: KiCadPowerSymbol) -> bool:
     return symbol.power_kind == "local"
 
@@ -268,6 +289,7 @@ def _validate_source_refs(
 ) -> None:
     scopes = {instance.scope_id for instance in source.sheet_instances}
     attached_sheet_pin_local_net_ids: dict[str, str] = {}
+    attached_bus_entry_local_net_ids: dict[str, str] = {}
     for local_net in source.local_nets:
         if local_net.scope_id not in scopes:
             msg = f"local net {local_net.id!r} references unknown scope {local_net.scope_id}"
@@ -329,6 +351,17 @@ def _validate_source_refs(
                 )
                 raise ResolutionInputError(msg)
             attached_sheet_pin_local_net_ids[sheet_pin.id] = local_net.id
+        for bus_entry in local_net.bus_entries:
+            _validate_scoped_local_net_ref(
+                kind="bus entry",
+                id_=bus_entry.id,
+                scope_id=bus_entry.scope_id,
+                local_net_id=bus_entry.local_net_id,
+                containing_local_net_id=local_net.id,
+                scopes=scopes,
+                local_nets_by_id=local_nets_by_id,
+            )
+            attached_bus_entry_local_net_ids[bus_entry.id] = local_net.id
     for sheet_pin in source.sheet_pins:
         _validate_top_level_sheet_pin_ref(
             id_=sheet_pin.id,
@@ -349,6 +382,30 @@ def _validate_source_refs(
             msg = (
                 f"sheet pin {sheet_pin.id!r} references local net "
                 f"{sheet_pin.local_net_id!r} but is attached to local net "
+                f"{attached_local_net_id!r}"
+            )
+            raise ResolutionInputError(msg)
+    for bus_entry in source.bus_entries:
+        _validate_scoped_local_net_ref(
+            kind="bus entry",
+            id_=bus_entry.id,
+            scope_id=bus_entry.scope_id,
+            local_net_id=bus_entry.local_net_id,
+            containing_local_net_id=bus_entry.local_net_id,
+            scopes=scopes,
+            local_nets_by_id=local_nets_by_id,
+        )
+        attached_local_net_id = attached_bus_entry_local_net_ids.get(bus_entry.id)
+        if attached_local_net_id is None:
+            msg = (
+                f"bus entry {bus_entry.id!r} is not attached to local net "
+                f"{bus_entry.local_net_id!r}"
+            )
+            raise ResolutionInputError(msg)
+        if attached_local_net_id != bus_entry.local_net_id:
+            msg = (
+                f"bus entry {bus_entry.id!r} references local net "
+                f"{bus_entry.local_net_id!r} but is attached to local net "
                 f"{attached_local_net_id!r}"
             )
             raise ResolutionInputError(msg)
@@ -471,6 +528,7 @@ def _kicad_net_input_for_group(
     local_nets_by_id: dict[str, KiCadLocalNet],
     pins_by_local_net_id: dict[str, list[KiCadPinOccurrence]],
     sheet_names_by_scope: dict[ScopeId, str],
+    bus_labels_by_id: dict[str, KiCadBusLabel],
     schematic_version: int,
     net_index: int,
     root_id: str,
@@ -481,6 +539,7 @@ def _kicad_net_input_for_group(
         kicad_local_nets,
         pins_by_local_net_id=pins_by_local_net_id,
         sheet_names_by_scope=sheet_names_by_scope,
+        bus_labels_by_id=bus_labels_by_id,
         schematic_version=schematic_version,
         net_index=net_index,
     )
@@ -511,6 +570,7 @@ def select_kicad_net_name(local_nets: Iterable[KiCadLocalNet]) -> str:
         tuple(local_nets),
         pins_by_local_net_id={},
         sheet_names_by_scope={},
+        bus_labels_by_id={},
         schematic_version=20231120,
         net_index=0,
     )
@@ -522,11 +582,12 @@ def _select_kicad_net_names(
     *,
     pins_by_local_net_id: dict[str, list[KiCadPinOccurrence]],
     sheet_names_by_scope: dict[ScopeId, str],
+    bus_labels_by_id: dict[str, KiCadBusLabel],
     schematic_version: int,
     net_index: int,
 ) -> _NameDecision:
     nets = tuple(local_nets)
-    label_candidates = _label_name_candidates(nets, sheet_names_by_scope)
+    label_candidates = _label_name_candidates(nets, sheet_names_by_scope, bus_labels_by_id)
     if label_candidates:
         candidates = _dedupe_candidates(label_candidates)
         canonical = min(candidates, key=_candidate_sort_key)
@@ -565,6 +626,7 @@ def _select_kicad_net_names(
 def _label_name_candidates(
     local_nets: Iterable[KiCadLocalNet],
     sheet_names_by_scope: dict[ScopeId, str],
+    bus_labels_by_id: dict[str, KiCadBusLabel],
 ) -> list[_NameCandidate]:
     candidates: list[_NameCandidate] = []
     for local_net in local_nets:
@@ -659,7 +721,39 @@ def _label_name_candidates(
                         sheet_pin_direction=sheet_pin.direction,
                     )
                 )
+        for bus_entry in local_net.bus_entries:
+            name = _bus_entry_member_net_name(bus_entry, bus_labels_by_id, sheet_names_by_scope)
+            if name is None:
+                continue
+            candidates.append(
+                _candidate(
+                    name=name,
+                    kind=NetNameKind.LABEL,
+                    scope=bus_entry.scope_id,
+                    source="bus_entry",
+                    priority=_SHEET_PIN_PRIORITY,
+                    source_index=bus_entry.source_index,
+                )
+            )
     return candidates
+
+
+def _bus_entry_member_net_name(
+    entry: KiCadBusEntry,
+    bus_labels_by_id: dict[str, KiCadBusLabel],
+    sheet_names_by_scope: dict[ScopeId, str],
+) -> str | None:
+    if not entry.member_name:
+        return None
+    label = bus_labels_by_id.get(entry.member_label_id)
+    if label is not None and label.kind == "global_label":
+        return _escape_net_name(entry.member_name)
+    return _compose_name(
+        entry.member_name,
+        entry.scope_id,
+        sheet_names_by_scope,
+        prepend_path=True,
+    )
 
 
 def _pin_name_candidates(
@@ -833,6 +927,7 @@ def _source_names(local_net: KiCadLocalNet) -> set[str]:
     names.update(_local_label_names(local_net))
     names.update(_hierarchical_label_names(local_net))
     names.update(_sheet_pin_names(local_net))
+    names.update(_bus_entry_names(local_net))
     return names
 
 
@@ -854,6 +949,10 @@ def _hierarchical_label_names(local_net: KiCadLocalNet) -> list[str]:
 
 def _sheet_pin_names(local_net: KiCadLocalNet) -> list[str]:
     return _dedupe(_mergeable_name(sheet_pin.name) or "" for sheet_pin in local_net.sheet_pins)
+
+
+def _bus_entry_names(local_net: KiCadLocalNet) -> list[str]:
+    return _dedupe(_mergeable_name(entry.member_name) or "" for entry in local_net.bus_entries)
 
 
 def _mergeable_name(name: str) -> str | None:

@@ -8,6 +8,7 @@ https://github.com/Werni2A/OpenOrCadParser
 """
 
 import struct
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -15,6 +16,9 @@ import olefile
 
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.common.raw_models import (
+    DsnBusEntry,
+    DsnNetBundleMap,
+    DsnNetBundleMember,
     GraphicInst,
     NetIdMapping,
     PageNetEntry,
@@ -28,7 +32,9 @@ from phosphor_eda.formats.common.raw_models import (
 from phosphor_eda.formats.dsn.binary_reader import (
     PAGE_SETTINGS_SIZE,
     PREAMBLE,
+    STRUCT_BUS_ENTRY,
     STRUCT_GLOBAL,
+    STRUCT_NET_GROUP,
     STRUCT_OFF_PAGE_CONNECTOR,
     STRUCT_PORT,
     STRUCT_WIRE_BUS,
@@ -102,6 +108,8 @@ def skip_self_describing(r: BinaryReader) -> int:
 # Net labels placed on a wire never exceed a handful; a larger count means
 # the wire body layout differs from the StructWire layout we know.
 _MAX_WIRE_ALIASES = 64
+_MAX_NET_BUNDLE_GROUPS = 4096
+_MAX_NET_BUNDLE_MEMBERS = 4096
 
 
 def _parse_wire_aliases(
@@ -149,6 +157,11 @@ def skip_counted_self_describing(r: BinaryReader) -> int:
     for _ in range(count):
         skip_self_describing(r)
     return count
+
+
+def _warn(ctx: ParseContext | None, category: str, message: str) -> None:
+    if ctx is not None:
+        ctx.warn(category, message)
 
 
 def _props_from_pairs(
@@ -521,7 +534,115 @@ def parse_page(
             page.off_page_connectors.append(connector)
         r.skip(5)  # trailing data
 
+    _parse_page_tail_objects(r, page, ctx)
+
     return page
+
+
+def _parse_page_tail_objects(
+    r: BinaryReader,
+    page: DsnSchematicPage,
+    ctx: ParseContext | None,
+) -> None:
+    """Parse known post-connector page structures without guessing at the rest."""
+    if r.remaining() < 2:
+        return
+    try:
+        num_erc_objects = r.read_uint16()
+        for _ in range(num_erc_objects):
+            skip_structure(r)
+    except (struct.error, IndexError, ValueError) as e:
+        _warn(ctx, "dsn_page_tail", f"Page tail ERC object parse error: {e}")
+        return
+
+    if r.remaining() < 2:
+        return
+    try:
+        num_bus_entries = r.read_uint16()
+        for _ in range(num_bus_entries):
+            type_id, end_offset, _pairs = r.read_prefix_chain()
+            r.try_read_preamble()
+            entry: DsnBusEntry | None = None
+            if type_id == STRUCT_BUS_ENTRY:
+                entry = DsnBusEntry(
+                    color=r.read_uint32(),
+                    start_x=r.read_int32(),
+                    start_y=r.read_int32(),
+                    end_x=r.read_int32(),
+                    end_y=r.read_int32(),
+                )
+                r.skip(8)
+            if end_offset > 0:
+                r.pos = end_offset
+            if entry is not None:
+                page.bus_entries.append(entry)
+    except (struct.error, IndexError, ValueError) as e:
+        _warn(ctx, "dsn_bus_entry", f"Bus entry parse error: {e}")
+
+
+def parse_net_bundle_map_data(
+    data: bytes,
+    ctx: ParseContext | None = None,
+) -> list[DsnNetBundleMap]:
+    """Parse OrCAD Capture's NetBundleMapData stream.
+
+    Layout follows OpenOrCadParser ``StreamNetBundleMapData``: two unknown
+    bytes, a group count, then named ``NetGroup`` structures with member
+    names and a scalar/bus wire-type marker.
+    """
+    r = BinaryReader(data, "NetBundleMapData")
+    try:
+        r.skip(2)
+        number_groups = r.read_uint16()
+        if number_groups > _MAX_NET_BUNDLE_GROUPS:
+            msg = f"implausible NetBundleMapData group count {number_groups}"
+            raise ValueError(msg)
+
+        groups: list[DsnNetBundleMap] = []
+        for _ in range(number_groups):
+            group = DsnNetBundleMap(name=r.read_string_len_zero())
+            type_id, end_offset, _pairs = r.read_prefix_chain()
+            if type_id != STRUCT_NET_GROUP:
+                msg = f"expected NetGroup structure 0x{STRUCT_NET_GROUP:02x}, got 0x{type_id:02x}"
+                raise ValueError(msg)
+            r.try_read_preamble()
+            unknown = r.read_bytes(6)
+            if unknown != b"\x00" * 6:
+                msg = "NetBundleMapData NetGroup header contains unknown non-zero bytes"
+                raise ValueError(msg)
+
+            number_members = r.read_uint16()
+            if number_members > _MAX_NET_BUNDLE_MEMBERS:
+                msg = f"implausible NetBundleMapData member count {number_members}"
+                raise ValueError(msg)
+            for _ in range(number_members):
+                group.members.append(
+                    DsnNetBundleMember(
+                        name=r.read_string_len_zero(),
+                        wire_type=r.read_uint16(),
+                    )
+                )
+            if end_offset > 0:
+                r.pos = end_offset
+            groups.append(group)
+
+        if not r.eof():
+            msg = f"NetBundleMapData has {r.remaining()} trailing bytes"
+            raise ValueError(msg)
+    except (struct.error, IndexError, ValueError) as e:
+        _warn(ctx, "dsn_net_bundle_map", f"NetBundleMapData parse error: {e}")
+        return []
+    return groups
+
+
+def _parse_net_bundle_map_streams(
+    streams: Iterable[bytes],
+    ctx: ParseContext | None = None,
+) -> list[DsnNetBundleMap]:
+    net_bundle_maps: list[DsnNetBundleMap] = []
+    for stream in streams:
+        net_bundle_maps.extend(parse_net_bundle_map_data(stream, ctx))
+    return net_bundle_maps
 
 
 def parse_hierarchy(data: bytes) -> list[NetIdMapping]:
@@ -764,6 +885,13 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
         if path == "Cache":
             cache_data = ole.openstream(entry).read()
             design.symbol_pin_names = parse_cache(cache_data)
+
+    # 5. Parse design-level net bundle groups when present.
+    for entry in ole.listdir():
+        path = "/".join(entry)
+        if path == "NetBundleMapData" or path.endswith("/NetBundleMapData"):
+            bundle_data = ole.openstream(entry).read()
+            design.net_bundle_maps.extend(_parse_net_bundle_map_streams([bundle_data], ctx))
 
     ole.close()
     return design

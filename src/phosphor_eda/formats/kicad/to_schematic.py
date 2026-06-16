@@ -20,6 +20,7 @@ from phosphor_eda.formats.kicad.sheet_loader import (
 )
 from phosphor_eda.formats.kicad.source import (
     KiCadBusAlias,
+    KiCadBusEntry,
     KiCadBusLabel,
     KiCadGlobalLabel,
     KiCadHierarchicalLabel,
@@ -65,6 +66,7 @@ def kicad_to_source(
     hierarchical_labels: list[KiCadHierarchicalLabel] = []
     bus_labels: list[KiCadBusLabel] = []
     bus_aliases: list[KiCadBusAlias] = []
+    bus_entries: list[KiCadBusEntry] = []
     power_symbols: list[KiCadPowerSymbol] = []
     sheet_symbols: list[KiCadSheetSymbol] = []
     sheet_pins: list[KiCadSheetPin] = []
@@ -95,6 +97,7 @@ def kicad_to_source(
         hierarchical_labels.extend(extracted.hierarchical_labels)
         bus_labels.extend(extracted.bus_labels)
         bus_aliases.extend(extracted.bus_aliases)
+        bus_entries.extend(extracted.bus_entries)
         power_symbols.extend(extracted.power_symbols)
         sheet_symbols.extend(extracted.sheet_symbols)
         sheet_pins.extend(extracted.sheet_pins)
@@ -111,6 +114,7 @@ def kicad_to_source(
         hierarchical_labels=hierarchical_labels,
         bus_labels=bus_labels,
         bus_aliases=bus_aliases,
+        bus_entries=bus_entries,
         power_symbols=power_symbols,
         sheet_symbols=sheet_symbols,
         sheet_pins=sheet_pins,

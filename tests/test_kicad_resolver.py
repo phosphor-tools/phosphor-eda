@@ -7,6 +7,7 @@ from phosphor_eda.formats.common.resolved_graph import ResolutionInputError
 from phosphor_eda.formats.kicad.resolver import resolve_kicad_source, select_kicad_net_name
 from phosphor_eda.formats.kicad.source import (
     KiCadBusAlias,
+    KiCadBusEntry,
     KiCadBusLabel,
     KiCadGlobalLabel,
     KiCadHierarchicalLabel,
@@ -163,6 +164,7 @@ def _local_net(
     hierarchical_labels: list[KiCadHierarchicalLabel] | None = None,
     power_symbols: list[KiCadPowerSymbol] | None = None,
     sheet_pins: list[KiCadSheetPin] | None = None,
+    bus_entries: list[KiCadBusEntry] | None = None,
     pins: list[KiCadPinOccurrence] | None = None,
     generated_name: str = "",
 ) -> KiCadLocalNet:
@@ -177,6 +179,7 @@ def _local_net(
         hierarchical_labels=hierarchical_labels or [],
         power_symbols=power_symbols or [],
         sheet_pins=sheet_pins or [],
+        bus_entries=bus_entries or [],
         generated_name=generated_name or f"__auto_{_scope_key(scope_id)}_{key}",
     )
 
@@ -187,6 +190,7 @@ def _source(
     *,
     bus_labels: list[KiCadBusLabel] | None = None,
     bus_aliases: list[KiCadBusAlias] | None = None,
+    bus_entries: list[KiCadBusEntry] | None = None,
     sheet_instances: list[KiCadSheetInstance] | None = None,
     sheet_symbols: list[KiCadSheetSymbol] | None = None,
     schematic_version: int = 20231120,
@@ -204,6 +208,7 @@ def _source(
         hierarchical_labels=[label for net in local_nets for label in net.hierarchical_labels],
         bus_labels=bus_labels or [],
         bus_aliases=bus_aliases or [],
+        bus_entries=bus_entries or [],
         power_symbols=[symbol for net in local_nets for symbol in net.power_symbols],
         sheet_symbols=sheet_symbols or [],
         sheet_pins=[pin for net in local_nets for pin in net.sheet_pins],
@@ -222,14 +227,42 @@ def _refs(net: Net) -> set[str]:
     return {pin.component.reference for pin in net.pins}
 
 
-def _bus_label(scope_id: ScopeId, name: str, index: int = 1) -> KiCadBusLabel:
+def _bus_label(
+    scope_id: ScopeId,
+    name: str,
+    index: int = 1,
+    *,
+    kind: str = "local_label",
+) -> KiCadBusLabel:
     return KiCadBusLabel(
         id=f"{_scope_key(scope_id)}:bus_label:{index}",
         scope_id=scope_id,
         source_index=index,
         name=name,
         location=(float(index), 5.0),
-        kind="local_label",
+        kind=kind,
+    )
+
+
+def _bus_entry(
+    scope_id: ScopeId,
+    local_net_id: str,
+    member_name: str,
+    member_label_id: str,
+    index: int = 1,
+) -> KiCadBusEntry:
+    return KiCadBusEntry(
+        id=f"{_scope_key(scope_id)}:bus_entry:{index}",
+        scope_id=scope_id,
+        source_index=index,
+        start=(float(index), 1.0),
+        end=(float(index), 2.0),
+        wire_point=(float(index), 1.0),
+        bus_point=(float(index), 2.0),
+        local_net_id=local_net_id,
+        bus_group_id=f"{_scope_key(scope_id)}:bus_group:{index}",
+        member_name=member_name,
+        member_label_id=member_label_id,
     )
 
 
@@ -279,6 +312,27 @@ def test_bus_labels_promote_to_resolved_buses() -> None:
     assert group_bus.kind is BusKind.GROUP
     assert {net.name for net in group_bus.members} == {"/SOC.CLK"}
     assert all(net.name != "DATA[0..1]" for net in design.nets)
+
+
+def test_global_bus_entry_member_uses_global_member_name() -> None:
+    scope = _scope()
+    net_id = "root:local:d0"
+    pin = _pin(scope, net_id, "U1")
+    bus_label = _bus_label(scope, "DATA[0..0]", 1, kind="global_label")
+    bus_entry = _bus_entry(scope, net_id, "DATA0", bus_label.id)
+
+    design = resolve_kicad_source(
+        _source(
+            [_local_net(scope, "d0", bus_entries=[bus_entry], pins=[pin])],
+            [pin],
+            bus_labels=[bus_label],
+            bus_entries=[bus_entry],
+        )
+    )
+
+    assert _net_for_reference(design.nets, "U1").name == "DATA0"
+    bus = next(bus for bus in design.buses if bus.name == "DATA[0..0]")
+    assert {net.name for net in bus.members} == {"DATA0"}
 
 
 def test_kicad_local_label_names_are_path_qualified_and_escaped() -> None:

@@ -9,8 +9,11 @@ from phosphor_eda.formats.dsn.parser import DsnSchematicPage, RawTitleBlock
 from phosphor_eda.formats.dsn.pins import normalize_package_name, resolve_pin_name
 from phosphor_eda.formats.dsn.resolver import resolve_dsn_source
 from phosphor_eda.formats.dsn.source import (
+    DsnBundleMember,
+    DsnBusEntry,
     DsnGlobal,
     DsnHierarchyMapping,
+    DsnNetBundle,
     DsnOffPageConnector,
     DsnPageNet,
     DsnPageSource,
@@ -321,6 +324,7 @@ def _source_page(
         ports=[],
         globals=[],
         off_page_connectors=[],
+        bus_entries=[],
         title_block=_page_title_block(raw_page),
     )
     page_nets_by_id: dict[int, DsnPageNet] = {}
@@ -373,6 +377,17 @@ def _source_page(
         )
         page_source.wires.append(wire)
         page_net.wire_ids.append(wire.id)
+
+    for index, raw_entry in enumerate(raw_page.bus_entries):
+        page_source.bus_entries.append(
+            DsnBusEntry(
+                id=f"{page_id}:bus_entry:{index}",
+                scope_id=scope_id,
+                start=(raw_entry.start_x, raw_entry.start_y),
+                end=(raw_entry.end_x, raw_entry.end_y),
+                color=raw_entry.color,
+            )
+        )
 
     for instance_index, raw_inst in enumerate(raw_page.instances):
         pkg = normalize_package_name(raw_inst.package_name)
@@ -489,6 +504,22 @@ def dsn_to_source(
                 name_key=dsn_name_key(mapping.name),
             )
             for index, mapping in enumerate(raw.net_id_mappings)
+        ],
+        net_bundles=[
+            DsnNetBundle(
+                id=f"net_bundle_map:{index}",
+                name=bundle.name,
+                name_key=dsn_name_key(bundle.name),
+                members=tuple(
+                    DsnBundleMember(
+                        name=member.name,
+                        name_key=dsn_name_key(member.name),
+                        wire_type=member.wire_type,
+                    )
+                    for member in bundle.members
+                ),
+            )
+            for index, bundle in enumerate(raw.net_bundle_maps)
         ],
     )
 

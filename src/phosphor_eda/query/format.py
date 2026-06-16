@@ -17,6 +17,7 @@ from phosphor_eda.formats.common.electrical import ELECTRICAL_KEY, PinElectrical
 from phosphor_eda.query.classify import PASSIVE_PREFIXES, is_power_net, ref_prefix
 from phosphor_eda.query.query import (
     component_physical_designator,
+    find_bus,
     find_component,
     find_net,
     net_page_names,
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from phosphor_eda.domain.schematic import (
+        Bus,
         Component,
         Net,
         Page,
@@ -88,6 +90,10 @@ def _filter_default_net_metadata(net: Net) -> dict[str, str]:
     return {
         key: value for key, value in net.metadata.items() if key not in _DEFAULT_NET_METADATA_HIDDEN
     }
+
+
+def _bus_membership_text(design: Schematic, net: Net) -> str:
+    return ", ".join(f"{bus.name} ({bus.kind.value})" for bus in bus_memberships(design, net))
 
 
 def _format_net_directive(directive: SchematicDirective) -> str:
@@ -340,6 +346,9 @@ def _format_nets(design: Schematic) -> list[str]:
 
         lines.extend(_format_net_directive(directive) for directive in net.directives)
 
+        for bus in bus_memberships(design, net):
+            lines.append(f"  Bus: {bus.name} ({bus.kind.value})")
+
         for pin in sorted(net.pins, key=lambda p: (_pin_label(design, p, net), p.designator)):
             ref_pin = _pin_label(design, pin, net)
             if pin.name:
@@ -507,16 +516,50 @@ def format_net_table(
     design: Schematic,
     nets: list[Net] | None = None,
 ) -> str:
-    """Format a table of nets: NET | ALIASES | PINS | PAGES."""
+    """Format a table of nets: NET | ALIASES | PINS | PAGES | BUSES."""
     source = nets if nets is not None else design.nets
     rows: list[tuple[str, ...]] = []
     for net in sorted(source, key=lambda n: n.name):
         aliases = ", ".join(sorted(net.aliases)) if net.aliases else ""
         pages = net_page_names(net)
-        rows.append((net.name, aliases, str(len(net.pins)), ", ".join(pages)))
+        rows.append(
+            (
+                net.name,
+                aliases,
+                str(len(net.pins)),
+                ", ".join(pages),
+                _bus_membership_text(design, net),
+            )
+        )
     if not rows:
         return "No nets found."
-    return tabulate(("NET", "ALIASES", "PINS", "PAGES"), rows)
+    return tabulate(("NET", "ALIASES", "PINS", "PAGES", "BUSES"), rows)
+
+
+def format_bus_table(
+    design: Schematic,
+    buses: list[Bus] | None = None,
+) -> str:
+    """Format a table of buses: BUS | KIND | MEMBERS | MEMBER NETS."""
+    source = buses if buses is not None else design.buses
+    duplicate_names = {
+        bus.name
+        for bus in source
+        if sum(1 for candidate in source if candidate.name == bus.name) > 1
+    }
+    rows: list[tuple[str, ...]] = []
+    for bus in sorted(source, key=lambda b: (b.name, b.id)):
+        member_names = ", ".join(member.name for member in bus.members)
+        if duplicate_names:
+            bus_id = bus.id if bus.name in duplicate_names else ""
+            rows.append((bus.name, bus_id, bus.kind.value, str(len(bus.members)), member_names))
+        else:
+            rows.append((bus.name, bus.kind.value, str(len(bus.members)), member_names))
+    if not rows:
+        return "No buses found."
+    if duplicate_names:
+        return tabulate(("BUS", "BUS ID", "KIND", "MEMBERS", "MEMBER NETS"), rows)
+    return tabulate(("BUS", "KIND", "MEMBERS", "MEMBER NETS"), rows)
 
 
 def format_page_table(
@@ -622,6 +665,22 @@ def format_net_detail(design: Schematic, name: str) -> str:
             lines.append(f"  {ref_pin:<12s} {pin.name:<15s} ({comp_desc})")
         else:
             lines.append(f"  {ref_pin:<12s} {'':15s} ({comp_desc})")
+
+    return "\n".join(lines)
+
+
+def format_bus_detail(design: Schematic, name: str) -> str:
+    """Format full detail for a single bus. Raises ValueError if not found."""
+    bus = find_bus(design, name)
+    lines = [f"BUS: {bus.name} ({bus.kind.value}) | Members: {len(bus.members)}"]
+
+    for key, value in sorted(bus.metadata.items()):
+        lines.append(f"  [{key}: {value}]")
+
+    for member in sorted(bus.members, key=lambda net: net.name):
+        pages = ", ".join(net_page_names(member))
+        aliases = f" | Also: {', '.join(sorted(member.aliases))}" if member.aliases else ""
+        lines.append(f"  {member.name}{aliases} | Pins: {len(member.pins)} | Pages: {pages}")
 
     return "\n".join(lines)
 
