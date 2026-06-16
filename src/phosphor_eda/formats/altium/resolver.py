@@ -261,13 +261,15 @@ def _merge_repeated_logical_pins(
     net_union: NetUnion,
     pin_occurrences: Iterable[AltiumPinOccurrence],
 ) -> None:
+    pin_occurrences_tuple = tuple(pin_occurrences)
+    duplicate_pin_keys = _duplicate_visible_source_pin_keys(pin_occurrences_tuple)
     net_ids_by_pin: dict[tuple[str, str], list[str]] = {}
-    for pin_occurrence in pin_occurrences:
+    for pin_occurrence in pin_occurrences_tuple:
         if not pin_occurrence.local_net_id:
             continue
         key = (
             _source_component_identity(pin_occurrence),
-            pin_occurrence.pin_designator,
+            _source_logical_pin_key(pin_occurrence, duplicate_pin_keys),
         )
         net_ids_by_pin.setdefault(key, []).append(pin_occurrence.local_net_id)
 
@@ -949,6 +951,28 @@ def _duplicate_visible_pin_keys(
         key = (_component_identity(pin_occurrence), pin_occurrence.pin_designator)
         counts[key] = counts.get(key, 0) + 1
     return {key for key, count in counts.items() if count > 1}
+
+
+def _duplicate_visible_source_pin_keys(
+    pin_occurrences: Iterable[AltiumPinOccurrence],
+) -> set[tuple[str, str]]:
+    counts: dict[tuple[str, str], int] = {}
+    for pin_occurrence in pin_occurrences:
+        key = (_source_component_identity(pin_occurrence), pin_occurrence.pin_designator)
+        counts[key] = counts.get(key, 0) + 1
+    return {key for key, count in counts.items() if count > 1}
+
+
+def _source_logical_pin_key(
+    pin_occurrence: AltiumPinOccurrence,
+    duplicate_pin_keys: set[tuple[str, str]],
+) -> str:
+    if (
+        _source_component_identity(pin_occurrence),
+        pin_occurrence.pin_designator,
+    ) not in duplicate_pin_keys:
+        return pin_occurrence.pin_designator
+    return pin_occurrence.pin_unique_id or pin_occurrence.id or pin_occurrence.pin_designator
 
 
 def _logical_pin_id(

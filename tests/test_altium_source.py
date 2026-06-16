@@ -1,8 +1,11 @@
 """Tests for Altium-native source connectivity extraction."""
 
-from pathlib import Path
+from __future__ import annotations
 
-from phosphor_eda.domain.schematic import SchematicDirectiveKind, ScopeId
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from phosphor_eda.domain.schematic import SchematicDirectiveKind
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode
 from phosphor_eda.formats.altium.records import (
     FileNameRec,
@@ -14,14 +17,13 @@ from phosphor_eda.formats.altium.records import (
     WireRec,
 )
 from phosphor_eda.formats.altium.sheet_builder import SheetRecords
-from phosphor_eda.formats.altium.source import (
-    _sheet_title_block,
-    _source_sheet,
-    load_project_source_sheets,
-)
+from phosphor_eda.formats.altium.source import load_project_source_sheets
 from phosphor_eda.formats.altium.to_schematic import altium_to_source
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.common.spatial import WireIndex
+
+if TYPE_CHECKING:
+    import pytest
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 QFSAE_PRJPCB = FIXTURES / "altium/qfsae-debugger/Debugger.PrjPcb"
@@ -110,6 +112,21 @@ def _sheet_level_parameter(index: int, name: str, text: str) -> ParameterRec:
     )
 
 
+def _load_records_sheet(
+    monkeypatch: pytest.MonkeyPatch,
+    records: SheetRecords,
+    source_file: str,
+    ctx: ParseContext | None = None,
+):
+    monkeypatch.setattr(
+        "phosphor_eda.formats.altium.source.load_sheet",
+        lambda _path, ctx: records,
+    )
+    _project, sheets = load_project_source_sheets(Path(source_file), ctx=ctx)
+    [sheet] = sheets.values()
+    return sheet
+
+
 def test_altium_to_source_preserves_project_options():
     source = altium_to_source(QFSAE_PRJPCB, name="QFSAE Debugger")
 
@@ -182,7 +199,9 @@ def test_source_local_net_ids_are_not_final_net_names():
         assert "VCC3V3" not in local_net.id.upper()
 
 
-def test_altium_sheet_title_block_maps_typed_fields_and_preserves_raw_metadata():
+def test_altium_sheet_title_block_maps_typed_fields_and_preserves_raw_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+):
     records = [
         _sheet_level_parameter(1, "Title", "*"),
         _sheet_level_parameter(2, "CompanyName", "Acme Hardware"),
@@ -196,9 +215,13 @@ def test_altium_sheet_title_block_maps_typed_fields_and_preserves_raw_metadata()
         _sheet_level_parameter(10, "ModifiedDate", "2026-06-16"),
         _sheet_level_parameter(11, "Author", "~"),
     ]
-    sheet = SheetRecords(records=records, children={}, wire_index=WireIndex([]), name="Sheet")
+    sheet = _load_records_sheet(
+        monkeypatch,
+        SheetRecords(records=records, children={}, wire_index=WireIndex([]), name="Sheet"),
+        "Sheet.SchDoc",
+    )
 
-    block = _sheet_title_block(sheet)
+    block = sheet.title_block
 
     assert block is not None
     assert block.title == ""
@@ -215,14 +238,15 @@ def test_altium_sheet_title_block_maps_typed_fields_and_preserves_raw_metadata()
     assert block.metadata["Author"] == "~"
 
 
-def test_parameter_set_diff_pair_directives_attach_to_touched_local_net():
+def test_parameter_set_diff_pair_directives_attach_to_touched_local_net(
+    monkeypatch: pytest.MonkeyPatch,
+):
     ctx = ParseContext()
-    sheet = _source_sheet(
+    sheet = _load_records_sheet(
+        monkeypatch,
         _parameter_set_sheet(),
         "Directives.SchDoc",
-        sheet_id="sheet:directives",
-        scope_id=ScopeId(path=("directives",)),
-        ctx=ctx,
+        ctx,
     )
 
     [local_net] = sheet.local_nets
@@ -234,21 +258,22 @@ def test_parameter_set_diff_pair_directives_attach_to_touched_local_net():
         (SchematicDirectiveKind.DIFF_PAIR_CLASS, "LVDS", "DifferentialPairClassName"),
     ]
     assert {directive.source_id for directive in local_net.directives} == {
-        "sheet:directives:parameter_set:2",
+        f"{sheet.id}:parameter_set:2",
     }
     assert all(directive.source == "altium" for directive in local_net.directives)
     assert local_net.directives[0].metadata["DifferentialPair"] == "True"
     assert ctx.issues == []
 
 
-def test_unresolved_parameter_set_diff_pair_records_diagnostic_without_attaching_directive():
+def test_unresolved_parameter_set_diff_pair_records_diagnostic_without_attaching_directive(
+    monkeypatch: pytest.MonkeyPatch,
+):
     ctx = ParseContext()
-    sheet = _source_sheet(
+    sheet = _load_records_sheet(
+        monkeypatch,
         _parameter_set_sheet(location=(50, 50)),
         "Directives.SchDoc",
-        sheet_id="sheet:directives",
-        scope_id=ScopeId(path=("directives",)),
-        ctx=ctx,
+        ctx,
     )
 
     assert sheet.local_nets

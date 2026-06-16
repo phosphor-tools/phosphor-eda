@@ -32,7 +32,14 @@ from phosphor_eda.query.validate import Severity, validate_design
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from phosphor_eda.domain.schematic import Component, Net, Page, Pin, Schematic
+    from phosphor_eda.domain.schematic import (
+        Component,
+        Net,
+        Page,
+        Pin,
+        Schematic,
+        SchematicDirective,
+    )
 
 _MAJOR_IC_PIN_THRESHOLD = 4
 
@@ -81,6 +88,14 @@ def _filter_default_net_metadata(net: Net) -> dict[str, str]:
     return {
         key: value for key, value in net.metadata.items() if key not in _DEFAULT_NET_METADATA_HIDDEN
     }
+
+
+def _format_net_directive(directive: SchematicDirective) -> str:
+    source = directive.source
+    if directive.source_id:
+        source = f"{source}:{directive.source_id}"
+    native = f" native={directive.native_name}" if directive.native_name else ""
+    return f"  [directive: {directive.kind.value}={directive.value} source={source}{native}]"
 
 
 def _component_mpn_label(comp: Component) -> str:
@@ -323,14 +338,7 @@ def _format_nets(design: Schematic) -> list[str]:
         for key, value in sorted(_filter_default_net_metadata(net).items()):
             lines.append(f"  [{key}: {value}]")
 
-        for directive in net.directives:
-            source = directive.source
-            if directive.source_id:
-                source = f"{source}:{directive.source_id}"
-            native = f" native={directive.native_name}" if directive.native_name else ""
-            lines.append(
-                f"  [directive: {directive.kind.value}={directive.value} source={source}{native}]"
-            )
+        lines.extend(_format_net_directive(directive) for directive in net.directives)
 
         for pin in sorted(net.pins, key=lambda p: (_pin_label(design, p, net), p.designator)):
             ref_pin = _pin_label(design, pin, net)
@@ -601,6 +609,8 @@ def format_net_detail(design: Schematic, name: str) -> str:
 
     for key, value in sorted(_filter_default_net_metadata(net).items()):
         lines.append(f"  [{key}: {value}]")
+
+    lines.extend(_format_net_directive(directive) for directive in net.directives)
 
     for bus in bus_memberships(design, net):
         lines.append(f"  Bus: {bus.name} ({bus.kind.value})")

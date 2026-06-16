@@ -854,6 +854,32 @@ def test_duplicate_visible_pin_designators_use_pin_unique_id_for_logical_identit
     }
 
 
+def test_duplicate_visible_pin_designators_do_not_merge_local_nets():
+    first_net, first_pins = _local_net("A", "first", references=["U1"])
+    second_net, second_pins = _local_net("A", "second", references=["U1"])
+    first_pins[0].pin_designator = "1"
+    first_pins[0].pin_unique_id = "PIN_A"
+    second_pins[0].pin_designator = "1"
+    second_pins[0].pin_unique_id = "PIN_B"
+
+    design = resolve_altium_source(
+        _source(
+            [
+                _sheet(
+                    "A",
+                    [first_net, second_net],
+                    [*first_pins, *second_pins],
+                )
+            ]
+        )
+    )
+
+    assert len(design.nets) == 2
+    assert {
+        tuple(pin.metadata["altium_pin_unique_id"] for pin in net.pins) for net in design.nets
+    } == {("PIN_A",), ("PIN_B",)}
+
+
 def _instance_pin(
     sheet: str,
     scope_path: tuple[str, ...],

@@ -438,6 +438,10 @@ def test_serialize_shows_schematic_directives_on_nets():
     text = serialize_design(Schematic(name="DIRECTIVES", pages=[page], nets=[net]))
 
     assert "[directive: net_class=SPI source=kicad:root:netclass_flag:1 native=Netclass]" in text
+    assert (
+        "[directive: net_class=SPI source=kicad:root:netclass_flag:1 native=Netclass]"
+        in format_net_detail(Schematic(name="DIRECTIVES", pages=[page], nets=[net]), "ADC_SCLK")
+    )
 
 
 def test_serialize_grep_friendly():
