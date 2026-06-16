@@ -234,8 +234,11 @@ class TestTitleBlock:
     def test_qfsae_title_block_fields(self, qfsae: Schematic) -> None:
         root = qfsae.pages[0]
         assert root.title_block is not None
-        assert root.title_block.company == "Altium Limited"
+        assert root.title_block.organization == "Altium Limited"
         assert root.title_block.metadata["Address1"] == "L3, 12a Rodborough Rd"
+        assert root.title_block.org_address == (
+            "L3, 12a Rodborough Rd\nFrenchs Forest\nNSW\nAustralia 2086"
+        )
         # The fixture leaves Title/Date at Altium's "*" placeholder — unset.
         assert root.title_block.title == ""
         assert root.title_block.date == ""
@@ -244,5 +247,8 @@ class TestTitleBlock:
         pmic = next(p for p in pimx8.pages if p.name == "02_8MPLUS_PMIC")
         assert pmic.title_block is not None
         assert pmic.title_block.title == "8MPLUS_PMIC"
+        assert pmic.title_block.author == "Lukas Henkel"
+        assert pmic.title_block.document_number == "2"
+        assert pmic.title_block.sheet_number == "2"
         assert pmic.title_block.metadata["Author"] == "Lukas Henkel"
         assert pmic.title_block.metadata["DocumentNumber"] == "2"

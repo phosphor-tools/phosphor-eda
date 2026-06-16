@@ -26,6 +26,7 @@ if TYPE_CHECKING:
         FootprintModel,
         LibraryLink,
         Parameter,
+        SchematicDirective,
         ScopeId,
         TitleBlock,
     )
@@ -51,6 +52,7 @@ class ResolvedLocalNetInput:
     id: str
     scope_id: ScopeId
     source_names: frozenset[str] = field(default_factory=frozenset)
+    directives: tuple[SchematicDirective, ...] = ()
     metadata: dict[str, str] = field(default_factory=dict)
 
 
@@ -265,6 +267,7 @@ def _build_nets(
             metadata=dict(net_input.metadata),
         )
         net_page_ids: set[str] = set()
+        net_directive_keys: set[tuple[str, str, str, str, str]] = set()
         for local_net in group_local_nets:
             page = _page_for_scope(pages_by_scope, local_net.scope_id)
             occurrence = NetOccurrence(
@@ -274,9 +277,15 @@ def _build_nets(
                 scope_id=local_net.scope_id,
                 source_local_net_id=local_net.id,
                 source_names=set(local_net.source_names),
+                directives=list(local_net.directives),
                 metadata=dict(local_net.metadata),
             )
             net.occurrences.append(occurrence)
+            _append_unique_directives(
+                net.directives,
+                local_net.directives,
+                seen_keys=net_directive_keys,
+            )
             _append_unique_page(net.pages, page, seen_ids=net_page_ids)
             _append_unique_net(
                 page.nets,
@@ -512,6 +521,26 @@ def _remove_pin(pins: list[Pin], pin: Pin) -> None:
     remaining = [existing for existing in pins if existing.id != pin.id]
     if len(remaining) != len(pins):
         pins[:] = remaining
+
+
+def _append_unique_directives(
+    target: list[SchematicDirective],
+    directives: Iterable[SchematicDirective],
+    *,
+    seen_keys: set[tuple[str, str, str, str, str]],
+) -> None:
+    for directive in directives:
+        key = (
+            directive.kind.value,
+            directive.value,
+            directive.source,
+            directive.source_id,
+            directive.native_name,
+        )
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        target.append(directive)
 
 
 def _merge_missing_metadata(target: dict[str, str], source: dict[str, str]) -> None:

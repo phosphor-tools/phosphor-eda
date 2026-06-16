@@ -13,6 +13,8 @@ from phosphor_eda.domain.schematic import (
     NetOccurrence,
     PinOccurrence,
     Schematic,
+    SchematicDirective,
+    SchematicDirectiveKind,
     ScopeId,
 )
 from phosphor_eda.domain.schematic import (
@@ -108,6 +110,7 @@ class Net(DomainNet):
         pages: list[DomainPage] | None = None,
         occurrences: list[NetOccurrence] | None = None,
         aliases: set[str] | None = None,
+        directives: list[SchematicDirective] | None = None,
         metadata: dict[str, str] | None = None,
     ) -> None:
         super().__init__(
@@ -117,6 +120,7 @@ class Net(DomainNet):
             pages=pages or [],
             occurrences=occurrences or [],
             aliases=aliases or set(),
+            directives=directives or [],
             metadata=metadata or {},
         )
 
@@ -382,6 +386,28 @@ def test_serialize_contains_net_section():
     assert "U7.10" in text
     assert "R1.1" in text
     assert "ADC/U7.10" not in text
+
+
+def test_serialize_shows_schematic_directives_on_nets():
+    page = Page(name="ADC")
+    net = Net(
+        name="ADC_SCLK",
+        pages=[page],
+        directives=[
+            SchematicDirective(
+                kind=SchematicDirectiveKind.NET_CLASS,
+                value="SPI",
+                source="kicad",
+                source_id="root:netclass_flag:1",
+                native_name="Netclass",
+            )
+        ],
+    )
+    page.nets = [net]
+
+    text = serialize_design(Schematic(name="DIRECTIVES", pages=[page], nets=[net]))
+
+    assert "[directive: net_class=SPI source=kicad:root:netclass_flag:1 native=Netclass]" in text
 
 
 def test_serialize_grep_friendly():

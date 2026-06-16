@@ -106,6 +106,7 @@ def _pin(
     designator: str = "1",
     component_source_id: str = "",
     component_occurrence_source_id: str = "",
+    pin_unique_id: str = "",
     index: int = 1,
 ) -> AltiumPinOccurrence:
     return AltiumPinOccurrence(
@@ -120,6 +121,7 @@ def _pin(
         pin_name=f"{reference}-{designator}",
         location=(index, 60),
         tip=(index, 61),
+        pin_unique_id=pin_unique_id,
     )
 
 
@@ -818,6 +820,38 @@ def test_repeated_logical_pin_preserves_first_no_connect_state_and_dedupes_sourc
     [pin] = component.pins
     assert pin.no_connect is False
     assert [occurrence.source_id for occurrence in pin.occurrences] == ["A:pin:U1:1:shared"]
+
+
+def test_duplicate_visible_pin_designators_use_pin_unique_id_for_logical_identity():
+    first_net, first_pins = _local_net("A", "first", references=["U1"])
+    second_net, second_pins = _local_net("A", "second", references=["U1"])
+    first_pins[0].pin_designator = "1"
+    first_pins[0].pin_unique_id = "PIN_A"
+    second_pins[0].pin_designator = "1"
+    second_pins[0].pin_unique_id = "PIN_B"
+
+    design = resolve_altium_source(
+        _source(
+            [
+                _sheet(
+                    "A",
+                    [first_net, second_net],
+                    [*first_pins, *second_pins],
+                )
+            ]
+        )
+    )
+
+    [component] = design.components
+    assert len(component.pins) == 2
+    assert {pin.metadata["altium_pin_unique_id"] for pin in component.pins} == {
+        "PIN_A",
+        "PIN_B",
+    }
+    assert {pin.id for pin in component.pins} == {
+        "A:component:U1:pin:1:PIN_A",
+        "A:component:U1:pin:1:PIN_B",
+    }
 
 
 def _instance_pin(

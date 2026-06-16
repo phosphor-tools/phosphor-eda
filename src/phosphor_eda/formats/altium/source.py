@@ -14,6 +14,8 @@ from phosphor_eda.domain.schematic import (
     FootprintModel,
     LibraryLink,
     Parameter,
+    SchematicDirective,
+    SchematicDirectiveKind,
     ScopeId,
     TitleBlock,
 )
@@ -29,6 +31,7 @@ from phosphor_eda.formats.altium.records import (
     ImplementationListRec,
     ImplementationRec,
     ParameterRec,
+    ParameterSetRec,
     PinRec,
     SheetEntryRec,
     SheetNameRec,
@@ -160,6 +163,7 @@ class AltiumPinOccurrence:
     tip: tuple[int, int]
     component_occurrence_source_id: str = ""
     no_connect: bool = False
+    pin_unique_id: str = ""
     component_part_id: str = ""
     component_part: str = ""
     component_description: str = ""
@@ -179,6 +183,7 @@ class AltiumLocalNet:
     sheet_entries: list[AltiumSheetEntry]
     harness_members: list[AltiumHarnessMember]
     generated_name: str
+    directives: list[SchematicDirective] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -385,11 +390,25 @@ def component_parameters(records: Sequence[ParameterRec]) -> tuple[Parameter, ..
 
 def _component_parameters_by_owner(sheet: SheetRecords) -> dict[int, tuple[Parameter, ...]]:
     records_by_owner: dict[int, list[ParameterRec]] = {}
+    component_owner_keys = {component.owner_key for component in sheet.by_type(ComponentRec)}
     for parameter in sheet.by_type(ParameterRec):
-        if parameter.owner_index < 0 or not parameter.name:
+        if parameter.owner_index not in component_owner_keys or not parameter.name:
             continue
         records_by_owner.setdefault(parameter.owner_index, []).append(parameter)
     return {owner: component_parameters(records) for owner, records in records_by_owner.items()}
+
+
+def _pin_unique_ids_by_owner(sheet: SheetRecords) -> dict[int, str]:
+    result: dict[int, str] = {}
+    for pin in sheet.by_type(PinRec):
+        for child in sheet.children.get(pin.owner_key, []):
+            if not isinstance(child, ParameterRec):
+                continue
+            if child.name.casefold() != "pinuniqueid" or not child.text:
+                continue
+            result[pin.owner_key] = child.text
+            break
+    return result
 
 
 def _component_footprints_by_owner(sheet: SheetRecords) -> dict[int, tuple[FootprintModel, ...]]:
@@ -553,8 +572,54 @@ def _component_metadata(
 
 
 # Sheet-level parameter names that map onto typed TitleBlock fields
-# (case-insensitive); everything else lands in TitleBlock.metadata.
-_TITLE_BLOCK_FIELD_NAMES = frozenset({"title", "revision", "date", "organization"})
+# (case-insensitive); all raw non-empty fields also land in TitleBlock.metadata.
+_TITLE_BLOCK_PLACEHOLDERS = frozenset({"", "*", "~"})
+_TITLE_BLOCK_FIELD_BY_NAME = {
+    "approvedby": "approved_by",
+    "approved by": "approved_by",
+    "author": "author",
+    "cage code": "cage_code",
+    "cagecode": "cage_code",
+    "checkedby": "checked_by",
+    "checked by": "checked_by",
+    "checkeddate": "modified_date",
+    "checked date": "modified_date",
+    "company": "organization",
+    "companyname": "organization",
+    "created": "created_date",
+    "createddate": "created_date",
+    "date": "date",
+    "documentnumber": "document_number",
+    "document number": "document_number",
+    "drawnby": "drawn_by",
+    "drawn by": "drawn_by",
+    "modifieddate": "modified_date",
+    "modified date": "modified_date",
+    "orgname": "organization",
+    "organization": "organization",
+    "revision": "revision",
+    "sheetnumber": "sheet_number",
+    "sheet number": "sheet_number",
+    "sheettotal": "sheet_total",
+    "sheet total": "sheet_total",
+    "title": "title",
+}
+
+
+def _title_value(value: str) -> str:
+    text = value.strip()
+    return "" if text in _TITLE_BLOCK_PLACEHOLDERS else text
+
+
+def _address_line_number(name: str) -> int | None:
+    lowered = name.casefold()
+    for prefix in ("address", "orgaddr"):
+        if not lowered.startswith(prefix):
+            continue
+        suffix = lowered[len(prefix) :]
+        if suffix.isdigit():
+            return int(suffix)
+    return None
 
 
 def _sheet_title_block(sheet: SheetRecords) -> TitleBlock | None:
@@ -566,22 +631,27 @@ def _sheet_title_block(sheet: SheetRecords) -> TitleBlock | None:
     """
     block = TitleBlock()
     populated = False
+    address_lines: dict[int, str] = {}
     for record in sheet.sheet_level_parameters:
         value = record.text
-        if not record.name or not value or value == "*":
+        if not record.name or not value:
             continue
         populated = True
-        name = record.name.lower()
-        if name not in _TITLE_BLOCK_FIELD_NAMES:
-            _ = block.metadata.setdefault(record.name, value)
-        elif name == "title":
-            block.title = block.title or value
-        elif name == "revision":
-            block.revision = block.revision or value
-        elif name == "date":
-            block.date = block.date or value
-        else:  # organization
-            block.company = block.company or value
+        _ = block.metadata.setdefault(record.name, value)
+        typed_value = _title_value(value)
+        if not typed_value:
+            continue
+        address_number = _address_line_number(record.name)
+        if address_number is not None:
+            address_lines.setdefault(address_number, typed_value)
+            continue
+        field_name = _TITLE_BLOCK_FIELD_BY_NAME.get(record.name.casefold())
+        if field_name is None:
+            continue
+        if not getattr(block, field_name):
+            setattr(block, field_name, typed_value)
+    if address_lines:
+        block.org_address = "\n".join(value for _line_no, value in sorted(address_lines.items()))
     return block if populated else None
 
 
@@ -607,12 +677,128 @@ def _root_for_point(
     return None
 
 
+def _parameter_set_directives_by_root(
+    sheet: SheetRecords,
+    sheet_id: str,
+    resolution: LocalNetResolution,
+    ctx: ParseContext | None,
+) -> dict[tuple[int, int], list[SchematicDirective]]:
+    directives_by_root: dict[tuple[int, int], list[SchematicDirective]] = {}
+    for parameter_set in sheet.by_type(ParameterSetRec):
+        directives = _parameter_set_directives(parameter_set, sheet, sheet_id)
+        if not directives:
+            continue
+        root = _root_for_point(parameter_set.location, sheet, resolution)
+        if root is None:
+            if ctx is not None:
+                ctx.warn(
+                    "altium_unresolved_directive_anchor",
+                    (
+                        "Altium parameter set directive did not touch a local net: "
+                        f"{_source_id(sheet_id, 'parameter_set', parameter_set.index)}"
+                    ),
+                    record_index=parameter_set.index,
+                )
+            continue
+        directives_by_root.setdefault(root, []).extend(directives)
+    return directives_by_root
+
+
+def _parameter_set_directives(
+    parameter_set: ParameterSetRec,
+    sheet: SheetRecords,
+    sheet_id: str,
+) -> list[SchematicDirective]:
+    if parameter_set.name != "DIFFPAIR":
+        return []
+    child_parameters = [
+        child
+        for child in sheet.children.get(parameter_set.owner_key, [])
+        if isinstance(child, ParameterRec)
+    ]
+    metadata = _parameter_set_metadata(parameter_set, child_parameters)
+    directives: list[SchematicDirective] = []
+    differential_pair = _child_parameter_text(child_parameters, "DifferentialPair")
+    if _truthy_altium_text(differential_pair):
+        directives.append(
+            _parameter_set_directive(
+                parameter_set,
+                sheet_id,
+                kind=SchematicDirectiveKind.DIFF_PAIR,
+                native_name="DifferentialPair",
+                value="true",
+                metadata=metadata,
+            )
+        )
+    class_name = _child_parameter_text(child_parameters, "DifferentialPairClassName").strip()
+    if class_name:
+        directives.append(
+            _parameter_set_directive(
+                parameter_set,
+                sheet_id,
+                kind=SchematicDirectiveKind.DIFF_PAIR_CLASS,
+                native_name="DifferentialPairClassName",
+                value=class_name,
+                metadata=metadata,
+            )
+        )
+    return directives
+
+
+def _parameter_set_directive(
+    parameter_set: ParameterSetRec,
+    sheet_id: str,
+    *,
+    kind: SchematicDirectiveKind,
+    native_name: str,
+    value: str,
+    metadata: dict[str, str],
+) -> SchematicDirective:
+    return SchematicDirective(
+        kind=kind,
+        value=value,
+        source="altium",
+        source_id=_source_id(sheet_id, "parameter_set", parameter_set.index),
+        native_name=native_name,
+        x=float(parameter_set.location[0]),
+        y=float(parameter_set.location[1]),
+        metadata=dict(metadata),
+    )
+
+
+def _parameter_set_metadata(
+    parameter_set: ParameterSetRec,
+    child_parameters: list[ParameterRec],
+) -> dict[str, str]:
+    metadata = {
+        "ParameterSetName": parameter_set.name,
+        "Style": str(parameter_set.style),
+        "Orientation": str(parameter_set.orientation),
+    }
+    for parameter in child_parameters:
+        if parameter.name:
+            metadata[parameter.name] = parameter.text
+    return metadata
+
+
+def _child_parameter_text(parameters: list[ParameterRec], name: str) -> str:
+    for parameter in parameters:
+        if parameter.name == name:
+            return parameter.text
+    return ""
+
+
+def _truthy_altium_text(value: str) -> bool:
+    return value.strip().casefold() in {"1", "true", "t", "yes", "y"}
+
+
 def _source_sheet(
     sheet: SheetRecords,
     source_file: str,
     *,
     sheet_id: str = "",
     scope_id: ScopeId | None = None,
+    ctx: ParseContext | None = None,
 ) -> AltiumSheetSource:
     sheet_id = sheet_id or _default_sheet_id(sheet, source_file)
     scope_id = scope_id or ScopeId(path=(sheet.name,))
@@ -630,6 +816,7 @@ def _source_sheet(
         extra_named_coords=compute_harness_entry_coords(sheet),
     )
     root_to_net_id: dict[tuple[int, int], str] = {}
+    directives_by_root = _parameter_set_directives_by_root(sheet, sheet_id, resolution, ctx)
     local_nets: list[AltiumLocalNet] = []
     for ordinal, group in enumerate(resolution.groups):
         local_net_id = f"{sheet_id}:local:{ordinal:04d}:{group.root[0]}:{group.root[1]}"
@@ -691,6 +878,7 @@ def _source_sheet(
                     if harness_members_by_index[member_index].coord in group.extra_named_coords
                 ],
                 generated_name=group.generated_name,
+                directives=directives_by_root.get(group.root, []),
             ),
         )
 
@@ -699,6 +887,7 @@ def _source_sheet(
     component_parameters_by_owner = _component_parameters_by_owner(sheet)
     component_footprints_by_owner = _component_footprints_by_owner(sheet)
     component_info_by_owner: dict[int, ResolvedComponentInfo] = {}
+    pin_unique_ids_by_owner = _pin_unique_ids_by_owner(sheet)
     designator_by_owner = _designators_by_owner(sheet)
     no_connect_roots = {
         root
@@ -751,6 +940,7 @@ def _source_sheet(
             pin_name=pin.name,
             location=pin.location,
             tip=pin.tip,
+            pin_unique_id=pin_unique_ids_by_owner.get(pin.owner_key, ""),
             no_connect=pin.tip in resolution.no_connect_wire_coords or root in no_connect_roots,
         )
         pin_occurrences.append(occurrence)
@@ -815,7 +1005,7 @@ def load_project_source_sheets(
             return resolved if resolved is not None else _source_file_key(child_source_file)
 
         base_sources_by_file = {
-            source_file: _source_sheet(sheet_records, source_file)
+            source_file: _source_sheet(sheet_records, source_file, ctx=ctx)
             for source_file, sheet_records in records_by_source_file.items()
         }
         child_source_counts: dict[str, int] = {}
@@ -861,6 +1051,7 @@ def load_project_source_sheets(
                     child_source_file,
                     sheet_id=child_sheet_id,
                     scope_id=child_scope_id,
+                    ctx=ctx,
                 )
                 sheets[child_sheet_id] = child_source
                 parents.append((child_source, (*lineage, child_source_file)))
@@ -869,7 +1060,7 @@ def load_project_source_sheets(
 
     sheet_records = load_sheet(str(path), ctx=ctx)
     project = AltiumProject(schematic_paths=[path.name])
-    source = _source_sheet(sheet_records, path.name)
+    source = _source_sheet(sheet_records, path.name, ctx=ctx)
     sheets[source.id] = source
     _apply_multipart_component_identities(sheets.values())
     return project, sheets

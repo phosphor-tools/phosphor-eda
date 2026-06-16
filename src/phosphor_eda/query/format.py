@@ -282,6 +282,15 @@ def _format_nets(design: Schematic) -> list[str]:
         for key, value in sorted(_filter_default_net_metadata(net).items()):
             lines.append(f"  [{key}: {value}]")
 
+        for directive in net.directives:
+            source = directive.source
+            if directive.source_id:
+                source = f"{source}:{directive.source_id}"
+            native = f" native={directive.native_name}" if directive.native_name else ""
+            lines.append(
+                f"  [directive: {directive.kind.value}={directive.value} source={source}{native}]"
+            )
+
         for pin in sorted(net.pins, key=lambda p: (_pin_label(design, p, net), p.designator)):
             ref_pin = _pin_label(design, pin, net)
             if pin.name:

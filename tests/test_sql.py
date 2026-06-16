@@ -40,6 +40,8 @@ from phosphor_eda.domain.schematic import (
     Pin,
     PinOccurrence,
     Schematic,
+    SchematicDirective,
+    SchematicDirectiveKind,
     ScopeId,
 )
 from phosphor_eda.query.convert import load_project
@@ -215,6 +217,17 @@ def _constructed_schematic() -> Schematic:
     sync.pins = [controller_sync]
     reset_power.pins = [controller_reset, duplicate_a_pin]
     reset_control.pins = [duplicate_b_pin]
+    sync_directive = SchematicDirective(
+        kind=SchematicDirectiveKind.NET_CLASS,
+        value="TIMING",
+        source="constructed",
+        source_id="directive:sync:power",
+        native_name="Netclass",
+        x=10.0,
+        y=20.0,
+        metadata={"raw": "Timing"},
+    )
+    sync.directives = [sync_directive]
 
     controller.occurrences = [
         ComponentOccurrence(
@@ -272,6 +285,7 @@ def _constructed_schematic() -> Schematic:
             scope_id=power_page.scope_id,
             source_local_net_id="power/local-12",
             source_names={"SYNC", "GLOBAL,SYNC", "GLOBAL_SYNC"},
+            directives=[sync_directive],
             metadata={"source_label_kind": "global", "source_sheet": "Power"},
         ),
         NetOccurrence(
@@ -706,6 +720,34 @@ class TestConstructedSchematicSql:
             ("net-occurrence:sync:power", "net:sync", "source_sheet", "Power"),
         ]
 
+        directive_rows = constructed_db.execute(
+            """
+            SELECT
+                directive_id, net_id, net_name, occurrence_id, page_id, scope_path,
+                kind, value, source, source_id, native_name, x, y, metadata
+            FROM schematic_directives
+            ORDER BY directive_id
+            """
+        ).fetchall()
+        assert directive_rows == [
+            (
+                "net-occurrence:sync:power:directive:0001",
+                "net:sync",
+                "SYNC",
+                "net-occurrence:sync:power",
+                "page:power",
+                "/root/power",
+                "net_class",
+                "TIMING",
+                "constructed",
+                "directive:sync:power",
+                "Netclass",
+                10.0,
+                20.0,
+                '{"raw":"Timing"}',
+            ),
+        ]
+
         alias_rows = constructed_db.execute(
             "SELECT net_id, aliases FROM nets WHERE aliases IS NOT NULL ORDER BY net_id"
         ).fetchall()
@@ -980,7 +1022,8 @@ class TestConstructedSchematicSql:
                 'component_occurrence_metadata',
                 'net_metadata',
                 'net_occurrence_metadata',
-                'pin_occurrence_metadata'
+                'pin_occurrence_metadata',
+                'schematic_directives'
             )
             ORDER BY index_name
             """
@@ -994,6 +1037,9 @@ class TestConstructedSchematicSql:
             ("idx_net_occurrence_metadata_occurrence_id",),
             ("idx_pin_occurrence_metadata_occurrence_id",),
             ("idx_pin_occurrence_metadata_pin_id",),
+            ("idx_schematic_directives_kind",),
+            ("idx_schematic_directives_net_id",),
+            ("idx_schematic_directives_occurrence_id",),
         ]
         assert (
             _count(
@@ -1087,6 +1133,30 @@ class TestConstructedSchematicSql:
                 FROM net_occurrence_source_names nosn
                 LEFT JOIN net_occurrences no ON no.occurrence_id = nosn.occurrence_id
                 WHERE no.occurrence_id IS NULL
+                """,
+            )
+            == 0
+        )
+        assert (
+            _count(
+                constructed_db,
+                """
+                SELECT count(*)
+                FROM schematic_directives sd
+                LEFT JOIN net_occurrences no ON no.occurrence_id = sd.occurrence_id
+                WHERE no.occurrence_id IS NULL
+                """,
+            )
+            == 0
+        )
+        assert (
+            _count(
+                constructed_db,
+                """
+                SELECT count(*)
+                FROM schematic_directives sd
+                LEFT JOIN nets n ON n.net_id = sd.net_id
+                WHERE n.net_id IS NULL
                 """,
             )
             == 0
@@ -1376,12 +1446,36 @@ class TestJetsonComponentEnrichment:
         assert count > 0
 
     def test_title_blocks_loaded(self, jetson_db: duckdb.DuckDBPyConnection) -> None:
+        column_rows = jetson_db.execute("PRAGMA table_info('title_blocks')").fetchall()
+        columns = {str(row[1]) for row in column_rows}
+        assert {
+            "title",
+            "revision",
+            "date",
+            "organization",
+            "org_address",
+            "document_number",
+            "sheet_number",
+            "sheet_total",
+            "author",
+            "drawn_by",
+            "checked_by",
+            "approved_by",
+            "created_date",
+            "modified_date",
+            "cage_code",
+            "comments",
+            "metadata",
+        }.issubset(columns)
+
         row = jetson_db.execute(
-            "SELECT title FROM title_blocks JOIN pages USING (page_id) LIMIT 1"
+            "SELECT title, organization, sheet_number, sheet_total "
+            "FROM title_blocks JOIN pages USING (page_id) LIMIT 1"
         ).fetchone()
         assert row is not None
         assert row[0] is not None
         assert str(row[0]).strip() != ""
+        assert len(row) == 4
 
 
 class TestJetsonSchematic:

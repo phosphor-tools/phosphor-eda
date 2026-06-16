@@ -715,6 +715,7 @@ def _local_net_inputs(local_refs: Iterable[_LocalNetRef]) -> list[ResolvedLocalN
             id=ref.local_net.id,
             scope_id=ref.local_net.scope_id,
             source_names=frozenset(_all_source_names([ref])),
+            directives=tuple(ref.local_net.directives),
         )
         for ref in local_refs
     ]
@@ -880,7 +881,9 @@ def _include_altium_net(
     pins: tuple[ResolvedPinInput, ...],
 ) -> bool:
     group_local_net_ids = {local_net.id for local_net in group_local_nets}
-    return any(pin.local_net_id in group_local_net_ids for pin in pins)
+    return any(local_net.directives for local_net in group_local_nets) or any(
+        pin.local_net_id in group_local_net_ids for pin in pins
+    )
 
 
 def _pin_inputs(
@@ -889,15 +892,20 @@ def _pin_inputs(
     physical_designators: dict[str, AnnotationDesignator],
     symbol_uid_by_id: dict[str, str],
 ) -> list[ResolvedPinInput]:
+    pin_occurrences_tuple = tuple(pin_occurrences)
+    duplicate_pin_keys = _duplicate_visible_pin_keys(pin_occurrences_tuple)
     result: list[ResolvedPinInput] = []
     seen_pin_occurrences: set[tuple[str, str]] = set()
-    for pin_occurrence in pin_occurrences:
+    for pin_occurrence in pin_occurrences_tuple:
         component_id = _component_identity(pin_occurrence)
-        pin_id = f"{component_id}:pin:{pin_occurrence.pin_designator}"
+        pin_id = _logical_pin_id(pin_occurrence, component_id, duplicate_pin_keys)
         pin_occurrence_key = (pin_id, pin_occurrence.id)
         if pin_occurrence_key in seen_pin_occurrences:
             continue
         seen_pin_occurrences.add(pin_occurrence_key)
+        pin_metadata = {"altium_pin_source_id": pin_occurrence.id}
+        if pin_occurrence.pin_unique_id:
+            pin_metadata["altium_pin_unique_id"] = pin_occurrence.pin_unique_id
         result.append(
             ResolvedPinInput(
                 id=pin_occurrence.id,
@@ -921,9 +929,7 @@ def _pin_inputs(
                     ),
                     metadata=_component_occurrence_metadata(pin_occurrence),
                 ),
-                pin_metadata={
-                    "altium_pin_source_id": pin_occurrence.id,
-                },
+                pin_metadata=pin_metadata,
                 pin_occurrence_metadata=_pin_occurrence_metadata(pin_occurrence),
                 component_metadata=_component_metadata_for_pin(
                     pin_occurrence,
@@ -933,6 +939,28 @@ def _pin_inputs(
             )
         )
     return result
+
+
+def _duplicate_visible_pin_keys(
+    pin_occurrences: Iterable[AltiumPinOccurrence],
+) -> set[tuple[str, str]]:
+    counts: dict[tuple[str, str], int] = {}
+    for pin_occurrence in pin_occurrences:
+        key = (_component_identity(pin_occurrence), pin_occurrence.pin_designator)
+        counts[key] = counts.get(key, 0) + 1
+    return {key for key, count in counts.items() if count > 1}
+
+
+def _logical_pin_id(
+    pin_occurrence: AltiumPinOccurrence,
+    component_id: str,
+    duplicate_pin_keys: set[tuple[str, str]],
+) -> str:
+    base_id = f"{component_id}:pin:{pin_occurrence.pin_designator}"
+    if (component_id, pin_occurrence.pin_designator) not in duplicate_pin_keys:
+        return base_id
+    suffix = pin_occurrence.pin_unique_id or pin_occurrence.id
+    return f"{base_id}:{suffix}" if suffix else base_id
 
 
 def _physical_designator(

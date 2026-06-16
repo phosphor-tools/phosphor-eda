@@ -91,6 +91,7 @@ if TYPE_CHECKING:
         Pin,
         PinOccurrence,
         Schematic,
+        SchematicDirective,
         TitleBlock,
     )
 
@@ -426,6 +427,13 @@ class _SourceNameRow:
     occurrence_id: str
     net_id: str
     source_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class _SchematicDirectiveRow:
+    occurrence: NetOccurrence
+    ord: int
+    directive: SchematicDirective
 
 
 @dataclass(frozen=True, slots=True)
@@ -996,6 +1004,31 @@ _NET_OCCURRENCE_SOURCE_NAMES: TableSpec[_SourceNameRow] = TableSpec(
     ),
 )
 
+_SCHEMATIC_DIRECTIVES: TableSpec[_SchematicDirectiveRow] = TableSpec(
+    "schematic_directives",
+    (
+        col(
+            "directive_id",
+            "VARCHAR",
+            lambda r: f"{r.occurrence.id}:directive:{r.ord:04d}",
+            constraint="PRIMARY KEY",
+        ),
+        col("net_id", "VARCHAR", lambda r: r.occurrence.net.id, constraint="NOT NULL"),
+        col("net_name", "VARCHAR", lambda r: r.occurrence.net.name, constraint="NOT NULL"),
+        col("occurrence_id", "VARCHAR", lambda r: r.occurrence.id, constraint="NOT NULL"),
+        col("page_id", "VARCHAR", lambda r: r.occurrence.page.id, constraint="NOT NULL"),
+        col("scope_path", "VARCHAR", lambda r: str(r.occurrence.scope_id), constraint="NOT NULL"),
+        col("kind", "VARCHAR", lambda r: r.directive.kind.value, constraint="NOT NULL"),
+        col("value", "VARCHAR", lambda r: r.directive.value, constraint="NOT NULL"),
+        col("source", "VARCHAR", lambda r: r.directive.source, constraint="NOT NULL"),
+        col("source_id", "VARCHAR", lambda r: _null_if_unset(r.directive.source_id)),
+        col("native_name", "VARCHAR", lambda r: _null_if_unset(r.directive.native_name)),
+        col("x", "DOUBLE", lambda r: r.directive.x),
+        col("y", "DOUBLE", lambda r: r.directive.y),
+        col("metadata", "JSON", lambda r: _json_or_null(r.directive.metadata)),
+    ),
+)
+
 _NET_METADATA: TableSpec[_KeyValueRow] = TableSpec(
     "net_metadata",
     (
@@ -1059,7 +1092,18 @@ _TITLE_BLOCKS: TableSpec[_TitleBlockRow] = TableSpec(
         col("title", "VARCHAR", lambda r: _null_if_unset(r.block.title)),
         col("revision", "VARCHAR", lambda r: _null_if_unset(r.block.revision)),
         col("date", "VARCHAR", lambda r: _null_if_unset(r.block.date)),
-        col("company", "VARCHAR", lambda r: _null_if_unset(r.block.company)),
+        col("organization", "VARCHAR", lambda r: _null_if_unset(r.block.organization)),
+        col("org_address", "VARCHAR", lambda r: _null_if_unset(r.block.org_address)),
+        col("document_number", "VARCHAR", lambda r: _null_if_unset(r.block.document_number)),
+        col("sheet_number", "VARCHAR", lambda r: _null_if_unset(r.block.sheet_number)),
+        col("sheet_total", "VARCHAR", lambda r: _null_if_unset(r.block.sheet_total)),
+        col("author", "VARCHAR", lambda r: _null_if_unset(r.block.author)),
+        col("drawn_by", "VARCHAR", lambda r: _null_if_unset(r.block.drawn_by)),
+        col("checked_by", "VARCHAR", lambda r: _null_if_unset(r.block.checked_by)),
+        col("approved_by", "VARCHAR", lambda r: _null_if_unset(r.block.approved_by)),
+        col("created_date", "VARCHAR", lambda r: _null_if_unset(r.block.created_date)),
+        col("modified_date", "VARCHAR", lambda r: _null_if_unset(r.block.modified_date)),
+        col("cage_code", "VARCHAR", lambda r: _null_if_unset(r.block.cage_code)),
         col("comments", "JSON", lambda r: _json_or_null(r.block.comments)),
         col("metadata", "JSON", lambda r: _json_or_null(r.block.metadata)),
     ),
@@ -1108,6 +1152,7 @@ _ORDERED_SPECS = (
     _NET_ALIASES,
     _NET_OCCURRENCES,
     _NET_OCCURRENCE_SOURCE_NAMES,
+    _SCHEMATIC_DIRECTIVES,
     _NET_METADATA,
     _NET_OCCURRENCE_METADATA,
     _BUSES,
@@ -1192,6 +1237,7 @@ def load_database(project: Project) -> duckdb.DuckDBPyConnection:
         _load_net_aliases(con, project.schematic)
         _load_net_occurrences(con, project.schematic)
         _load_net_occurrence_source_names(con, project.schematic)
+        _load_schematic_directives(con, project.schematic)
         _load_net_occurrence_metadata(con, project.schematic)
         _load_net_metadata(con, project.schematic)
         _load_buses(con, project.schematic)
@@ -1563,6 +1609,20 @@ def _load_net_occurrence_source_names(con: duckdb.DuckDBPyConnection, schematic:
                     con,
                     _SourceNameRow(
                         occurrence_id=occurrence.id, net_id=net.id, source_name=source_name
+                    ),
+                )
+
+
+def _load_schematic_directives(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    for net in schematic.nets:
+        for occurrence in net.occurrences:
+            for index, directive in enumerate(occurrence.directives, start=1):
+                _SCHEMATIC_DIRECTIVES.insert(
+                    con,
+                    _SchematicDirectiveRow(
+                        occurrence=occurrence,
+                        ord=index,
+                        directive=directive,
                     ),
                 )
 
