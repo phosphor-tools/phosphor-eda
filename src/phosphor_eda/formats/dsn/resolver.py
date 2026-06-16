@@ -13,6 +13,7 @@ from phosphor_eda.domain.buses import (
     expand_bus_members,
 )
 from phosphor_eda.domain.schematic import (
+    BusKind,
     FootprintModel,
     LibraryLink,
     NetName,
@@ -33,12 +34,13 @@ from phosphor_eda.formats.common.resolved_graph import (
 from phosphor_eda.formats.dsn.source import dsn_name_key
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Callable, Iterable, Sequence
 
     from phosphor_eda.domain.schematic import Net, Schematic, ScopeId
     from phosphor_eda.formats.common.diagnostics import ParseContext
     from phosphor_eda.formats.dsn.source import (
         DsnHierarchyMapping,
+        DsnNetBundle,
         DsnPageNet,
         DsnPageSource,
         DsnPinOccurrence,
@@ -109,14 +111,34 @@ def resolve_dsn_source(source: DsnSourceDesign, ctx: ParseContext | None = None)
         net_ordering=_order_dsn_nets,
         metadata=metadata,
     )
-    design.buses = build_buses_from_definitions(design, _dsn_bus_definitions(source))
+    design.buses = build_buses_from_definitions(design, _dsn_bus_definitions(source, design))
     return design
 
 
-def _dsn_bus_definitions(source: DsnSourceDesign) -> list[BusDefinition]:
+def _dsn_bus_definitions(source: DsnSourceDesign, design: Schematic) -> list[BusDefinition]:
     definitions: list[BusDefinition] = []
     seen: set[tuple[str, str]] = set()
     bus_index = 0
+    for bundle in source.net_bundles:
+        member_names = _dsn_bundle_member_names(bundle, design)
+        name = bundle.name.strip()
+        if not name or not member_names or (BusKind.GROUP.value, name) in seen:
+            continue
+        seen.add((BusKind.GROUP.value, name))
+        bus_index += 1
+        definitions.append(
+            BusDefinition(
+                id=f"dsn:bus:{BusKind.GROUP.value}:{bus_index:04d}",
+                name=name,
+                kind=BusKind.GROUP,
+                member_names=member_names,
+                metadata={
+                    "source_format": "dsn",
+                    "source_id": bundle.id,
+                    "source_kind": bundle.source_kind,
+                },
+            )
+        )
     for page in source.pages:
         for wire in page.wires:
             if not wire.is_bus:
@@ -144,6 +166,44 @@ def _dsn_bus_definitions(source: DsnSourceDesign) -> list[BusDefinition]:
                     )
                 )
     return definitions
+
+
+def _dsn_bundle_member_names(bundle: DsnNetBundle, design: Schematic) -> tuple[str, ...]:
+    """Resolve Capture net-bundle members against DSN's case-insensitive names."""
+    exact_names: set[str] = set()
+    names_by_key: dict[str, list[str]] = {}
+
+    def add_source_name(name: str) -> None:
+        stripped = name.strip()
+        if not stripped:
+            return
+        exact_names.add(stripped)
+        bucket = names_by_key.setdefault(dsn_name_key(stripped), [])
+        if stripped not in bucket:
+            bucket.append(stripped)
+
+    for net in design.nets:
+        add_source_name(net.name)
+        for alias in net.aliases:
+            add_source_name(alias)
+
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for member in bundle.members:
+        raw_name = member.name.strip()
+        if not raw_name:
+            continue
+        candidates: Sequence[str]
+        if raw_name in exact_names:
+            candidates = (raw_name,)
+        else:
+            candidates = names_by_key.get(member.name_key, (raw_name,))
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            resolved.append(candidate)
+    return tuple(resolved)
 
 
 def _collect_local_refs(pages: Iterable[DsnPageSource]) -> list[_LocalNetRef]:
