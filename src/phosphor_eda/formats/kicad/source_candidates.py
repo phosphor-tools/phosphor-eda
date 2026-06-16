@@ -140,6 +140,18 @@ class _BusEntryCandidate:
 
 
 @dataclass(slots=True)
+class _NetclassFlagCandidate:
+    id: str
+    scope_id: ScopeId
+    source_index: int
+    location: KiCadPoint
+    rotation: float
+    net_class: str
+    component_class: str
+    metadata: dict[str, str]
+
+
+@dataclass(slots=True)
 class SheetCandidates:
     local_labels: list[_LabelCandidate]
     global_labels: list[_LabelCandidate]
@@ -151,6 +163,7 @@ class SheetCandidates:
     sheet_symbols: list[KiCadSheetSymbol]
     sheet_pins: list[_SheetPinCandidate]
     pin_occurrences: list[_PinCandidate]
+    netclass_flags: list[_NetclassFlagCandidate]
 
 
 def extract_source_candidates(
@@ -230,6 +243,7 @@ def extract_source_candidates(
         wire_graph,
         root_uuid,
     )
+    netclass_flag_candidates = _netclass_flag_candidates(data, scope_id, wire_graph)
     return SheetCandidates(
         local_labels=local_label_candidates,
         global_labels=global_label_candidates,
@@ -241,6 +255,7 @@ def extract_source_candidates(
         sheet_symbols=sheet_symbols,
         sheet_pins=sheet_pin_candidates,
         pin_occurrences=pin_candidates,
+        netclass_flags=netclass_flag_candidates,
     )
 
 
@@ -657,6 +672,49 @@ def _component_attr_metadata(sym_node: SExpNode) -> dict[str, str]:
         metadata["kicad_on_board"] = "no"
     if _bool_attr(sym_node, "exclude_from_sim") is True:
         metadata["kicad_exclude_from_sim"] = "yes"
+    return metadata
+
+
+def _netclass_flag_candidates(
+    data: SExpNode,
+    scope_id: ScopeId,
+    wire_graph: WireGraph,
+) -> list[_NetclassFlagCandidate]:
+    candidates: list[_NetclassFlagCandidate] = []
+    for index, flag_node in enumerate(sexp.find_all(data[1:], "netclass_flag")):
+        at_node = sexp.find(flag_node[1:], "at")
+        if at_node is None:
+            continue
+        location = point_from_at(at_node)
+        wire_graph.connect_point(location)
+        rotation = sexp.num(at_node, 3) if len(at_node) > 3 else 0.0
+        metadata = _property_metadata(flag_node)
+        net_class = metadata.get("Netclass", "").strip()
+        component_class = metadata.get("Component Class", "").strip()
+        if not net_class and not component_class:
+            continue
+        source_key = _node_value(flag_node[1:], "uuid") or str(index)
+        candidates.append(
+            _NetclassFlagCandidate(
+                id=_source_id(scope_id, "netclass_flag", source_key),
+                scope_id=scope_id,
+                source_index=index,
+                location=location,
+                rotation=rotation,
+                net_class=net_class,
+                component_class=component_class,
+                metadata=metadata,
+            )
+        )
+    return candidates
+
+
+def _property_metadata(node: SExpNode) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    for prop_node in sexp.find_all(node[1:], "property"):
+        if len(prop_node) < 3:
+            continue
+        metadata[str(prop_node[1])] = str(prop_node[2])
     return metadata
 
 

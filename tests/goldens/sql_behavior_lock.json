@@ -1,6 +1,6 @@
 {
   "jetson-orin": {
-    "serialize_sha256": "8aa11b98acfa76e5adbdd027dca516873bbb70ce6201ac8ae488ebf396e9f21c",
+    "serialize_sha256": "ea77c3a7651347f49111dfb0ea92f56d7974d130bdf3e2d8dfd679ea2c70f0f3",
     "tables": {
       "artwork": {
         "rows": 149352,
@@ -146,9 +146,13 @@
         "rows": 4,
         "sha256": "de2141f08c6c2396dd5b341fc1984ea4ef3cf7636993b74656360a7237ed2815"
       },
+      "schematic_directives": {
+        "rows": 5,
+        "sha256": "6e9ce9ef4fb4be4a202dc10fdfa0824ed3373f4fe0eb4152cd7ebc92f2e2adff"
+      },
       "title_blocks": {
         "rows": 10,
-        "sha256": "a351d903b74b171e3085fb9f856b1f2beb869f17329a97c5ecccc0a18f2d8ade"
+        "sha256": "6cc3c05cd6fb29c5561925451991e553f56284d6a4498351ab9f7020913ef3c8"
       },
       "vias": {
         "rows": 1345,
@@ -157,7 +161,7 @@
     }
   },
   "pi-mx8": {
-    "serialize_sha256": "d142b7e8f85f7dd36a67c132eb546075b881c2cb22bef23466aeb37b8a805559",
+    "serialize_sha256": "cf60ba355fcc1da7cd24ceccacdc2470a45d2c46e98e057150ff4ba0f19cef60",
     "tables": {
       "artwork": {
         "rows": 11460,
@@ -273,7 +277,7 @@
       },
       "nets": {
         "rows": 546,
-        "sha256": "4a97d8efd04980175e7512235fe87386121bffc45feebbcc58a3fb3056f02732"
+        "sha256": "2060d4b75edeccc6b44e7c32bbbdaddf0c9685d0225d7a648b9007880a1881f3"
       },
       "pads": {
         "rows": 2606,
@@ -285,15 +289,15 @@
       },
       "pin_occurrence_metadata": {
         "rows": 4632,
-        "sha256": "22a85e97dfc9838671599032e48be7eddecd3497566923f7f68fb77874c4c0cf"
+        "sha256": "28184acd867ec45503d80063a5c9ad6a4079bb91927ce36631b42164fb53b5cd"
       },
       "pin_occurrences": {
         "rows": 2316,
-        "sha256": "bf63aaa2facd7a8bce512305910841f772675bc2f0a23acaae6d91262aaa0fd7"
+        "sha256": "7e7a6fa90d1424f2db624455b04e4f2a89216374b4106282047037e788a8421b"
       },
       "pins": {
-        "rows": 2309,
-        "sha256": "b20ee329c2b13144f8ce549c1b204098ad1f25a2a562f14851e011bf48208898"
+        "rows": 2316,
+        "sha256": "207da60576877ea784bf5177c57a9a6c4e2896b2c07bdb05263e115a0052c9ef"
       },
       "pours": {
         "rows": 48,
@@ -303,9 +307,13 @@
         "rows": 2,
         "sha256": "6fa04cd370c4242048699411cd41ea793c2be9af61c2c2460375b2e3bf52d91a"
       },
+      "schematic_directives": {
+        "rows": 280,
+        "sha256": "83b70105248031844583f6583324ae08f6fd9a4c7f729da303367ecf4fdc1f07"
+      },
       "title_blocks": {
         "rows": 16,
-        "sha256": "9c7ac6336e1dd6da5a8e3b606f8e5e04d149df534d58fbcf38848aa59a9db30c"
+        "sha256": "ece9f3bbe5aad9b6e45bb87949efbadaa6daa99b335fd4581a053806cece499a"
       },
       "vias": {
         "rows": 2278,

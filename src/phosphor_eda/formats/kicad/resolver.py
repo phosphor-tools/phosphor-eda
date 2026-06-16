@@ -518,6 +518,7 @@ def _local_net_inputs(local_nets: Iterable[KiCadLocalNet]) -> list[ResolvedLocal
             id=local_net.id,
             scope_id=local_net.scope_id,
             source_names=frozenset(_source_names(local_net)),
+            directives=tuple(local_net.directives),
         )
         for local_net in local_nets
     ]
@@ -558,7 +559,9 @@ def _include_kicad_net(
     pins: tuple[ResolvedPinInput, ...],
 ) -> bool:
     group_local_net_ids = {local_net.id for local_net in group_local_nets}
-    return any(pin.local_net_id in group_local_net_ids for pin in pins)
+    return any(local_net.directives for local_net in group_local_nets) or any(
+        pin.local_net_id in group_local_net_ids for pin in pins
+    )
 
 
 def select_kicad_net_name(local_nets: Iterable[KiCadLocalNet]) -> str:

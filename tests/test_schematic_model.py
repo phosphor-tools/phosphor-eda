@@ -12,6 +12,8 @@ from phosphor_eda.domain.schematic import (
     Pin,
     PinOccurrence,
     Schematic,
+    SchematicDirective,
+    SchematicDirectiveKind,
     ScopeId,
 )
 from phosphor_eda.formats.common.net_union import NetUnion
@@ -330,3 +332,61 @@ def test_resolved_graph_recomputes_enrichment_when_part_is_backfilled() -> None:
     assert component.part == "DNP"
     assert component.dnp is True
     assert component.part_numbers == [PartNumber(manufacturer="", number="SN74LVC2G66DCUR")]
+
+
+def test_resolved_graph_copies_local_net_directives_to_occurrences_and_net() -> None:
+    scope = ScopeId(path=("root",))
+    directive = SchematicDirective(
+        kind=SchematicDirectiveKind.NET_CLASS,
+        value="USB_DIFF",
+        source="kicad",
+        source_id="root:netclass_flag:flag-1",
+        native_name="Netclass",
+        x=5.0,
+        y=0.0,
+    )
+    duplicate = SchematicDirective(
+        kind=SchematicDirectiveKind.NET_CLASS,
+        value="USB_DIFF",
+        source="kicad",
+        source_id="root:netclass_flag:flag-1",
+        native_name="Netclass",
+        x=99.0,
+        y=99.0,
+    )
+    local_nets = [
+        ResolvedLocalNetInput(
+            id="local:first",
+            scope_id=scope,
+            source_names=frozenset({"D+"}),
+            directives=(directive,),
+        ),
+        ResolvedLocalNetInput(
+            id="local:second",
+            scope_id=scope,
+            source_names=frozenset({"D+"}),
+            directives=(duplicate,),
+        ),
+    ]
+    net_union = NetUnion(local_net.id for local_net in local_nets)
+    _ = net_union.union("local:first", "local:second")
+
+    design = build_resolved_schematic(
+        name="directives",
+        pages=[ResolvedPageInput(id="page:root", name="Root", scope_id=scope)],
+        local_nets=local_nets,
+        pins=[],
+        net_union=net_union,
+        net_factory=lambda net_index, _union_id, _grouped_nets: ResolvedNetInput(
+            id=f"net:{net_index}",
+            name="D+",
+        ),
+        include_net=lambda _union_id, _grouped_nets, _pins: True,
+    )
+
+    [net] = design.nets
+    assert [occurrence.directives for occurrence in net.occurrences] == [
+        [directive],
+        [duplicate],
+    ]
+    assert net.directives == [directive]

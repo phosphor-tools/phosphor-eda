@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 from phosphor_eda.domain.buses import expand_bus_members
+from phosphor_eda.domain.schematic import SchematicDirective, SchematicDirectiveKind
 from phosphor_eda.formats.kicad.lib_symbols import strip_kicad_markup
 from phosphor_eda.formats.kicad.source import (
     KiCadBusAlias,
@@ -15,6 +16,7 @@ from phosphor_eda.formats.kicad.source import (
     KiCadHierarchicalLabel,
     KiCadLocalLabel,
     KiCadLocalNet,
+    KiCadNetclassFlag,
     KiCadPinOccurrence,
     KiCadPowerSymbol,
     KiCadSheetPin,
@@ -195,6 +197,20 @@ def extract_sheet_sources(
         sheet_pins=sheet_pins,
     )
 
+    netclass_flags = [
+        KiCadNetclassFlag(
+            id=candidate.id,
+            scope_id=candidate.scope_id,
+            source_index=candidate.source_index,
+            local_net_id=root_to_net_id[wire_graph.find(candidate.location)],
+            location=candidate.location,
+            rotation=candidate.rotation,
+            net_class=candidate.net_class,
+            component_class=candidate.component_class,
+            metadata=dict(candidate.metadata),
+        )
+        for candidate in candidates.netclass_flags
+    ]
     pin_occurrences = [
         KiCadPinOccurrence(
             id=candidate.id,
@@ -236,6 +252,7 @@ def extract_sheet_sources(
         power_symbols=power_symbols,
         sheet_pins=sheet_pins,
         bus_entries=bus_entries,
+        netclass_flags=netclass_flags,
         pin_occurrences=pin_occurrences,
     )
 
@@ -373,6 +390,7 @@ def _build_local_nets(
     power_symbols: list[KiCadPowerSymbol],
     sheet_pins: list[KiCadSheetPin],
     bus_entries: list[KiCadBusEntry],
+    netclass_flags: list[KiCadNetclassFlag],
     pin_occurrences: list[KiCadPinOccurrence],
 ) -> list[KiCadLocalNet]:
     local_labels_by_net = _items_by_net(local_labels)
@@ -381,6 +399,7 @@ def _build_local_nets(
     power_symbols_by_net = _items_by_net(power_symbols)
     sheet_pins_by_net = _items_by_net(sheet_pins)
     bus_entries_by_net = _items_by_net(bus_entries)
+    netclass_flags_by_net = _items_by_net(netclass_flags)
     pin_ids_by_net: dict[str, list[str]] = {}
     for pin in pin_occurrences:
         pin_ids_by_net.setdefault(pin.local_net_id, []).append(pin.id)
@@ -408,9 +427,45 @@ def _build_local_nets(
                     power_symbols_by_net.get(local_net_id, []),
                     sheet_pins_by_net.get(local_net_id, []),
                 ),
+                netclass_flags=netclass_flags_by_net.get(local_net_id, []),
+                directives=_netclass_flag_directives(
+                    netclass_flags_by_net.get(local_net_id, []),
+                ),
             ),
         )
     return local_nets
+
+
+def _netclass_flag_directives(flags: list[KiCadNetclassFlag]) -> list[SchematicDirective]:
+    directives: list[SchematicDirective] = []
+    for flag in flags:
+        if flag.net_class:
+            directives.append(
+                SchematicDirective(
+                    kind=SchematicDirectiveKind.NET_CLASS,
+                    value=flag.net_class,
+                    source="kicad",
+                    source_id=flag.id,
+                    native_name="Netclass",
+                    x=flag.location[0],
+                    y=flag.location[1],
+                    metadata=dict(flag.metadata),
+                )
+            )
+        if flag.component_class:
+            directives.append(
+                SchematicDirective(
+                    kind=SchematicDirectiveKind.COMPONENT_CLASS,
+                    value=flag.component_class,
+                    source="kicad",
+                    source_id=flag.id,
+                    native_name="Component Class",
+                    x=flag.location[0],
+                    y=flag.location[1],
+                    metadata=dict(flag.metadata),
+                )
+            )
+    return directives
 
 
 def _items_by_net[T: _HasLocalNetId](items: list[T]) -> dict[str, list[T]]:

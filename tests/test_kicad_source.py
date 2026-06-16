@@ -2,17 +2,24 @@
 
 from pathlib import Path
 
-from phosphor_eda.domain.schematic import BusKind, ScopeId
+import sexpdata
+
+from phosphor_eda.domain.schematic import BusKind, SchematicDirectiveKind, ScopeId
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.kicad.resolver import resolve_kicad_source
+from phosphor_eda.formats.kicad.sheet_loader import LoadedSheet
 from phosphor_eda.formats.kicad.source import (
     KiCadGlobalLabel,
     KiCadHierarchicalLabel,
     KiCadLocalLabel,
     KiCadPowerSymbol,
+    KiCadSheetInstance,
     KiCadSheetPin,
 )
-from phosphor_eda.formats.kicad.source_extractor import _generated_local_net_name
+from phosphor_eda.formats.kicad.source_extractor import (
+    _generated_local_net_name,
+    extract_sheet_sources,
+)
 from phosphor_eda.formats.kicad.to_schematic import kicad_to_source
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -98,6 +105,62 @@ def test_generated_local_net_name_keeps_full_anonymous_source_key() -> None:
         )
         == "0001:12.0000:34.0000"
     )
+
+
+def test_netclass_flag_properties_attach_to_touched_local_net() -> None:
+    data = sexpdata.loads(
+        """
+        (kicad_sch
+          (version 20230121)
+          (wire (pts (xy 0 0) (xy 10 0)))
+          (netclass_flag ""
+            (at 5 0 0)
+            (uuid "flag-net")
+            (property "Netclass" "USB_DIFF")
+            (property "Component Class" "")
+          )
+          (netclass_flag ""
+            (at 5 0 0)
+            (uuid "flag-component")
+            (property "Netclass" "")
+            (property "Component Class" "USB_PORT")
+          )
+        )
+        """,
+    )
+    scope = ScopeId(path=())
+    loaded = LoadedSheet(
+        instance=KiCadSheetInstance(
+            id="page:root",
+            scope_id=scope,
+            sheet_name="Root",
+            source_file="root.kicad_sch",
+        ),
+        source_path=Path("root.kicad_sch"),
+        data=data,
+    )
+
+    extracted = extract_sheet_sources(
+        loaded,
+        lib_pins={},
+        lib_descs={},
+        lib_power_kinds={},
+        loaded_scopes={scope},
+    )
+
+    [local_net] = extracted.local_nets
+    assert [
+        (directive.kind, directive.value, directive.native_name)
+        for directive in local_net.directives
+    ] == [
+        (SchematicDirectiveKind.NET_CLASS, "USB_DIFF", "Netclass"),
+        (SchematicDirectiveKind.COMPONENT_CLASS, "USB_PORT", "Component Class"),
+    ]
+    assert {directive.source_id for directive in local_net.directives} == {
+        "root:netclass_flag:flag-net",
+        "root:netclass_flag:flag-component",
+    }
+    assert all(directive.x == 5.0 and directive.y == 0.0 for directive in local_net.directives)
 
 
 def test_multi_pin_power_symbol_attaches_evidence_to_each_local_net(tmp_path: Path) -> None:

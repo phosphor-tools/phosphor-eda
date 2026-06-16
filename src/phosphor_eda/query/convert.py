@@ -320,8 +320,8 @@ def _fill_metadata_from_title_block(project: Project) -> None:
     metadata.name = metadata.name or block.title
     metadata.revision = metadata.revision or block.revision
     metadata.date = metadata.date or block.date
-    metadata.organization = metadata.organization or block.company
-    metadata.author = metadata.author or block.metadata.get("Author", "")
+    metadata.organization = metadata.organization or block.organization
+    metadata.author = metadata.author or block.author or block.metadata.get("Author", "")
 
 
 def _load_kicad_project(entry: Path) -> Project:
