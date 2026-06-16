@@ -77,6 +77,17 @@ def test_cli_schematic_list_buses(tmp_path, monkeypatch):
     assert "DATA[0..1]" in result.output
 
 
+def test_cli_schematic_list_buses_rejects_negative_min_members(tmp_path):
+    path = tmp_path / "design.kicad_sch"
+    path.write_text("(kicad_sch)")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["list", "buses", "--min-members", "-1", str(path)])
+
+    assert result.exit_code != 0
+    assert "Invalid value for '--min-members'" in result.output
+
+
 def test_cli_schematic_show_component():
     runner = CliRunner()
     result = runner.invoke(main, ["show", "component", "U1", DSN_FILE])

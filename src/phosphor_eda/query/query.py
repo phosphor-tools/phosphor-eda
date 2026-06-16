@@ -173,6 +173,9 @@ def filter_buses(
         result = [bus for bus in result if any(member.id == net_obj.id for member in bus.members)]
 
     if min_members is not None:
+        if min_members < 0:
+            msg = "min_members must be >= 0."
+            raise ValueError(msg)
         result = [bus for bus in result if len(bus.members) >= min_members]
 
     return result

@@ -808,6 +808,11 @@ def test_filter_buses_by_kind_and_member_net():
     assert [bus.name for bus in filter_buses(design, min_members=2)] == ["DATA[0..1]"]
 
 
+def test_filter_buses_rejects_negative_min_members() -> None:
+    with pytest.raises(ValueError, match="min_members must be >= 0"):
+        filter_buses(_bus_design(), min_members=-1)
+
+
 def test_find_bus_disambiguates_duplicate_bus_names_by_id():
     design = _bus_design()
     design.buses.append(

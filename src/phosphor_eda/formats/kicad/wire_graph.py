@@ -29,7 +29,7 @@ class WireGraph:
         )
 
     def touches_wire(self, point: KiCadPoint) -> bool:
-        return point_touches_segments(point, self.segments, self.points)
+        return point_touches_segments(point, self.segments)
 
     def find(self, point: KiCadPoint) -> KiCadPoint:
         return self.uf.find(point)
@@ -54,7 +54,7 @@ class BusGraph:
         )
 
     def touches_bus(self, point: KiCadPoint) -> bool:
-        return point_touches_segments(point, self.segments, self.points)
+        return point_touches_segments(point, self.segments)
 
     def find(self, point: KiCadPoint) -> KiCadPoint:
         return self.uf.find(point)
@@ -125,11 +125,7 @@ def points_from_pts_node(pts_node: SExpNode) -> list[KiCadPoint]:
 def point_touches_segments(
     point: KiCadPoint,
     segments: list[tuple[KiCadPoint, KiCadPoint]],
-    points: set[KiCadPoint],
 ) -> bool:
-    for existing in points:
-        if abs(existing[0] - point[0]) < 0.01 and abs(existing[1] - point[1]) < 0.01:
-            return True
     return any(point_on_segment(point, start, end, tol=0.01) for start, end in segments)
 
 

@@ -8,6 +8,7 @@ https://github.com/Werni2A/OpenOrCadParser
 """
 
 import struct
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -634,6 +635,16 @@ def parse_net_bundle_map_data(
     return groups
 
 
+def _parse_net_bundle_map_streams(
+    streams: Iterable[bytes],
+    ctx: ParseContext | None = None,
+) -> list[DsnNetBundleMap]:
+    net_bundle_maps: list[DsnNetBundleMap] = []
+    for stream in streams:
+        net_bundle_maps.extend(parse_net_bundle_map_data(stream, ctx))
+    return net_bundle_maps
+
+
 def parse_hierarchy(data: bytes) -> list[NetIdMapping]:
     """Parse the Hierarchy stream for net-to-ID mappings."""
     r = BinaryReader(data, "Hierarchy")
@@ -880,7 +891,7 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
         path = "/".join(entry)
         if path == "NetBundleMapData" or path.endswith("/NetBundleMapData"):
             bundle_data = ole.openstream(entry).read()
-            design.net_bundle_maps = parse_net_bundle_map_data(bundle_data, ctx)
+            design.net_bundle_maps.extend(_parse_net_bundle_map_streams([bundle_data], ctx))
 
     ole.close()
     return design
