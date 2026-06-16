@@ -5,14 +5,27 @@ Bus notation like ``D[0..7]`` expands into individual signal names
 evidence and must not create aggregate-name public connectivity.
 """
 
-from phosphor_eda.domain.schematic import BusKind, Net, NetOccurrence, Page, Schematic, ScopeId
+from __future__ import annotations
+
+from phosphor_eda.domain.schematic import BusKind, ScopeId
 from phosphor_eda.formats.altium._helpers import parse_bus_notation
 from phosphor_eda.formats.altium.enums import SheetEntrySide
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode, AltiumProject
-from phosphor_eda.formats.altium.records import AltiumRecord, WireRec
-from phosphor_eda.formats.altium.resolver import _altium_harness_buses, resolve_altium_source
-from phosphor_eda.formats.altium.sheet_builder import SheetRecords
+from phosphor_eda.formats.altium.records import (
+    AltiumRecord,
+    BusEntryRec,
+    BusRec,
+    ComponentRec,
+    DesignatorRec,
+    NetLabelRec,
+    PinRec,
+    RecordType,
+    WireRec,
+)
+from phosphor_eda.formats.altium.resolver import resolve_altium_source
+from phosphor_eda.formats.altium.sheet_builder import SheetRecords, resolve_local_net_groups
 from phosphor_eda.formats.altium.source import (
+    AltiumGenericBusLine,
     AltiumHarnessMember,
     AltiumLocalNet,
     AltiumPinOccurrence,
@@ -28,11 +41,13 @@ from phosphor_eda.formats.common.spatial import WireIndex
 def _make_sheet(name: str, records: list[AltiumRecord]) -> SheetRecords:
     """Build a SheetRecords from a flat record list (no parent/child linking)."""
     wire_recs = [r for r in records if isinstance(r, WireRec)]
+    bus_recs = [r for r in records if isinstance(r, BusRec)]
     return SheetRecords(
         name=name,
         records=records,
         children={},
         wire_index=WireIndex(wire_recs),
+        bus_index=WireIndex(bus_recs),
     )
 
 
@@ -108,6 +123,8 @@ def _bus_local_net(
     *,
     ports: list[AltiumPort] | None = None,
     entries: list[AltiumSheetEntry] | None = None,
+    harness_members: list[AltiumHarnessMember] | None = None,
+    generic_bus_members: list[str] | None = None,
 ) -> tuple[AltiumLocalNet, AltiumPinOccurrence]:
     local_net_id = f"{sheet}:local:{name}"
     pin = AltiumPinOccurrence(
@@ -132,7 +149,8 @@ def _bus_local_net(
             power_ports=[],
             ports=ports or [],
             sheet_entries=entries or [],
-            harness_members=[],
+            harness_members=harness_members or [],
+            generic_bus_members=generic_bus_members or [],
             generated_name=f"__auto_{sheet}_{name}",
         ),
         pin,
@@ -146,6 +164,7 @@ def _bus_sheet(
     *,
     symbols: list[AltiumSheetSymbol] | None = None,
     entries: list[AltiumSheetEntry] | None = None,
+    generic_bus_lines: list[AltiumGenericBusLine] | None = None,
     source_file: str = "",
 ) -> AltiumSheetSource:
     return AltiumSheetSource(
@@ -156,6 +175,7 @@ def _bus_sheet(
         local_nets=local_nets,
         sheet_symbols=symbols or [],
         sheet_entries=entries or [],
+        generic_bus_lines=generic_bus_lines or [],
         harness_connectors=[],
         harness_members=[],
         pin_occurrences=pins,
@@ -281,7 +301,7 @@ def test_bus_sheet_entry_skipped_in_resolve_nets():
         index=2,
         owner_index=1,
         name="D[0..7]",
-        side=0,
+        side=SheetEntrySide.LEFT,
         distance_from_top=200,
         coord=(200, 100),
     )
@@ -374,51 +394,174 @@ def test_bus_sheet_entry_aggregate_name_does_not_merge_member_nets():
     assert {net.name for net in bus.members} == {"D0", "D1"}
 
 
+def test_generic_bus_line_entries_create_vector_bus_without_merging_members():
+    """Generic BusRec/BusEntryRec geometry contributes bus evidence only."""
+    d0_component = ComponentRec(
+        record_type=RecordType.COMPONENT,
+        index=1,
+        owner_index=-1,
+        lib_reference="TP",
+    )
+    d0_designator = DesignatorRec(
+        record_type=RecordType.DESIGNATOR,
+        index=2,
+        owner_index=d0_component.owner_key,
+        text="D0_REF",
+    )
+    d0_pin = PinRec(
+        record_type=RecordType.PIN,
+        index=3,
+        owner_index=d0_component.owner_key,
+        designator="1",
+        tip=(0, 10),
+    )
+    d1_component = ComponentRec(
+        record_type=RecordType.COMPONENT,
+        index=4,
+        owner_index=-1,
+        lib_reference="TP",
+    )
+    d1_designator = DesignatorRec(
+        record_type=RecordType.DESIGNATOR,
+        index=5,
+        owner_index=d1_component.owner_key,
+        text="D1_REF",
+    )
+    d1_pin = PinRec(
+        record_type=RecordType.PIN,
+        index=6,
+        owner_index=d1_component.owner_key,
+        designator="1",
+        tip=(0, 20),
+    )
+    d0_wire = WireRec(
+        record_type=RecordType.WIRE,
+        index=7,
+        owner_index=-1,
+        points=[(0, 10), (50, 10)],
+    )
+    d1_wire = WireRec(
+        record_type=RecordType.WIRE,
+        index=8,
+        owner_index=-1,
+        points=[(0, 20), (50, 20)],
+    )
+    bus = BusRec(
+        record_type=RecordType.BUS,
+        index=9,
+        owner_index=-1,
+        points=[(100, 0), (100, 30)],
+    )
+    d0_entry = BusEntryRec(
+        record_type=RecordType.BUS_ENTRY,
+        index=10,
+        owner_index=-1,
+        location=(100, 10),
+        corner=(50, 10),
+    )
+    d1_entry = BusEntryRec(
+        record_type=RecordType.BUS_ENTRY,
+        index=11,
+        owner_index=-1,
+        location=(100, 20),
+        corner=(50, 20),
+    )
+    bus_label = NetLabelRec(
+        record_type=RecordType.NET_LABEL,
+        index=12,
+        owner_index=-1,
+        location=(100, 15),
+        text="D[0..1]",
+    )
+    sheet = _make_sheet(
+        "Bus",
+        [
+            d0_component,
+            d0_designator,
+            d0_pin,
+            d1_component,
+            d1_designator,
+            d1_pin,
+            d0_wire,
+            d1_wire,
+            bus,
+            d0_entry,
+            d1_entry,
+            bus_label,
+        ],
+    )
+    resolution = resolve_local_net_groups(sheet)
+    assert len(resolution.generic_bus_groups) == 1
+    bus_group = resolution.generic_bus_groups[0]
+    assert bus_group.name == "D[0..1]"
+    assert set(bus_group.member_roots_by_name) == {"D0", "D1"}
+    assert bus_group.member_roots_by_name["D0"] != bus_group.member_roots_by_name["D1"]
+
+    d0_net, d0_pin = _bus_local_net(
+        "Bus",
+        "D0",
+        "D0_REF",
+        generic_bus_members=["D0"],
+    )
+    d1_net, d1_pin = _bus_local_net(
+        "Bus",
+        "D1",
+        "D1_REF",
+        generic_bus_members=["D1"],
+    )
+    source_sheet = _bus_sheet(
+        "Bus",
+        [d0_net, d1_net],
+        [d0_pin, d1_pin],
+        generic_bus_lines=[
+            AltiumGenericBusLine(
+                id="sheet:Bus:generic_bus:0000:12",
+                scope_id=_scope("Bus"),
+                source_index=12,
+                name="D[0..1]",
+                location=(100, 15),
+                member_local_net_ids={"D0": d0_net.id, "D1": d1_net.id},
+            )
+        ],
+    )
+
+    design = resolve_altium_source(
+        _bus_source([source_sheet], AltiumHierarchyMode.FLAT),
+    )
+
+    assert {net.name: {pin.component.reference for pin in net.pins} for net in design.nets} == {
+        "D0": {"D0_REF"},
+        "D1": {"D1_REF"},
+    }
+    bus_result = next(bus for bus in design.buses if bus.name == "D[0..1]")
+    assert bus_result.kind is BusKind.VECTOR
+    assert {net.name for net in bus_result.members} == {"D0", "D1"}
+
+
 def test_harness_bus_members_keep_resolved_net_identity_for_duplicate_names():
-    scope = _scope("Harness")
-    page = Page(id="page:harness", name="Harness", scope_id=scope)
-    harness_net = Net(id="net:harness", name="SIG")
-    unrelated_net = Net(id="net:unrelated", name="SIG")
-    harness_net.occurrences.append(
-        NetOccurrence(
-            id="net:harness:occ:1",
-            net=harness_net,
-            page=page,
-            scope_id=scope,
-            source_local_net_id="Harness:local:harness",
-        )
-    )
-    unrelated_net.occurrences.append(
-        NetOccurrence(
-            id="net:unrelated:occ:1",
-            net=unrelated_net,
-            page=page,
-            scope_id=scope,
-            source_local_net_id="Harness:local:unrelated",
-        )
-    )
-    design = Schematic(name="Harness", pages=[page], nets=[harness_net, unrelated_net])
-    local_net = AltiumLocalNet(
-        id="Harness:local:harness",
-        scope_id=scope,
-        wire_points=set(),
-        pin_ids=[],
-        net_labels=[],
-        power_ports=[],
-        ports=[],
-        sheet_entries=[],
+    harness_net, harness_pin = _bus_local_net(
+        "Harness",
+        "harness",
+        "H1",
         harness_members=[_harness_member("Harness", "CTRL", "SIG")],
-        generated_name="SIG",
     )
-    source = _bus_source(
-        [_bus_sheet("Harness", [local_net], [])],
-        AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
+    unrelated_net, unrelated_pin = _bus_local_net(
+        "Harness",
+        "unrelated",
+        "U1",
+        generic_bus_members=["SIG"],
     )
 
-    buses = _altium_harness_buses(source, design)
+    design = resolve_altium_source(
+        _bus_source(
+            [_bus_sheet("Harness", [harness_net, unrelated_net], [harness_pin, unrelated_pin])],
+            AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
+        )
+    )
 
-    assert len(buses) == 1
-    assert [net.id for net in buses[0].members] == ["net:harness"]
+    bus = next(bus for bus in design.buses if bus.name == "CTRL")
+
+    assert [net.name for net in bus.members] == ["CTRL.SIG"]
 
 
 def test_bus_port_aggregate_name_does_not_merge_member_port_nets():

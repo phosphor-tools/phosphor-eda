@@ -147,6 +147,17 @@ class AltiumHarnessMember:
 
 
 @dataclass(slots=True)
+class AltiumGenericBusLine:
+    id: str
+    scope_id: ScopeId
+    source_index: int
+    name: str
+    location: tuple[int, int]
+    member_local_net_ids: dict[str, str]
+    kind: str = field(default="generic_bus", init=False)
+
+
+@dataclass(slots=True)
 class AltiumPinOccurrence:
     id: str
     scope_id: ScopeId
@@ -179,6 +190,7 @@ class AltiumLocalNet:
     sheet_entries: list[AltiumSheetEntry]
     harness_members: list[AltiumHarnessMember]
     generated_name: str
+    generic_bus_members: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -194,6 +206,7 @@ class AltiumSheetSource:
     harness_members: list[AltiumHarnessMember]
     pin_occurrences: list[AltiumPinOccurrence]
     title_block: TitleBlock | None = None
+    generic_bus_lines: list[AltiumGenericBusLine] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -690,11 +703,34 @@ def _source_sheet(
                     for member_index in sorted(harness_members_by_index)
                     if harness_members_by_index[member_index].coord in group.extra_named_coords
                 ],
+                generic_bus_members=[],
                 generated_name=group.generated_name,
             ),
         )
 
     local_nets_by_id = {local_net.id: local_net for local_net in local_nets}
+    generic_bus_lines: list[AltiumGenericBusLine] = []
+    for ordinal, bus_group in enumerate(resolution.generic_bus_groups):
+        member_local_net_ids: dict[str, str] = {}
+        for member_name, member_root in bus_group.member_roots_by_name.items():
+            member_local_net_id = root_to_net_id.get(member_root)
+            if member_local_net_id is None:
+                continue
+            member_local_net_ids[member_name] = member_local_net_id
+            local_net = local_nets_by_id.get(member_local_net_id)
+            if local_net is not None and member_name not in local_net.generic_bus_members:
+                local_net.generic_bus_members.append(member_name)
+        generic_bus_lines.append(
+            AltiumGenericBusLine(
+                id=f"{sheet_id}:generic_bus:{ordinal:04d}:{bus_group.source_index}",
+                scope_id=scope_id,
+                source_index=bus_group.source_index,
+                name=bus_group.name,
+                location=bus_group.location,
+                member_local_net_ids=member_local_net_ids,
+            )
+        )
+
     components_by_owner = _component_records(sheet)
     component_parameters_by_owner = _component_parameters_by_owner(sheet)
     component_footprints_by_owner = _component_footprints_by_owner(sheet)
@@ -766,6 +802,7 @@ def _source_sheet(
         local_nets=local_nets,
         sheet_symbols=symbols,
         sheet_entries=list(sheet_entries_by_index.values()),
+        generic_bus_lines=generic_bus_lines,
         harness_connectors=harness_connectors,
         harness_members=list(harness_members_by_index.values()),
         pin_occurrences=pin_occurrences,

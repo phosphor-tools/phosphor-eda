@@ -15,7 +15,9 @@ from typing import TYPE_CHECKING, TypeVar
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from phosphor_eda.formats.altium.records import WireRec
+    from phosphor_eda.formats.altium.records import BusRec, WireRec
+
+    AxisAlignedRec = WireRec | BusRec
 
 T = TypeVar("T")
 
@@ -52,10 +54,10 @@ class _Segment:
 
     lo: int
     hi: int
-    wire: WireRec
+    wire: AxisAlignedRec
     seg_idx: int
 
-    def __init__(self, lo: int, hi: int, wire: WireRec, seg_idx: int) -> None:
+    def __init__(self, lo: int, hi: int, wire: AxisAlignedRec, seg_idx: int) -> None:
         self.lo = lo
         self.hi = hi
         self.wire = wire
@@ -70,7 +72,7 @@ class WireIndex:
     iterating all segments.
     """
 
-    def __init__(self, wires: Iterable[WireRec]) -> None:
+    def __init__(self, wires: Iterable[AxisAlignedRec]) -> None:
         # _by_row[y] = sorted list of (x_min, x_max, wire, seg_idx)
         self._by_row: dict[int, list[_Segment]] = {}
         # _by_col[x] = sorted list of (y_min, y_max, wire, seg_idx)
@@ -100,12 +102,12 @@ class WireIndex:
         self,
         x: int,
         y: int,
-    ) -> list[tuple[WireRec, int]]:
+    ) -> list[tuple[AxisAlignedRec, int]]:
         """Find all wire segments that contain the point (x, y).
 
         Returns a list of (wire, segment_index) tuples.
         """
-        result: list[tuple[WireRec, int]] = []
+        result: list[tuple[AxisAlignedRec, int]] = []
         self._query_axis(self._by_row.get(y), x, result)
         self._query_axis(self._by_col.get(x), y, result)
         return result
@@ -114,7 +116,7 @@ class WireIndex:
     def _query_axis(
         bucket: list[_Segment] | None,
         val: int,
-        out: list[tuple[WireRec, int]],
+        out: list[tuple[AxisAlignedRec, int]],
     ) -> None:
         """Find segments in a sorted bucket where lo <= val <= hi."""
         if not bucket:
