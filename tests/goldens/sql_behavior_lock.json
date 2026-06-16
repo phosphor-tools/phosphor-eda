@@ -157,7 +157,7 @@
     }
   },
   "pi-mx8": {
-    "serialize_sha256": "fe3d6d740825bf721ecd0d2bc758006ae42a9fcc54be0b67954d122e22861356",
+    "serialize_sha256": "0b7e085503d4ab25c247f2adeb9404b34124cadbac7420461e9d37e8b2455db4",
     "tables": {
       "artwork": {
         "rows": 11460,
@@ -177,11 +177,11 @@
       },
       "bus_members": {
         "rows": 274,
-        "sha256": "761d5497acd7660282eb77437388f60bf4944e4941321d1c72768837df4d0783"
+        "sha256": "73ad75e588b54d277e9467d52c3453d2d145850d334d6eb355b4e55f458ae3fb"
       },
       "buses": {
         "rows": 25,
-        "sha256": "665e3c257f5cc0a0dd377eefa72fa65b6970d06def3de466627553a69b84fb1c"
+        "sha256": "b468ca38c8fd090e454bb4fa7b16ec7106bf4fd52837b9fd780ea5d38b4882d0"
       },
       "component_footprints": {
         "rows": 589,
@@ -240,8 +240,8 @@
         "sha256": "3a1d8cf41ae9acebb4941fef9eb91086c02fb70198b7204f380a8900e2596249"
       },
       "net_aliases": {
-        "rows": 219,
-        "sha256": "a8f0d26346192110ceca48c49977cc1cf0f11af49fb44026d4079d6f30b1bf15"
+        "rows": 259,
+        "sha256": "b6e7754a3cad906b41675a7447f9dd88dd14c03fe21cfef5f3010133834b7894"
       },
       "net_class_members": {
         "rows": 2200,
@@ -253,19 +253,19 @@
       },
       "net_metadata": {
         "rows": 546,
-        "sha256": "2b677c766a01a7c3def1f2b13bd67a01ffa1964e53d799144177013b76452df0"
+        "sha256": "985c444de3436bf85e269de4319bcf1759a6a8f2bb79c8812fc89935bc629286"
       },
       "net_occurrence_metadata": {
         "rows": 0,
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       "net_occurrence_source_names": {
-        "rows": 1556,
-        "sha256": "39f11091130ce286166fc30f67fa185a80829a872a74e21091f94d61d6aa848c"
+        "rows": 1596,
+        "sha256": "9c6014fe196d80f890ff4e5ffdfb7beefdc539389c262658ff5a9c11f5c5f029"
       },
       "net_occurrences": {
         "rows": 1185,
-        "sha256": "8b89bd50cc071fa11103f7a3b3ed19490158ed57bbe218d2eb73526df3085755"
+        "sha256": "4545c150cd33b974749331809fd72ce59307fe5bd0ee4b97bf7f4956b83dd6d2"
       },
       "net_pages": {
         "rows": 898,
@@ -273,7 +273,7 @@
       },
       "nets": {
         "rows": 546,
-        "sha256": "8680f8bbb80dfd5c8fa57d44228fd91e6596f2b4f14a1a1110cdaddc547fb20c"
+        "sha256": "4a97d8efd04980175e7512235fe87386121bffc45feebbcc58a3fb3056f02732"
       },
       "pads": {
         "rows": 2606,
