@@ -5,8 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
+from phosphor_eda.domain.buses import expand_bus_members
+from phosphor_eda.formats.kicad.lib_symbols import strip_kicad_markup
 from phosphor_eda.formats.kicad.source import (
     KiCadBusAlias,
+    KiCadBusEntry,
     KiCadBusLabel,
     KiCadGlobalLabel,
     KiCadHierarchicalLabel,
@@ -18,7 +21,7 @@ from phosphor_eda.formats.kicad.source import (
     KiCadSheetSymbol,
 )
 from phosphor_eda.formats.kicad.source_candidates import extract_source_candidates
-from phosphor_eda.formats.kicad.wire_graph import build_wire_graph
+from phosphor_eda.formats.kicad.wire_graph import build_bus_graph, build_wire_graph
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -39,6 +42,7 @@ class _ExtractedSheet:
     hierarchical_labels: list[KiCadHierarchicalLabel]
     bus_labels: list[KiCadBusLabel]
     bus_aliases: list[KiCadBusAlias]
+    bus_entries: list[KiCadBusEntry]
     power_symbols: list[KiCadPowerSymbol]
     sheet_symbols: list[KiCadSheetSymbol]
     sheet_pins: list[KiCadSheetPin]
@@ -61,6 +65,7 @@ def extract_sheet_sources(
     scope_id = loaded.instance.scope_id
     data = loaded.data
     wire_graph = build_wire_graph(data)
+    bus_graph = build_bus_graph(data)
 
     candidates = extract_source_candidates(
         data,
@@ -69,6 +74,7 @@ def extract_sheet_sources(
         lib_descs,
         lib_power_kinds,
         wire_graph,
+        bus_graph,
         root_uuid,
         text_variables,
         ctx,
@@ -118,6 +124,7 @@ def extract_sheet_sources(
             name=candidate.name,
             location=candidate.location,
             kind=candidate.kind,
+            bus_group_id=candidate.bus_group_id,
         )
         for candidate in candidates.bus_labels
     ]
@@ -129,6 +136,20 @@ def extract_sheet_sources(
             members=candidate.members,
         )
         for candidate in candidates.bus_aliases
+    ]
+    bus_entries = [
+        KiCadBusEntry(
+            id=candidate.id,
+            scope_id=candidate.scope_id,
+            source_index=candidate.source_index,
+            start=candidate.start,
+            end=candidate.end,
+            wire_point=candidate.wire_point,
+            bus_point=candidate.bus_point,
+            local_net_id=root_to_net_id[wire_graph.find(candidate.wire_point)],
+            bus_group_id=candidate.bus_group_id,
+        )
+        for candidate in candidates.bus_entries
     ]
     power_symbols = [
         KiCadPowerSymbol(
@@ -162,6 +183,18 @@ def extract_sheet_sources(
     sheet_symbols = [
         symbol for symbol in candidates.sheet_symbols if symbol.child_scope_id in loaded_scopes
     ]
+
+    _assign_bus_entry_members(
+        bus_entries,
+        bus_labels=bus_labels,
+        bus_aliases=bus_aliases,
+        local_labels=local_labels,
+        global_labels=global_labels,
+        hierarchical_labels=hierarchical_labels,
+        power_symbols=power_symbols,
+        sheet_pins=sheet_pins,
+    )
+
     pin_occurrences = [
         KiCadPinOccurrence(
             id=candidate.id,
@@ -202,6 +235,7 @@ def extract_sheet_sources(
         hierarchical_labels=hierarchical_labels,
         power_symbols=power_symbols,
         sheet_pins=sheet_pins,
+        bus_entries=bus_entries,
         pin_occurrences=pin_occurrences,
     )
 
@@ -213,6 +247,7 @@ def extract_sheet_sources(
         hierarchical_labels=hierarchical_labels,
         bus_labels=bus_labels,
         bus_aliases=bus_aliases,
+        bus_entries=bus_entries,
         power_symbols=power_symbols,
         sheet_symbols=sheet_symbols,
         sheet_pins=sheet_pins,
@@ -230,6 +265,103 @@ def _local_net_ids(
     return result
 
 
+def _assign_bus_entry_members(
+    bus_entries: list[KiCadBusEntry],
+    *,
+    bus_labels: list[KiCadBusLabel],
+    bus_aliases: list[KiCadBusAlias],
+    local_labels: list[KiCadLocalLabel],
+    global_labels: list[KiCadGlobalLabel],
+    hierarchical_labels: list[KiCadHierarchicalLabel],
+    power_symbols: list[KiCadPowerSymbol],
+    sheet_pins: list[KiCadSheetPin],
+) -> None:
+    labels_by_bus_group: dict[str, list[KiCadBusLabel]] = {}
+    for label in bus_labels:
+        if label.bus_group_id:
+            labels_by_bus_group.setdefault(label.bus_group_id, []).append(label)
+
+    scalar_names_by_net = _scalar_names_by_net(
+        local_labels,
+        global_labels,
+        hierarchical_labels,
+        power_symbols,
+        sheet_pins,
+    )
+
+    entries_by_bus_group: dict[str, list[KiCadBusEntry]] = {}
+    for entry in bus_entries:
+        if entry.bus_group_id:
+            entries_by_bus_group.setdefault(entry.bus_group_id, []).append(entry)
+
+    for bus_group_id, entries in entries_by_bus_group.items():
+        label = _best_bus_group_label(labels_by_bus_group.get(bus_group_id, []))
+        if label is None:
+            continue
+        aliases = {
+            alias.name: alias.members for alias in bus_aliases if alias.scope_id == label.scope_id
+        }
+        members = tuple(expand_bus_members(label.name, aliases=aliases) or ())
+        if not members:
+            continue
+
+        remaining_members = list(members)
+        member_set = set(members)
+        sorted_entries = sorted(entries, key=_bus_entry_sort_key)
+        for entry in sorted_entries:
+            explicit_name = _explicit_bus_entry_member(
+                scalar_names_by_net.get(entry.local_net_id, ()),
+                member_set,
+            )
+            if explicit_name is None:
+                continue
+            entry.member_name = explicit_name
+            entry.member_label_id = label.id
+            if explicit_name in remaining_members:
+                remaining_members.remove(explicit_name)
+
+        for entry in sorted_entries:
+            if entry.member_name or not remaining_members:
+                continue
+            entry.member_name = remaining_members.pop(0)
+            entry.member_label_id = label.id
+
+
+def _scalar_names_by_net(
+    local_labels: list[KiCadLocalLabel],
+    global_labels: list[KiCadGlobalLabel],
+    hierarchical_labels: list[KiCadHierarchicalLabel],
+    power_symbols: list[KiCadPowerSymbol],
+    sheet_pins: list[KiCadSheetPin],
+) -> dict[str, tuple[str, ...]]:
+    names: dict[str, list[str]] = {}
+    for item in (*local_labels, *global_labels, *hierarchical_labels, *power_symbols, *sheet_pins):
+        name = strip_kicad_markup(item.name)
+        if name:
+            names.setdefault(item.local_net_id, []).append(name)
+    return {net_id: tuple(net_names) for net_id, net_names in names.items()}
+
+
+def _best_bus_group_label(labels: list[KiCadBusLabel]) -> KiCadBusLabel | None:
+    if not labels:
+        return None
+    return min(labels, key=lambda label: label.source_index)
+
+
+def _explicit_bus_entry_member(
+    scalar_names: tuple[str, ...],
+    member_names: set[str],
+) -> str | None:
+    for name in scalar_names:
+        if name in member_names:
+            return name
+    return None
+
+
+def _bus_entry_sort_key(entry: KiCadBusEntry) -> tuple[float, float, int]:
+    return entry.bus_point[1], entry.bus_point[0], entry.source_index
+
+
 def _build_local_nets(
     *,
     scope_id: ScopeId,
@@ -240,6 +372,7 @@ def _build_local_nets(
     hierarchical_labels: list[KiCadHierarchicalLabel],
     power_symbols: list[KiCadPowerSymbol],
     sheet_pins: list[KiCadSheetPin],
+    bus_entries: list[KiCadBusEntry],
     pin_occurrences: list[KiCadPinOccurrence],
 ) -> list[KiCadLocalNet]:
     local_labels_by_net = _items_by_net(local_labels)
@@ -247,6 +380,7 @@ def _build_local_nets(
     hierarchical_labels_by_net = _items_by_net(hierarchical_labels)
     power_symbols_by_net = _items_by_net(power_symbols)
     sheet_pins_by_net = _items_by_net(sheet_pins)
+    bus_entries_by_net = _items_by_net(bus_entries)
     pin_ids_by_net: dict[str, list[str]] = {}
     for pin in pin_occurrences:
         pin_ids_by_net.setdefault(pin.local_net_id, []).append(pin.id)
@@ -265,6 +399,7 @@ def _build_local_nets(
                 hierarchical_labels=hierarchical_labels_by_net.get(local_net_id, []),
                 power_symbols=power_symbols_by_net.get(local_net_id, []),
                 sheet_pins=sheet_pins_by_net.get(local_net_id, []),
+                bus_entries=bus_entries_by_net.get(local_net_id, []),
                 generated_name=_generated_local_net_name(
                     local_net_id,
                     local_labels_by_net.get(local_net_id, []),

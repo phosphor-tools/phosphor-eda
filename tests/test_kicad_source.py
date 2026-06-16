@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from phosphor_eda.domain.schematic import ScopeId
+from phosphor_eda.domain.schematic import BusKind, ScopeId
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.kicad.resolver import resolve_kicad_source
 from phosphor_eda.formats.kicad.source import (
@@ -177,6 +177,128 @@ def test_multi_pin_power_symbol_attaches_evidence_to_each_local_net(tmp_path: Pa
     assert {pin.component.reference for pin in vcc_net.pins} == {"J1", "J2"}
     assert len(vcc_net.occurrences) == 2
     assert all("VCC" in occurrence.source_names for occurrence in vcc_net.occurrences)
+
+
+def test_bus_entries_connect_vector_bus_members(tmp_path: Path) -> None:
+    schematic_path = tmp_path / "bus_entries.kicad_sch"
+    schematic_path.write_text(
+        """
+(kicad_sch (version 20231120) (generator eeschema)
+  (uuid 10000000-0000-0000-0000-000000000001)
+  (paper "A4")
+  (lib_symbols
+    (symbol "Test:OnePin" (pin_names (offset 0)) (in_bom yes) (on_board yes)
+      (property "Reference" "J" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (property "Value" "OnePin" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (symbol "OnePin_1_1"
+        (pin passive line (at 0 0 0) (length 0)
+          (name "~" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27))))
+        )
+      )
+    )
+  )
+  (symbol (lib_id "Test:OnePin") (at 10 20 0) (unit 1)
+    (uuid 10000000-0000-0000-0000-000000000011)
+    (property "Reference" "J1" (at 10 20 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "Probe" (at 10 20 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid 10000000-0000-0000-0000-000000000021))
+  )
+  (symbol (lib_id "Test:OnePin") (at 10 30 0) (unit 1)
+    (uuid 10000000-0000-0000-0000-000000000012)
+    (property "Reference" "J2" (at 10 30 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "Probe" (at 10 30 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid 10000000-0000-0000-0000-000000000022))
+  )
+  (wire (pts (xy 10 20) (xy 20 20)) (stroke (width 0) (type default))
+    (uuid 10000000-0000-0000-0000-000000000031))
+  (wire (pts (xy 10 30) (xy 20 30)) (stroke (width 0) (type default))
+    (uuid 10000000-0000-0000-0000-000000000032))
+  (bus (pts (xy 25 15) (xy 25 25)) (stroke (width 0) (type default))
+    (uuid 10000000-0000-0000-0000-000000000041))
+  (bus_entry (pts (xy 20 20) (xy 25 15)) (stroke (width 0) (type default))
+    (uuid 10000000-0000-0000-0000-000000000051))
+  (bus_entry (pts (xy 20 30) (xy 25 25)) (stroke (width 0) (type default))
+    (uuid 10000000-0000-0000-0000-000000000052))
+  (label "DATA[0..1]" (at 25 15 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid 10000000-0000-0000-0000-000000000061)
+  )
+  (sheet_instances (path "/" (page "1")))
+)
+""",
+        encoding="utf-8",
+    )
+
+    source = kicad_to_source(schematic_path)
+
+    assert [(entry.start, entry.end, entry.member_name) for entry in source.bus_entries] == [
+        ((20.0, 20.0), (25.0, 15.0), "DATA0"),
+        ((20.0, 30.0), (25.0, 25.0), "DATA1"),
+    ]
+
+    design = resolve_kicad_source(source)
+
+    assert {net.name for net in design.nets} == {"/DATA0", "/DATA1"}
+    bus = next(bus for bus in design.buses if bus.name == "DATA[0..1]")
+    assert bus.kind is BusKind.VECTOR
+    assert {net.name for net in bus.members} == {"/DATA0", "/DATA1"}
+
+
+def test_bus_entries_use_bus_junctions_to_find_labels(tmp_path: Path) -> None:
+    schematic_path = tmp_path / "bus_entry_junction.kicad_sch"
+    schematic_path.write_text(
+        """
+(kicad_sch (version 20231120) (generator eeschema)
+  (uuid 10000000-0000-0000-0000-000000000001)
+  (paper "A4")
+  (lib_symbols
+    (symbol "Test:OnePin" (pin_names (offset 0)) (in_bom yes) (on_board yes)
+      (property "Reference" "J" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (property "Value" "OnePin" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (symbol "OnePin_1_1"
+        (pin passive line (at 0 0 0) (length 0)
+          (name "~" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27))))
+        )
+      )
+    )
+  )
+  (symbol (lib_id "Test:OnePin") (at 10 20 0) (unit 1)
+    (uuid 10000000-0000-0000-0000-000000000011)
+    (property "Reference" "J1" (at 10 20 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "Probe" (at 10 20 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid 10000000-0000-0000-0000-000000000021))
+  )
+  (wire (pts (xy 10 20) (xy 20 20)) (stroke (width 0) (type default))
+    (uuid 10000000-0000-0000-0000-000000000031))
+  (bus (pts (xy 25 15) (xy 25 25)) (stroke (width 0) (type default))
+    (uuid 10000000-0000-0000-0000-000000000041))
+  (bus (pts (xy 25 20) (xy 30 20)) (stroke (width 0) (type default))
+    (uuid 10000000-0000-0000-0000-000000000042))
+  (junction (at 25 20) (diameter 0) (color 0 0 0 0)
+    (uuid 10000000-0000-0000-0000-000000000043))
+  (bus_entry (pts (xy 20 20) (xy 25 15)) (stroke (width 0) (type default))
+    (uuid 10000000-0000-0000-0000-000000000051))
+  (label "DATA[0..0]" (at 30 20 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid 10000000-0000-0000-0000-000000000061)
+  )
+  (sheet_instances (path "/" (page "1")))
+)
+""",
+        encoding="utf-8",
+    )
+
+    source = kicad_to_source(schematic_path)
+
+    [entry] = source.bus_entries
+    assert entry.member_name == "DATA0"
+
+    design = resolve_kicad_source(source)
+
+    bus = next(bus for bus in design.buses if bus.name == "DATA[0..0]")
+    assert {net.name for net in bus.members} == {"/DATA0"}
 
 
 def _write_single_pin_label_schematic(path: Path, label_name: str) -> None:
