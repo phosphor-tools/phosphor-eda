@@ -104,6 +104,7 @@ class KiCadBusLabel:
     name: str
     location: KiCadPoint
     kind: str
+    bus_group_id: str = ""
 
 
 @dataclass(slots=True)
@@ -112,6 +113,21 @@ class KiCadBusAlias:
     scope_id: ScopeId
     name: str
     members: tuple[str, ...]
+
+
+@dataclass(slots=True)
+class KiCadBusEntry:
+    id: str
+    scope_id: ScopeId
+    source_index: int
+    start: KiCadPoint
+    end: KiCadPoint
+    wire_point: KiCadPoint
+    bus_point: KiCadPoint
+    local_net_id: str
+    bus_group_id: str
+    member_name: str = ""
+    member_label_id: str = ""
 
 
 @dataclass(slots=True)
@@ -154,6 +170,7 @@ class KiCadLocalNet:
     hierarchical_labels: list[KiCadHierarchicalLabel]
     power_symbols: list[KiCadPowerSymbol]
     sheet_pins: list[KiCadSheetPin]
+    bus_entries: list[KiCadBusEntry]
     generated_name: str
 
 
@@ -170,6 +187,7 @@ class KiCadSourceDesign:
     hierarchical_labels: list[KiCadHierarchicalLabel]
     bus_labels: list[KiCadBusLabel]
     bus_aliases: list[KiCadBusAlias]
+    bus_entries: list[KiCadBusEntry]
     power_symbols: list[KiCadPowerSymbol]
     sheet_symbols: list[KiCadSheetSymbol]
     sheet_pins: list[KiCadSheetPin]

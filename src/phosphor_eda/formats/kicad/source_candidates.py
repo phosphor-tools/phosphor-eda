@@ -31,7 +31,12 @@ from phosphor_eda.formats.kicad.source import (
     KiCadPoint,
     KiCadSheetSymbol,
 )
-from phosphor_eda.formats.kicad.wire_graph import WireGraph, point_from_at
+from phosphor_eda.formats.kicad.wire_graph import (
+    BusGraph,
+    WireGraph,
+    point_from_at,
+    points_from_pts_node,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -111,6 +116,7 @@ class _BusLabelCandidate:
     name: str
     location: KiCadPoint
     kind: str
+    bus_group_id: str
 
 
 @dataclass(slots=True)
@@ -122,12 +128,25 @@ class _BusAliasCandidate:
 
 
 @dataclass(slots=True)
+class _BusEntryCandidate:
+    id: str
+    scope_id: ScopeId
+    source_index: int
+    start: KiCadPoint
+    end: KiCadPoint
+    wire_point: KiCadPoint
+    bus_point: KiCadPoint
+    bus_group_id: str
+
+
+@dataclass(slots=True)
 class SheetCandidates:
     local_labels: list[_LabelCandidate]
     global_labels: list[_LabelCandidate]
     hierarchical_labels: list[_LabelCandidate]
     bus_labels: list[_BusLabelCandidate]
     bus_aliases: list[_BusAliasCandidate]
+    bus_entries: list[_BusEntryCandidate]
     power_symbols: list[_PowerCandidate]
     sheet_symbols: list[KiCadSheetSymbol]
     sheet_pins: list[_SheetPinCandidate]
@@ -141,6 +160,7 @@ def extract_source_candidates(
     lib_descs: dict[str, str],
     lib_power_kinds: LibPowerKinds,
     wire_graph: WireGraph,
+    bus_graph: BusGraph,
     root_uuid: str = "",
     text_variables: Mapping[str, str] | None = None,
     ctx: ParseContext | None = None,
@@ -177,8 +197,16 @@ def extract_source_candidates(
         ctx,
         warned_variables,
     )
-    bus_label_candidates = _bus_label_candidates(data, scope_id, variables, ctx, warned_variables)
+    bus_label_candidates = _bus_label_candidates(
+        data,
+        scope_id,
+        bus_graph,
+        variables,
+        ctx,
+        warned_variables,
+    )
     bus_alias_candidates = _bus_alias_candidates(data, scope_id)
+    bus_entry_candidates = _bus_entry_candidates(data, scope_id, wire_graph, bus_graph)
     sheet_symbols, sheet_pin_candidates = _sheet_symbol_sources(
         data,
         scope_id,
@@ -208,6 +236,7 @@ def extract_source_candidates(
         hierarchical_labels=hierarchical_label_candidates,
         bus_labels=bus_label_candidates,
         bus_aliases=bus_alias_candidates,
+        bus_entries=bus_entry_candidates,
         power_symbols=power_candidates,
         sheet_symbols=sheet_symbols,
         sheet_pins=sheet_pin_candidates,
@@ -287,6 +316,7 @@ def _label_candidates(
 def _bus_label_candidates(
     data: SExpNode,
     scope_id: ScopeId,
+    bus_graph: BusGraph,
     text_variables: Mapping[str, str],
     ctx: ParseContext | None,
     warned_variables: set[str],
@@ -311,6 +341,16 @@ def _bus_label_candidates(
             at_node = sexp.find(label[2:], "at")
             if at_node is None:
                 continue
+            location = point_from_at(at_node)
+            if bus_graph.touches_bus(location):
+                bus_graph.connect_point(location)
+                bus_group_id = _source_id(
+                    scope_id,
+                    "bus_group",
+                    _point_key(bus_graph.find(location)),
+                )
+            else:
+                bus_group_id = ""
             source_key = _node_value(label[2:], "uuid") or str(index)
             candidates.append(
                 _BusLabelCandidate(
@@ -318,8 +358,9 @@ def _bus_label_candidates(
                     scope_id=scope_id,
                     source_index=index,
                     name=bus_name,
-                    location=point_from_at(at_node),
+                    location=location,
                     kind=id_kind,
+                    bus_group_id=bus_group_id,
                 )
             )
     return candidates
@@ -346,6 +387,55 @@ def _bus_alias_candidates(data: SExpNode, scope_id: ScopeId) -> list[_BusAliasCa
             )
         )
     return aliases
+
+
+def _bus_entry_candidates(
+    data: SExpNode,
+    scope_id: ScopeId,
+    wire_graph: WireGraph,
+    bus_graph: BusGraph,
+) -> list[_BusEntryCandidate]:
+    entries: list[_BusEntryCandidate] = []
+    for index, entry_node in enumerate(sexp.find_all(data[1:], "bus_entry")):
+        pts_node = sexp.find(entry_node[1:], "pts")
+        if pts_node is None:
+            continue
+        points = points_from_pts_node(pts_node)
+        if len(points) < 2:
+            continue
+        start, end = points[0], points[-1]
+        start_is_wire = wire_graph.touches_wire(start)
+        end_is_wire = wire_graph.touches_wire(end)
+        start_is_bus = bus_graph.touches_bus(start)
+        end_is_bus = bus_graph.touches_bus(end)
+
+        if start_is_wire and end_is_bus:
+            wire_point, bus_point = start, end
+        elif end_is_wire and start_is_bus:
+            wire_point, bus_point = end, start
+        else:
+            continue
+
+        wire_graph.connect_point(wire_point)
+        bus_graph.connect_point(bus_point)
+        source_key = _node_value(entry_node[1:], "uuid") or str(index)
+        entries.append(
+            _BusEntryCandidate(
+                id=_source_id(scope_id, "bus_entry", source_key),
+                scope_id=scope_id,
+                source_index=index,
+                start=start,
+                end=end,
+                wire_point=wire_point,
+                bus_point=bus_point,
+                bus_group_id=_source_id(
+                    scope_id,
+                    "bus_group",
+                    _point_key(bus_graph.find(bus_point)),
+                ),
+            )
+        )
+    return entries
 
 
 def _sheet_symbol_sources(
@@ -751,6 +841,10 @@ def _matches_point(point: KiCadPoint, points: set[KiCadPoint]) -> bool:
 def _source_id(scope_id: ScopeId, kind: str, source_key: str) -> str:
     scope_key = "root" if not scope_id.path else "/".join(scope_id.path)
     return f"{scope_key}:{kind}:{source_key}"
+
+
+def _point_key(point: KiCadPoint) -> str:
+    return f"{point[0]:.4f}:{point[1]:.4f}"
 
 
 def _node_value(items: SExpNode, tag_name: str) -> str:
