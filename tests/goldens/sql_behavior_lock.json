@@ -1,6 +1,6 @@
 {
   "jetson-orin": {
-    "serialize_sha256": "8aa11b98acfa76e5adbdd027dca516873bbb70ce6201ac8ae488ebf396e9f21c",
+    "serialize_sha256": "65d37c0664a0001bf08e46adcddb224d505d8423fff8d11afd92282ffddd7d7c",
     "tables": {
       "artwork": {
         "rows": 149352,
@@ -157,7 +157,7 @@
     }
   },
   "pi-mx8": {
-    "serialize_sha256": "fe3d6d740825bf721ecd0d2bc758006ae42a9fcc54be0b67954d122e22861356",
+    "serialize_sha256": "1e5cbcd6d3962c671c82cb45449e2d3e6c36e3f0eb0176d9525155308e9d88ac",
     "tables": {
       "artwork": {
         "rows": 11460,

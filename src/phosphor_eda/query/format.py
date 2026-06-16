@@ -83,6 +83,49 @@ def _filter_default_net_metadata(net: Net) -> dict[str, str]:
     }
 
 
+def _component_mpn_label(comp: Component) -> str:
+    part_number_labels: list[str] = []
+    seen: set[str] = set()
+    for part_number in comp.part_numbers:
+        number = part_number.number.strip()
+        if not number:
+            continue
+        maker = part_number.manufacturer.strip()
+        label = f"{maker} {number}" if maker else number
+        normalized = label.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        part_number_labels.append(label)
+    if part_number_labels:
+        return "; ".join(part_number_labels)
+
+    metadata_part_number = comp.metadata.get("mfr_pn", "").strip()
+    if not metadata_part_number:
+        return ""
+    maker = (
+        comp.metadata.get("mfr_abbrev", "").strip()
+        or comp.metadata.get("mfr", "").strip()
+        or comp.metadata.get("manufacturer", "").strip()
+        or comp.metadata.get("Manufacturer", "").strip()
+    )
+    return f"{maker} {metadata_part_number}" if maker else metadata_part_number
+
+
+def _component_header(design: Schematic, comp: Component) -> str:
+    page_names = ", ".join(_page_names(comp.pages))
+    label = _component_block_label(design, comp)
+    fields: list[str] = [f"COMPONENT: {label}"]
+    mpn = _component_mpn_label(comp)
+    if mpn:
+        fields.append(f"MPN: {mpn}")
+    fields.append(f"SYMBOL: {comp.part}")
+    if comp.description:
+        fields.append(f"Desc: {comp.description}")
+    fields.append(f"Pages: {page_names}")
+    return " | ".join(fields)
+
+
 def _pin_belongs_to_page(pin: Pin, page: Page) -> bool:
     if pin.occurrences:
         return any(occurrence.page.id == page.id for occurrence in pin.occurrences)
@@ -249,9 +292,7 @@ def _format_summary(design: Schematic) -> list[str]:
 def _format_components(design: Schematic) -> list[str]:
     lines = ["=== COMPONENTS ===", ""]
     for comp in sorted(design.components, key=lambda c: c.reference):
-        page_names = ", ".join(_page_names(comp.pages))
-        label = _component_block_label(design, comp)
-        lines.append(f"COMPONENT: {label} | {comp.part} | {comp.description} | Pages: {page_names}")
+        lines.append(_component_header(design, comp))
 
         for key, value in sorted(_filter_metadata(comp).items()):
             lines.append(f"  {key}: {value}")
@@ -498,12 +539,7 @@ def format_component_detail(design: Schematic, ref: str) -> str:
     """
     comp = find_component(design, ref)
 
-    page_names = ", ".join(_page_names(comp.pages))
-    header = (
-        f"COMPONENT: {_component_block_label(design, comp)} | {comp.part} |"
-        f" {comp.description} | Pages: {page_names}"
-    )
-    lines = [header]
+    lines = [_component_header(design, comp)]
     lines.extend(_component_enrichment_lines(comp))
 
     for key, value in sorted(_filter_metadata(comp).items()):
