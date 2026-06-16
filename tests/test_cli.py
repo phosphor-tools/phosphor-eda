@@ -5,7 +5,9 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+import phosphor_eda.cli as cli_module
 from phosphor_eda.cli import main
+from phosphor_eda.domain.schematic import Bus, BusKind, Net, Page, Schematic
 from phosphor_eda.render.api import RenderResult
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -62,6 +64,19 @@ def test_cli_schematic_list_pages():
     assert "PAGE" in result.output
 
 
+def test_cli_schematic_list_buses(tmp_path, monkeypatch):
+    path = tmp_path / "design.kicad_sch"
+    path.write_text("(kicad_sch)")
+    monkeypatch.setattr(cli_module, "_load_design_or_die", lambda _file: _bus_design_for_cli())
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["list", "buses", "--net", "DATA0", str(path)])
+
+    assert result.exit_code == 0
+    assert "BUS" in result.output
+    assert "DATA[0..1]" in result.output
+
+
 def test_cli_schematic_show_component():
     runner = CliRunner()
     result = runner.invoke(main, ["show", "component", "U1", DSN_FILE])
@@ -90,6 +105,19 @@ def test_cli_schematic_show_net_not_found():
     assert "not found" in result.output
 
 
+def test_cli_schematic_show_bus(tmp_path, monkeypatch):
+    path = tmp_path / "design.kicad_sch"
+    path.write_text("(kicad_sch)")
+    monkeypatch.setattr(cli_module, "_load_design_or_die", lambda _file: _bus_design_for_cli())
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["show", "bus", "DATA[0..1]", str(path)])
+
+    assert result.exit_code == 0
+    assert "BUS: DATA[0..1] (vector) | Members: 2" in result.output
+    assert "DATA0" in result.output
+
+
 def test_cli_schematic_unsupported_format(tmp_path):
     bad = tmp_path / "test.pdf"
     bad.write_text("hello")
@@ -97,6 +125,15 @@ def test_cli_schematic_unsupported_format(tmp_path):
     result = runner.invoke(main, ["list", "components", str(bad)])
     assert result.exit_code != 0
     assert "Unsupported" in result.output
+
+
+def _bus_design_for_cli() -> Schematic:
+    page = Page(id="page:digital", name="Digital")
+    data0 = Net(id="net:data0", name="DATA0", pages=[page])
+    data1 = Net(id="net:data1", name="DATA1", pages=[page])
+    bus = Bus(id="bus:data", name="DATA[0..1]", kind=BusKind.VECTOR, members=[data0, data1])
+    page.nets = [data0, data1]
+    return Schematic(name="BUS", pages=[page], nets=[data0, data1], buses=[bus])
 
 
 # ---- filter CLI tests ----

@@ -11,11 +11,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.buses import bus_memberships
+from phosphor_eda.domain.schematic import BusKind
 from phosphor_eda.query.classify import PASSIVE_PREFIXES, is_power_net, ref_prefix
 from phosphor_eda.query.trace import trace_from_net
 
 if TYPE_CHECKING:
-    from phosphor_eda.domain.schematic import Component, Net, Page, Schematic
+    from phosphor_eda.domain.schematic import Bus, Component, Net, Page, Schematic
 
 
 def net_page_names(net: Net) -> list[str]:
@@ -149,6 +150,34 @@ def filter_pages(
     return result
 
 
+def filter_buses(
+    design: Schematic,
+    *,
+    kind: str | None = None,
+    net: str | None = None,
+    min_members: int | None = None,
+) -> list[Bus]:
+    """Filter buses from a design. All criteria are AND-composed."""
+    result = list(design.buses)
+
+    if kind is not None:
+        try:
+            requested_kind = BusKind(kind)
+        except ValueError as exc:
+            choices = ", ".join(bus_kind.value for bus_kind in BusKind)
+            raise ValueError(f"Bus kind '{kind}' is invalid; choose one of: {choices}.") from exc
+        result = [bus for bus in result if bus.kind == requested_kind]
+
+    if net is not None:
+        net_obj = find_net(design, net)
+        result = [bus for bus in result if any(member.id == net_obj.id for member in bus.members)]
+
+    if min_members is not None:
+        result = [bus for bus in result if len(bus.members) >= min_members]
+
+    return result
+
+
 def find_net(design: Schematic, name: str) -> Net:
     """Find a net by scoped id, name, or alias.  Raises ValueError if not found.
 
@@ -169,6 +198,24 @@ def find_net(design: Schematic, name: str) -> Net:
             f"{net.id} ({net.name} on {', '.join(net_page_names(net))})" for net in matches
         ]
         raise ValueError(f"Net '{name}' is ambiguous; matches: {', '.join(page_parts)}.")
+    return matches[0]
+
+
+def find_bus(design: Schematic, name: str) -> Bus:
+    """Find a bus by id or name. Raises ValueError if not found or ambiguous."""
+    id_matches = [bus for bus in design.buses if bus.id == name]
+    if len(id_matches) == 1:
+        return id_matches[0]
+
+    matches = [bus for bus in design.buses if bus.name == name]
+    if not matches:
+        raise ValueError(f"Bus '{name}' not found in design.")
+    if len(matches) > 1:
+        choices = ", ".join(
+            f"{bus.id} ({bus.name}, {bus.kind.value}, {len(bus.members)} members)"
+            for bus in matches
+        )
+        raise ValueError(f"Bus '{name}' is ambiguous; use a bus id: {choices}.")
     return matches[0]
 
 

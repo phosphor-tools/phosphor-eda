@@ -157,7 +157,7 @@
     }
   },
   "pi-mx8": {
-    "serialize_sha256": "0b7e085503d4ab25c247f2adeb9404b34124cadbac7420461e9d37e8b2455db4",
+    "serialize_sha256": "d142b7e8f85f7dd36a67c132eb546075b881c2cb22bef23466aeb37b8a805559",
     "tables": {
       "artwork": {
         "rows": 11460,

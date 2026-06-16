@@ -28,6 +28,8 @@ from phosphor_eda.domain.schematic import (
     Pin as DomainPin,
 )
 from phosphor_eda.query.format import (
+    format_bus_detail,
+    format_bus_table,
     format_component_detail,
     format_component_table,
     format_net_detail,
@@ -38,9 +40,11 @@ from phosphor_eda.query.format import (
     serialize_design,
 )
 from phosphor_eda.query.query import (
+    filter_buses,
     filter_components,
     filter_nets,
     filter_pages,
+    find_bus,
 )
 
 if TYPE_CHECKING:
@@ -729,10 +733,87 @@ def test_filter_nets_by_bus_membership():
     assert filter_nets(design, bus="MISSING") == []
 
 
+def test_filter_buses_by_kind_and_member_net():
+    design = _bus_design()
+    control = Bus(
+        id="bus:control",
+        name="CONTROL",
+        kind=BusKind.GROUP,
+        members=[design.nets[0]],
+    )
+    design.buses.append(control)
+
+    assert [bus.name for bus in filter_buses(design, kind="vector")] == ["DATA[0..1]"]
+    assert [bus.name for bus in filter_buses(design, net="DATA0")] == ["DATA[0..1]", "CONTROL"]
+    assert [bus.name for bus in filter_buses(design, min_members=2)] == ["DATA[0..1]"]
+
+
+def test_find_bus_disambiguates_duplicate_bus_names_by_id():
+    design = _bus_design()
+    design.buses.append(
+        Bus(id="bus:data-copy", name="DATA[0..1]", kind=BusKind.VECTOR, members=[design.nets[0]])
+    )
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        _ = find_bus(design, "DATA[0..1]")
+
+    assert find_bus(design, "bus:data-copy").id == "bus:data-copy"
+
+
 def test_net_detail_shows_bus_membership():
     detail = format_net_detail(_bus_design(), "DATA0")
 
     assert "Bus: DATA[0..1] (vector)" in detail
+
+
+def test_net_table_shows_multiple_bus_memberships():
+    design = _bus_design()
+    design.buses.append(
+        Bus(id="bus:control", name="CONTROL", kind=BusKind.GROUP, members=[design.nets[0]])
+    )
+
+    table = format_net_table(design)
+
+    assert "BUSES" in table
+    assert "DATA[0..1] (vector), CONTROL (group)" in table
+
+
+def test_serialized_net_metadata_shows_multiple_bus_memberships():
+    design = _bus_design()
+    design.buses.append(
+        Bus(id="bus:control", name="CONTROL", kind=BusKind.GROUP, members=[design.nets[0]])
+    )
+
+    text = serialize_design(design)
+
+    assert "  Bus: DATA[0..1] (vector)" in text
+    assert "  Bus: CONTROL (group)" in text
+
+
+def test_format_bus_table_and_detail():
+    design = _bus_design()
+
+    table = format_bus_table(design)
+    detail = format_bus_detail(design, "DATA[0..1]")
+
+    assert "BUS" in table
+    assert "DATA[0..1]" in table
+    assert "BUS: DATA[0..1] (vector) | Members: 2" in detail
+    assert "DATA0" in detail
+    assert "DATA1" in detail
+
+
+def test_format_bus_table_includes_ids_for_duplicate_bus_names():
+    design = _bus_design()
+    design.buses.append(
+        Bus(id="bus:data-copy", name="DATA[0..1]", kind=BusKind.VECTOR, members=[design.nets[0]])
+    )
+
+    table = format_bus_table(design)
+
+    assert "BUS ID" in table
+    assert "bus:data" in table
+    assert "bus:data-copy" in table
 
 
 def test_format_page_table():
