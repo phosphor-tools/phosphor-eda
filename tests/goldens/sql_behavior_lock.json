@@ -56,7 +56,7 @@
       },
       "components": {
         "rows": 666,
-        "sha256": "d41b8a9f22b7a6065c3539fad13602afc274624a97f68a63b809b69223ea0a41"
+        "sha256": "63f43c5891fbd9df21d65bb31376404a2d2f4a6ff5e2574bc344ca69e9cc29da"
       },
       "conductors": {
         "rows": 14390,
@@ -158,6 +158,10 @@
         "rows": 0,
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
+      "project_variants": {
+        "rows": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
       "schematic_directives": {
         "rows": 5,
         "sha256": "6e9ce9ef4fb4be4a202dc10fdfa0824ed3373f4fe0eb4152cd7ebc92f2e2adff"
@@ -165,6 +169,10 @@
       "title_blocks": {
         "rows": 10,
         "sha256": "6cc3c05cd6fb29c5561925451991e553f56284d6a4498351ab9f7020913ef3c8"
+      },
+      "variant_overrides": {
+        "rows": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       "vias": {
         "rows": 1345,
@@ -229,7 +237,7 @@
       },
       "components": {
         "rows": 545,
-        "sha256": "8b64024a8a45aeaa5c939d4852b159933252b6c90454e9a1dc61dd9fc158e8f3"
+        "sha256": "1dd750b124af447f31048d1a4d1022eaf31cda666df4fa638ef8129ce9511ac5"
       },
       "conductors": {
         "rows": 13473,
@@ -320,16 +328,20 @@
         "sha256": "61fb00ba5e86a52a7fbd27a9481ceebd057b0cee6b0bd061efd043f0ace1e440"
       },
       "project": {
-        "rows": 3,
-        "sha256": "73cd7b058935f2f349c853e0317b9143166bd93a2dfaac876709fec837cf78cd"
+        "rows": 4,
+        "sha256": "4b88a30a151c17eb56ced485410685aef069084a63553e0f11e1cb6b047923b4"
       },
       "project_documents": {
         "rows": 19,
-        "sha256": "9db3519922ce001fba3333b538b6c8d18027f199a5730018dede52fdf3c9701f"
+        "sha256": "c20f263c06e43a9e1d2ec83b2833d348e0f7154ab7b9f02735ad1477ff9e90be"
       },
       "project_parameters": {
         "rows": 7,
         "sha256": "73fb38b5fa93a0e266264b493268c4b84a5728568c39e20be4f0bd007aea41d8"
+      },
+      "project_variants": {
+        "rows": 2,
+        "sha256": "f3939908367b99d14c368000abc98595ec525bdb027ad079e5d773610b9a5828"
       },
       "schematic_directives": {
         "rows": 280,
@@ -338,6 +350,10 @@
       "title_blocks": {
         "rows": 16,
         "sha256": "ece9f3bbe5aad9b6e45bb87949efbadaa6daa99b335fd4581a053806cece499a"
+      },
+      "variant_overrides": {
+        "rows": 276,
+        "sha256": "7f6e0ec15cb2018f4a9a5261b8931ea86900cb7eb6a55080ab53426aa391338f"
       },
       "vias": {
         "rows": 2278,

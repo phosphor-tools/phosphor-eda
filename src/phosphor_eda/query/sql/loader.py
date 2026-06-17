@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from typing import TYPE_CHECKING
 
 import duckdb
@@ -94,6 +94,7 @@ if TYPE_CHECKING:
         SchematicDirective,
         TitleBlock,
     )
+    from phosphor_eda.domain.variants import Variant, VariantOverride, VariantValue
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +118,20 @@ def _json_or_null(mapping: dict[str, str]) -> str | None:
     if not mapping:
         return None
     return json.dumps(mapping, separators=(",", ":"), sort_keys=True)
+
+
+def _variant_value_json(value: VariantValue) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, (bool, str)):
+        return json.dumps(value, separators=(",", ":"), sort_keys=True)
+    if is_dataclass(value):
+        return json.dumps(asdict(value), separators=(",", ":"), sort_keys=True)
+    return json.dumps(
+        [asdict(item) if is_dataclass(item) else item for item in value],
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 def _net_fields(net: PcbNet | None) -> tuple[str | None, int | None]:
@@ -470,6 +485,13 @@ class _TitleBlockRow:
     block: TitleBlock
 
 
+@dataclass(frozen=True)
+class _VariantOverrideRow:
+    variant_name: str
+    ord: int
+    override: VariantOverride
+
+
 @dataclass(frozen=True, slots=True)
 class _PageAnnotationRow:
     page: Page
@@ -816,6 +838,12 @@ _COMPONENTS: TableSpec[Component] = TableSpec(
         col("dnp", "BOOLEAN", lambda c: c.dnp, constraint="NOT NULL"),
         col("dnp_source", "VARCHAR", lambda c: c.dnp_source.value if c.dnp_source else None),
         col("exclude_from_bom", "BOOLEAN", lambda c: c.exclude_from_bom, constraint="NOT NULL"),
+        col(
+            "exclude_from_simulation",
+            "BOOLEAN",
+            lambda c: c.exclude_from_simulation,
+            constraint="NOT NULL",
+        ),
         col("datasheet", "VARCHAR", lambda c: _null_if_unset(c.datasheet)),
         col("lib_symbol", "VARCHAR", lambda c: _null_if_unset(c.lib.symbol) if c.lib else None),
         col("lib_library", "VARCHAR", lambda c: _null_if_unset(c.lib.library) if c.lib else None),
@@ -1169,6 +1197,72 @@ _PROJECT_PARAMETERS: TableSpec[tuple[str, str]] = TableSpec(
     ),
 )
 
+_PROJECT_VARIANTS: TableSpec[Variant] = TableSpec(
+    "project_variants",
+    (
+        col("variant_name", "VARCHAR", lambda v: v.name, constraint="PRIMARY KEY"),
+        col("description", "VARCHAR", lambda v: v.description),
+        col("ord", "INTEGER", lambda v: v.order, constraint="NOT NULL"),
+        col(
+            "active",
+            "BOOLEAN",
+            lambda v: any(override.applied for override in v.overrides),
+            constraint="NOT NULL",
+        ),
+        col("override_count", "INTEGER", lambda v: len(v.overrides), constraint="NOT NULL"),
+        col(
+            "not_fitted_count",
+            "INTEGER",
+            lambda v: sum(1 for o in v.overrides if o.field.value == "fitted" and o.value is False),
+            constraint="NOT NULL",
+        ),
+        col(
+            "alternate_part_count",
+            "INTEGER",
+            lambda v: sum(1 for o in v.overrides if o.field.value == "alternate_part"),
+            constraint="NOT NULL",
+        ),
+        col(
+            "parameter_count",
+            "INTEGER",
+            lambda v: sum(1 for o in v.overrides if o.field.value == "parameter"),
+            constraint="NOT NULL",
+        ),
+        col("source_id", "VARCHAR", lambda v: _null_if_unset(v.source_id)),
+        col("metadata", "JSON", lambda v: _json_or_null(v.metadata)),
+    ),
+)
+
+_VARIANT_OVERRIDES: TableSpec[_VariantOverrideRow] = TableSpec(
+    "variant_overrides",
+    (
+        col("variant_name", "VARCHAR", lambda r: r.variant_name, constraint="NOT NULL"),
+        col("ord", "INTEGER", lambda r: r.ord, constraint="NOT NULL"),
+        col(
+            "target_kind", "VARCHAR", lambda r: r.override.target.kind.value, constraint="NOT NULL"
+        ),
+        col("target_object_id", "VARCHAR", lambda r: _null_if_unset(r.override.target.object_id)),
+        col("target_reference", "VARCHAR", lambda r: _null_if_unset(r.override.target.reference)),
+        col(
+            "target_occurrence_id",
+            "VARCHAR",
+            lambda r: _null_if_unset(r.override.target.occurrence_id),
+        ),
+        col("target_source_id", "VARCHAR", lambda r: _null_if_unset(r.override.target.source_id)),
+        col("scope_path", "VARCHAR", lambda r: _null_if_unset(r.override.target.scope_path)),
+        col("field", "VARCHAR", lambda r: r.override.field.value, constraint="NOT NULL"),
+        col(
+            "parameter_name", "VARCHAR", lambda r: _null_if_unset(r.override.target.parameter_name)
+        ),
+        col("value", "JSON", lambda r: _variant_value_json(r.override.value)),
+        col("base_value", "JSON", lambda r: _variant_value_json(r.override.base_value)),
+        col("native_kind", "VARCHAR", lambda r: _null_if_unset(r.override.native_kind)),
+        col("source_id", "VARCHAR", lambda r: _null_if_unset(r.override.source_id)),
+        col("applied", "BOOLEAN", lambda r: r.override.applied, constraint="NOT NULL"),
+        col("metadata", "JSON", lambda r: _json_or_null(r.override.metadata)),
+    ),
+)
+
 
 # Table creation order. Only ``name``/``create_ddl()`` are read here — neither
 # depends on a spec's row type — so the specs can stay heterogeneously typed.
@@ -1214,6 +1308,8 @@ _ORDERED_SPECS = (
     _TITLE_BLOCKS,
     _PROJECT_DOCUMENTS,
     _PROJECT_PARAMETERS,
+    _PROJECT_VARIANTS,
+    _VARIANT_OVERRIDES,
     _PROJECT,
 )
 
@@ -1302,6 +1398,7 @@ def load_database(project: Project) -> duckdb.DuckDBPyConnection:
 
     _load_project_documents(con, project)
     _load_project_parameters(con, project)
+    _load_project_variants(con, project)
     _load_project_metadata(con, project)
 
     create_views(con)
@@ -1544,6 +1641,16 @@ def _load_project_parameters(con: duckdb.DuckDBPyConnection, project: Project) -
         _PROJECT_PARAMETERS.insert(con, (key, value))
 
 
+def _load_project_variants(con: duckdb.DuckDBPyConnection, project: Project) -> None:
+    for variant in project.variants:
+        _PROJECT_VARIANTS.insert(con, variant)
+        for index, override in enumerate(variant.overrides, start=1):
+            _VARIANT_OVERRIDES.insert(
+                con,
+                _VariantOverrideRow(variant_name=variant.name, ord=index, override=override),
+            )
+
+
 def _load_components(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
     for comp in schematic.components:
         _COMPONENTS.insert(con, comp)
@@ -1745,6 +1852,7 @@ def _load_project_metadata(con: duckdb.DuckDBPyConnection, project: Project) -> 
         ("date", meta.date),
         ("organization", meta.organization),
         ("format", meta.format),
+        ("selected_variant", project.selected_variant_name),
     ]
     for key, value in entries:
         if value:

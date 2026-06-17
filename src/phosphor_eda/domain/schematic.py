@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import override
+from typing import TYPE_CHECKING, override
+
+if TYPE_CHECKING:
+    from phosphor_eda.domain.variants import VariantOverride
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +36,7 @@ class DnpSource(StrEnum):
 
     EXPLICIT = "explicit"  # native flag (KiCad dnp attribute)
     CONVENTION = "convention"  # whole-value parameter/comment match
+    ACTIVE_VARIANT = "active_variant"  # selected project variant
 
 
 @dataclass(frozen=True)
@@ -155,6 +159,8 @@ class Component:
     dnp: bool = False
     dnp_source: DnpSource | None = None
     exclude_from_bom: bool = False
+    exclude_from_simulation: bool = False
+    variant_overrides: list[VariantOverride] = field(default_factory=list)
     metadata: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -164,6 +170,14 @@ class Component:
             if model.is_current:
                 return model
         return self.footprints[0] if self.footprints else None
+
+    @property
+    def variant_overrides_by_variant(self) -> dict[str, tuple[VariantOverride, ...]]:
+        """Variant overrides grouped by variant name."""
+        grouped: dict[str, list[VariantOverride]] = {}
+        for variant_override in self.variant_overrides:
+            grouped.setdefault(variant_override.variant_name, []).append(variant_override)
+        return {name: tuple(overrides) for name, overrides in grouped.items()}
 
     @override
     def __repr__(self) -> str:

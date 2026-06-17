@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from phosphor_eda.domain.variant_materializer import materialize_project_variant
 from phosphor_eda.formats.altium.pcb_parser import parse_altium_pcb
 from phosphor_eda.formats.altium.project_loader import (
     load_altium_project,
@@ -103,7 +104,12 @@ def load_pcb(path: Path) -> Board:
     return loader(path)
 
 
-def load_project(path: Path) -> Project:
+def load_project(
+    path: Path,
+    *,
+    variant_name: str | None = None,
+    base_variant: bool = False,
+) -> Project:
     """Load a complete project from a project manifest file."""
     ext = path.suffix.lower()
 
@@ -121,6 +127,7 @@ def load_project(path: Path) -> Project:
         )
 
     _fill_metadata_from_title_block(project)
+    materialize_project_variant(project, variant_name=variant_name, base_variant=base_variant)
     return project
 
 

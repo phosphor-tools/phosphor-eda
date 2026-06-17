@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from phosphor_eda.domain.pcb import Board
     from phosphor_eda.domain.schematic import Schematic
+    from phosphor_eda.domain.variants import Variant
 
 
 @dataclass
@@ -138,8 +139,20 @@ class Project:
     net_classes: list[NetClass] = field(default_factory=list)
     design_rules: list[DesignRule] = field(default_factory=list)
     diff_pairs: list[DiffPair] = field(default_factory=list)
+    variants: list[Variant] = field(default_factory=list)
+    selected_variant_name: str = ""
 
     @property
     def board(self) -> Board | None:
         """The primary board — first in ``boards``, or None when layout-less."""
         return self.boards[0] if self.boards else None
+
+    @property
+    def active_variant(self) -> Variant | None:
+        """The selected project variant, or None when the base design is active."""
+        if not self.selected_variant_name:
+            return None
+        for variant in self.variants:
+            if variant.name == self.selected_variant_name:
+                return variant
+        return None
