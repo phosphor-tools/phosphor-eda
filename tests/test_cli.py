@@ -7,11 +7,55 @@ from click.testing import CliRunner
 
 import phosphor_eda.cli as cli_module
 from phosphor_eda.cli import main
+from phosphor_eda.domain.pcb import Board
+from phosphor_eda.domain.project import Project
 from phosphor_eda.domain.schematic import Bus, BusKind, Net, Page, Schematic
+from phosphor_eda.formats.altium.pcb_project import AltiumEnrichment
 from phosphor_eda.render.api import RenderResult
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-DSN_FILE = str(FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN")
+DSN_PATH = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
+PCB_PATH = FIXTURES / "swd_switch.kicad_pcb"
+
+
+def _write_opj(path: Path, dsn_path: Path = DSN_PATH) -> Path:
+    project_path = str(dsn_path).replace("\\", "\\\\")
+    path.write_text(
+        f"""(ExpressProject "Pico Project"
+  (ProjectVersion "19981106")
+  (ProjectType "PCB")
+  (Folder "Design Resources"
+    (File "{project_path}"
+      (Type "Schematic Design"))))
+""",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _write_swd_project(tmp_path: Path) -> Path:
+    project = tmp_path / "swd_switch.kicad_pro"
+    board = tmp_path / "swd_switch.kicad_pcb"
+    board.write_bytes(PCB_PATH.read_bytes())
+    project.write_text("{}", encoding="utf-8")
+    return project
+
+
+def _empty_board(name: str, path: Path) -> Board:
+    return Board(
+        name=name,
+        layers=[],
+        nets={},
+        footprints=[],
+        pads=[],
+        vias=[],
+        drills=[],
+        conductors=[],
+        artwork=[],
+        pours=[],
+        keepouts=[],
+        source_path=str(path),
+    )
 
 
 def test_cli_version():
@@ -24,105 +68,99 @@ def test_cli_version():
 # ---- schematic list/show CLI tests ----
 
 
-def test_cli_schematic_list_components():
+def test_cli_schematic_list_components(tmp_path: Path):
+    opj = _write_opj(tmp_path / "pico.opj")
     runner = CliRunner()
-    result = runner.invoke(main, ["list", "components", DSN_FILE])
+    result = runner.invoke(main, ["-P", str(opj), "list", "components"])
     assert result.exit_code == 0
     assert "REF" in result.output
     assert "PART" in result.output
 
 
-def test_cli_convert_writes_serialized_design(tmp_path):
-    output = tmp_path / "pico.txt"
+def test_cli_schematic_list_nets(tmp_path: Path):
+    opj = _write_opj(tmp_path / "pico.opj")
     runner = CliRunner()
-    result = runner.invoke(main, ["convert", DSN_FILE, str(output)])
-    assert result.exit_code == 0
-    text = output.read_text()
-    assert "NET: GND" in text
-
-
-def test_cli_convert_reports_output_write_errors(tmp_path):
-    missing_parent_output = tmp_path / "missing" / "pico.txt"
-    runner = CliRunner()
-    result = runner.invoke(main, ["convert", DSN_FILE, str(missing_parent_output)])
-    assert result.exit_code != 0
-    assert "Error:" in result.output
-    assert str(missing_parent_output) in result.output
-
-
-def test_cli_schematic_list_nets():
-    runner = CliRunner()
-    result = runner.invoke(main, ["list", "nets", DSN_FILE])
+    result = runner.invoke(main, ["-P", str(opj), "list", "nets"])
     assert result.exit_code == 0
     assert "NET" in result.output
 
 
-def test_cli_schematic_list_pages():
+def test_cli_schematic_list_pages(tmp_path: Path):
+    opj = _write_opj(tmp_path / "pico.opj")
     runner = CliRunner()
-    result = runner.invoke(main, ["list", "pages", DSN_FILE])
+    result = runner.invoke(main, ["-P", str(opj), "list", "pages"])
     assert result.exit_code == 0
     assert "PAGE" in result.output
 
 
-def test_cli_schematic_list_buses(tmp_path, monkeypatch):
-    path = tmp_path / "design.kicad_sch"
-    path.write_text("(kicad_sch)")
-    monkeypatch.setattr(cli_module, "_load_design_or_die", lambda _file: _bus_design_for_cli())
+def test_cli_schematic_list_buses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    opj = _write_opj(tmp_path / "bus.opj")
+    monkeypatch.setattr(
+        cli_module,
+        "_load_project_or_die",
+        lambda: Project(name="BUS", schematic=_bus_design_for_cli()),
+    )
 
     runner = CliRunner()
-    result = runner.invoke(main, ["list", "buses", "--net", "DATA0", str(path)])
+    result = runner.invoke(main, ["-P", str(opj), "list", "buses", "--net", "DATA0"])
 
     assert result.exit_code == 0
     assert "BUS" in result.output
     assert "DATA[0..1]" in result.output
 
 
-def test_cli_schematic_list_buses_rejects_negative_min_members(tmp_path):
-    path = tmp_path / "design.kicad_sch"
-    path.write_text("(kicad_sch)")
+def test_cli_schematic_list_buses_rejects_negative_min_members(tmp_path: Path):
+    opj = _write_opj(tmp_path / "bus.opj")
 
     runner = CliRunner()
-    result = runner.invoke(main, ["list", "buses", "--min-members", "-1", str(path)])
+    result = runner.invoke(main, ["-P", str(opj), "list", "buses", "--min-members", "-1"])
 
     assert result.exit_code != 0
     assert "Invalid value for '--min-members'" in result.output
 
 
-def test_cli_schematic_show_component():
+def test_cli_schematic_show_component(tmp_path: Path):
+    opj = _write_opj(tmp_path / "pico.opj")
     runner = CliRunner()
-    result = runner.invoke(main, ["show", "component", "U1", DSN_FILE])
+    result = runner.invoke(main, ["-P", str(opj), "show", "component", "U1"])
     assert result.exit_code == 0
     assert "COMPONENT: U1" in result.output
 
 
-def test_cli_schematic_show_component_not_found():
+def test_cli_schematic_show_component_not_found(tmp_path: Path):
+    opj = _write_opj(tmp_path / "pico.opj")
     runner = CliRunner()
-    result = runner.invoke(main, ["show", "component", "U999", DSN_FILE])
+    result = runner.invoke(main, ["-P", str(opj), "show", "component", "U999"])
     assert result.exit_code != 0
     assert "not found" in result.output
 
 
-def test_cli_schematic_show_net():
+def test_cli_schematic_show_net(tmp_path: Path):
+    opj = _write_opj(tmp_path / "pico.opj")
     runner = CliRunner()
-    result = runner.invoke(main, ["show", "net", "GND", DSN_FILE])
+    result = runner.invoke(main, ["-P", str(opj), "show", "net", "GND"])
     assert result.exit_code == 0
     assert "NET: GND" in result.output
 
 
-def test_cli_schematic_show_net_not_found():
+def test_cli_schematic_show_net_not_found(tmp_path: Path):
+    opj = _write_opj(tmp_path / "pico.opj")
     runner = CliRunner()
-    result = runner.invoke(main, ["show", "net", "NONEXISTENT_NET", DSN_FILE])
+    result = runner.invoke(main, ["-P", str(opj), "show", "net", "NONEXISTENT_NET"])
     assert result.exit_code != 0
     assert "not found" in result.output
 
 
-def test_cli_schematic_show_bus(tmp_path, monkeypatch):
-    path = tmp_path / "design.kicad_sch"
-    path.write_text("(kicad_sch)")
-    monkeypatch.setattr(cli_module, "_load_design_or_die", lambda _file: _bus_design_for_cli())
+def test_cli_schematic_show_bus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    opj = _write_opj(tmp_path / "bus.opj")
+    monkeypatch.setattr(
+        cli_module,
+        "_load_project_or_die",
+        lambda: Project(name="BUS", schematic=_bus_design_for_cli()),
+    )
 
     runner = CliRunner()
-    result = runner.invoke(main, ["show", "bus", "DATA[0..1]", str(path)])
+    result = runner.invoke(main, ["-P", str(opj), "show", "bus", "DATA[0..1]"])
 
     assert result.exit_code == 0
     assert "BUS: DATA[0..1] (vector) | Members: 2" in result.output
@@ -133,9 +171,9 @@ def test_cli_schematic_unsupported_format(tmp_path):
     bad = tmp_path / "test.pdf"
     bad.write_text("hello")
     runner = CliRunner()
-    result = runner.invoke(main, ["list", "components", str(bad)])
+    result = runner.invoke(main, ["-P", str(bad), "list", "components"])
     assert result.exit_code != 0
-    assert "Unsupported" in result.output
+    assert "project file required" in result.output
 
 
 def _bus_design_for_cli() -> Schematic:
@@ -150,15 +188,17 @@ def _bus_design_for_cli() -> Schematic:
 # ---- filter CLI tests ----
 
 
-def test_cli_list_nets_no_power():
+def test_cli_list_nets_no_power(tmp_path: Path):
+    opj = _write_opj(tmp_path / "pico.opj")
     runner = CliRunner()
     result = runner.invoke(
         main,
         [
+            "-P",
+            str(opj),
             "list",
             "nets",
             "--no-power",
-            DSN_FILE,
         ],
     )
     assert result.exit_code == 0
@@ -166,31 +206,35 @@ def test_cli_list_nets_no_power():
     assert "GND" not in result.output
 
 
-def test_cli_list_nets_power_only():
+def test_cli_list_nets_power_only(tmp_path: Path):
+    opj = _write_opj(tmp_path / "pico.opj")
     runner = CliRunner()
     result = runner.invoke(
         main,
         [
+            "-P",
+            str(opj),
             "list",
             "nets",
             "--power",
-            DSN_FILE,
         ],
     )
     assert result.exit_code == 0
     assert "GND" in result.output
 
 
-def test_cli_list_nets_by_component():
+def test_cli_list_nets_by_component(tmp_path: Path):
+    opj = _write_opj(tmp_path / "pico.opj")
     runner = CliRunner()
     result = runner.invoke(
         main,
         [
+            "-P",
+            str(opj),
             "list",
             "nets",
             "-c",
             "U1",
-            DSN_FILE,
         ],
     )
     assert result.exit_code == 0
@@ -201,16 +245,18 @@ def test_cli_list_nets_by_component():
     assert len(lines) >= 3
 
 
-def test_cli_list_components_by_prefix():
+def test_cli_list_components_by_prefix(tmp_path: Path):
+    opj = _write_opj(tmp_path / "pico.opj")
     runner = CliRunner()
     result = runner.invoke(
         main,
         [
+            "-P",
+            str(opj),
             "list",
             "components",
             "--prefix",
             "U",
-            DSN_FILE,
         ],
     )
     assert result.exit_code == 0
@@ -221,31 +267,35 @@ def test_cli_list_components_by_prefix():
             assert line.strip().startswith("U")
 
 
-def test_cli_list_components_no_passive():
+def test_cli_list_components_no_passive(tmp_path: Path):
+    opj = _write_opj(tmp_path / "pico.opj")
     runner = CliRunner()
     result = runner.invoke(
         main,
         [
+            "-P",
+            str(opj),
             "list",
             "components",
             "--no-passive",
-            DSN_FILE,
         ],
     )
     assert result.exit_code == 0
     assert "U1" in result.output
 
 
-def test_cli_list_pages_by_component():
+def test_cli_list_pages_by_component(tmp_path: Path):
+    opj = _write_opj(tmp_path / "pico.opj")
     runner = CliRunner()
     result = runner.invoke(
         main,
         [
+            "-P",
+            str(opj),
             "list",
             "pages",
             "-c",
             "U1",
-            DSN_FILE,
         ],
     )
     assert result.exit_code == 0
@@ -255,16 +305,18 @@ def test_cli_list_pages_by_component():
 # ---- trace CLI tests ----
 
 
-def test_cli_trace():
+def test_cli_trace(tmp_path: Path):
+    opj = _write_opj(tmp_path / "pico.opj")
     runner = CliRunner()
     # U1 is the RP2040, U3 is the QSPI flash
     result = runner.invoke(
         main,
         [
+            "-P",
+            str(opj),
             "trace",
             "U1",
             "U3",
-            DSN_FILE,
         ],
     )
     assert result.exit_code == 0
@@ -273,105 +325,24 @@ def test_cli_trace():
     assert "QSPI" in result.output
 
 
-def test_cli_trace_not_found():
+def test_cli_trace_not_found(tmp_path: Path):
+    opj = _write_opj(tmp_path / "pico.opj")
     runner = CliRunner()
     result = runner.invoke(
         main,
         [
+            "-P",
+            str(opj),
             "trace",
             "U999",
             "U1",
-            DSN_FILE,
         ],
     )
     assert result.exit_code != 0
     assert "not found" in result.output
 
 
-# ---- sub-sheet detection tests ----
-
-ALTIUM_PROJECT = str(FIXTURES / "altium/qfsae-debugger/Debugger.PrjPcb")
-ALTIUM_SUBSHEET = str(FIXTURES / "altium/qfsae-debugger/MCU.SchDoc")
-KICAD_ROOT = str(FIXTURES / "kicad-hierarchy/root.kicad_sch")
-KICAD_CHILD = str(FIXTURES / "kicad-hierarchy/child.kicad_sch")
-
-
-def test_cli_rejects_altium_subsheet():
-    runner = CliRunner()
-    result = runner.invoke(
-        main,
-        [
-            "list",
-            "components",
-            ALTIUM_SUBSHEET,
-        ],
-    )
-    assert result.exit_code != 0
-    assert "sub-sheet" in result.output
-    assert "Debugger.PrjPcb" in result.output
-
-
-def test_cli_force_single_sheet_altium():
-    runner = CliRunner()
-    result = runner.invoke(
-        main,
-        [
-            "--force-single-sheet",
-            "list",
-            "components",
-            ALTIUM_SUBSHEET,
-        ],
-    )
-    assert result.exit_code == 0
-    assert "REF" in result.output
-
-
-def test_cli_rejects_kicad_child_sheet():
-    runner = CliRunner()
-    result = runner.invoke(
-        main,
-        [
-            "list",
-            "components",
-            KICAD_CHILD,
-        ],
-    )
-    assert result.exit_code != 0
-    assert "sub-sheet" in result.output
-    assert "root.kicad_sch" in result.output
-
-
-def test_cli_force_single_sheet_kicad():
-    runner = CliRunner()
-    result = runner.invoke(
-        main,
-        [
-            "--force-single-sheet",
-            "list",
-            "components",
-            KICAD_CHILD,
-        ],
-    )
-    assert result.exit_code == 0
-
-
-def test_cli_kicad_root_not_rejected():
-    runner = CliRunner()
-    result = runner.invoke(
-        main,
-        [
-            "list",
-            "pages",
-            KICAD_ROOT,
-        ],
-    )
-    assert result.exit_code == 0
-    assert "PAGE" in result.output
-
-
 # ---- pcb render --render-settings CLI tests ----
-
-PCB_FILE = str(FIXTURES / "swd_switch.kicad_pcb")
 
 
 def test_cli_render_settings_schema_outputs_json_without_file() -> None:
@@ -407,33 +378,42 @@ def test_cli_render_settings_schema_exits_before_other_option_validation() -> No
     assert schema["type"] == "object"
 
 
-def test_cli_render_without_file_reports_missing_file() -> None:
+def test_cli_render_without_project_reports_missing_project() -> None:
     runner = CliRunner()
     result = runner.invoke(main, ["pcb", "render"])
 
     assert result.exit_code != 0
-    assert "missing FILE" in result.output
+    assert "-P/--project" in result.output
 
 
-def test_cli_render_custom_css_file_option_is_removed() -> None:
+def test_cli_render_custom_css_file_option_is_removed(tmp_path: Path) -> None:
+    project = _write_swd_project(tmp_path)
     runner = CliRunner()
-    result = runner.invoke(main, ["pcb", "render", "--custom-css-file", "theme.css", PCB_FILE])
+    result = runner.invoke(
+        main,
+        ["-P", str(project), "pcb", "render", "--custom-css-file", "theme.css"],
+    )
 
     assert result.exit_code != 0
     assert "No such option: --custom-css-file" in result.output
 
 
-def test_cli_render_theme_option_is_removed() -> None:
+def test_cli_render_theme_option_is_removed(tmp_path: Path) -> None:
+    project = _write_swd_project(tmp_path)
     runner = CliRunner()
-    result = runner.invoke(main, ["pcb", "render", "--theme", "print", PCB_FILE])
+    result = runner.invoke(main, ["-P", str(project), "pcb", "render", "--theme", "print"])
 
     assert result.exit_code != 0
     assert "No such option: --theme" in result.output
 
 
-def test_cli_render_supports_highlight_pad() -> None:
+def test_cli_render_supports_highlight_pad(tmp_path: Path) -> None:
+    project = _write_swd_project(tmp_path)
     runner = CliRunner()
-    result = runner.invoke(main, ["pcb", "render", "--highlight-pad", "TP3.1", PCB_FILE])
+    result = runner.invoke(
+        main,
+        ["-P", str(project), "pcb", "render", "--highlight-pad", "TP3.1"],
+    )
 
     assert result.exit_code == 0, result.output
     assert 'class="highlight-overlay"' in result.output
@@ -454,22 +434,29 @@ def test_cli_render_prjpcb_resolves_single_existing_pcbdoc(
     prjpcb.write_text(
         "[Design]\nHierarchyMode=1\n\n[Document1]\nDocumentPath=boards\\Board.PcbDoc\n"
     )
-    parsed_board = object()
+    parsed_board = _empty_board("Board", pcbdoc)
     parsed_paths: list[Path] = []
 
-    def fake_parse_altium_pcb(path: Path) -> object:
+    def fake_parse_altium_pcb(path: Path, _ctx: object = None) -> Board:
         parsed_paths.append(path)
         return parsed_board
 
-    def fake_render_pcb_svg(board: object, _settings: object, **_kwargs: object) -> RenderResult:
+    def fake_load_altium_enrichment(_path: Path, _ctx: object) -> AltiumEnrichment:
+        return AltiumEnrichment(design_rules=[], net_classes=[], diff_pairs=[])
+
+    def fake_render_pcb_svg(board: Board, _settings: object, **_kwargs: object) -> RenderResult:
         assert board is parsed_board
         return RenderResult(svg="<svg></svg>")
 
     monkeypatch.setattr("phosphor_eda.query.convert.parse_altium_pcb", fake_parse_altium_pcb)
+    monkeypatch.setattr(
+        "phosphor_eda.query.convert.load_altium_enrichment",
+        fake_load_altium_enrichment,
+    )
     monkeypatch.setattr("phosphor_eda.render.api.render_pcb_svg", fake_render_pcb_svg)
 
     runner = CliRunner()
-    result = runner.invoke(main, ["pcb", "render", str(prjpcb)])
+    result = runner.invoke(main, ["-P", str(prjpcb), "pcb", "render"])
 
     assert result.exit_code == 0, result.output
     assert parsed_paths == [pcbdoc]
@@ -483,14 +470,14 @@ def test_cli_render_prjpcb_without_existing_pcbdoc_reports_clear_error(tmp_path:
     )
 
     runner = CliRunner()
-    result = runner.invoke(main, ["pcb", "render", str(prjpcb)])
+    result = runner.invoke(main, ["-P", str(prjpcb), "pcb", "render"])
 
     assert result.exit_code != 0
-    assert ".PcbDoc" in result.output
+    assert "no renderable PCB board" in result.output
 
 
 def test_cli_render_prjpcb_with_multiple_existing_pcbdocs_reports_clear_error(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     first = tmp_path / "First.PcbDoc"
     second = tmp_path / "Second.PcbDoc"
@@ -506,37 +493,28 @@ def test_cli_render_prjpcb_with_multiple_existing_pcbdocs_reports_clear_error(
         "DocumentPath=Second.PcbDoc\n"
     )
 
+    def fake_parse_altium_pcb(path: Path, _ctx: object = None) -> Board:
+        return _empty_board(path.stem, path)
+
+    def fake_load_altium_enrichment(_path: Path, _ctx: object) -> AltiumEnrichment:
+        return AltiumEnrichment(design_rules=[], net_classes=[], diff_pairs=[])
+
+    monkeypatch.setattr("phosphor_eda.query.convert.parse_altium_pcb", fake_parse_altium_pcb)
+    monkeypatch.setattr(
+        "phosphor_eda.query.convert.load_altium_enrichment",
+        fake_load_altium_enrichment,
+    )
+
     runner = CliRunner()
-    result = runner.invoke(main, ["pcb", "render", str(prjpcb)])
+    result = runner.invoke(main, ["-P", str(prjpcb), "pcb", "render"])
 
     assert result.exit_code != 0
     assert "multiple" in result.output.lower()
-    assert ".PcbDoc" in result.output
+    assert "First.PcbDoc" in result.output
 
 
 def test_cli_render_settings_inline_custom_css_is_injected(tmp_path: Path) -> None:
-    settings = {
-        "extends": "phosphor:realistic",
-        "custom_css": ".board-fill { fill: rgb(1, 2, 3); }",
-    }
-    settings_file = tmp_path / "settings.json"
-    settings_file.write_text(json.dumps(settings))
-    out_file = tmp_path / "out.svg"
-
-    runner = CliRunner()
-    result = runner.invoke(
-        main,
-        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file), "-o", str(out_file)],
-    )
-
-    assert result.exit_code == 0, result.output
-    svg = out_file.read_text()
-    assert '<style id="custom">' in svg
-    assert "rgb(1, 2, 3)" in svg
-
-
-def test_cli_render_explicit_empty_custom_css_clears_settings_css(tmp_path: Path) -> None:
-    """--custom-css '' clears custom CSS coming from the settings file."""
+    project = _write_swd_project(tmp_path)
     settings = {
         "extends": "phosphor:realistic",
         "custom_css": ".board-fill { fill: rgb(1, 2, 3); }",
@@ -549,9 +527,42 @@ def test_cli_render_explicit_empty_custom_css_clears_settings_css(tmp_path: Path
     result = runner.invoke(
         main,
         [
+            "-P",
+            str(project),
             "pcb",
             "render",
-            PCB_FILE,
+            "--render-settings",
+            str(settings_file),
+            "-o",
+            str(out_file),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    svg = out_file.read_text()
+    assert '<style id="custom">' in svg
+    assert "rgb(1, 2, 3)" in svg
+
+
+def test_cli_render_explicit_empty_custom_css_clears_settings_css(tmp_path: Path) -> None:
+    """--custom-css '' clears custom CSS coming from the settings file."""
+    project = _write_swd_project(tmp_path)
+    settings = {
+        "extends": "phosphor:realistic",
+        "custom_css": ".board-fill { fill: rgb(1, 2, 3); }",
+    }
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text(json.dumps(settings))
+    out_file = tmp_path / "out.svg"
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        [
+            "-P",
+            str(project),
+            "pcb",
+            "render",
             "--render-settings",
             str(settings_file),
             "--custom-css",
@@ -568,6 +579,7 @@ def test_cli_render_explicit_empty_custom_css_clears_settings_css(tmp_path: Path
 
 def test_cli_render_custom_css_is_emitted_after_annotation_styles(tmp_path: Path) -> None:
     """User CSS must come after generated annotation CSS so it can override it."""
+    project = _write_swd_project(tmp_path)
     settings = {
         "extends": "phosphor:realistic",
         "custom_css": ".annotation-label { fill: rgb(1, 2, 3); }",
@@ -582,7 +594,16 @@ def test_cli_render_custom_css_is_emitted_after_annotation_styles(tmp_path: Path
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file), "-o", str(out_file)],
+        [
+            "-P",
+            str(project),
+            "pcb",
+            "render",
+            "--render-settings",
+            str(settings_file),
+            "-o",
+            str(out_file),
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -592,6 +613,7 @@ def test_cli_render_custom_css_is_emitted_after_annotation_styles(tmp_path: Path
 
 def test_cli_render_settings_from_file(tmp_path: Path) -> None:
     """--render-settings loads highlights and annotations from a JSON file."""
+    project = _write_swd_project(tmp_path)
     settings = {
         "extends": "phosphor:realistic",
         "highlights": [{"net": "/SWDIO_TMS"}],
@@ -606,7 +628,16 @@ def test_cli_render_settings_from_file(tmp_path: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file), "-o", str(out_file)],
+        [
+            "-P",
+            str(project),
+            "pcb",
+            "render",
+            "--render-settings",
+            str(settings_file),
+            "-o",
+            str(out_file),
+        ],
     )
     assert result.exit_code == 0, result.output
     svg = out_file.read_text()
@@ -617,6 +648,7 @@ def test_cli_render_settings_from_file(tmp_path: Path) -> None:
 
 
 def test_cli_render_profile_outputs_json_to_stderr(tmp_path: Path) -> None:
+    project = _write_swd_project(tmp_path)
     settings = {"extends": "phosphor:realistic"}
     settings_file = tmp_path / "settings.json"
     settings_file.write_text(json.dumps(settings))
@@ -626,9 +658,10 @@ def test_cli_render_profile_outputs_json_to_stderr(tmp_path: Path) -> None:
     result = runner.invoke(
         main,
         [
+            "-P",
+            str(project),
             "pcb",
             "render",
-            PCB_FILE,
             "--render-settings",
             str(settings_file),
             "--profile-render",
@@ -641,13 +674,14 @@ def test_cli_render_profile_outputs_json_to_stderr(tmp_path: Path) -> None:
     assert out_file.read_text().startswith("<svg")
     profile = json.loads(result.stderr.split("Wrote", maxsplit=1)[1].split("\n", maxsplit=1)[1])
     event_names = [event["name"] for event in profile["events"]]
-    assert "cli.parse_board" in event_names
+    assert "cli.load_project" in event_names
     assert "plan.build_inventory" in event_names
     assert "render.serialize" in event_names
     assert "svg.output" in event_names
 
 
 def test_cli_render_settings_font_size_sets_annotation_size(tmp_path: Path) -> None:
+    project = _write_swd_project(tmp_path)
     settings = {
         "extends": "phosphor:realistic",
         "fontSizePx": 24,
@@ -662,7 +696,16 @@ def test_cli_render_settings_font_size_sets_annotation_size(tmp_path: Path) -> N
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file), "-o", str(out_file)],
+        [
+            "-P",
+            str(project),
+            "pcb",
+            "render",
+            "--render-settings",
+            str(settings_file),
+            "-o",
+            str(out_file),
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -671,6 +714,7 @@ def test_cli_render_settings_font_size_sets_annotation_size(tmp_path: Path) -> N
 
 
 def test_cli_render_settings_accepts_packaged_v2_settings(tmp_path: Path) -> None:
+    project = _write_swd_project(tmp_path)
     settings = {
         "extends": "phosphor:documentation",
         "fontSizePx": 64,
@@ -685,7 +729,16 @@ def test_cli_render_settings_accepts_packaged_v2_settings(tmp_path: Path) -> Non
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file), "-o", str(out_file)],
+        [
+            "-P",
+            str(project),
+            "pcb",
+            "render",
+            "--render-settings",
+            str(settings_file),
+            "-o",
+            str(out_file),
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -695,6 +748,7 @@ def test_cli_render_settings_accepts_packaged_v2_settings(tmp_path: Path) -> Non
 
 
 def test_cli_font_size_overrides_render_settings(tmp_path: Path) -> None:
+    project = _write_swd_project(tmp_path)
     settings = {
         "extends": "phosphor:realistic",
         "fontSizePx": 12,
@@ -710,9 +764,10 @@ def test_cli_font_size_overrides_render_settings(tmp_path: Path) -> None:
     result = runner.invoke(
         main,
         [
+            "-P",
+            str(project),
             "pcb",
             "render",
-            PCB_FILE,
             "--render-settings",
             str(settings_file),
             "--font-size",
@@ -730,6 +785,7 @@ def test_cli_font_size_overrides_render_settings(tmp_path: Path) -> None:
 
 def test_cli_render_settings_from_stdin(tmp_path: Path) -> None:
     """--render-settings - reads JSON from stdin."""
+    project = _write_swd_project(tmp_path)
     settings = {
         "extends": "phosphor:realistic",
         "highlights": [{"net": "/SWDIO_TMS"}],
@@ -739,7 +795,16 @@ def test_cli_render_settings_from_stdin(tmp_path: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["pcb", "render", PCB_FILE, "--render-settings", "-", "-o", str(out_file)],
+        [
+            "-P",
+            str(project),
+            "pcb",
+            "render",
+            "--render-settings",
+            "-",
+            "-o",
+            str(out_file),
+        ],
         input=json.dumps(settings),
     )
     assert result.exit_code == 0, result.output
@@ -751,6 +816,7 @@ def test_cli_render_settings_from_stdin(tmp_path: Path) -> None:
 
 def test_cli_render_settings_with_highlight_colors(tmp_path: Path) -> None:
     """Highlight colors from render settings appear in the SVG CSS."""
+    project = _write_swd_project(tmp_path)
     settings = {
         "extends": "phosphor:realistic",
         "highlights": [
@@ -765,7 +831,16 @@ def test_cli_render_settings_with_highlight_colors(tmp_path: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file), "-o", str(out_file)],
+        [
+            "-P",
+            str(project),
+            "pcb",
+            "render",
+            "--render-settings",
+            str(settings_file),
+            "-o",
+            str(out_file),
+        ],
     )
     assert result.exit_code == 0, result.output
     svg = out_file.read_text()
@@ -775,13 +850,14 @@ def test_cli_render_settings_with_highlight_colors(tmp_path: Path) -> None:
 
 def test_cli_render_settings_invalid_json(tmp_path: Path) -> None:
     """Invalid JSON in render settings file produces a clear error."""
+    project = _write_swd_project(tmp_path)
     settings_file = tmp_path / "bad.json"
     settings_file.write_text("not json")
 
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file)],
+        ["-P", str(project), "pcb", "render", "--render-settings", str(settings_file)],
     )
     assert result.exit_code != 0
     assert "Invalid render settings JSON" in result.output
@@ -789,13 +865,14 @@ def test_cli_render_settings_invalid_json(tmp_path: Path) -> None:
 
 def test_cli_render_settings_non_object(tmp_path: Path) -> None:
     """Non-object JSON (array, scalar) in render settings produces a clear error."""
+    project = _write_swd_project(tmp_path)
     settings_file = tmp_path / "array.json"
     settings_file.write_text("[]")
 
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file)],
+        ["-P", str(project), "pcb", "render", "--render-settings", str(settings_file)],
     )
     assert result.exit_code != 0
     assert "must be an object" in result.output
@@ -803,13 +880,14 @@ def test_cli_render_settings_non_object(tmp_path: Path) -> None:
 
 def test_cli_render_settings_rejects_theme(tmp_path: Path) -> None:
     """Unsupported theme in render settings produces a clear error."""
+    project = _write_swd_project(tmp_path)
     settings_file = tmp_path / "bad.json"
     settings_file.write_text(json.dumps({"theme": "neon"}))
 
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["pcb", "render", PCB_FILE, "--render-settings", str(settings_file)],
+        ["-P", str(project), "pcb", "render", "--render-settings", str(settings_file)],
     )
     assert result.exit_code != 0
     assert "Render settings error" in result.output
@@ -818,10 +896,11 @@ def test_cli_render_settings_rejects_theme(tmp_path: Path) -> None:
 # ---- error boundary + render warnings (plan 03) ----
 
 
-def test_cli_render_unknown_net_warns_on_stderr_and_exits_zero() -> None:
+def test_cli_render_unknown_net_warns_on_stderr_and_exits_zero(tmp_path: Path) -> None:
     """An unresolved highlight target prints a warning to stderr but still renders."""
+    project = _write_swd_project(tmp_path)
     runner = CliRunner()
-    result = runner.invoke(main, ["pcb", "render", "-n", "DOES_NOT_EXIST", PCB_FILE])
+    result = runner.invoke(main, ["-P", str(project), "pcb", "render", "-n", "DOES_NOT_EXIST"])
 
     assert result.exit_code == 0, result.stderr
     assert "Highlight target not found" in result.stderr
@@ -830,17 +909,20 @@ def test_cli_render_unknown_net_warns_on_stderr_and_exits_zero() -> None:
     assert "<svg" in result.stdout
 
 
-def test_cli_render_net_highlight_without_schematic_warns_and_matches_exact() -> None:
+def test_cli_render_net_highlight_without_schematic_warns_and_matches_exact(
+    tmp_path: Path,
+) -> None:
     """A net highlight on a board with no discoverable schematic falls back
     to exact matching with a warning."""
+    project = _write_swd_project(tmp_path)
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["pcb", "render", "-n", "GND", str(FIXTURES / "swd_switch.kicad_pcb")],
+        ["-P", str(project), "pcb", "render", "-n", "GND"],
     )
 
     assert result.exit_code == 0, result.stderr
-    assert "no schematic found" in result.stderr
+    assert "project contains no loadable schematic" in result.stderr
     assert "<svg" in result.stdout
 
 
@@ -851,16 +933,17 @@ def test_cli_render_net_highlight_traverses_series_passives_via_schematic() -> N
     result = runner.invoke(
         main,
         [
+            "-P",
+            str(FIXTURES / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pro"),
             "pcb",
             "render",
             "-n",
             "/CSI/I2C_MUX_SCL",
-            str(FIXTURES / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pcb"),
         ],
     )
 
     assert result.exit_code == 0, result.stderr
-    assert "no schematic found" not in result.stderr
+    assert "project contains no loadable schematic" not in result.stderr
     # SCL_CAM is the far side of a series resistor from /CSI/I2C_MUX_SCL and
     # routes on front, back, and inner copper; all of it joins the highlight.
     assert 'data-net-name="SCL_CAM"' in result.stdout
@@ -873,8 +956,9 @@ def test_cli_render_net_highlight_traverses_series_passives_via_schematic() -> N
 
 def test_cli_list_components_unknown_net_errors(tmp_path: Path) -> None:
     """list components -n on an unknown net: one-line error, exit 1."""
+    opj = _write_opj(tmp_path / "pico.opj")
     runner = CliRunner()
-    result = runner.invoke(main, ["list", "components", "-n", "NOPE_NET", DSN_FILE])
+    result = runner.invoke(main, ["-P", str(opj), "list", "components", "-n", "NOPE_NET"])
 
     assert result.exit_code == 1
     assert "Error:" in result.output
@@ -882,13 +966,14 @@ def test_cli_list_components_unknown_net_errors(tmp_path: Path) -> None:
     assert "not found" in result.output
 
 
-def test_cli_list_nets_unknown_component_errors() -> None:
+def test_cli_list_nets_unknown_component_errors(tmp_path: Path) -> None:
     """list nets -c on an unknown component: symmetrical error, exit 1.
 
     Previously this silently printed an empty table.
     """
+    opj = _write_opj(tmp_path / "pico.opj")
     runner = CliRunner()
-    result = runner.invoke(main, ["list", "nets", "-c", "NOPE_COMP", DSN_FILE])
+    result = runner.invoke(main, ["-P", str(opj), "list", "nets", "-c", "NOPE_COMP"])
 
     assert result.exit_code == 1
     assert "Error:" in result.output
@@ -896,11 +981,12 @@ def test_cli_list_nets_unknown_component_errors() -> None:
     assert "not found" in result.output
 
 
-def test_cli_unknown_net_and_component_errors_are_symmetrical() -> None:
+def test_cli_unknown_net_and_component_errors_are_symmetrical(tmp_path: Path) -> None:
     """Unknown net and unknown component both produce a one-line error + exit 1."""
+    opj = _write_opj(tmp_path / "pico.opj")
     runner = CliRunner()
-    net_result = runner.invoke(main, ["list", "components", "-n", "ZZZ", DSN_FILE])
-    comp_result = runner.invoke(main, ["list", "nets", "-c", "ZZZ", DSN_FILE])
+    net_result = runner.invoke(main, ["-P", str(opj), "list", "components", "-n", "ZZZ"])
+    comp_result = runner.invoke(main, ["-P", str(opj), "list", "nets", "-c", "ZZZ"])
 
     assert net_result.exit_code == comp_result.exit_code == 1
     assert "not found" in net_result.output
@@ -908,12 +994,12 @@ def test_cli_unknown_net_and_component_errors_are_symmetrical() -> None:
 
 
 def test_cli_corrupt_schematic_reports_one_line_error(tmp_path: Path) -> None:
-    """A corrupt schematic file produces a one-line parse error and exit 1, not a traceback."""
-    bad = tmp_path / "broken.kicad_sch"
+    """A corrupt project file produces a one-line parse error and exit 1, not a traceback."""
+    bad = tmp_path / "broken.kicad_pro"
     bad.write_text("(this is not a valid kicad schematic")
 
     runner = CliRunner()
-    result = runner.invoke(main, ["list", "components", str(bad)])
+    result = runner.invoke(main, ["-P", str(bad), "list", "components"])
 
     assert result.exit_code == 1
     assert "failed to parse" in result.output
@@ -922,11 +1008,13 @@ def test_cli_corrupt_schematic_reports_one_line_error(tmp_path: Path) -> None:
 
 def test_cli_corrupt_pcb_reports_one_line_error(tmp_path: Path) -> None:
     """A corrupt PCB file produces a one-line parse error and exit 1."""
+    project = tmp_path / "broken.kicad_pro"
     bad = tmp_path / "broken.kicad_pcb"
+    project.write_text("{}", encoding="utf-8")
     bad.write_text("(this is not a valid kicad pcb")
 
     runner = CliRunner()
-    result = runner.invoke(main, ["pcb", "render", str(bad)])
+    result = runner.invoke(main, ["-P", str(project), "pcb", "render"])
 
     assert result.exit_code == 1
     assert "failed to parse" in result.output

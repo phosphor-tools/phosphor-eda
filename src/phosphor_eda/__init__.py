@@ -5,14 +5,20 @@ from __future__ import annotations
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
-__all__ = ["PCB_EXTENSIONS", "SCHEMATIC_EXTENSIONS", "convert", "load_design", "load_project"]
+__all__ = [
+    "PCB_EXTENSIONS",
+    "PROJECT_EXTENSIONS",
+    "SCHEMATIC_EXTENSIONS",
+    "load_design",
+    "load_project",
+]
 __version__ = "0.1.0"
 
 if TYPE_CHECKING:
     from phosphor_eda.query.convert import (
         PCB_EXTENSIONS,
+        PROJECT_EXTENSIONS,
         SCHEMATIC_EXTENSIONS,
-        convert,
         load_design,
         load_project,
     )

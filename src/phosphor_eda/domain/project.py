@@ -8,6 +8,7 @@ This is the top-level container for the SQL query layer.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -24,9 +25,36 @@ class ProjectMetadata:
     author: str = ""
     date: str = ""
     organization: str = ""
-    format: str = ""  # "kicad", "altium", "eagle"
+    format: str = ""  # "kicad", "altium", "orcad", "eagle"
     format_version: str = ""
     source_paths: list[str] = field(default_factory=list)
+
+
+class DocumentKind(StrEnum):
+    SCHEMATIC = "schematic"
+    PCB = "pcb"
+    LIBRARY = "library"
+    BOM = "bom"
+    OUTPUT_JOB = "output_job"
+    DRAWING = "drawing"
+    SIMULATION = "simulation"
+    REPORT = "report"
+    OTHER = "other"
+
+
+@dataclass
+class ProjectDocument:
+    """One source document or deliverable listed by the project manifest."""
+
+    path: str
+    kind: DocumentKind
+    native_kind: str
+    description: str = ""
+    unique_id: str = ""
+    order: int = 0
+    exists: bool = False
+    parsed: bool = False
+    metadata: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -103,6 +131,8 @@ class Project:
 
     name: str
     metadata: ProjectMetadata = field(default_factory=ProjectMetadata)
+    parameters: dict[str, str] = field(default_factory=dict)
+    documents: list[ProjectDocument] = field(default_factory=list)
     schematic: Schematic | None = None
     boards: list[Board] = field(default_factory=list)
     net_classes: list[NetClass] = field(default_factory=list)

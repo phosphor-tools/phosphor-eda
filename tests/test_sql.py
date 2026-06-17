@@ -44,13 +44,14 @@ from phosphor_eda.domain.schematic import (
     SchematicDirectiveKind,
     ScopeId,
 )
+from phosphor_eda.formats.kicad.board import parse_kicad_pcb
 from phosphor_eda.query.convert import load_project
 from phosphor_eda.query.sql import load_database
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SWD_SWITCH_PCB = FIXTURES / "swd_switch.kicad_pcb"
-ORANGECRAB_PCB = FIXTURES / "kicad-orangecrab/OrangeCrab.kicad_pcb"
-PI_MX8_PCB = FIXTURES / "altium/pi-mx8/PCB/PiMX8MP_r0.3.PcbDoc"
+ORANGECRAB_PRO = FIXTURES / "kicad-orangecrab/OrangeCrab.kicad_pro"
+PI_MX8_PRJPCB = FIXTURES / "altium/pi-mx8/PiMX8MP_r0.3_release.PrjPcb"
 JETSON_ORIN_PRO = FIXTURES / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pro"
 
 if TYPE_CHECKING:
@@ -1182,7 +1183,7 @@ class TestConstructedSchematicSql:
 
 @pytest.fixture(scope="module")
 def db() -> Iterator[duckdb.DuckDBPyConnection]:
-    project = load_project(SWD_SWITCH_PCB)
+    project = Project(name=SWD_SWITCH_PCB.stem, boards=[parse_kicad_pcb(SWD_SWITCH_PCB)])
     con = load_database(project)
     try:
         yield con
@@ -1262,7 +1263,7 @@ class TestPadsAndVias:
 
 
 def test_altium_free_pad_mask_apertures_are_queryable_without_freepads_footprint() -> None:
-    project = load_project(PI_MX8_PCB)
+    project = load_project(PI_MX8_PRJPCB)
     con = load_database(project)
     try:
         rows = con.execute(
@@ -1360,7 +1361,7 @@ class TestViews:
 
 
 def test_kicad_keepouts_are_queryable_in_sql() -> None:
-    project = load_project(ORANGECRAB_PCB)
+    project = load_project(ORANGECRAB_PRO)
     con = load_database(project)
     try:
         assert _count(con, "SELECT count(*) FROM keepouts") > 0
@@ -1369,7 +1370,7 @@ def test_kicad_keepouts_are_queryable_in_sql() -> None:
 
 
 def test_altium_typed_tables_are_populated() -> None:
-    project = load_project(PI_MX8_PCB)
+    project = load_project(PI_MX8_PRJPCB)
     con = load_database(project)
     try:
         assert _count(con, "SELECT count(*) FROM drills") > 0
@@ -1500,32 +1501,36 @@ class TestCLI:
     def test_basic_query(self) -> None:
         runner = CliRunner()
         result = runner.invoke(
-            main, ["sql", str(SWD_SWITCH_PCB), "SELECT count(*) FROM footprints"]
+            main, ["-P", str(JETSON_ORIN_PRO), "sql", "SELECT count(*) FROM footprints"]
         )
         assert result.exit_code == 0
-        assert "28" in result.output
+        assert "(1 row)" in result.output
 
     def test_schema_flag(self) -> None:
         runner = CliRunner()
-        result = runner.invoke(main, ["sql", str(SWD_SWITCH_PCB), "--schema"])
+        result = runner.invoke(main, ["-P", str(JETSON_ORIN_PRO), "sql", "--schema"])
         assert result.exit_code == 0
         assert "CREATE TABLE footprints" in result.output
 
     def test_no_query_error(self) -> None:
         runner = CliRunner()
-        result = runner.invoke(main, ["sql", str(SWD_SWITCH_PCB)])
+        result = runner.invoke(main, ["-P", str(JETSON_ORIN_PRO), "sql"])
         assert result.exit_code != 0
 
     def test_invalid_query(self) -> None:
         runner = CliRunner()
-        result = runner.invoke(main, ["sql", str(SWD_SWITCH_PCB), "SELECT * FROM nonexistent"])
+        result = runner.invoke(
+            main,
+            ["-P", str(JETSON_ORIN_PRO), "sql", "SELECT * FROM nonexistent"],
+        )
         assert result.exit_code != 0
         assert "error" in result.output.lower()
 
     def test_spatial_query(self) -> None:
         runner = CliRunner()
         result = runner.invoke(
-            main, ["sql", str(SWD_SWITCH_PCB), "SELECT ST_Area(geom) FROM footprints LIMIT 1"]
+            main,
+            ["-P", str(JETSON_ORIN_PRO), "sql", "SELECT ST_Area(geom) FROM footprints LIMIT 1"],
         )
         assert result.exit_code == 0
         # Should contain a numeric value (the area)

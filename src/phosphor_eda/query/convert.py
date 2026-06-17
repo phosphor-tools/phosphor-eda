@@ -1,42 +1,44 @@
-"""Schematic loading and project detection.
+"""Schematic, PCB, and project loading.
 
 Dispatches on file extension to parse schematics from Altium, KiCad,
-OrCAD, and Eagle into a unified Schematic model.  Also provides
-load_project() for loading a full Project (PCB, stackup, rules, etc.).
+OrCAD, and Eagle into a unified Schematic model. Project loading is
+project-file-first: ``load_project()`` accepts project manifests only.
 """
 
 from __future__ import annotations
 
-import re
+from pathlib import Path
 from typing import TYPE_CHECKING
 
-from phosphor_eda.domain.project import DesignRule, DiffPair, NetClass, Project
+from phosphor_eda.domain.project import (
+    DesignRule,
+    DiffPair,
+    DocumentKind,
+    NetClass,
+    Project,
+    ProjectDocument,
+    ProjectMetadata,
+)
 from phosphor_eda.formats.altium.pcb_parser import parse_altium_pcb
 from phosphor_eda.formats.altium.pcb_project import load_altium_enrichment
 from phosphor_eda.formats.altium.project import parse_prjpcb_file
 from phosphor_eda.formats.altium.to_schematic import altium_to_design
 from phosphor_eda.formats.common.diagnostics import ParseContext
+from phosphor_eda.formats.dsn.errors import DsnFormatError
 from phosphor_eda.formats.dsn.parser import parse_dsn
+from phosphor_eda.formats.dsn.project import parse_opj_file
 from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
 from phosphor_eda.formats.eagle.to_schematic import eagle_to_design
 from phosphor_eda.formats.kicad.board import parse_kicad_pcb
 from phosphor_eda.formats.kicad.dru_parser import parse_kicad_dru
-from phosphor_eda.formats.kicad.pro_parser import parse_kicad_pro
+from phosphor_eda.formats.kicad.pro_parser import parse_kicad_pro, parse_kicad_text_variables
 from phosphor_eda.formats.kicad.to_schematic import kicad_to_design
-from phosphor_eda.query.format import serialize_design
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
     from phosphor_eda.domain.pcb import Board
     from phosphor_eda.domain.schematic import Schematic
-
-# Matches "Sheetfile" "<value>" in KiCad S-expression text.
-_SHEETFILE_RE = re.compile(r'"Sheetfile"\s+"([^"]+)"')
-
-# Walk-up search depth for project-root detection.
-_PROJECT_SEARCH_MAX_LEVELS = 5
 
 
 def _load_altium(path: Path) -> Schematic:
@@ -68,103 +70,6 @@ _DESIGN_LOADERS: dict[str, Callable[[Path], Schematic]] = {
 SCHEMATIC_EXTENSIONS: frozenset[str] = frozenset(_DESIGN_LOADERS)
 
 
-def find_project_root(path: Path) -> Path | None:
-    """If *path* is a sub-sheet, return the project root that contains it.
-
-    For Altium .SchDoc files: searches the same directory for .PrjPcb files
-    that reference this sheet.
-
-    For KiCad .kicad_sch files: searches sibling .kicad_sch files for
-    ``(sheet ... (property "Sheetfile" "<this_filename>"))`` references.
-
-    Returns None if *path* is already a project root or no parent is found.
-    """
-    ext = path.suffix.lower()
-
-    if ext == ".schdoc":
-        return _find_altium_project(path)
-    if ext == ".kicad_sch":
-        return _find_kicad_root(path)
-    return None
-
-
-def _walk_up_for(
-    start: Path,
-    predicate: Callable[[Path], Path | None],
-    *,
-    max_levels: int = _PROJECT_SEARCH_MAX_LEVELS,
-) -> Path | None:
-    """Walk up from *start* applying *predicate* to each directory.
-
-    *predicate* inspects one directory and returns the matched project root
-    (or ``None`` to keep searching). Stops at the filesystem root or after
-    *max_levels* directories.
-    """
-    search_dir = start.resolve()
-    for _ in range(max_levels):
-        result = predicate(search_dir)
-        if result is not None:
-            return result
-        parent = search_dir.parent
-        if parent == search_dir:
-            break  # filesystem root
-        search_dir = parent
-    return None
-
-
-def _find_altium_project(schdoc: Path) -> Path | None:
-    """Find a .PrjPcb that references *schdoc*.
-
-    Searches the schdoc's own directory first, then walks up parent
-    directories to handle projects whose DocumentPath values place
-    schematics in subdirectories.
-    """
-    schdoc_resolved = schdoc.resolve()
-
-    def find_in(search_dir: Path) -> Path | None:
-        for child in search_dir.iterdir():
-            if not child.is_file() or child.suffix.lower() != ".prjpcb":
-                continue
-            project = parse_prjpcb_file(str(child))
-            for rel_path in project.schematic_paths:
-                if (child.parent / rel_path.replace("\\", "/")).resolve() == schdoc_resolved:
-                    return child
-        return None
-
-    return _walk_up_for(schdoc.parent, find_in)
-
-
-def _find_kicad_root(sch: Path) -> Path | None:
-    """Find a .kicad_sch that references *sch* as a child sheet.
-
-    Handles Sheetfile values that may use Windows backslash separators or
-    include subdirectory prefixes (e.g. ``"sheets\\child.kicad_sch"``).
-    Searches the child's own directory first, then walks up parent
-    directories.
-    """
-    sch_resolved = sch.resolve()
-
-    def find_in(search_dir: Path) -> Path | None:
-        for sibling in search_dir.iterdir():
-            if not sibling.is_file() or sibling.suffix.lower() != ".kicad_sch":
-                continue
-            if sibling.resolve() == sch_resolved:
-                continue
-            try:
-                text = sibling.read_text()
-            except OSError:
-                continue
-            # Extract all Sheetfile values and resolve them relative to the
-            # sibling's directory, normalizing Windows backslashes.
-            for match in _SHEETFILE_RE.finditer(text):
-                sheet_ref = match.group(1).replace("\\", "/")
-                if (sibling.parent / sheet_ref).resolve() == sch_resolved:
-                    return sibling
-        return None
-
-    return _walk_up_for(sch.parent, find_in)
-
-
 def load_design(path: Path) -> Schematic:
     """Parse a schematic file into a Schematic (no serialization)."""
     ext = path.suffix.lower()
@@ -173,11 +78,6 @@ def load_design(path: Path) -> Schematic:
         supported = ", ".join(sorted(SCHEMATIC_EXTENSIONS))
         raise ValueError(f"Unsupported schematic format: '{ext}'. Supported: {supported}")
     return loader(path)
-
-
-def convert(path: Path) -> str:
-    """Parse a schematic and serialize to LLM-friendly text."""
-    return serialize_design(load_design(path))
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +104,7 @@ _PCB_LOADERS: dict[str, Callable[[Path], Board]] = {
 }
 
 PCB_EXTENSIONS: frozenset[str] = frozenset(_PCB_LOADERS)
+PROJECT_EXTENSIONS: frozenset[str] = frozenset({".kicad_pro", ".prjpcb", ".opj"})
 
 
 def load_pcb(path: Path) -> Board:
@@ -250,53 +151,22 @@ def resolve_prjpcb_pcbdoc(prj_path: Path) -> Path:
     return existing_pcbdocs[0]
 
 
-# ---------------------------------------------------------------------------
-# Project-level loading
-# ---------------------------------------------------------------------------
-
-
-def load_schematic(path: Path) -> Schematic | None:
-    """Load just the schematic associated with a project entry point.
-
-    Returns ``None`` when no schematic is discoverable: a KiCad entry with no
-    sibling ``.kicad_sch`` of the same stem, a ``.PrjPcb`` listing no
-    schematic documents, or a bare ``.PcbDoc`` (which carries no schematic
-    reference). Cheaper than :func:`load_project` — the PCB is not parsed.
-    """
-    ext = path.suffix.lower()
-    if ext in (".kicad_pcb", ".kicad_pro", ".kicad_sch", ".kicad_dru"):
-        sch_path = path.parent / f"{path.stem}.kicad_sch"
-        return kicad_to_design(sch_path, name=path.stem) if sch_path.exists() else None
-    if ext == ".prjpcb":
-        project_info = parse_prjpcb_file(str(path))
-        if project_info.schematic_paths:
-            return altium_to_design(path, name=path.stem)
-        return None
-    return None
-
-
 def load_project(path: Path) -> Project:
-    """Load a complete project from any entry-point file.
-
-    Discovers sibling files and assembles all available data into a Project.
-    Supported entry points:
-      - .kicad_pcb → look for .kicad_pro, .kicad_dru, .kicad_sch (same stem)
-      - .kicad_pro → derive PCB/schematic/DRU paths from same stem
-      - .kicad_sch → look for sibling .kicad_pcb, .kicad_pro, .kicad_dru
-      - .PcbDoc   → parse PCB + enrichment streams (Rules6, Classes6, etc.)
-      - .PrjPcb   → find referenced PcbDoc and SchDoc files
-    """
+    """Load a complete project from a project manifest file."""
     ext = path.suffix.lower()
 
-    if ext in (".kicad_pcb", ".kicad_pro", ".kicad_sch", ".kicad_dru"):
+    if ext == ".kicad_pro":
         project = _load_kicad_project(path)
-    elif ext == ".pcbdoc":
-        project = _load_altium_project_from_pcb(path)
     elif ext == ".prjpcb":
         project = _load_altium_project_from_prj(path)
+    elif ext == ".opj":
+        project = _load_orcad_project(path)
     else:
-        supported = ".kicad_pcb, .kicad_pro, .kicad_sch, .PcbDoc, .PrjPcb"
-        raise ValueError(f"Unsupported project entry point: '{ext}'. Supported: {supported}")
+        supported = ", ".join(sorted(PROJECT_EXTENSIONS))
+        raise ValueError(
+            f"project file required: '{path.suffix}' is not a project entry point. "
+            f"Supported: {supported}"
+        )
 
     _fill_metadata_from_title_block(project)
     return project
@@ -324,32 +194,67 @@ def _fill_metadata_from_title_block(project: Project) -> None:
     metadata.author = metadata.author or block.author or block.metadata.get("Author", "")
 
 
-def _load_kicad_project(entry: Path) -> Project:
-    """Assemble a KiCad project from any entry file."""
-    # Determine stem and directory
-    stem = entry.stem
-    parent = entry.parent
+def _load_kicad_project(pro_path: Path) -> Project:
+    """Assemble a KiCad project from a .kicad_pro file."""
+    stem = pro_path.stem
+    parent = pro_path.parent
 
-    # Resolve paths for all possible project files
     pcb_path = parent / f"{stem}.kicad_pcb"
-    pro_path = parent / f"{stem}.kicad_pro"
     dru_path = parent / f"{stem}.kicad_dru"
     sch_path = parent / f"{stem}.kicad_sch"
 
-    # Parse PCB (the board parse attaches the stackup)
     board = parse_kicad_pcb(pcb_path) if pcb_path.exists() else None
-
-    # Parse net classes from .kicad_pro
     net_classes = parse_kicad_pro(pro_path) if pro_path.exists() else []
-
-    # Parse design rules from .kicad_dru
     design_rules = parse_kicad_dru(dru_path) if dru_path.exists() else []
-
-    # Parse schematic
     schematic = kicad_to_design(sch_path, name=stem) if sch_path.exists() else None
+    documents = [
+        _project_document(
+            pro_path,
+            base=parent,
+            raw_path=pro_path.name,
+            kind=DocumentKind.OTHER,
+            native_kind=".kicad_pro",
+            parsed=True,
+            order=1,
+        ),
+        _project_document(
+            sch_path,
+            base=parent,
+            raw_path=sch_path.name,
+            kind=DocumentKind.SCHEMATIC,
+            native_kind=".kicad_sch",
+            parsed=schematic is not None,
+            order=2,
+        ),
+        _project_document(
+            pcb_path,
+            base=parent,
+            raw_path=pcb_path.name,
+            kind=DocumentKind.PCB,
+            native_kind=".kicad_pcb",
+            parsed=board is not None,
+            order=3,
+        ),
+        _project_document(
+            dru_path,
+            base=parent,
+            raw_path=dru_path.name,
+            kind=DocumentKind.OTHER,
+            native_kind=".kicad_dru",
+            parsed=bool(design_rules),
+            order=4,
+        ),
+    ]
 
     return Project(
         name=stem,
+        metadata=ProjectMetadata(
+            name=stem,
+            format="kicad",
+            source_paths=[str(pro_path)],
+        ),
+        parameters=parse_kicad_text_variables(pro_path),
+        documents=documents,
         schematic=schematic,
         boards=[board] if board else [],
         net_classes=net_classes,
@@ -365,6 +270,7 @@ def _load_altium_project_from_pcb(pcb_path: Path) -> Project:
 
     return Project(
         name=pcb_path.stem,
+        metadata=ProjectMetadata(name=pcb_path.stem, format="altium", source_paths=[str(pcb_path)]),
         boards=[board],
         net_classes=enrichment.net_classes,
         design_rules=enrichment.design_rules,
@@ -381,9 +287,47 @@ def _load_altium_project_from_prj(prj_path: Path) -> Project:
     net_classes: list[NetClass] = []
     design_rules: list[DesignRule] = []
     diff_pairs: list[DiffPair] = []
+    documents: list[ProjectDocument] = [
+        _project_document(
+            prj_path,
+            base=prj_path.parent,
+            raw_path=prj_path.name,
+            kind=DocumentKind.OTHER,
+            native_kind=".PrjPcb",
+            parsed=True,
+            order=1,
+        )
+    ]
     seen_pcbdocs: set[Path] = set()
+    order = 2
+    for sch_rel in project_info.schematic_paths:
+        sch_abs = prj_path.parent / sch_rel.replace("\\", "/")
+        documents.append(
+            _project_document(
+                sch_abs,
+                base=prj_path.parent,
+                raw_path=sch_rel,
+                kind=DocumentKind.SCHEMATIC,
+                native_kind="SchDoc",
+                parsed=sch_abs.exists(),
+                order=order,
+            )
+        )
+        order += 1
     for pcb_rel in project_info.pcb_paths:
         pcb_abs = prj_path.parent / pcb_rel.replace("\\", "/")
+        documents.append(
+            _project_document(
+                pcb_abs,
+                base=prj_path.parent,
+                raw_path=pcb_rel,
+                kind=DocumentKind.PCB,
+                native_kind="PcbDoc",
+                parsed=pcb_abs.exists(),
+                order=order,
+            )
+        )
+        order += 1
         if not pcb_abs.exists():
             continue
         resolved = pcb_abs.resolve()
@@ -403,9 +347,85 @@ def _load_altium_project_from_prj(prj_path: Path) -> Project:
 
     return Project(
         name=prj_path.stem,
+        metadata=ProjectMetadata(
+            name=prj_path.stem,
+            format="altium",
+            source_paths=[str(prj_path)],
+        ),
+        parameters={
+            "HierarchyMode": str(int(project_info.hierarchy_mode)),
+            "AllowPortNetNames": str(project_info.allow_port_net_names),
+            "AllowSheetEntryNetNames": str(project_info.allow_sheet_entry_net_names),
+            "AppendSheetNumberToLocalNets": str(project_info.append_sheet_number_to_local_nets),
+            "NameNetsHierarchically": str(project_info.name_nets_hierarchically),
+            "NetlistSinglePinNets": str(project_info.netlist_single_pin_nets),
+            "PowerPortNamesTakePriority": str(project_info.power_port_names_take_priority),
+        },
+        documents=documents,
         schematic=schematic,
         boards=boards,
         net_classes=net_classes,
         design_rules=design_rules,
         diff_pairs=diff_pairs,
+    )
+
+
+def _load_orcad_project(opj_path: Path) -> Project:
+    """Load an OrCAD project from a .OPJ manifest."""
+    project_info = parse_opj_file(opj_path)
+    schematic_docs = [
+        doc
+        for doc in project_info.documents
+        if doc.kind is DocumentKind.SCHEMATIC and doc.exists and doc.metadata.get("resolved_path")
+    ]
+    if len(schematic_docs) > 1:
+        paths = ", ".join(doc.path for doc in schematic_docs)
+        raise ValueError(
+            f"{opj_path.name} references multiple existing schematic DSN files: {paths}"
+        )
+
+    schematic = None
+    if schematic_docs:
+        dsn_path = Path(schematic_docs[0].metadata["resolved_path"])
+        ctx = ParseContext()
+        try:
+            raw = parse_dsn(dsn_path, ctx)
+            schematic = dsn_to_design(raw, name=project_info.name or opj_path.stem, ctx=ctx)
+            schematic_docs[0].parsed = True
+        except (DsnFormatError, OSError, ValueError) as exc:
+            schematic_docs[0].metadata["parse_error"] = str(exc)
+
+    name = project_info.name or opj_path.stem
+    return Project(
+        name=name,
+        metadata=ProjectMetadata(
+            name=name,
+            format="orcad",
+            format_version=project_info.version,
+            source_paths=[str(opj_path)],
+        ),
+        parameters=project_info.parameters,
+        documents=project_info.documents,
+        schematic=schematic,
+    )
+
+
+def _project_document(
+    resolved_path: Path,
+    *,
+    base: Path,
+    raw_path: str,
+    kind: DocumentKind,
+    native_kind: str,
+    parsed: bool,
+    order: int,
+) -> ProjectDocument:
+    return ProjectDocument(
+        path=raw_path,
+        kind=kind,
+        native_kind=native_kind,
+        order=order,
+        exists=resolved_path.exists(),
+        parsed=parsed,
+        metadata={"resolved_path": str(base / raw_path.replace("\\", "/"))},
     )
