@@ -7,7 +7,7 @@ from click.testing import CliRunner
 
 from phosphor_eda.cli import main
 from phosphor_eda.domain.project import DocumentKind
-from phosphor_eda.query.convert import load_project
+from phosphor_eda.query.project_loader import load_project
 from phosphor_eda.query.sql import load_database
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"

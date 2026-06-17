@@ -21,8 +21,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from phosphor_eda.query.convert import load_project
 from phosphor_eda.query.format import serialize_design
+from phosphor_eda.query.project_loader import load_project
 from phosphor_eda.query.sql import load_database
 from phosphor_eda.query.sql.loader import TABLE_DDL
 

@@ -7,7 +7,7 @@ import pytest
 from phosphor_eda.domain.pcb import Board
 from phosphor_eda.domain.project import Project
 from phosphor_eda.formats.altium.pcb_project import AltiumEnrichment
-from phosphor_eda.query.convert import load_project
+from phosphor_eda.query.project_loader import load_project
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -138,9 +138,12 @@ def test_altium_prjpcb_loads_all_existing_boards(
     def fake_load_altium_enrichment(_path: Path, _ctx: object) -> AltiumEnrichment:
         return AltiumEnrichment(design_rules=[], net_classes=[], diff_pairs=[])
 
-    monkeypatch.setattr("phosphor_eda.query.convert.parse_altium_pcb", fake_parse_altium_pcb)
     monkeypatch.setattr(
-        "phosphor_eda.query.convert.load_altium_enrichment",
+        "phosphor_eda.formats.altium.project_loader.parse_altium_pcb",
+        fake_parse_altium_pcb,
+    )
+    monkeypatch.setattr(
+        "phosphor_eda.formats.altium.project_loader.load_altium_enrichment",
         fake_load_altium_enrichment,
     )
 

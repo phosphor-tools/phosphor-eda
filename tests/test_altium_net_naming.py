@@ -24,7 +24,7 @@ from phosphor_eda.formats.altium.source import (
     AltiumSourceDesign,
 )
 from phosphor_eda.formats.common.diagnostics import ParseContext
-from phosphor_eda.query.convert import load_project
+from phosphor_eda.query.project_loader import load_project
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 PIMX8_PRJPCB = FIXTURES / "altium/pi-mx8/PiMX8MP_r0.3_release.PrjPcb"

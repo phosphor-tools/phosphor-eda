@@ -448,9 +448,12 @@ def test_cli_render_prjpcb_resolves_single_existing_pcbdoc(
         assert board is parsed_board
         return RenderResult(svg="<svg></svg>")
 
-    monkeypatch.setattr("phosphor_eda.query.convert.parse_altium_pcb", fake_parse_altium_pcb)
     monkeypatch.setattr(
-        "phosphor_eda.query.convert.load_altium_enrichment",
+        "phosphor_eda.formats.altium.project_loader.parse_altium_pcb",
+        fake_parse_altium_pcb,
+    )
+    monkeypatch.setattr(
+        "phosphor_eda.formats.altium.project_loader.load_altium_enrichment",
         fake_load_altium_enrichment,
     )
     monkeypatch.setattr("phosphor_eda.render.api.render_pcb_svg", fake_render_pcb_svg)
@@ -499,9 +502,12 @@ def test_cli_render_prjpcb_with_multiple_existing_pcbdocs_reports_clear_error(
     def fake_load_altium_enrichment(_path: Path, _ctx: object) -> AltiumEnrichment:
         return AltiumEnrichment(design_rules=[], net_classes=[], diff_pairs=[])
 
-    monkeypatch.setattr("phosphor_eda.query.convert.parse_altium_pcb", fake_parse_altium_pcb)
     monkeypatch.setattr(
-        "phosphor_eda.query.convert.load_altium_enrichment",
+        "phosphor_eda.formats.altium.project_loader.parse_altium_pcb",
+        fake_parse_altium_pcb,
+    )
+    monkeypatch.setattr(
+        "phosphor_eda.formats.altium.project_loader.load_altium_enrichment",
         fake_load_altium_enrichment,
     )
 

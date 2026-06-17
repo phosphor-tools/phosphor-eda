@@ -45,7 +45,7 @@ from phosphor_eda.domain.schematic import (
     ScopeId,
 )
 from phosphor_eda.formats.kicad.board import parse_kicad_pcb
-from phosphor_eda.query.convert import load_project
+from phosphor_eda.query.project_loader import load_project
 from phosphor_eda.query.sql import load_database
 
 FIXTURES = Path(__file__).parent / "fixtures"
