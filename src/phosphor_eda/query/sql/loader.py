@@ -470,6 +470,13 @@ class _TitleBlockRow:
     block: TitleBlock
 
 
+@dataclass(frozen=True, slots=True)
+class _PageAnnotationRow:
+    page: Page
+    ord: int
+    text: str
+
+
 # ---------------------------------------------------------------------------
 # Table specs — DDL and inserts generated from one column list per table
 # ---------------------------------------------------------------------------
@@ -1085,6 +1092,22 @@ _PAGES: TableSpec[Page] = TableSpec(
     ),
 )
 
+_PAGE_ANNOTATIONS: TableSpec[_PageAnnotationRow] = TableSpec(
+    "page_annotations",
+    (
+        col(
+            "annotation_id",
+            "VARCHAR",
+            lambda r: f"{r.page.id}:annotation:{r.ord:04d}",
+            constraint="PRIMARY KEY",
+        ),
+        col("page_id", "VARCHAR", lambda r: r.page.id, constraint="NOT NULL"),
+        col("page_name", "VARCHAR", lambda r: r.page.name, constraint="NOT NULL"),
+        col("ord", "INTEGER", lambda r: r.ord, constraint="NOT NULL"),
+        col("text", "VARCHAR", lambda r: r.text, constraint="NOT NULL"),
+    ),
+)
+
 _TITLE_BLOCKS: TableSpec[_TitleBlockRow] = TableSpec(
     "title_blocks",
     (
@@ -1187,6 +1210,7 @@ _ORDERED_SPECS = (
     _BUSES,
     _BUS_MEMBERS,
     _PAGES,
+    _PAGE_ANNOTATIONS,
     _TITLE_BLOCKS,
     _PROJECT_DOCUMENTS,
     _PROJECT_PARAMETERS,
@@ -1256,6 +1280,7 @@ def load_database(project: Project) -> duckdb.DuckDBPyConnection:
 
     if project.schematic:
         _load_pages(con, project.schematic)
+        _load_page_annotations(con, project.schematic)
         _load_title_blocks(con, project.schematic)
         _load_components(con, project.schematic)
         _load_component_enrichment(con, project.schematic)
@@ -1545,6 +1570,15 @@ def _load_title_blocks(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> 
     for page in schematic.pages:
         if page.title_block is not None:
             _TITLE_BLOCKS.insert(con, _TitleBlockRow(page=page, block=page.title_block))
+
+
+def _load_page_annotations(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    for page in schematic.pages:
+        for index, annotation in enumerate(page.annotations, start=1):
+            _PAGE_ANNOTATIONS.insert(
+                con,
+                _PageAnnotationRow(page=page, ord=index, text=annotation),
+            )
 
 
 def _load_component_pages(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
