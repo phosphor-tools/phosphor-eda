@@ -68,6 +68,9 @@ class PlacedInstance:
     # Arbitrary name-value properties from parsed binary data.
     props: dict[str, str] = field(default_factory=dict)
     props_list: tuple[tuple[str, str], ...] = field(default_factory=tuple)
+    # Project/package context can override Cache display-order pin names with
+    # primitive PIN_NUMBER mappings from Cadence packaged netlists.
+    pin_name_overrides: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(kw_only=True)

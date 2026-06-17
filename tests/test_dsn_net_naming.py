@@ -3,13 +3,13 @@
 Capture materializes every resolved net name into the DSN (page net
 lists, the Hierarchy mapping) and autonames anonymous nets after their
 seed wire's dbid. These tests cover the selection policy on synthetic
-sources, the repo fixtures, and the OpenCellular breakout board against
-Cadence's own pstxnet netlist (see tests/fixtures/dsn/opencellular-breakout).
+sources, the repo fixtures, and OpenCellular boards against Cadence's
+own pstxnet netlists.
 """
 
 from pathlib import Path
 
-from dsn_oracle_helpers import compare_net_names
+from dsn_oracle_helpers import compare_net_names, compare_schematic_net_names
 
 from phosphor_eda.domain.schematic import Net, NetNameKind, ScopeId
 from phosphor_eda.formats.common.diagnostics import ParseContext
@@ -33,12 +33,29 @@ from phosphor_eda.formats.dsn.source import (
     dsn_name_key,
 )
 from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
+from phosphor_eda.query.convert import load_project
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 PICO_DSN = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
 PICO_W_DSN = FIXTURES / "dsn/raspberry-pi-pico-w/RPI-PICOW-R2.DSN"
 CMIO_DSN = FIXTURES / "dsn/raspberry-pi-cmio/RPI-CMIO-V3_0-PUBLIC.DSN"
-BREAKOUT_DIR = FIXTURES / "dsn/opencellular-breakout"
+BREAKOUT_DIR = FIXTURES / "orcad/opencellular-breakout"
+BREAKOUT_DSN = (
+    BREAKOUT_DIR
+    / "orcad/OpenCellular/electronics/breakout/schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.DSN"
+)
+BREAKOUT_OPJ = (
+    BREAKOUT_DIR
+    / "orcad/OpenCellular/electronics/breakout/schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.opj"
+)
+BREAKOUT_PSTXNET = (
+    BREAKOUT_DIR / "orcad/OpenCellular/electronics/breakout/schematic/Netlist/pstxnet.dat"
+)
+SYNC_DIR = FIXTURES / "orcad/opencellular-sync"
+SYNC_DSN = (
+    SYNC_DIR / "orcad/OpenCellular/electronics/sync/schematics/dsn/FB_CONNECT1_SYNC_LIFE-3_V1P1.DSN"
+)
+SYNC_PSTXNET = SYNC_DIR / "orcad/OpenCellular/electronics/sync/schematics/Netlist/pstxnet.dat"
 
 # --- synthetic-source helpers ---
 
@@ -299,6 +316,36 @@ def test_cross_page_stored_name_conflict_resolved_by_mapping() -> None:
     assert resolved.aliases == {"UNNAMED_101_NPN_I19_B"}
 
 
+def test_matching_stored_page_net_names_merge_across_pages() -> None:
+    scope_a = _scope("Page A")
+    scope_b = _scope("Page B")
+
+    design = resolve_dsn_source(
+        _source(
+            [
+                _page(
+                    "Page A",
+                    scope_a,
+                    [_net("Page A", scope_a, 1, "3.3VD_TIVA")],
+                    pins=[_pin("Page A", scope_a, 1, "C11")],
+                ),
+                _page(
+                    "Page B",
+                    scope_b,
+                    [_net("Page B", scope_b, 2, "3.3VD_TIVA")],
+                    pins=[_pin("Page B", scope_b, 2, "J4")],
+                ),
+            ]
+        )
+    )
+
+    resolved = _net_named(design.nets, "3.3VD_TIVA")
+    assert {(pin.component.reference, pin.designator) for pin in resolved.pins} == {
+        ("C11", "1"),
+        ("J4", "1"),
+    }
+
+
 def test_stored_autoname_form_is_classified_tool_auto() -> None:
     scope = _scope("Main")
     auto_form = _net("Main", scope, 1, "N12345")
@@ -424,13 +471,29 @@ def test_breakout_fixture_matches_pstxnet_oracle_names() -> None:
     # OpenCellular breakout (CC-BY): Cadence's own packaged netlist is the
     # naming oracle. Every membership-matched net must carry the oracle's
     # name; autonames must be byte-exact.
-    result = compare_net_names(
-        BREAKOUT_DIR / "OC_CONNECT_1_BRKOUT_BRD.DSN",
-        BREAKOUT_DIR / "pstxnet.dat",
-    )
+    project = load_project(BREAKOUT_OPJ)
+    assert project.schematic is not None
+    result = compare_schematic_net_names(project.schematic, BREAKOUT_PSTXNET)
 
     assert result.mismatched == []
-    assert len(result.matched) >= 19
+    assert result.unmatched == 0
+    assert result.ambiguous == 0
+    assert len(result.matched) >= 75
     autonames = result.matched_autonames
     assert len(autonames) >= 19
+    assert all(oracle == ours for oracle, ours in autonames)
+
+
+def test_sync_fixture_matches_pstxnet_oracle_names() -> None:
+    # Complete OpenCellular Sync project fixture: this is the larger OrCAD
+    # naming oracle used to keep Capture package output and parser behavior
+    # aligned on real hierarchy/autoname cases.
+    result = compare_net_names(SYNC_DSN, SYNC_PSTXNET)
+
+    assert result.mismatched == []
+    assert result.unmatched == 0
+    assert result.ambiguous == 0
+    assert len(result.matched) >= 125
+    autonames = result.matched_autonames
+    assert len(autonames) >= 90
     assert all(oracle == ours for oracle, ours in autonames)

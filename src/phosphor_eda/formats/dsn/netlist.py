@@ -31,6 +31,7 @@ def build_netlist(
                     pin_names,
                     ctx,
                     inst.reference,
+                    inst.pin_name_overrides,
                 )
 
                 coord = (pin.pin_x, pin.pin_y)

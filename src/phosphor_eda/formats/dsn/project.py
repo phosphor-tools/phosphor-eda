@@ -79,8 +79,28 @@ def resolve_opj_path(base_path: Path, raw_path: str) -> Path | None:
         return None
     candidate = Path(normalized)
     if candidate.is_absolute():
-        return candidate
-    return base_path.parent / candidate
+        return _resolve_case_insensitive(candidate)
+    return _resolve_case_insensitive(base_path.parent / candidate)
+
+
+def _resolve_case_insensitive(path: Path) -> Path:
+    """Resolve Windows-authored OPJ paths on case-sensitive filesystems."""
+    parent = path.parent
+    if parent == path:
+        return path
+    resolved_parent = _resolve_case_insensitive(parent)
+    if resolved_parent.exists():
+        target = path.name.casefold()
+        try:
+            children = sorted(resolved_parent.iterdir(), key=lambda child: child.name.casefold())
+        except OSError:
+            return path
+        for child in children:
+            if child.name.casefold() == target:
+                return child
+    if path.exists():
+        return path
+    return path
 
 
 def _walk(node: object, project: OrCadProject, *, base_path: Path | None) -> None:

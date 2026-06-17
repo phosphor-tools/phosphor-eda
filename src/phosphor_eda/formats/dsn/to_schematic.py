@@ -443,6 +443,7 @@ def _source_page(
                     raw.symbol_pin_names,
                     ctx,
                     raw_inst.reference,
+                    raw_inst.pin_name_overrides,
                 ),
                 location=location,
                 component_props=component_props,

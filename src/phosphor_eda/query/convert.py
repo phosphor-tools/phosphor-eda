@@ -19,12 +19,14 @@ from phosphor_eda.domain.project import (
     ProjectDocument,
     ProjectMetadata,
 )
+from phosphor_eda.domain.schematic import NetName, NetNameKind
 from phosphor_eda.formats.altium.pcb_parser import parse_altium_pcb
 from phosphor_eda.formats.altium.pcb_project import load_altium_enrichment
 from phosphor_eda.formats.altium.project import parse_prjpcb_file
 from phosphor_eda.formats.altium.to_schematic import altium_to_design
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.dsn.errors import DsnFormatError
+from phosphor_eda.formats.dsn.package_netlist import apply_packaged_pin_names
 from phosphor_eda.formats.dsn.parser import parse_dsn
 from phosphor_eda.formats.dsn.project import parse_opj_file
 from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
@@ -140,13 +142,13 @@ def resolve_prjpcb_pcbdoc(prj_path: Path) -> Path:
     if not existing_pcbdocs:
         raise ValueError(
             f"{prj_path.name} does not reference an existing .PcbDoc. "
-            "Pass a .PcbDoc directly or update the project DocumentPath."
+            + "Pass a .PcbDoc directly or update the project DocumentPath."
         )
     if len(existing_pcbdocs) > 1:
         boards = ", ".join(str(path) for path in existing_pcbdocs)
         raise ValueError(
             f"{prj_path.name} references multiple existing .PcbDoc files: {boards}. "
-            "Pass the intended .PcbDoc directly."
+            + "Pass the intended .PcbDoc directly."
         )
     return existing_pcbdocs[0]
 
@@ -165,7 +167,7 @@ def load_project(path: Path) -> Project:
         supported = ", ".join(sorted(PROJECT_EXTENSIONS))
         raise ValueError(
             f"project file required: '{path.suffix}' is not a project entry point. "
-            f"Supported: {supported}"
+            + f"Supported: {supported}"
         )
 
     _fill_metadata_from_title_block(project)
@@ -344,6 +346,8 @@ def _load_altium_project_from_prj(prj_path: Path) -> Project:
     schematic = None
     if project_info.schematic_paths:
         schematic = altium_to_design(prj_path, name=prj_path.stem)
+        if boards:
+            _align_schematic_net_names_to_board(schematic, boards[0])
 
     return Project(
         name=prj_path.stem,
@@ -370,6 +374,47 @@ def _load_altium_project_from_prj(prj_path: Path) -> Project:
     )
 
 
+def _align_schematic_net_names_to_board(schematic: Schematic, board: Board) -> None:
+    """Use Altium's packaged PCB net names for exact schematic/PCB pin matches."""
+    schematic_by_members: dict[frozenset[tuple[str, str]], list[int]] = {}
+    for index, net in enumerate(schematic.nets):
+        members = frozenset((pin.component.reference, pin.designator) for pin in net.pins)
+        if not members:
+            continue
+        schematic_by_members.setdefault(members, []).append(index)
+
+    for board_net in board.nets.values():
+        if not board_net.name:
+            continue
+        members = frozenset(
+            (pad.footprint.reference, pad.number)
+            for pad in board.pads
+            if pad.net is board_net and pad.footprint is not None
+        )
+        if not members:
+            continue
+        indexes = schematic_by_members.get(members, [])
+        if len(indexes) != 1:
+            continue
+        net = schematic.nets[indexes[0]]
+        if net.name == board_net.name:
+            continue
+        old_name = net.name
+        net.name = board_net.name
+        net.aliases.discard(board_net.name)
+        net.aliases.add(old_name)
+        if all(name.name != board_net.name for name in net.names):
+            net.names.append(
+                NetName(
+                    name=board_net.name,
+                    kind=NetNameKind.TOOL_AUTO,
+                    source="altium:Nets6/Data",
+                )
+            )
+        net.metadata["altium_pcb_net_name"] = board_net.name
+        net.metadata["altium_schematic_net_name"] = old_name
+
+
 def _load_orcad_project(opj_path: Path) -> Project:
     """Load an OrCAD project from a .OPJ manifest."""
     project_info = parse_opj_file(opj_path)
@@ -390,6 +435,7 @@ def _load_orcad_project(opj_path: Path) -> Project:
         ctx = ParseContext()
         try:
             raw = parse_dsn(dsn_path, ctx)
+            apply_packaged_pin_names(raw, dsn_path.parent.parent / "Netlist")
             schematic = dsn_to_design(raw, name=project_info.name or opj_path.stem, ctx=ctx)
             schematic_docs[0].parsed = True
         except (DsnFormatError, OSError, ValueError) as exc:

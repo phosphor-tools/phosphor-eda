@@ -419,7 +419,7 @@ def _build_local_nets(
                 power_symbols=power_symbols_by_net.get(local_net_id, []),
                 sheet_pins=sheet_pins_by_net.get(local_net_id, []),
                 bus_entries=bus_entries_by_net.get(local_net_id, []),
-                generated_name=_generated_local_net_name(
+                generated_name=generated_local_net_name(
                     local_net_id,
                     local_labels_by_net.get(local_net_id, []),
                     global_labels_by_net.get(local_net_id, []),
@@ -475,7 +475,7 @@ def _items_by_net[T: _HasLocalNetId](items: list[T]) -> dict[str, list[T]]:
     return result
 
 
-def _generated_local_net_name(
+def generated_local_net_name(
     local_net_id: str,
     local_labels: list[KiCadLocalLabel],
     global_labels: list[KiCadGlobalLabel],

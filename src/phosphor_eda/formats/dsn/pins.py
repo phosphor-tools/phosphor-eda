@@ -27,6 +27,7 @@ def resolve_pin_name(
     symbol_pin_names: dict[str, list[str]],
     ctx: ParseContext | None = None,
     reference: str = "",
+    pin_name_overrides: dict[str, str] | None = None,
 ) -> str:
     """Resolve a pin name from the Cache symbol definitions.
 
@@ -34,6 +35,11 @@ def resolve_pin_name(
     non-numeric or out of range. Overlines are display markup and are
     stripped from the returned name.
     """
+    override = (pin_name_overrides or {}).get(pin_number)
+    if override is not None:
+        pin_name, _overline = strip_overline(override)
+        return pin_name
+
     sym_pins = symbol_pin_names.get(normalize_package_name(package_name), [])
     try:
         pn = int(pin_number)
@@ -45,6 +51,11 @@ def resolve_pin_name(
             )
         return ""
     if not 1 <= pn <= len(sym_pins):
+        if pn >= 0xFF00:
+            sentinel_index = 0x10000 - pn
+            if 1 <= sentinel_index <= len(sym_pins):
+                pin_name, _overline = strip_overline(sym_pins[sentinel_index - 1])
+                return pin_name
         return ""
     pin_name, _overline = strip_overline(sym_pins[pn - 1])
     return pin_name
