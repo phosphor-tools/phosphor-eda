@@ -209,6 +209,9 @@ INDEX_DDL: dict[str, str] = {
     "idx_bus_members_net_id": """
         CREATE INDEX idx_bus_members_net_id ON bus_members(net_id)
     """,
+    "idx_page_annotations_page_id": """
+        CREATE INDEX idx_page_annotations_page_id ON page_annotations(page_id)
+    """,
 }
 
 VIEW_DDL: dict[str, str] = {

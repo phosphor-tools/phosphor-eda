@@ -44,6 +44,7 @@ class ResolvedPageInput:
     scope_id: ScopeId
     source_file: str = ""
     title_block: TitleBlock | None = None
+    annotations: tuple[str, ...] = ()
     metadata: dict[str, str] = field(default_factory=dict)
 
 
@@ -186,6 +187,7 @@ def _build_pages(pages: Iterable[ResolvedPageInput]) -> dict[ScopeId, Page]:
             name=page_input.name,
             source_file=page_input.source_file,
             scope_id=page_input.scope_id,
+            annotations=list(page_input.annotations),
             title_block=page_input.title_block,
             metadata=dict(page_input.metadata),
         )

@@ -70,12 +70,14 @@ def _constructed_schematic() -> Schematic:
         name="Power",
         source_file="power.kicad_sch",
         scope_id=ScopeId(path=("root", "power")),
+        annotations=["First note", "Second note"],
     )
     control_page = Page(
         id="page:control",
         name="Control",
         source_file="control.kicad_sch",
         scope_id=ScopeId(path=("root", "control")),
+        annotations=["Control note"],
     )
 
     controller = Component(
@@ -886,6 +888,21 @@ class TestConstructedSchematicSql:
         assert member_rows == [
             ("bus:control", "CTRL{SYNC RESET}", "group", "net:sync", "SYNC", 1),
             ("bus:control", "CTRL{SYNC RESET}", "group", "net:reset:control", "RESET", 2),
+        ]
+
+    def test_page_annotations_are_loaded(self, constructed_db: duckdb.DuckDBPyConnection) -> None:
+        rows = constructed_db.execute(
+            """
+            SELECT page_id, page_name, ord, text
+            FROM page_annotations
+            ORDER BY page_id, ord
+            """
+        ).fetchall()
+
+        assert rows == [
+            ("page:control", "Control", 1, "Control note"),
+            ("page:power", "Power", 1, "First note"),
+            ("page:power", "Power", 2, "Second note"),
         ]
 
     def test_net_summary_groups_schematic_by_net_id_with_name_joined_pcb_counts(
