@@ -13,7 +13,6 @@ import pytest
 from phosphor_eda.formats.altium.project import parse_prjpcb
 from phosphor_eda.formats.altium.to_schematic import altium_to_design
 from phosphor_eda.formats.kicad.to_schematic import kicad_to_design
-from phosphor_eda.query.convert import find_project_root
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -97,29 +96,6 @@ def test_altium_warns_on_missing_backslash_schdoc(tmp_path: Path) -> None:
     sheets = load_project_sheets(prjpcb, ctx=ctx)
     assert sheets == {}
     assert any("Missing.SchDoc" in issue.message for issue in ctx.issues)
-
-
-# ---------------------------------------------------------------------------
-# Altium: find_project_root with backslash DocumentPaths
-# ---------------------------------------------------------------------------
-
-
-def test_find_project_root_with_backslash_paths(tmp_path: Path):
-    """find_project_root resolves .PrjPcb entries that use backslashes."""
-    sub = tmp_path / "sheets"
-    sub.mkdir()
-
-    schdoc = sub / "Main.SchDoc"
-    schdoc.write_text("")
-
-    prjpcb = tmp_path / "Board.PrjPcb"
-    prjpcb.write_text(
-        "[Design]\nHierarchyMode=1\n\n[Document1]\nDocumentPath=sheets\\Main.SchDoc\n"
-    )
-
-    root = find_project_root(schdoc)
-    assert root is not None
-    assert root.name == "Board.PrjPcb"
 
 
 # ---------------------------------------------------------------------------
@@ -220,27 +196,3 @@ def test_kicad_warns_on_missing_backslash_sheet(tmp_path: Path) -> None:
     design = kicad_to_design(root_file)
     assert len(design.pages) == 1
     assert design.metadata.get("parse_issue_count") == "1"
-
-
-# ---------------------------------------------------------------------------
-# KiCad: find_project_root with backslash Sheetfile
-# ---------------------------------------------------------------------------
-
-
-def test_find_kicad_root_with_backslash_sheetfile(tmp_path: Path):
-    """find_project_root matches even when root uses backslash in Sheetfile."""
-    sub = tmp_path / "sheets"
-    sub.mkdir()
-
-    child = sub / "child.kicad_sch"
-    child.write_text("(kicad_sch)")
-
-    # The root references the child with a backslash path.
-    # find_project_root does a text search for the child's filename,
-    # so this tests that the search still works.
-    root = tmp_path / "root.kicad_sch"
-    root.write_text('(kicad_sch (sheet (property "Sheetfile" "sheets\\child.kicad_sch")))')
-
-    result = find_project_root(child)
-    assert result is not None
-    assert result.name == "root.kicad_sch"

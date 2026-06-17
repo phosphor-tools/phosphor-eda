@@ -77,7 +77,7 @@ if TYPE_CHECKING:
         PcbNet,
         PcbPour,
     )
-    from phosphor_eda.domain.project import DesignRule, NetClass, Project
+    from phosphor_eda.domain.project import DesignRule, NetClass, Project, ProjectDocument
     from phosphor_eda.domain.schematic import (
         Bus,
         Component,
@@ -1117,6 +1117,35 @@ _PROJECT: TableSpec[tuple[str, str]] = TableSpec(
     ),
 )
 
+_PROJECT_DOCUMENTS: TableSpec[ProjectDocument] = TableSpec(
+    "project_documents",
+    (
+        col(
+            "document_id",
+            "VARCHAR",
+            lambda doc: f"document:{doc.order:04d}",
+            constraint="PRIMARY KEY",
+        ),
+        col("path", "VARCHAR", lambda doc: doc.path, constraint="NOT NULL"),
+        col("kind", "VARCHAR", lambda doc: doc.kind.value, constraint="NOT NULL"),
+        col("native_kind", "VARCHAR", lambda doc: doc.native_kind),
+        col("description", "VARCHAR", lambda doc: doc.description),
+        col("unique_id", "VARCHAR", lambda doc: doc.unique_id),
+        col("ord", "INTEGER", lambda doc: doc.order, constraint="NOT NULL"),
+        col("exists", "BOOLEAN", lambda doc: doc.exists, constraint="NOT NULL"),
+        col("parsed", "BOOLEAN", lambda doc: doc.parsed, constraint="NOT NULL"),
+        col("metadata", "JSON", lambda doc: _json_or_null(doc.metadata)),
+    ),
+)
+
+_PROJECT_PARAMETERS: TableSpec[tuple[str, str]] = TableSpec(
+    "project_parameters",
+    (
+        col("key", "VARCHAR", lambda r: r[0], constraint="NOT NULL"),
+        col("value", "VARCHAR", lambda r: r[1], constraint="NOT NULL"),
+    ),
+)
+
 
 # Table creation order. Only ``name``/``create_ddl()`` are read here — neither
 # depends on a spec's row type — so the specs can stay heterogeneously typed.
@@ -1159,6 +1188,8 @@ _ORDERED_SPECS = (
     _BUS_MEMBERS,
     _PAGES,
     _TITLE_BLOCKS,
+    _PROJECT_DOCUMENTS,
+    _PROJECT_PARAMETERS,
     _PROJECT,
 )
 
@@ -1244,6 +1275,8 @@ def load_database(project: Project) -> duckdb.DuckDBPyConnection:
         _load_pins(con, project.schematic)
         _load_pin_occurrences(con, project.schematic)
 
+    _load_project_documents(con, project)
+    _load_project_parameters(con, project)
     _load_project_metadata(con, project)
 
     create_views(con)
@@ -1474,6 +1507,16 @@ def _load_net_classes(con: duckdb.DuckDBPyConnection, project: Project) -> None:
 def _load_design_rules(con: duckdb.DuckDBPyConnection, project: Project) -> None:
     for rule in project.design_rules:
         _DESIGN_RULES.insert(con, rule)
+
+
+def _load_project_documents(con: duckdb.DuckDBPyConnection, project: Project) -> None:
+    for document in project.documents:
+        _PROJECT_DOCUMENTS.insert(con, document)
+
+
+def _load_project_parameters(con: duckdb.DuckDBPyConnection, project: Project) -> None:
+    for key, value in sorted(project.parameters.items()):
+        _PROJECT_PARAMETERS.insert(con, (key, value))
 
 
 def _load_components(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:

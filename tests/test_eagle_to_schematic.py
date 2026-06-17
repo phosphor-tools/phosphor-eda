@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from phosphor_eda.formats.eagle import eagle_to_design
-from phosphor_eda.query.convert import convert
+from phosphor_eda.query.format import serialize_design
 from phosphor_eda.query.validate import Severity, validate_design
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -523,7 +523,7 @@ def test_adafruit_no_errors(adafruit_design):
 
 
 def test_convert_api():
-    text = convert(BME280_SCH)
+    text = serialize_design(eagle_to_design(BME280_SCH))
     assert "DESIGN SUMMARY" in text
     assert "COMPONENTS" in text
     assert "NETS" in text
