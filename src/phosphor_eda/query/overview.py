@@ -1,0 +1,425 @@
+"""Project overview formatter for agent orientation."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from phosphor_eda.query.classify import is_power_net, ref_prefix
+from phosphor_eda.query.format import component_mpn_label, tabulate
+from phosphor_eda.query.query import net_page_names
+
+if TYPE_CHECKING:
+    from phosphor_eda.domain.pcb import Board
+    from phosphor_eda.domain.project import Project, ProjectDocument
+    from phosphor_eda.domain.schematic import Bus, Component, Page, Schematic, TitleBlock
+
+
+_HIGH_PIN_THRESHOLD = 32
+_CONNECTOR_PREFIXES = frozenset({"J", "P", "CN", "X"})
+_TRUNCATION_SUFFIX = "..."
+
+
+def format_project_overview(project: Project) -> str:
+    """Format a bounded text overview of a loaded project."""
+    sections: list[str] = [
+        _project_section(project),
+        _documents_section(project.documents),
+    ]
+
+    if project.schematic is not None:
+        sections.extend(
+            section
+            for section in (
+                _schematic_section(project.schematic),
+                _schematic_pages_section(project.schematic, project),
+            )
+            if section
+        )
+
+    if project.boards:
+        sections.append(_boards_section(project.boards))
+
+    if project.schematic is not None:
+        sections.extend(
+            section
+            for section in (
+                _important_components_section(project.schematic),
+                _rails_section(project.schematic),
+                _buses_section(project.schematic.buses),
+                _notes_section(project.schematic),
+            )
+            if section
+        )
+
+    sections.append(_omitted_section())
+    return "\n\n".join(sections)
+
+
+def _project_section(project: Project) -> str:
+    metadata = project.metadata
+    lines = ["Project", f"  Name: {project.name}"]
+    format_label = " ".join(part for part in (metadata.format, metadata.format_version) if part)
+    if format_label:
+        lines.append(f"  Format: {format_label}")
+
+    root_block = _root_title_block(project)
+    if root_block is not None and root_block.title and root_block.title != project.name:
+        lines.append(f"  Title: {root_block.title}")
+
+    for label, value in (
+        ("Revision", metadata.revision),
+        ("Date", metadata.date),
+        ("Organization", metadata.organization),
+    ):
+        if value:
+            lines.append(f"  {label}: {value}")
+    return "\n".join(lines)
+
+
+def _documents_section(documents: list[ProjectDocument]) -> str:
+    lines = ["Documents"]
+    rows: list[tuple[str, str, str, str]] = []
+    errors: dict[int, str] = {}
+    for index, document in enumerate(documents):
+        rows.append(
+            (
+                document.kind.value,
+                document.native_kind,
+                document.path,
+                _document_status(document),
+            )
+        )
+        parse_error = document.metadata.get("parse_error")
+        if parse_error:
+            errors[index] = parse_error
+
+    if rows:
+        table_lines = tabulate(("KIND", "FORMAT/NATIVE KIND", "PATH", "STATUS"), rows).splitlines()
+        for index, line in enumerate(table_lines):
+            lines.append(f"  {line}")
+            if index >= 2:
+                row_index = index - 2
+                if row_index in errors:
+                    lines.append(f"    Error: {errors[row_index]}")
+    else:
+        lines.append("  No project documents found.")
+    return "\n".join(lines)
+
+
+def _document_status(document: ProjectDocument) -> str:
+    exists = "exists" if document.exists else "missing"
+    parsed = "parsed" if document.parsed else "not parsed"
+    return f"{exists}, {parsed}"
+
+
+def _schematic_section(schematic: Schematic) -> str:
+    multi_page_signal_count = sum(
+        1
+        for net in schematic.nets
+        if len(net_page_names(net)) > 1 and not is_power_net(net.name, net)
+    )
+    return "\n".join(
+        [
+            "Schematic",
+            f"  Pages: {len(schematic.pages)}",
+            f"  Components: {len(schematic.components)}",
+            f"  Nets: {len(schematic.nets)}",
+            f"  Buses: {len(schematic.buses)}",
+            f"  Multi-page signal nets: {multi_page_signal_count}",
+        ]
+    )
+
+
+def _schematic_pages_section(schematic: Schematic, project: Project) -> str:
+    root_title = _root_title(project)
+    repeated_titles = _repeated_page_titles(schematic)
+    rows = [
+        (
+            page.name,
+            Path(page.source_file).name if page.source_file else "",
+            _page_title(page, root_title, repeated_titles),
+            _sheet_number(page),
+            str(len(page.components)),
+            str(len(page.nets)),
+            str(len(page.annotations)),
+        )
+        for page in schematic.pages
+    ]
+    if not rows:
+        return ""
+    return "\n".join(
+        [
+            "Schematic Pages",
+            *[
+                f"  {line}"
+                for line in tabulate(
+                    (
+                        "PAGE",
+                        "SOURCE FILE",
+                        "TITLE/PAGE TITLE",
+                        "SHEET",
+                        "COMPONENTS",
+                        "NETS",
+                        "NOTES",
+                    ),
+                    rows,
+                ).splitlines()
+            ],
+        ]
+    )
+
+
+def _boards_section(boards: list[Board]) -> str:
+    rows = [
+        (
+            board.name,
+            Path(board.source_path).name if board.source_path else "",
+            f"{len(board.layers)} total, {len(board.layers_by_role('copper'))} copper",
+            str(len(board.footprints)),
+            str(len(board.pads)),
+            str(len(board.vias)),
+            str(len(board.nets)),
+        )
+        for board in boards
+    ]
+    return "\n".join(
+        [
+            "Boards",
+            *[
+                f"  {line}"
+                for line in tabulate(
+                    ("NAME", "SOURCE FILE", "LAYERS", "FOOTPRINTS", "PADS", "VIAS", "NETS"),
+                    rows,
+                ).splitlines()
+            ],
+        ]
+    )
+
+
+def _important_components_section(schematic: Schematic) -> str:
+    subsections = [
+        (
+            f"Components with >= {_HIGH_PIN_THRESHOLD} pins",
+            [comp for comp in schematic.components if len(comp.pins) >= _HIGH_PIN_THRESHOLD],
+        ),
+        (
+            "IC-like references (U*)",
+            [comp for comp in schematic.components if ref_prefix(comp.reference) == "U"],
+        ),
+        (
+            "Connectors (J*, P*, CN*, X*)",
+            [
+                comp
+                for comp in schematic.components
+                if ref_prefix(comp.reference) in _CONNECTOR_PREFIXES
+            ],
+        ),
+        (
+            "Test points (TP*)",
+            [comp for comp in schematic.components if ref_prefix(comp.reference) == "TP"],
+        ),
+    ]
+    lines = ["Important Components"]
+    added = False
+    for title, components in subsections:
+        if not components:
+            continue
+        if added:
+            lines.append("")
+        lines.append(f"  {title}")
+        lines.extend(
+            f"    {_component_overview_line(comp)}"
+            for comp in sorted(components, key=_component_sort_key)
+        )
+        added = True
+    return "\n".join(lines) if added else ""
+
+
+def _component_overview_line(component: Component) -> str:
+    pages = sorted({_single_line(page.name) for page in component.pages})
+    page_key = "pages" if len(pages) > 1 else "page"
+    page_value = ", ".join(pages) if pages else ""
+    parts = [component.reference, f"pins={len(component.pins)}"]
+    if page_value:
+        parts.append(f"{page_key}={page_value}")
+
+    test_point_net = _test_point_net(component)
+    if test_point_net:
+        parts.append(f"net={_single_line(test_point_net)}")
+
+    mpn = component_mpn_label(component)
+    if mpn:
+        parts.append(f"mpn={_single_line(mpn)}")
+    if component.part:
+        parts.append(f"symbol={_single_line(component.part)}")
+    if component.description:
+        parts.append(f"desc={_single_line(component.description)}")
+    return "  ".join(parts)
+
+
+def _test_point_net(component: Component) -> str:
+    if ref_prefix(component.reference) != "TP":
+        return ""
+    connected = [pin.net.name for pin in component.pins if pin.net is not None]
+    if len(connected) == 1:
+        return connected[0]
+    return ""
+
+
+def _rails_section(schematic: Schematic) -> str:
+    rails = sorted(
+        (net for net in schematic.nets if is_power_net(net.name, net)),
+        key=lambda net: (-len(net.pins), net.name),
+    )
+    if not rails:
+        return ""
+    rows = [
+        (
+            net.name,
+            str(len(net.pins)),
+            str(len(net_page_names(net))),
+            ", ".join(sorted(net.aliases)),
+        )
+        for net in rails
+    ]
+    return "\n".join(
+        [
+            "Rails",
+            *[
+                f"  {line}"
+                for line in tabulate(("NET", "PINS", "PAGES", "ALIASES"), rows).splitlines()
+            ],
+        ]
+    )
+
+
+def _buses_section(buses: list[Bus]) -> str:
+    if not buses:
+        return ""
+    lines = ["Buses"]
+    for bus in sorted(buses, key=lambda item: (item.name, item.id)):
+        lines.append(f"  {bus.name}  {bus.kind.value}  members={len(bus.members)}")
+    return "\n".join(lines)
+
+
+def _notes_section(schematic: Schematic) -> str:
+    root = _root_page(schematic)
+    root_comments = root.title_block.comments if root and root.title_block else {}
+    annotated_pages = [page for page in schematic.pages if page.annotations]
+    if not root_comments and not annotated_pages:
+        return ""
+
+    lines = ["Notes"]
+    if root_comments:
+        lines.append("  Project comments")
+        for key in sorted(root_comments, key=_comment_sort_key):
+            lines.append(f"    {key}: {_truncate(root_comments[key], 160)}")
+
+    if annotated_pages:
+        if root_comments:
+            lines.append("")
+        lines.append("  Page annotations")
+        visible_pages = annotated_pages[:8]
+        for page in visible_pages:
+            lines.append(f"    {page.name}")
+            for annotation in page.annotations[:2]:
+                lines.append(f"      {_truncate(annotation, 240)}")
+            omitted = len(page.annotations) - 2
+            if omitted > 0:
+                noun = "annotation" if omitted == 1 else "annotations"
+                lines.append(f"      ... {omitted} more {noun} omitted")
+        omitted_pages = len(annotated_pages) - len(visible_pages)
+        if omitted_pages > 0:
+            noun = "page" if omitted_pages == 1 else "pages"
+            lines.append(f"    ... {omitted_pages} more {noun} with annotations omitted")
+    return "\n".join(lines)
+
+
+def _omitted_section() -> str:
+    return "\n".join(
+        [
+            "Omitted",
+            "  Full component list",
+            "  Full net membership",
+            "  Full pin lists",
+            "  Full page annotations",
+            "  Multi-page net list",
+            "  PCB route geometry",
+        ]
+    )
+
+
+def _root_page(schematic: Schematic) -> Page | None:
+    if not schematic.pages:
+        return None
+    return min(schematic.pages, key=lambda page: len(page.scope_id.path))
+
+
+def _root_title_block(project: Project) -> TitleBlock | None:
+    if project.schematic is None:
+        return None
+    root = _root_page(project.schematic)
+    return None if root is None else root.title_block
+
+
+def _root_title(project: Project) -> str:
+    block = _root_title_block(project)
+    return "" if block is None else block.title
+
+
+def _repeated_page_titles(schematic: Schematic) -> set[str]:
+    counts: dict[str, int] = {}
+    for page in schematic.pages:
+        title = page.title_block.title if page.title_block else ""
+        if title:
+            counts[title] = counts.get(title, 0) + 1
+    return {title for title, count in counts.items() if count == len(schematic.pages)}
+
+
+def _page_title(page: Page, root_title: str, repeated_titles: set[str]) -> str:
+    block = page.title_block
+    if block is None:
+        return ""
+    page_title = block.metadata.get("PageTitle", "").strip()
+    if page_title:
+        return page_title
+    title = block.title.strip()
+    if not title or title == root_title or title in repeated_titles:
+        return ""
+    return title
+
+
+def _sheet_number(page: Page) -> str:
+    block = page.title_block
+    if block is None:
+        return ""
+    if block.sheet_number and block.sheet_total:
+        return f"{block.sheet_number}/{block.sheet_total}"
+    return block.sheet_number
+
+
+def _component_sort_key(component: Component) -> tuple[str, int, str]:
+    prefix = ref_prefix(component.reference)
+    suffix = component.reference[len(prefix) :]
+    match = re.match(r"(\d+)", suffix)
+    number = int(match.group(1)) if match else -1
+    return (prefix, number, component.reference)
+
+
+def _comment_sort_key(key: str) -> tuple[int, int | str]:
+    return (0, int(key)) if key.isdigit() else (1, key)
+
+
+def _truncate(value: str, max_chars: int) -> str:
+    normalized = _single_line(value)
+    if len(normalized) <= max_chars:
+        return normalized
+    if max_chars <= len(_TRUNCATION_SUFFIX):
+        return _TRUNCATION_SUFFIX[:max_chars]
+    return normalized[: max_chars - len(_TRUNCATION_SUFFIX)].rstrip() + _TRUNCATION_SUFFIX
+
+
+def _single_line(value: str) -> str:
+    return " ".join(value.split())
