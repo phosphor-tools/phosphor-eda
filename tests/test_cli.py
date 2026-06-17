@@ -97,8 +97,8 @@ def test_cli_schematic_list_buses(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     opj = _write_opj(tmp_path / "bus.opj")
     monkeypatch.setattr(
         cli_module,
-        "_load_project_or_die",
-        lambda: Project(name="BUS", schematic=_bus_design_for_cli()),
+        "load_project",
+        lambda _path: Project(name="BUS", schematic=_bus_design_for_cli()),
     )
 
     runner = CliRunner()
@@ -155,8 +155,8 @@ def test_cli_schematic_show_bus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     opj = _write_opj(tmp_path / "bus.opj")
     monkeypatch.setattr(
         cli_module,
-        "_load_project_or_die",
-        lambda: Project(name="BUS", schematic=_bus_design_for_cli()),
+        "load_project",
+        lambda _path: Project(name="BUS", schematic=_bus_design_for_cli()),
     )
 
     runner = CliRunner()
@@ -517,6 +517,50 @@ def test_cli_render_prjpcb_with_multiple_existing_pcbdocs_reports_clear_error(
     assert result.exit_code != 0
     assert "multiple" in result.output.lower()
     assert "First.PcbDoc" in result.output
+
+
+def test_cli_render_board_selector_reports_ambiguous_matches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    first = first_dir / "Board.PcbDoc"
+    second = second_dir / "Board.PcbDoc"
+    first.write_text("")
+    second.write_text("")
+    prjpcb = tmp_path / "Project.PrjPcb"
+    prjpcb.write_text(
+        "[Design]\n"
+        "HierarchyMode=1\n\n"
+        "[Document1]\n"
+        "DocumentPath=first\\Board.PcbDoc\n\n"
+        "[Document2]\n"
+        "DocumentPath=second\\Board.PcbDoc\n"
+    )
+
+    def fake_parse_altium_pcb(path: Path, _ctx: object = None) -> Board:
+        return _empty_board(path.stem, path)
+
+    def fake_load_altium_enrichment(_path: Path, _ctx: object) -> AltiumEnrichment:
+        return AltiumEnrichment(design_rules=[], net_classes=[], diff_pairs=[])
+
+    monkeypatch.setattr(
+        "phosphor_eda.formats.altium.project_loader.parse_altium_pcb",
+        fake_parse_altium_pcb,
+    )
+    monkeypatch.setattr(
+        "phosphor_eda.formats.altium.project_loader.load_altium_enrichment",
+        fake_load_altium_enrichment,
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["-P", str(prjpcb), "pcb", "render", "--board", "Board"])
+
+    assert result.exit_code != 0
+    assert "ambiguous" in result.output
+    assert "Board (Board.PcbDoc)" in result.output
 
 
 def test_cli_render_settings_inline_custom_css_is_injected(tmp_path: Path) -> None:

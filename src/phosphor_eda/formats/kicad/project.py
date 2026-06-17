@@ -25,12 +25,11 @@ def load_kicad_project(pro_path: Path) -> Project:
 
     board = parse_kicad_pcb(pcb_path) if pcb_path.exists() else None
     net_classes = parse_kicad_pro(pro_path) if pro_path.exists() else []
-    design_rules = parse_kicad_dru(dru_path) if dru_path.exists() else []
+    design_rules = parse_kicad_dru(dru_path) if dru_path.exists() else None
     schematic = kicad_to_design(sch_path, name=stem) if sch_path.exists() else None
     documents = [
         _project_document(
             pro_path,
-            base=parent,
             raw_path=pro_path.name,
             kind=DocumentKind.OTHER,
             native_kind=".kicad_pro",
@@ -39,7 +38,6 @@ def load_kicad_project(pro_path: Path) -> Project:
         ),
         _project_document(
             sch_path,
-            base=parent,
             raw_path=sch_path.name,
             kind=DocumentKind.SCHEMATIC,
             native_kind=".kicad_sch",
@@ -48,7 +46,6 @@ def load_kicad_project(pro_path: Path) -> Project:
         ),
         _project_document(
             pcb_path,
-            base=parent,
             raw_path=pcb_path.name,
             kind=DocumentKind.PCB,
             native_kind=".kicad_pcb",
@@ -57,11 +54,10 @@ def load_kicad_project(pro_path: Path) -> Project:
         ),
         _project_document(
             dru_path,
-            base=parent,
             raw_path=dru_path.name,
             kind=DocumentKind.OTHER,
             native_kind=".kicad_dru",
-            parsed=bool(design_rules),
+            parsed=design_rules is not None,
             order=4,
         ),
     ]
@@ -78,14 +74,13 @@ def load_kicad_project(pro_path: Path) -> Project:
         schematic=schematic,
         boards=[board] if board else [],
         net_classes=net_classes,
-        design_rules=design_rules,
+        design_rules=design_rules or [],
     )
 
 
 def _project_document(
     resolved_path: Path,
     *,
-    base: Path,
     raw_path: str,
     kind: DocumentKind,
     native_kind: str,
@@ -99,5 +94,5 @@ def _project_document(
         order=order,
         exists=resolved_path.exists(),
         parsed=parsed,
-        metadata={"resolved_path": str(base / raw_path.replace("\\", "/"))},
+        metadata={"resolved_path": str(resolved_path)},
     )

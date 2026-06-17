@@ -36,7 +36,6 @@ def load_altium_project(prj_path: Path) -> Project:
     documents: list[ProjectDocument] = [
         _project_document(
             prj_path,
-            base=prj_path.parent,
             raw_path=prj_path.name,
             kind=DocumentKind.OTHER,
             native_kind=".PrjPcb",
@@ -51,7 +50,6 @@ def load_altium_project(prj_path: Path) -> Project:
         documents.append(
             _project_document(
                 sch_abs,
-                base=prj_path.parent,
                 raw_path=sch_rel,
                 kind=DocumentKind.SCHEMATIC,
                 native_kind="SchDoc",
@@ -65,7 +63,6 @@ def load_altium_project(prj_path: Path) -> Project:
         documents.append(
             _project_document(
                 pcb_abs,
-                base=prj_path.parent,
                 raw_path=pcb_rel,
                 kind=DocumentKind.PCB,
                 native_kind="PcbDoc",
@@ -164,7 +161,6 @@ def resolve_prjpcb_pcbdoc(prj_path: Path) -> Path:
 def _project_document(
     resolved_path: Path,
     *,
-    base: Path,
     raw_path: str,
     kind: DocumentKind,
     native_kind: str,
@@ -178,5 +174,5 @@ def _project_document(
         order=order,
         exists=resolved_path.exists(),
         parsed=parsed,
-        metadata={"resolved_path": str(base / raw_path.replace("\\", "/"))},
+        metadata={"resolved_path": str(resolved_path)},
     )

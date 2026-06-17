@@ -59,11 +59,15 @@ def parse_opj_file(path: Path) -> OrCadProject:
 def load_orcad_project(opj_path: Path) -> Project:
     """Load an OrCAD project from a .OPJ manifest."""
     project_info = parse_opj_file(opj_path)
-    schematic_docs = [
-        doc
-        for doc in project_info.documents
-        if doc.kind is DocumentKind.SCHEMATIC and doc.exists and doc.metadata.get("resolved_path")
-    ]
+    schematic_by_path: dict[str, ProjectDocument] = {}
+    for doc in project_info.documents:
+        if doc.kind is not DocumentKind.SCHEMATIC or not doc.exists:
+            continue
+        resolved_path = doc.metadata.get("resolved_path")
+        if not resolved_path:
+            continue
+        schematic_by_path.setdefault(resolved_path, doc)
+    schematic_docs = list(schematic_by_path.values())
     if len(schematic_docs) > 1:
         paths = ", ".join(doc.path for doc in schematic_docs)
         raise ValueError(
