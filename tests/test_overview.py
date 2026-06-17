@@ -83,14 +83,21 @@ def _overview_project() -> Project:
     )
     tp_pin = Pin(id="pin:TP1:1", designator="1", name="", component=tp, net=gnd)
     tp.pins = [tp_pin]
-    gnd.pins = [tp_pin]
-    top.components = [connector, tp]
+    two_pin_tp = Component(
+        id="component:TP2", reference="TP2", part="TestPoint2", description="", pages=[top]
+    )
+    two_pin_tp.pins = [
+        Pin(id="pin:TP2:1", designator="1", name="", component=two_pin_tp, net=gnd),
+        Pin(id="pin:TP2:2", designator="2", name="", component=two_pin_tp, net=gnd),
+    ]
+    gnd.pins = [tp_pin, *two_pin_tp.pins]
+    top.components = [connector, tp, two_pin_tp]
     power.components = [ic]
 
     schematic = Schematic(
         name="Motor Controller",
         pages=[top, power],
-        components=[connector, ic, tp],
+        components=[connector, ic, tp, two_pin_tp],
         nets=[gnd, signal],
     )
 
@@ -178,6 +185,7 @@ def test_format_project_overview_important_components_and_notes() -> None:
     assert "U1  pins=32  page=Power  mpn=ST STM32H743VIT6  symbol=STM32H7  desc=MCU" in output
     assert output.index("mpn=ST STM32H743VIT6") < output.index("symbol=STM32H7")
     assert "TP1  pins=1  page=Top  net=GND  symbol=TestPoint" in output
+    assert "TP2  pins=2  page=Top  net=GND  symbol=TestPoint2" in output
     assert "..." in output
     assert "... 1 more annotation omitted" in output
 

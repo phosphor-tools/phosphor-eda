@@ -262,9 +262,9 @@ def _component_overview_line(component: Component) -> str:
 def _test_point_net(component: Component) -> str:
     if ref_prefix(component.reference) != "TP":
         return ""
-    connected = [pin.net.name for pin in component.pins if pin.net is not None]
+    connected = {pin.net.name for pin in component.pins if pin.net is not None}
     if len(connected) == 1:
-        return connected[0]
+        return next(iter(connected))
     return ""
 
 
