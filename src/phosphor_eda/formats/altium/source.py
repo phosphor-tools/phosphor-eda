@@ -36,6 +36,7 @@ from phosphor_eda.formats.altium.records import (
     SheetEntryRec,
     SheetNameRec,
     SheetSymbolRec,
+    TextFrameRec,
 )
 from phosphor_eda.formats.altium.sheet_builder import (
     LocalNetResolution,
@@ -210,6 +211,7 @@ class AltiumSheetSource:
     harness_connectors: list[AltiumHarnessConnector]
     harness_members: list[AltiumHarnessMember]
     pin_occurrences: list[AltiumPinOccurrence]
+    annotations: list[str] = field(default_factory=list)
     title_block: TitleBlock | None = None
     generic_bus_lines: list[AltiumGenericBusLine] = field(default_factory=list)
 
@@ -668,6 +670,19 @@ def _sheet_title_block(sheet: SheetRecords) -> TitleBlock | None:
     return block if populated else None
 
 
+def _sheet_annotations(sheet: SheetRecords) -> list[str]:
+    annotations: list[str] = []
+    for frame in sheet.by_type(TextFrameRec):
+        if frame.owner_index != -1:
+            continue
+        text = frame.text.replace("~1", "\n").strip()
+        if text in _TITLE_BLOCK_PLACEHOLDERS:
+            continue
+        if text:
+            annotations.append(text)
+    return annotations
+
+
 def _pin_is_visible(pin: PinRec, components_by_owner: dict[int, ComponentRec]) -> bool:
     component = components_by_owner.get(pin.owner_index)
     if component is None:
@@ -996,6 +1011,7 @@ def _source_sheet(
         harness_connectors=harness_connectors,
         harness_members=list(harness_members_by_index.values()),
         pin_occurrences=pin_occurrences,
+        annotations=_sheet_annotations(sheet),
         title_block=_sheet_title_block(sheet),
     )
 

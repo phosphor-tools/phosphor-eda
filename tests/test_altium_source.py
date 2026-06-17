@@ -14,11 +14,12 @@ from phosphor_eda.formats.altium.records import (
     RecordType,
     SheetNameRec,
     SheetSymbolRec,
+    TextFrameRec,
     WireRec,
 )
 from phosphor_eda.formats.altium.sheet_builder import SheetRecords
 from phosphor_eda.formats.altium.source import load_project_source_sheets
-from phosphor_eda.formats.altium.to_schematic import altium_to_source
+from phosphor_eda.formats.altium.to_schematic import altium_to_design, altium_to_source
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.common.spatial import WireIndex
 
@@ -236,6 +237,60 @@ def test_altium_sheet_title_block_maps_typed_fields_and_preserves_raw_metadata(
     assert block.author == ""
     assert block.metadata["Title"] == "*"
     assert block.metadata["Author"] == "~"
+
+
+def test_altium_text_frames_become_page_annotations(monkeypatch: pytest.MonkeyPatch):
+    records = SheetRecords(
+        records=[
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=1,
+                owner_index=-1,
+                text="Initial release~1Changed power sequencing",
+            ),
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=2,
+                owner_index=-1,
+                text="   ",
+            ),
+        ],
+        children={},
+        wire_index=WireIndex([]),
+        name="Notes",
+    )
+    sheet = _load_records_sheet(monkeypatch, records, "Notes.SchDoc")
+
+    assert sheet.annotations == ["Initial release\nChanged power sequencing"]
+    assert sheet.title_block is None
+
+
+def test_altium_text_frames_reach_public_page_annotations(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    schdoc = tmp_path / "Notes.SchDoc"
+    schdoc.write_text("", encoding="utf-8")
+    records = SheetRecords(
+        records=[
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=1,
+                owner_index=-1,
+                text="First line~1Second line",
+            )
+        ],
+        children={},
+        wire_index=WireIndex([]),
+        name="Notes",
+    )
+    monkeypatch.setattr(
+        "phosphor_eda.formats.altium.source.load_sheet",
+        lambda _path, ctx: records,
+    )
+
+    design = altium_to_design(schdoc)
+
+    assert design.pages[0].annotations == ["First line\nSecond line"]
 
 
 def test_parameter_set_diff_pair_directives_attach_to_touched_local_net(
