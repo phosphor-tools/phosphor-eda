@@ -44,6 +44,14 @@ from phosphor_eda.domain.schematic import (
     SchematicDirectiveKind,
     ScopeId,
 )
+from phosphor_eda.domain.variant_materializer import materialize_project_variant
+from phosphor_eda.domain.variants import (
+    Variant,
+    VariantField,
+    VariantOverride,
+    VariantTarget,
+    VariantTargetKind,
+)
 from phosphor_eda.formats.kicad.board import parse_kicad_pcb
 from phosphor_eda.query.project_loader import load_project
 from phosphor_eda.query.sql import load_database
@@ -416,6 +424,70 @@ def constructed_db() -> Iterator[duckdb.DuckDBPyConnection]:
     con = load_database(project)
     try:
         yield con
+    finally:
+        con.close()
+
+
+def test_sql_exports_variants_and_effective_component_state() -> None:
+    component = Component(id="component:r1", reference="R1", part="10k", description="")
+    variant = Variant(
+        name="no-r1",
+        order=1,
+        overrides=[
+            VariantOverride(
+                variant_name="no-r1",
+                target=VariantTarget(kind=VariantTargetKind.COMPONENT, object_id="component:r1"),
+                field=VariantField.FITTED,
+                value=False,
+                native_kind="altium_not_fitted",
+            ),
+            VariantOverride(
+                variant_name="no-r1",
+                target=VariantTarget(kind=VariantTargetKind.COMPONENT, object_id="component:r1"),
+                field=VariantField.EXCLUDE_FROM_SIMULATION,
+                value=True,
+                native_kind="kicad_exclude_from_sim",
+            ),
+        ],
+    )
+    project = Project(
+        name="Variant SQL",
+        schematic=Schematic(name="Variant SQL", components=[component]),
+        variants=[variant],
+    )
+    materialize_project_variant(project, variant_name="no-r1")
+
+    con = load_database(project)
+    try:
+        component_row = con.execute(
+            """
+            SELECT dnp, dnp_source, exclude_from_simulation
+            FROM components
+            WHERE component_id = 'component:r1'
+            """
+        ).fetchone()
+        assert component_row == (True, "active_variant", True)
+        assert con.execute(
+            "SELECT value FROM project WHERE key = 'selected_variant'"
+        ).fetchone() == ("no-r1",)
+        variant_row = con.execute(
+            """
+            SELECT variant_name, active, override_count, not_fitted_count
+            FROM project_variants
+            """
+        ).fetchone()
+        assert variant_row == ("no-r1", True, 2, 1)
+        override_rows = con.execute(
+            """
+            SELECT field, applied, value, base_value
+            FROM variant_overrides
+            ORDER BY ord
+            """
+        ).fetchall()
+        assert override_rows == [
+            ("fitted", True, "false", "true"),
+            ("exclude_from_simulation", True, "true", "false"),
+        ]
     finally:
         con.close()
 

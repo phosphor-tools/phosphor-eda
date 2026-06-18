@@ -101,6 +101,7 @@ class ResolvedComponentInfo:
     kind: ComponentKind = ComponentKind.STANDARD
     explicit_dnp: bool | None = None
     exclude_from_bom: bool = False
+    exclude_from_simulation: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -446,6 +447,7 @@ def _apply_component_info(component: Component, info: ResolvedComponentInfo | No
     component.lib = info.lib
     component.footprints = list(info.footprints)
     component.exclude_from_bom = info.exclude_from_bom
+    component.exclude_from_simulation = info.exclude_from_simulation
 
     fields = resolve_part_fields(component.parameters, part=component.part)
     component.part_numbers = fields.part_numbers

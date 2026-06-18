@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from phosphor_eda.query.classify import is_power_net, ref_prefix
 from phosphor_eda.query.format import component_mpn_label, tabulate
 from phosphor_eda.query.query import net_page_names
+from phosphor_eda.query.variants import variant_counts
 
 if TYPE_CHECKING:
     from phosphor_eda.domain.pcb import Board
@@ -25,8 +26,11 @@ def format_project_overview(project: Project) -> str:
     """Format a bounded text overview of a loaded project."""
     sections: list[str] = [
         _project_section(project),
-        _documents_section(project.documents),
     ]
+    variants_section = _variants_section(project)
+    if variants_section:
+        sections.append(variants_section)
+    sections.append(_documents_section(project.documents))
 
     if project.schematic is not None:
         sections.extend(
@@ -106,6 +110,39 @@ def _documents_section(documents: list[ProjectDocument]) -> str:
     else:
         lines.append("  No project documents found.")
     return "\n".join(lines)
+
+
+def _variants_section(project: Project) -> str:
+    if not project.variants:
+        return ""
+    active = project.active_variant.name if project.active_variant is not None else "base"
+    rows: list[tuple[str, str, str, str, str, str, str]] = []
+    for variant in project.variants:
+        total, not_fitted, alternate, parameters, other = variant_counts(variant)
+        rows.append(
+            (
+                variant.name,
+                "yes" if project.active_variant is variant else "no",
+                str(total),
+                str(not_fitted),
+                str(alternate),
+                str(parameters),
+                str(other),
+            )
+        )
+    return "\n".join(
+        [
+            "Variants",
+            f"  Active: {active}",
+            *[
+                f"  {line}"
+                for line in tabulate(
+                    ("NAME", "ACTIVE", "OVERRIDES", "NOT_FITTED", "ALT_PARTS", "PARAMS", "OTHER"),
+                    rows,
+                ).splitlines()
+            ],
+        ]
+    )
 
 
 def _document_status(document: ProjectDocument) -> str:

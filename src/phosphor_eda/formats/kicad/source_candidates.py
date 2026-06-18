@@ -665,6 +665,7 @@ def _component_info(sym_node: SExpNode, lib_id: str, footprint: str) -> Resolved
         footprints=_footprint_models(footprint),
         explicit_dnp=_bool_attr(sym_node, "dnp"),
         exclude_from_bom=in_bom is False,
+        exclude_from_simulation=_bool_attr(sym_node, "exclude_from_sim") is True,
     )
 
 

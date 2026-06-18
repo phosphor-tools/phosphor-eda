@@ -98,7 +98,7 @@ def test_cli_schematic_list_buses(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(
         cli_module,
         "load_project",
-        lambda _path: Project(name="BUS", schematic=_bus_design_for_cli()),
+        lambda _path, **_kwargs: Project(name="BUS", schematic=_bus_design_for_cli()),
     )
 
     runner = CliRunner()
@@ -156,7 +156,7 @@ def test_cli_schematic_show_bus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(
         cli_module,
         "load_project",
-        lambda _path: Project(name="BUS", schematic=_bus_design_for_cli()),
+        lambda _path, **_kwargs: Project(name="BUS", schematic=_bus_design_for_cli()),
     )
 
     runner = CliRunner()

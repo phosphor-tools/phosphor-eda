@@ -16,6 +16,7 @@ import json
 from typing import TYPE_CHECKING, cast
 
 from phosphor_eda.domain.project import NetClass
+from phosphor_eda.domain.variants import Variant
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -81,6 +82,29 @@ def parse_kicad_text_variables(path: Path) -> dict[str, str]:
     data: object = json.loads(text)
     variables = _json_dict(_json_dict(data).get("text_variables"))
     return {name: value for name, value in variables.items() if isinstance(value, str)}
+
+
+def parse_kicad_variants(path: Path) -> list[Variant]:
+    """Parse native KiCad project variant definitions."""
+    text = path.read_text(encoding="utf-8")
+    data: object = json.loads(text)
+    schematic = _json_dict(_json_dict(data).get("schematic"))
+    variants_raw = _json_list(schematic.get("variants"))
+    variants: list[Variant] = []
+    for index, item_raw in enumerate(variants_raw, start=1):
+        item = _json_dict(item_raw)
+        name = _as_str(item.get("name"))
+        if not name:
+            continue
+        variants.append(
+            Variant(
+                name=name,
+                description=_as_str(item.get("description")),
+                order=index,
+                source_id=f"schematic.variants[{index - 1}]",
+            )
+        )
+    return variants
 
 
 # json.loads output is inherently untyped; isinstance() narrows `object` only

@@ -45,29 +45,31 @@ def load_altium_project(prj_path: Path) -> Project:
     ]
     seen_pcbdocs: set[Path] = set()
     order = 2
-    for sch_rel in project_info.schematic_paths:
-        sch_abs = prj_path.parent / sch_rel.replace("\\", "/")
+    for sch_doc in project_info.schematic_documents:
+        sch_abs = prj_path.parent / sch_doc.path.replace("\\", "/")
         documents.append(
             _project_document(
                 sch_abs,
-                raw_path=sch_rel,
+                raw_path=sch_doc.path,
                 kind=DocumentKind.SCHEMATIC,
                 native_kind="SchDoc",
                 parsed=sch_abs.exists(),
                 order=order,
+                unique_id=sch_doc.unique_id,
             )
         )
         order += 1
-    for pcb_rel in project_info.pcb_paths:
-        pcb_abs = prj_path.parent / pcb_rel.replace("\\", "/")
+    for pcb_doc in project_info.pcb_documents:
+        pcb_abs = prj_path.parent / pcb_doc.path.replace("\\", "/")
         documents.append(
             _project_document(
                 pcb_abs,
-                raw_path=pcb_rel,
+                raw_path=pcb_doc.path,
                 kind=DocumentKind.PCB,
                 native_kind="PcbDoc",
                 parsed=pcb_abs.exists(),
                 order=order,
+                unique_id=pcb_doc.unique_id,
             )
         )
         order += 1
@@ -109,6 +111,8 @@ def load_altium_project(prj_path: Path) -> Project:
         net_classes=net_classes,
         design_rules=design_rules,
         diff_pairs=diff_pairs,
+        variants=project_info.variants,
+        selected_variant_name=project_info.current_variant,
     )
 
 
@@ -166,11 +170,13 @@ def _project_document(
     native_kind: str,
     parsed: bool,
     order: int,
+    unique_id: str = "",
 ) -> ProjectDocument:
     return ProjectDocument(
         path=raw_path,
         kind=kind,
         native_kind=native_kind,
+        unique_id=unique_id,
         order=order,
         exists=resolved_path.exists(),
         parsed=parsed,

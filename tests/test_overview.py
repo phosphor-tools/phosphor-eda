@@ -20,6 +20,13 @@ from phosphor_eda.domain.schematic import (
     Schematic,
     TitleBlock,
 )
+from phosphor_eda.domain.variants import (
+    Variant,
+    VariantField,
+    VariantOverride,
+    VariantTarget,
+    VariantTargetKind,
+)
 from phosphor_eda.query.overview import format_project_overview
 
 
@@ -171,6 +178,32 @@ def test_format_project_overview_contains_project_inventory() -> None:
     assert "3 total, 2 copper" in output
 
 
+def test_format_project_overview_lists_variants_when_present() -> None:
+    project = _overview_project()
+    project.variants = [
+        Variant(
+            name="Base manufacturing",
+            overrides=[
+                VariantOverride(
+                    variant_name="Base manufacturing",
+                    target=VariantTarget(kind=VariantTargetKind.COMPONENT, reference="R1"),
+                    field=VariantField.FITTED,
+                    value=False,
+                )
+            ],
+        ),
+        Variant(name="TPU"),
+    ]
+    project.selected_variant_name = "TPU"
+
+    output = format_project_overview(project)
+
+    assert "Variants\n" in output
+    assert "  Active: TPU" in output
+    assert "Base manufacturing" in output
+    assert output.index("Variants\n") < output.index("Documents\n")
+
+
 def test_format_project_overview_important_components_and_notes() -> None:
     output = format_project_overview(_overview_project())
 
@@ -193,7 +226,7 @@ def test_format_project_overview_important_components_and_notes() -> None:
 def test_overview_cli_uses_project_option(monkeypatch, tmp_path) -> None:
     project_path = tmp_path / "Project.PrjPcb"
     project_path.write_text("", encoding="utf-8")
-    monkeypatch.setattr(cli_module, "load_project", lambda _path: _overview_project())
+    monkeypatch.setattr(cli_module, "load_project", lambda _path, **_kwargs: _overview_project())
 
     result = CliRunner().invoke(main, ["-P", str(project_path), "overview"])
 
