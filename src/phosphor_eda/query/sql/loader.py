@@ -485,7 +485,7 @@ class _TitleBlockRow:
     block: TitleBlock
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class _VariantOverrideRow:
     variant_name: str
     ord: int

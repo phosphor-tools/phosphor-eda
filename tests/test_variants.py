@@ -31,7 +31,7 @@ def _project_with_component(component: Component, *, variants: list[Variant]) ->
     )
 
 
-def test_project_active_variant_returns_selected_variant() -> None:
+def test_project_active_variant_returns_selected_variant():
     project = Project(
         name="demo",
         selected_variant_name="production",
@@ -41,7 +41,7 @@ def test_project_active_variant_returns_selected_variant() -> None:
     assert project.active_variant is project.variants[1]
 
 
-def test_materialize_not_fitted_component_sets_active_variant_dnp() -> None:
+def test_materialize_not_fitted_component_sets_active_variant_dnp():
     component = Component(id="component:R1", reference="R1", part="10k", description="")
     variant = Variant(
         name="no-r1",
@@ -65,7 +65,7 @@ def test_materialize_not_fitted_component_sets_active_variant_dnp() -> None:
     assert component.variant_overrides[0].base_value is True
 
 
-def test_materialize_parameter_override_updates_part_fields() -> None:
+def test_materialize_parameter_override_updates_part_fields():
     component = Component(
         id="component:U1",
         reference="U1",
@@ -96,7 +96,7 @@ def test_materialize_parameter_override_updates_part_fields() -> None:
     assert [part.number for part in component.part_numbers] == ["NEW"]
 
 
-def test_materialize_part_number_override_updates_component_part_numbers() -> None:
+def test_materialize_part_number_override_updates_component_part_numbers():
     component = Component(
         id="component:U1",
         reference="U1",
@@ -122,7 +122,7 @@ def test_materialize_part_number_override_updates_component_part_numbers() -> No
     assert component.part_numbers == [PartNumber(manufacturer="Acme", number="NEW")]
 
 
-def test_selected_unresolved_component_override_errors() -> None:
+def test_selected_unresolved_component_override_errors():
     variant = Variant(
         name="missing",
         overrides=[
@@ -143,7 +143,7 @@ def test_selected_unresolved_component_override_errors() -> None:
         materialize_project_variant(project, variant_name="missing")
 
 
-def test_cli_variant_option_is_passed_to_project_loader(monkeypatch, tmp_path) -> None:
+def test_cli_variant_option_is_passed_to_project_loader(monkeypatch, tmp_path):
     project_path = tmp_path / "demo.kicad_pro"
     project_path.write_text("{}", encoding="utf-8")
     calls: list[dict[str, object]] = []
@@ -164,7 +164,7 @@ def test_cli_variant_option_is_passed_to_project_loader(monkeypatch, tmp_path) -
     assert "production" in result.output
 
 
-def test_cli_rejects_variant_and_base_variant_together(tmp_path) -> None:
+def test_cli_rejects_variant_and_base_variant_together(tmp_path):
     project_path = tmp_path / "demo.kicad_pro"
     project_path.write_text("{}", encoding="utf-8")
 
@@ -177,7 +177,7 @@ def test_cli_rejects_variant_and_base_variant_together(tmp_path) -> None:
     assert "--variant and --base-variant are mutually exclusive" in result.output
 
 
-def test_altium_project_variants_use_current_variant_by_default() -> None:
+def test_altium_project_variants_use_current_variant_by_default():
     project = load_project(PI_MX8_PRJPCB)
 
     assert project.selected_variant_name == "TPU"
@@ -188,7 +188,7 @@ def test_altium_project_variants_use_current_variant_by_default() -> None:
     assert sum(1 for component in project.schematic.components if component.dnp) == 56
 
 
-def test_altium_base_variant_preserves_variant_definitions_without_applying() -> None:
+def test_altium_base_variant_preserves_variant_definitions_without_applying():
     project = load_project(PI_MX8_PRJPCB, base_variant=True)
 
     assert project.selected_variant_name == ""
@@ -198,7 +198,7 @@ def test_altium_base_variant_preserves_variant_definitions_without_applying() ->
     assert sum(1 for component in project.schematic.components if component.dnp) == 0
 
 
-def test_kicad_native_variant_applies_dnp_and_exclude_from_sim(tmp_path: Path) -> None:
+def test_kicad_native_variant_applies_dnp_and_exclude_from_sim(tmp_path: Path):
     project_path = tmp_path / "variant-demo.kicad_pro"
     schematic_path = tmp_path / "variant-demo.kicad_sch"
     project_path.write_text(
