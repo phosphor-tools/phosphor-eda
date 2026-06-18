@@ -26,11 +26,6 @@ def net_page_names(net: Net) -> list[str]:
     return sorted({page.name for pin in net.pins for page in pin.component.pages})
 
 
-def _net_pages(net: Net) -> set[str]:
-    """Page names a net spans."""
-    return set(net_page_names(net))
-
-
 def _net_page_ids(net: Net) -> set[str]:
     """Page ids a net spans, falling back to its pins' component pages."""
     if net.pages:
@@ -68,7 +63,7 @@ def filter_nets(
         result = [n for n in result if len(n.pins) >= min_pins]
 
     if multi_page:
-        result = [n for n in result if len(_net_pages(n)) > 1]
+        result = [n for n in result if len(_net_page_ids(n)) > 1]
 
     if bus_ids is not None:
         result = [

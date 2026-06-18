@@ -484,7 +484,7 @@ def _highlight_net_names(
     highlight: HighlightSpec,
     net_expansions: Mapping[str, frozenset[str]] | None,
 ) -> frozenset[str]:
-    """Upper-cased net names this highlight matches."""
+    """Expanded net names this highlight matches."""
     if not highlight.net:
         return frozenset()
     if net_expansions is None or highlight.exact:
@@ -492,7 +492,7 @@ def _highlight_net_names(
     expanded = net_expansions.get(highlight.net)
     if expanded is None:
         return frozenset()
-    return frozenset(name.upper() for name in expanded)
+    return frozenset(expanded)
 
 
 def _matches_highlight(
@@ -503,15 +503,24 @@ def _matches_highlight(
     if item.item_kind == InventoryItemKind.DRILL:
         return False
     if highlight.net:
-        return item.tags.net_name.upper() in net_names or selector_matches(
-            highlight.net, (item.tags.net_name,)
+        net_name = item.tags.net_name
+        return bool(net_name) and (
+            net_name in net_names or selector_matches(highlight.net, (net_name,))
         )
     if highlight.component:
-        return selector_matches(highlight.component, (item.tags.component_ref,))
+        component_ref = item.tags.component_ref
+        return bool(component_ref) and selector_matches(highlight.component, (component_ref,))
     if highlight.pad:
         ref, _, pad_number = highlight.pad.partition(".")
-        return selector_matches(ref, (item.tags.component_ref,)) and selector_matches(
-            pad_number, (item.tags.pad_number,)
+        if not pad_number:
+            pad_number = "*"
+        component_ref = item.tags.component_ref
+        item_pad_number = item.tags.pad_number
+        return (
+            bool(component_ref)
+            and bool(item_pad_number)
+            and selector_matches(ref, (component_ref,))
+            and selector_matches(pad_number, (item_pad_number,))
         )
     return False
 

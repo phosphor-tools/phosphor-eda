@@ -325,6 +325,26 @@ def test_cli_list_components_selector_exclusion(
     assert "U2" not in result.output
 
 
+def test_cli_list_components_unmatched_glob_returns_empty_filter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opj = _write_opj(tmp_path / "selectors.opj")
+    monkeypatch.setattr(
+        cli_module,
+        "load_project",
+        lambda _path, **_kwargs: Project(name="selectors", schematic=_selector_design_for_cli()),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["-P", str(opj), "list", "components", "--component", "X*"])
+
+    assert result.exit_code == 0
+    assert result.output.strip() == "No components found."
+    assert "U1" not in result.output
+    assert "U2" not in result.output
+    assert "J1" not in result.output
+
+
 def test_cli_list_nets_by_net_selector(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     opj = _write_opj(tmp_path / "selectors.opj")
     monkeypatch.setattr(
