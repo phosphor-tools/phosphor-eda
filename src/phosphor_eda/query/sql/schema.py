@@ -18,9 +18,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable, Sequence
 
     import duckdb
+import pandas as pd
 
 GEOMETRY = "GEOMETRY"
 
@@ -42,9 +43,6 @@ class Column[T]:
         suffix = f" {self.constraint}" if self.constraint else ""
         return f"{self.name} {self.sql_type}{suffix}"
 
-    def placeholder(self) -> str:
-        return "ST_GeomFromWKB(?)" if self.is_geometry else "?"
-
 
 @dataclass(frozen=True)
 class TableSpec[T]:
@@ -57,16 +55,52 @@ class TableSpec[T]:
         body = ",\n".join(f"            {column.ddl()}" for column in self.columns)
         return f"\n        CREATE TABLE {self.name} (\n{body}\n        )\n    "
 
-    def insert_sql(self) -> str:
-        names = ", ".join(column.name for column in self.columns)
-        placeholders = ", ".join(column.placeholder() for column in self.columns)
-        return f"INSERT INTO {self.name} ({names}) VALUES ({placeholders})"
-
     def values(self, source: T) -> list[object]:
         return [column.extractor(source) for column in self.columns]
 
-    def insert(self, con: duckdb.DuckDBPyConnection, source: T) -> None:
-        _ = con.execute(self.insert_sql(), self.values(source))
+    def bulk_insert(self, con: duckdb.DuckDBPyConnection, sources: Iterable[T]) -> None:
+        self.bulk_insert_values(con, (self.values(source) for source in sources))
+
+    def bulk_insert_values(
+        self,
+        con: duckdb.DuckDBPyConnection,
+        rows: Iterable[Sequence[object]],
+    ) -> None:
+        data = [list(row) for row in rows]
+        if not data:
+            return
+
+        stage_table = f"_{self.name}_stage"
+        frame = pd.DataFrame(data=data, columns=self._stage_column_names())
+        _ = con.execute(self._stage_ddl(stage_table))
+        try:
+            con.append(stage_table, frame, by_name=True)
+            _ = con.execute(self._bulk_insert_sql(stage_table))
+        finally:
+            _ = con.execute(f"DROP TABLE IF EXISTS {stage_table}")
+
+    def _stage_column_names(self) -> list[str]:
+        return [
+            f"{column.name}_wkb" if column.is_geometry else column.name for column in self.columns
+        ]
+
+    def _stage_ddl(self, stage_table: str) -> str:
+        body = ",\n".join(
+            f"            {stage_name} {self._stage_sql_type(column)}"
+            for column, stage_name in zip(self.columns, self._stage_column_names(), strict=True)
+        )
+        return f"\n        CREATE TEMP TABLE {stage_table} (\n{body}\n        )\n    "
+
+    def _stage_sql_type(self, column: Column[T]) -> str:
+        return "BLOB" if column.is_geometry else column.sql_type
+
+    def _bulk_insert_sql(self, stage_table: str) -> str:
+        names = ", ".join(column.name for column in self.columns)
+        expressions = ", ".join(
+            f"ST_GeomFromWKB({stage_name})" if column.is_geometry else stage_name
+            for column, stage_name in zip(self.columns, self._stage_column_names(), strict=True)
+        )
+        return f"INSERT INTO {self.name} ({names}) SELECT {expressions} FROM {stage_table}"
 
 
 def col[T](

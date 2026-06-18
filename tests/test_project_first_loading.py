@@ -40,6 +40,7 @@ OPENCELLULAR_SYNC_DSN = (
 OPENCELLULAR_SYNC_BOARD = (
     OPENCELLULAR_SYNC / "allegro/OpenCellular/electronics/sync/board/Fb_Connect1_SYNC_Life-3.brd"
 )
+QFSAE_PRJPCB = FIXTURES / "altium/qfsae-debugger/Debugger.PrjPcb"
 
 
 def _write_opj(path: Path, dsn_path: Path = DSN_FILE) -> Path:
@@ -80,9 +81,11 @@ def test_load_project_rejects_direct_document_entrypoints() -> None:
 
 def test_load_project_accepts_project_entrypoints(tmp_path: Path) -> None:
     opj = _write_opj(tmp_path / "pico.opj")
+    kicad_pro = tmp_path / "minimal.kicad_pro"
+    kicad_pro.write_text("{}", encoding="utf-8")
 
-    assert load_project(JETSON_ORIN_PRO).metadata.format == "kicad"
-    assert load_project(PIMX8_PRJPCB).metadata.format == "altium"
+    assert load_project(kicad_pro).metadata.format == "kicad"
+    assert load_project(QFSAE_PRJPCB).metadata.format == "altium"
     assert load_project(opj).metadata.format == "orcad"
 
 
@@ -245,6 +248,15 @@ def test_cli_requires_project_for_project_backed_commands() -> None:
         result = runner.invoke(main, args)
         assert result.exit_code != 0, args
         assert "-P/--project" in result.output
+
+
+def test_cli_sql_schema_does_not_require_project() -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(main, ["sql", "--schema"])
+
+    assert result.exit_code == 0
+    assert "CREATE TABLE footprints" in result.output
 
 
 def test_cli_project_option_drives_schematic_commands(tmp_path: Path) -> None:

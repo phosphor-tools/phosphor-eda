@@ -7,7 +7,19 @@ from click.testing import CliRunner
 
 import phosphor_eda.cli as cli_module
 from phosphor_eda.cli import main
-from phosphor_eda.domain.pcb import Board
+from phosphor_eda.domain.pcb import (
+    Board,
+    LayerRole,
+    PadStack,
+    PcbConductor,
+    PcbConductorKind,
+    PcbFootprint,
+    PcbLayer,
+    PcbLine,
+    PcbNet,
+    PcbPad,
+    PcbPadType,
+)
 from phosphor_eda.domain.project import Project
 from phosphor_eda.domain.schematic import Bus, BusKind, Component, Net, Page, Pin, Schematic
 from phosphor_eda.formats.altium.pcb_project import AltiumEnrichment
@@ -56,6 +68,102 @@ def _empty_board(name: str, path: Path) -> Board:
         keepouts=[],
         source_path=str(path),
     )
+
+
+def _series_passive_highlight_project(path: Path) -> Project:
+    front = PcbLayer("F.Cu", roles=(LayerRole.COPPER, LayerRole.FRONT), stack_index=0)
+    inner = PcbLayer("In1.Cu", roles=(LayerRole.COPPER, LayerRole.INNER), stack_index=1)
+    back = PcbLayer("B.Cu", roles=(LayerRole.COPPER, LayerRole.BACK), stack_index=2)
+    source_net = PcbNet(number=1, name="/CSI/I2C_MUX_SCL")
+    far_net = PcbNet(number=2, name="SCL_CAM")
+    footprint = PcbFootprint(
+        reference="R1",
+        footprint_lib="Resistor_SMD:R_0402",
+        x=0.0,
+        y=0.0,
+        rotation=0.0,
+        layer=front,
+    )
+    pad_stack = PadStack.simple("rect", 0.6, 0.4)
+    pads = [
+        PcbPad(
+            id="pad:r1:1",
+            number="1",
+            x=0.0,
+            y=0.0,
+            stack=pad_stack,
+            pad_type=PcbPadType.SMD,
+            layers=(front,),
+            net=source_net,
+            footprint=footprint,
+        ),
+        PcbPad(
+            id="pad:r1:2",
+            number="2",
+            x=1.0,
+            y=0.0,
+            stack=pad_stack,
+            pad_type=PcbPadType.SMD,
+            layers=(front,),
+            net=far_net,
+            footprint=footprint,
+        ),
+    ]
+    board = Board(
+        name="series-passive-highlight",
+        layers=[front, inner, back],
+        nets={source_net.number: source_net, far_net.number: far_net},
+        footprints=[footprint],
+        pads=pads,
+        vias=[],
+        drills=[],
+        conductors=[
+            PcbConductor(
+                id="trace:scl-cam:front",
+                kind=PcbConductorKind.TRACE,
+                layer=front,
+                data=PcbLine(1.0, 0.0, 3.0, 0.0, 0.15),
+                net=far_net,
+            ),
+            PcbConductor(
+                id="trace:scl-cam:inner",
+                kind=PcbConductorKind.TRACE,
+                layer=inner,
+                data=PcbLine(3.0, 0.0, 3.0, 2.0, 0.15),
+                net=far_net,
+            ),
+            PcbConductor(
+                id="trace:scl-cam:back",
+                kind=PcbConductorKind.TRACE,
+                layer=back,
+                data=PcbLine(3.0, 2.0, 1.0, 2.0, 0.15),
+                net=far_net,
+            ),
+        ],
+        artwork=[],
+        pours=[],
+        keepouts=[],
+        source_path=str(path.with_suffix(".kicad_pcb")),
+    )
+
+    page = Page(id="page:root", name="Root")
+    resistor = Component(id="component:r1", reference="R1", part="R", description="resistor")
+    net_a = Net(id="net:a", name="/CSI/I2C_MUX_SCL", pages=[page])
+    net_b = Net(id="net:b", name="SCL_CAM", pages=[page])
+    pin_a = Pin(id="pin:r1:1", designator="1", name="1", component=resistor, net=net_a)
+    pin_b = Pin(id="pin:r1:2", designator="2", name="2", component=resistor, net=net_b)
+    resistor.pins = [pin_a, pin_b]
+    net_a.pins = [pin_a]
+    net_b.pins = [pin_b]
+    page.components = [resistor]
+    page.nets = [net_a, net_b]
+    schematic = Schematic(
+        name="series-passive-highlight",
+        pages=[page],
+        nets=[net_a, net_b],
+        components=[resistor],
+    )
+    return Project(name="series-passive-highlight", schematic=schematic, boards=[board])
 
 
 def test_cli_version():
@@ -1106,15 +1214,25 @@ def test_cli_render_net_highlight_without_schematic_warns_and_matches_exact(
     assert "<svg" in result.stdout
 
 
-def test_cli_render_net_highlight_traverses_series_passives_via_schematic() -> None:
+def test_cli_render_net_highlight_traverses_series_passives_via_schematic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Highlighting one side of a series resistor lights the far-side net's
-    copper on every layer (the jetson-orin project has a sibling schematic)."""
+    copper on every layer."""
+    project_file = tmp_path / "series-passive-highlight.kicad_pro"
+    project_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        cli_module,
+        "load_project",
+        lambda path, **_kwargs: _series_passive_highlight_project(path),
+    )
+
     runner = CliRunner()
     result = runner.invoke(
         main,
         [
             "-P",
-            str(FIXTURES / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pro"),
+            str(project_file),
             "pcb",
             "render",
             "-n",
@@ -1124,8 +1242,6 @@ def test_cli_render_net_highlight_traverses_series_passives_via_schematic() -> N
 
     assert result.exit_code == 0, result.stderr
     assert "project contains no loadable schematic" not in result.stderr
-    # SCL_CAM is the far side of a series resistor from /CSI/I2C_MUX_SCL and
-    # routes on front, back, and inner copper; all of it joins the highlight.
     assert 'data-net-name="SCL_CAM"' in result.stdout
     highlight_block = result.stdout.split('data-highlight-target="net:/CSI/I2C_MUX_SCL"')[1]
     overlay = highlight_block.split("</svg>")[0]

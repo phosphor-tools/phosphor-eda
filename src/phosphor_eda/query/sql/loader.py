@@ -11,9 +11,11 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import asdict, dataclass, is_dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import duckdb
+import numpy as np
+import shapely
 from shapely import LineString, Point
 from shapely.affinity import rotate
 
@@ -63,8 +65,9 @@ from phosphor_eda.query.sql.schema import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable, Sequence
 
+    from numpy.typing import NDArray
     from shapely.geometry.base import BaseGeometry
 
     from phosphor_eda.domain.pcb import (
@@ -104,6 +107,26 @@ if TYPE_CHECKING:
 _QUAD_SEGS_CIRCLE = 16
 _QUAD_SEGS_DRILL = 8
 _PROFILE_ARC_POINTS = 32
+
+_LineCoords = tuple[tuple[float, float], tuple[float, float]]
+
+
+class _ShapelyBuffer(Protocol):
+    def __call__(
+        self,
+        geometry: NDArray[np.object_],
+        distance: NDArray[np.float64],
+        *,
+        cap_style: str,
+    ) -> NDArray[np.object_]: ...
+
+
+_shapely_linestrings: Callable[[Sequence[_LineCoords]], NDArray[np.object_]] = vars(shapely)[
+    "linestrings"
+]
+_shapely_buffer: _ShapelyBuffer = vars(shapely)["buffer"]
+_shapely_is_empty: Callable[[NDArray[np.object_]], NDArray[np.bool_]] = vars(shapely)["is_empty"]
+_shapely_to_wkb: Callable[[NDArray[np.object_]], NDArray[np.bytes_]] = vars(shapely)["to_wkb"]
 
 
 def _wkb(geom: BaseGeometry | None) -> bytes | None:
@@ -193,6 +216,28 @@ def _shape_geometry(payload: PcbShape) -> BaseGeometry | None:
     # valid no-geometry case, not unreachable).
     _: PcbModel3D = payload
     return None
+
+
+def _line_artwork_wkbs(lines: list[PcbLine]) -> list[bytes | None]:
+    if not lines:
+        return []
+
+    centerlines = _shapely_linestrings(
+        [((line.start_x, line.start_y), (line.end_x, line.end_y)) for line in lines]
+    )
+    widths = np.array([line.width for line in lines], dtype=np.float64)
+    geometries = _shapely_buffer(
+        centerlines,
+        widths / 2.0,
+        cap_style="flat",
+    )
+    geometries = np.where(widths > 0.0, geometries, centerlines)
+    empty_flags = _shapely_is_empty(geometries)
+    wkb_values = _shapely_to_wkb(geometries)
+    return [
+        None if bool(is_empty) else bytes(wkb)
+        for is_empty, wkb in zip(empty_flags, wkb_values, strict=True)
+    ]
 
 
 def _profile_shape_geometry(
@@ -1406,22 +1451,23 @@ def load_database(project: Project) -> duckdb.DuckDBPyConnection:
 
 
 def _load_footprints(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
-    for fp in pcb.footprints:
-        _FOOTPRINTS.insert(con, fp)
+    _FOOTPRINTS.bulk_insert(con, pcb.footprints)
 
 
 def _load_pads(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
-    for pad in pcb.pads:
-        _PADS.insert(con, _PadRow(pad=pad, copper_layers=copper_layers(pad, pcb)))
+    _PADS.bulk_insert(
+        con,
+        (_PadRow(pad=pad, copper_layers=copper_layers(pad, pcb)) for pad in pcb.pads),
+    )
 
 
 def _load_vias(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
+    rows: list[_ViaRow] = []
     for via in pcb.vias:
         net_name, net_number = _net_fields(via.net)
         start_layer = via.layers[0].name if via.layers else ""
         end_layer = via.layers[-1].name if len(via.layers) > 1 else start_layer
-        _VIAS.insert(
-            con,
+        rows.append(
             _ViaRow(
                 via=via,
                 net_name=net_name,
@@ -1432,11 +1478,11 @@ def _load_vias(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
                 geom=via_geometry(via)[0],
             ),
         )
+    _VIAS.bulk_insert(con, rows)
 
 
 def _load_drills(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
-    for drill in pcb.drills:
-        _DRILLS.insert(con, drill)
+    _DRILLS.bulk_insert(con, pcb.drills)
 
 
 def _conductor_row(conductor: PcbConductor) -> _ConductorRow:
@@ -1517,53 +1563,74 @@ def _conductor_row(conductor: PcbConductor) -> _ConductorRow:
 
 
 def _load_conductors(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
-    for conductor in pcb.conductors:
-        _CONDUCTORS.insert(con, _conductor_row(conductor))
+    _CONDUCTORS.bulk_insert(con, (_conductor_row(conductor) for conductor in pcb.conductors))
 
 
 def _load_artwork(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
+    rows: list[list[object]] = []
+    line_row_indexes: list[int] = []
+    line_payloads: list[PcbLine] = []
     for artwork in pcb.artwork:
         text = x = y = rotation = font_size = None
+        geom_wkb = None
         if isinstance(artwork.data, PcbText):
             text = artwork.data.text
             x = artwork.data.x
             y = artwork.data.y
             rotation = artwork.data.rotation
             font_size = artwork.data.font_size
-        _ARTWORK.insert(
-            con,
-            _ArtworkRow(
-                artwork=artwork,
-                text=text,
-                x=x,
-                y=y,
-                rotation=rotation,
-                font_size=font_size,
-                geom=_shape_geometry(artwork.data),
-            ),
+            geom_wkb = _wkb(_shape_geometry(artwork.data))
+        elif isinstance(artwork.data, PcbLine):
+            line_row_indexes.append(len(rows))
+            line_payloads.append(artwork.data)
+        else:
+            geom_wkb = _wkb(_shape_geometry(artwork.data))
+        rows.append(
+            [
+                artwork.id,
+                artwork.purpose.value,
+                artwork.kind.value,
+                None if artwork.footprint is None else artwork.footprint.reference,
+                None if artwork.layer is None else artwork.layer.name,
+                text,
+                x,
+                y,
+                rotation,
+                font_size,
+                geom_wkb,
+            ]
         )
+    if not rows:
+        return
+
+    for row_index, geom_wkb in zip(
+        line_row_indexes,
+        _line_artwork_wkbs(line_payloads),
+        strict=True,
+    ):
+        rows[row_index][-1] = geom_wkb
+
+    _ARTWORK.bulk_insert_values(con, rows)
 
 
 def _load_board_profile(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
     if pcb.board_profile is None:
         return
-    for element in pcb.board_profile.elements:
-        _BOARD_PROFILE.insert(con, element)
+    _BOARD_PROFILE.bulk_insert(con, pcb.board_profile.elements)
 
 
 def _load_pours(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
-    for pour in pcb.pours:
-        _POURS.insert(con, pour)
+    _POURS.bulk_insert(con, pcb.pours)
 
 
 def _load_keepouts(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
-    for keepout in pcb.keepouts:
-        _KEEPOUTS.insert(con, keepout)
+    _KEEPOUTS.bulk_insert(con, pcb.keepouts)
 
 
 def _load_layers(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
     stackup = pcb.stackup
     stackup_map: dict[str, int] = {}
+    rows: list[_LayerRow] = []
     if stackup:
         for index, stack_layer in enumerate(stackup.layers, start=1):
             stackup_map[stack_layer.name] = index
@@ -1571,8 +1638,7 @@ def _load_layers(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
             info = pcb_layer or _stackup_layer_as_pcb_layer(
                 stack_layer.layer_type, stack_layer.side
             )
-            _LAYERS.insert(
-                con,
+            rows.append(
                 _LayerRow(
                     position=index,
                     name=stack_layer.name,
@@ -1591,8 +1657,7 @@ def _load_layers(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
     for layer in pcb.layers:
         if layer.name in stackup_map:
             continue
-        _LAYERS.insert(
-            con,
+        rows.append(
             _LayerRow(
                 position=None,
                 name=layer.name,
@@ -1607,139 +1672,165 @@ def _load_layers(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
                 copper_orientation=None,
             ),
         )
+    _LAYERS.bulk_insert(con, rows)
 
 
 def _load_board(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
     outline = board_outline_polygon(pcb.board_profile) if pcb.board_profile is not None else None
-    _BOARD.insert(con, _BoardRow(board=pcb, geom=outline))
+    _BOARD.bulk_insert(con, [_BoardRow(board=pcb, geom=outline)])
 
 
 def _load_boards(con: duckdb.DuckDBPyConnection, project: Project) -> None:
-    for index, board in enumerate(project.boards, start=1):
-        _BOARDS.insert(con, _BoardsRow(board_id=f"board:{index:04d}", board=board))
+    _BOARDS.bulk_insert(
+        con,
+        (
+            _BoardsRow(board_id=f"board:{index:04d}", board=board)
+            for index, board in enumerate(project.boards, start=1)
+        ),
+    )
 
 
 def _load_net_classes(con: duckdb.DuckDBPyConnection, project: Project) -> None:
+    member_rows: list[tuple[str, str]] = []
     for net_class in project.net_classes:
-        _NET_CLASSES.insert(con, net_class)
         for member in net_class.members:
-            _NET_CLASS_MEMBERS.insert(con, (member, net_class.name))
+            member_rows.append((member, net_class.name))
+    _NET_CLASSES.bulk_insert(con, project.net_classes)
+    _NET_CLASS_MEMBERS.bulk_insert(con, member_rows)
 
 
 def _load_design_rules(con: duckdb.DuckDBPyConnection, project: Project) -> None:
-    for rule in project.design_rules:
-        _DESIGN_RULES.insert(con, rule)
+    _DESIGN_RULES.bulk_insert(con, project.design_rules)
 
 
 def _load_project_documents(con: duckdb.DuckDBPyConnection, project: Project) -> None:
-    for document in project.documents:
-        _PROJECT_DOCUMENTS.insert(con, document)
+    _PROJECT_DOCUMENTS.bulk_insert(con, project.documents)
 
 
 def _load_project_parameters(con: duckdb.DuckDBPyConnection, project: Project) -> None:
-    for key, value in sorted(project.parameters.items()):
-        _PROJECT_PARAMETERS.insert(con, (key, value))
+    _PROJECT_PARAMETERS.bulk_insert(con, sorted(project.parameters.items()))
 
 
 def _load_project_variants(con: duckdb.DuckDBPyConnection, project: Project) -> None:
+    override_rows: list[_VariantOverrideRow] = []
     for variant in project.variants:
-        _PROJECT_VARIANTS.insert(con, variant)
         for index, override in enumerate(variant.overrides, start=1):
-            _VARIANT_OVERRIDES.insert(
-                con,
-                _VariantOverrideRow(variant_name=variant.name, ord=index, override=override),
+            override_rows.append(
+                _VariantOverrideRow(variant_name=variant.name, ord=index, override=override)
             )
+    _PROJECT_VARIANTS.bulk_insert(con, project.variants)
+    _VARIANT_OVERRIDES.bulk_insert(con, override_rows)
 
 
 def _load_components(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
-    for comp in schematic.components:
-        _COMPONENTS.insert(con, comp)
+    _COMPONENTS.bulk_insert(con, schematic.components)
 
 
 def _load_component_enrichment(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    parameter_rows: list[_ComponentParameterRow] = []
+    footprint_rows: list[_ComponentFootprintRow] = []
+    part_number_rows: list[_ComponentPartNumberRow] = []
     for comp in schematic.components:
         for ord_, parameter in enumerate(comp.parameters, start=1):
-            _COMPONENT_PARAMETERS.insert(
-                con, _ComponentParameterRow(component_id=comp.id, ord=ord_, parameter=parameter)
+            parameter_rows.append(
+                _ComponentParameterRow(component_id=comp.id, ord=ord_, parameter=parameter)
             )
         for ord_, model in enumerate(comp.footprints, start=1):
-            _COMPONENT_FOOTPRINTS.insert(
-                con, _ComponentFootprintRow(component_id=comp.id, ord=ord_, model=model)
+            footprint_rows.append(
+                _ComponentFootprintRow(component_id=comp.id, ord=ord_, model=model)
             )
         for ord_, part_number in enumerate(comp.part_numbers, start=1):
-            _COMPONENT_PART_NUMBERS.insert(
-                con,
+            part_number_rows.append(
                 _ComponentPartNumberRow(component_id=comp.id, ord=ord_, part_number=part_number),
             )
+    _COMPONENT_PARAMETERS.bulk_insert(con, parameter_rows)
+    _COMPONENT_FOOTPRINTS.bulk_insert(con, footprint_rows)
+    _COMPONENT_PART_NUMBERS.bulk_insert(con, part_number_rows)
 
 
 def _load_title_blocks(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
-    for page in schematic.pages:
-        if page.title_block is not None:
-            _TITLE_BLOCKS.insert(con, _TitleBlockRow(page=page, block=page.title_block))
+    _TITLE_BLOCKS.bulk_insert(
+        con,
+        (
+            _TitleBlockRow(page=page, block=page.title_block)
+            for page in schematic.pages
+            if page.title_block is not None
+        ),
+    )
 
 
 def _load_page_annotations(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    rows: list[_PageAnnotationRow] = []
     for page in schematic.pages:
         for index, annotation in enumerate(page.annotations, start=1):
-            _PAGE_ANNOTATIONS.insert(
-                con,
+            rows.append(
                 _PageAnnotationRow(page=page, ord=index, text=annotation),
             )
+    _PAGE_ANNOTATIONS.bulk_insert(con, rows)
 
 
 def _load_component_pages(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    rows: list[_CompPageRow] = []
     for comp in schematic.components:
         for page in _unique_pages(comp.pages):
-            _COMPONENT_PAGES.insert(con, _CompPageRow(component=comp, page=page))
+            rows.append(_CompPageRow(component=comp, page=page))
+    _COMPONENT_PAGES.bulk_insert(con, rows)
 
 
 def _load_component_occurrences(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    rows: list[ComponentOccurrence] = []
     for comp in schematic.components:
         for occurrence in comp.occurrences:
-            _COMPONENT_OCCURRENCES.insert(con, occurrence)
+            rows.append(occurrence)
+    _COMPONENT_OCCURRENCES.bulk_insert(con, rows)
 
 
 def _load_component_occurrence_metadata(
     con: duckdb.DuckDBPyConnection, schematic: Schematic
 ) -> None:
+    rows: list[_OccKeyValueRow] = []
     for comp in schematic.components:
         for occurrence in comp.occurrences:
             for key, value in occurrence.metadata.items():
-                _COMPONENT_OCCURRENCE_METADATA.insert(
-                    con,
+                rows.append(
                     _OccKeyValueRow(
                         occurrence_id=occurrence.id, owner_id=comp.id, key=key, value=value
                     ),
                 )
+    _COMPONENT_OCCURRENCE_METADATA.bulk_insert(con, rows)
 
 
 def _load_component_metadata(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    rows: list[_KeyValueRow] = []
     for comp in schematic.components:
         for key, value in comp.metadata.items():
-            _COMPONENT_METADATA.insert(
-                con, _KeyValueRow(owner_id=comp.id, ref=comp.reference, key=key, value=value)
-            )
+            rows.append(_KeyValueRow(owner_id=comp.id, ref=comp.reference, key=key, value=value))
+    _COMPONENT_METADATA.bulk_insert(con, rows)
 
 
 def _load_pins(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    rows: list[Pin] = []
     for comp in schematic.components:
         for pin in comp.pins:
-            _PINS.insert(con, pin)
+            rows.append(pin)
+    _PINS.bulk_insert(con, rows)
 
 
 def _load_pin_occurrences(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    occurrence_rows: list[PinOccurrence] = []
+    metadata_rows: list[_OccKeyValueRow] = []
     for comp in schematic.components:
         for pin in comp.pins:
             for occurrence in pin.occurrences:
-                _PIN_OCCURRENCES.insert(con, occurrence)
+                occurrence_rows.append(occurrence)
                 for key, value in occurrence.metadata.items():
-                    _PIN_OCCURRENCE_METADATA.insert(
-                        con,
+                    metadata_rows.append(
                         _OccKeyValueRow(
                             occurrence_id=occurrence.id, owner_id=pin.id, key=key, value=value
                         ),
                     )
+    _PIN_OCCURRENCES.bulk_insert(con, occurrence_rows)
+    _PIN_OCCURRENCE_METADATA.bulk_insert(con, metadata_rows)
 
 
 def _load_nets(con: duckdb.DuckDBPyConnection, schematic: Schematic, project: Project) -> None:
@@ -1753,10 +1844,10 @@ def _load_nets(con: duckdb.DuckDBPyConnection, schematic: Schematic, project: Pr
         net_to_diff_pair[dp.positive_net] = (dp.name, "+")
         net_to_diff_pair[dp.negative_net] = (dp.name, "-")
 
+    rows: list[_NetRow] = []
     for net in schematic.nets:
         dp_info = net_to_diff_pair.get(net.name)
-        _NETS.insert(
-            con,
+        rows.append(
             _NetRow(
                 net=net,
                 is_power=is_power_net(net.name, net),
@@ -1765,82 +1856,93 @@ def _load_nets(con: duckdb.DuckDBPyConnection, schematic: Schematic, project: Pr
                 diff_pair_polarity=dp_info[1] if dp_info else None,
             ),
         )
+    _NETS.bulk_insert(con, rows)
 
 
 def _load_net_pages(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    rows: list[_NetPageRow] = []
     for net in schematic.nets:
         for page in _unique_pages(net.pages):
-            _NET_PAGES.insert(con, _NetPageRow(net=net, page=page))
+            rows.append(_NetPageRow(net=net, page=page))
+    _NET_PAGES.bulk_insert(con, rows)
 
 
 def _load_net_aliases(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    rows: list[_AliasRow] = []
     for net in schematic.nets:
         for alias in sorted(net.aliases):
-            _NET_ALIASES.insert(con, _AliasRow(net_id=net.id, net_name=net.name, alias=alias))
+            rows.append(_AliasRow(net_id=net.id, net_name=net.name, alias=alias))
+    _NET_ALIASES.bulk_insert(con, rows)
 
 
 def _load_net_occurrences(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    rows: list[NetOccurrence] = []
     for net in schematic.nets:
         for occurrence in net.occurrences:
-            _NET_OCCURRENCES.insert(con, occurrence)
+            rows.append(occurrence)
+    _NET_OCCURRENCES.bulk_insert(con, rows)
 
 
 def _load_net_occurrence_source_names(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    rows: list[_SourceNameRow] = []
     for net in schematic.nets:
         for occurrence in net.occurrences:
             for source_name in sorted(occurrence.source_names):
-                _NET_OCCURRENCE_SOURCE_NAMES.insert(
-                    con,
+                rows.append(
                     _SourceNameRow(
                         occurrence_id=occurrence.id, net_id=net.id, source_name=source_name
                     ),
                 )
+    _NET_OCCURRENCE_SOURCE_NAMES.bulk_insert(con, rows)
 
 
 def _load_schematic_directives(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    rows: list[_SchematicDirectiveRow] = []
     for net in schematic.nets:
         for occurrence in net.occurrences:
             for index, directive in enumerate(occurrence.directives, start=1):
-                _SCHEMATIC_DIRECTIVES.insert(
-                    con,
+                rows.append(
                     _SchematicDirectiveRow(
                         occurrence=occurrence,
                         ord=index,
                         directive=directive,
                     ),
                 )
+    _SCHEMATIC_DIRECTIVES.bulk_insert(con, rows)
 
 
 def _load_net_occurrence_metadata(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    rows: list[_OccKeyValueRow] = []
     for net in schematic.nets:
         for occurrence in net.occurrences:
             for key, value in occurrence.metadata.items():
-                _NET_OCCURRENCE_METADATA.insert(
-                    con,
+                rows.append(
                     _OccKeyValueRow(
                         occurrence_id=occurrence.id, owner_id=net.id, key=key, value=value
                     ),
                 )
+    _NET_OCCURRENCE_METADATA.bulk_insert(con, rows)
 
 
 def _load_net_metadata(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    rows: list[_KeyValueRow] = []
     for net in schematic.nets:
         for key, value in net.metadata.items():
-            _NET_METADATA.insert(
-                con, _KeyValueRow(owner_id=net.id, ref=net.name, key=key, value=value)
-            )
+            rows.append(_KeyValueRow(owner_id=net.id, ref=net.name, key=key, value=value))
+    _NET_METADATA.bulk_insert(con, rows)
 
 
 def _load_buses(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
+    member_rows: list[_BusMemberRow] = []
     for bus in schematic.buses:
-        _BUSES.insert(con, bus)
         for index, net in enumerate(bus.members, start=1):
-            _BUS_MEMBERS.insert(con, _BusMemberRow(bus=bus, net=net, ord=index))
+            member_rows.append(_BusMemberRow(bus=bus, net=net, ord=index))
+    _BUSES.bulk_insert(con, schematic.buses)
+    _BUS_MEMBERS.bulk_insert(con, member_rows)
 
 
 def _load_pages(con: duckdb.DuckDBPyConnection, schematic: Schematic) -> None:
-    for page in schematic.pages:
-        _PAGES.insert(con, page)
+    _PAGES.bulk_insert(con, schematic.pages)
 
 
 def _load_project_metadata(con: duckdb.DuckDBPyConnection, project: Project) -> None:
@@ -1854,6 +1956,4 @@ def _load_project_metadata(con: duckdb.DuckDBPyConnection, project: Project) -> 
         ("format", meta.format),
         ("selected_variant", project.selected_variant_name),
     ]
-    for key, value in entries:
-        if value:
-            _PROJECT.insert(con, (key, value))
+    _PROJECT.bulk_insert(con, ((key, value) for key, value in entries if value))
