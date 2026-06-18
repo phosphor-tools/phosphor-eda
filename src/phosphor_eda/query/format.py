@@ -603,7 +603,11 @@ def format_component_detail(design: Schematic, ref: str) -> str:
     designator (``U1.3``); see ``find_component``.
     """
     comp = find_component(design, ref)
+    return format_component_detail_for(design, comp)
 
+
+def format_component_detail_for(design: Schematic, comp: Component) -> str:
+    """Format full detail for a resolved component."""
     lines = [_component_header(design, comp)]
     lines.extend(_component_enrichment_lines(comp))
 
@@ -647,7 +651,11 @@ def _component_enrichment_lines(comp: Component) -> list[str]:
 def format_net_detail(design: Schematic, name: str) -> str:
     """Format full detail for a single net. Raises ValueError if not found."""
     net = find_net(design, name)
+    return format_net_detail_for(design, net)
 
+
+def format_net_detail_for(design: Schematic, net: Net) -> str:
+    """Format full detail for a resolved net."""
     net_pages = net_page_names(net)
     alias_str = f" | Also: {', '.join(sorted(net.aliases))}" if net.aliases else ""
     lines = [f"NET: {net.name}{alias_str} | Pages: {', '.join(net_pages)}"]
@@ -677,6 +685,12 @@ def format_net_detail(design: Schematic, name: str) -> str:
 def format_bus_detail(design: Schematic, name: str) -> str:
     """Format full detail for a single bus. Raises ValueError if not found."""
     bus = find_bus(design, name)
+    return format_bus_detail_for(design, bus)
+
+
+def format_bus_detail_for(design: Schematic, bus: Bus) -> str:
+    """Format full detail for a resolved bus."""
+    del design
     lines = [f"BUS: {bus.name} ({bus.kind.value}) | Members: {len(bus.members)}"]
 
     for key, value in sorted(bus.metadata.items()):
@@ -690,7 +704,7 @@ def format_bus_detail(design: Schematic, name: str) -> str:
     return "\n".join(lines)
 
 
-def _find_page_for_detail(design: Schematic, page_name: str) -> Page:
+def find_page_for_detail(design: Schematic, page_name: str) -> Page:
     id_matches = [page for page in design.pages if page.id == page_name]
     if len(id_matches) == 1:
         return id_matches[0]
@@ -709,8 +723,12 @@ def _find_page_for_detail(design: Schematic, page_name: str) -> Page:
 
 def format_page_detail(design: Schematic, page_name: str) -> str:
     """Format full detail for a single page. Raises ValueError if not found."""
-    page = _find_page_for_detail(design, page_name)
+    page = find_page_for_detail(design, page_name)
+    return format_page_detail_for(design, page)
 
+
+def format_page_detail_for(design: Schematic, page: Page) -> str:
+    """Format full detail for a resolved page."""
     lines = [f"PAGE: {page.name}"]
     for key, value in sorted(page.metadata.items()):
         lines.append(f"  {key}: {value}")

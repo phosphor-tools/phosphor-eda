@@ -789,8 +789,11 @@ def test_format_net_table():
 def test_filter_nets_by_bus_membership():
     design = _bus_design()
 
-    assert [net.name for net in filter_nets(design, bus="DATA[0..1]")] == ["DATA0", "DATA1"]
-    assert filter_nets(design, bus="MISSING") == []
+    assert [net.name for net in filter_nets(design, bus_ids={"bus:data"})] == [
+        "DATA0",
+        "DATA1",
+    ]
+    assert filter_nets(design, bus_ids={"bus:missing"}) == []
 
 
 def test_filter_buses_by_kind_and_member_net():
@@ -804,7 +807,10 @@ def test_filter_buses_by_kind_and_member_net():
     design.buses.append(control)
 
     assert [bus.name for bus in filter_buses(design, kind="vector")] == ["DATA[0..1]"]
-    assert [bus.name for bus in filter_buses(design, net="DATA0")] == ["DATA[0..1]", "CONTROL"]
+    assert [bus.name for bus in filter_buses(design, net_ids={design.nets[0].id})] == [
+        "DATA[0..1]",
+        "CONTROL",
+    ]
     assert [bus.name for bus in filter_buses(design, min_members=2)] == ["DATA[0..1]"]
 
 
@@ -1277,12 +1283,24 @@ def _filterable_design():
     )
 
 
+def _component_ids(design: Schematic, *refs: str) -> set[str]:
+    return {component.id for component in design.components if component.reference in refs}
+
+
+def _net_ids(design: Schematic, *names: str) -> set[str]:
+    return {net.id for net in design.nets if net.name in names}
+
+
+def _page_ids(design: Schematic, *names: str) -> set[str]:
+    return {page.id for page in design.pages if page.name in names}
+
+
 # ---- Filter tests ----
 
 
 def test_filter_nets_by_component():
     design = _filterable_design()
-    result = filter_nets(design, components=["U1"])
+    result = filter_nets(design, component_ids=_component_ids(design, "U1"))
     names = {n.name for n in result}
     assert "SPI_CLK" in names
     assert "SPI_MOSI" in names
@@ -1290,19 +1308,19 @@ def test_filter_nets_by_component():
     assert "GND" not in names
 
 
-def test_filter_nets_component_intersection():
+def test_filter_nets_component_selector_union():
     design = _filterable_design()
-    result = filter_nets(design, components=["U1", "U2"])
+    result = filter_nets(design, component_ids=_component_ids(design, "U1", "U2"))
     names = {n.name for n in result}
-    # U1 and U2 share SPI_MOSI directly
+    # Component selector filters are ORed within the component category.
     assert "SPI_MOSI" in names
-    # SPI_CLK only has U1 (not U2, which is on SPI_CLK_B via R1)
-    assert "SPI_CLK" not in names
+    assert "SPI_CLK" in names
+    assert "SPI_CLK_B" in names
 
 
 def test_filter_nets_component_intersection_with_trace():
     design = _filterable_design()
-    result = filter_nets(design, components=["U1", "U2"], trace=True)
+    result = filter_nets(design, component_ids=_component_ids(design, "U1", "U2"), trace=True)
     names = {n.name for n in result}
     # With trace, SPI_CLK reaches U2 through R1
     assert "SPI_CLK" in names
@@ -1311,7 +1329,7 @@ def test_filter_nets_component_intersection_with_trace():
 
 def test_filter_nets_by_page():
     design = _filterable_design()
-    result = filter_nets(design, pages=["Power"])
+    result = filter_nets(design, page_ids=_page_ids(design, "Power"))
     names = {n.name for n in result}
     assert "P3V3" in names
     assert "GND" in names
@@ -1355,7 +1373,7 @@ def test_filter_nets_multi_page():
 
 def test_filter_nets_composable():
     design = _filterable_design()
-    result = filter_nets(design, components=["U1"], power=False)
+    result = filter_nets(design, component_ids=_component_ids(design, "U1"), power=False)
     names = {n.name for n in result}
     assert "SPI_CLK" in names
     assert "P3V3" not in names
@@ -1363,21 +1381,21 @@ def test_filter_nets_composable():
 
 def test_filter_components_by_page():
     design = _filterable_design()
-    result = filter_components(design, pages=["Power"])
+    result = filter_components(design, page_ids=_page_ids(design, "Power"))
     refs = {c.reference for c in result}
     assert refs == {"C1", "U3"}
 
 
-def test_filter_components_by_prefix():
+def test_filter_components_by_selected_components():
     design = _filterable_design()
-    result = filter_components(design, prefixes=["U"])
+    result = filter_components(design, component_ids=_component_ids(design, "U1", "U2", "U3"))
     refs = {c.reference for c in result}
     assert refs == {"U1", "U2", "U3"}
 
 
-def test_filter_components_by_prefix_tp():
+def test_filter_components_by_selected_test_point():
     design = _filterable_design()
-    result = filter_components(design, prefixes=["TP"])
+    result = filter_components(design, component_ids=_component_ids(design, "TP1"))
     refs = {c.reference for c in result}
     assert refs == {"TP1"}
 
@@ -1408,7 +1426,7 @@ def test_filter_components_min_pins():
 
 def test_filter_components_by_net():
     design = _filterable_design()
-    result = filter_components(design, net="SPI_CLK")
+    result = filter_components(design, net_ids=_net_ids(design, "SPI_CLK"))
     refs = {c.reference for c in result}
     assert "U1" in refs
     assert "R1" in refs
@@ -1418,7 +1436,7 @@ def test_filter_components_by_net():
 
 def test_filter_pages_by_net():
     design = _filterable_design()
-    result = filter_pages(design, nets=["P3V3"])
+    result = filter_pages(design, net_ids=_net_ids(design, "P3V3"))
     names = {p.name for p in result}
     assert "Power" in names
 
@@ -1426,18 +1444,18 @@ def test_filter_pages_by_net():
 def test_filter_pages_by_net_scoped_id_and_alias():
     design = _filterable_design()
 
-    by_id = filter_pages(design, nets=["net:P3V3"])
+    by_id = filter_pages(design, net_ids=_net_ids(design, "P3V3"))
     assert "Power" in {p.name for p in by_id}
 
     p3v3 = next(n for n in design.nets if n.name == "P3V3")
     p3v3.aliases.add("+3V3")
-    by_alias = filter_pages(design, nets=["+3V3"])
+    by_alias = filter_pages(design, net_ids={p3v3.id})
     assert "Power" in {p.name for p in by_alias}
 
 
 def test_filter_pages_by_component():
     design = _filterable_design()
-    result = filter_pages(design, components=["U1"])
+    result = filter_pages(design, component_ids=_component_ids(design, "U1"))
     names = {p.name for p in result}
     assert "SPI" in names
     assert "Power" not in names
