@@ -9,7 +9,7 @@ import phosphor_eda.cli as cli_module
 from phosphor_eda.cli import main
 from phosphor_eda.domain.pcb import Board
 from phosphor_eda.domain.project import Project
-from phosphor_eda.domain.schematic import Bus, BusKind, Net, Page, Schematic
+from phosphor_eda.domain.schematic import Bus, BusKind, Component, Net, Page, Pin, Schematic
 from phosphor_eda.formats.altium.pcb_project import AltiumEnrichment
 from phosphor_eda.render.api import RenderResult
 
@@ -185,6 +185,43 @@ def _bus_design_for_cli() -> Schematic:
     return Schematic(name="BUS", pages=[page], nets=[data0, data1], buses=[bus])
 
 
+def _selector_design_for_cli() -> Schematic:
+    page = Page(id="page:main", name="Main")
+    u1 = Component(id="component:u1", reference="U1", part="MCU", description="Controller")
+    u2 = Component(id="component:u2", reference="U2", part="USB", description="USB PHY")
+    j1 = Component(id="component:j1", reference="J1", part="CONN", description="Connector")
+    usb_dp = Net(id="net:usb-dp", name="USB_DP", pages=[page], aliases={"USB_D+"})
+    usb_dm = Net(id="net:usb-dm", name="USB_DM", pages=[page], aliases={"USB_D-"})
+    gnd = Net(id="net:gnd", name="GND", pages=[page])
+    for component, net, pin_id in (
+        (u1, usb_dp, "u1-1"),
+        (u2, usb_dp, "u2-1"),
+        (j1, usb_dm, "j1-1"),
+        (u1, gnd, "u1-2"),
+    ):
+        pin = Pin(
+            id=pin_id,
+            designator=pin_id.rsplit("-", maxsplit=1)[1],
+            name="",
+            component=component,
+            net=net,
+        )
+        component.pins.append(pin)
+        net.pins.append(pin)
+    page.components = [u1, u2, j1]
+    page.nets = [usb_dp, usb_dm, gnd]
+    for component in page.components:
+        component.pages.append(page)
+    bus = Bus(id="bus:usb", name="USB", kind=BusKind.GROUP, members=[usb_dp, usb_dm])
+    return Schematic(
+        name="selectors",
+        pages=[page],
+        components=[u1, u2, j1],
+        nets=[usb_dp, usb_dm, gnd],
+        buses=[bus],
+    )
+
+
 # ---- filter CLI tests ----
 
 
@@ -245,7 +282,7 @@ def test_cli_list_nets_by_component(tmp_path: Path):
     assert len(lines) >= 3
 
 
-def test_cli_list_components_by_prefix(tmp_path: Path):
+def test_cli_list_components_by_selector(tmp_path: Path):
     opj = _write_opj(tmp_path / "pico.opj")
     runner = CliRunner()
     result = runner.invoke(
@@ -255,8 +292,8 @@ def test_cli_list_components_by_prefix(tmp_path: Path):
             str(opj),
             "list",
             "components",
-            "--prefix",
-            "U",
+            "--component",
+            "U*",
         ],
     )
     assert result.exit_code == 0
@@ -265,6 +302,99 @@ def test_cli_list_components_by_prefix(tmp_path: Path):
     for line in result.output.splitlines()[2:]:  # skip header + separator
         if line.strip():
             assert line.strip().startswith("U")
+
+
+def test_cli_list_components_selector_exclusion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opj = _write_opj(tmp_path / "selectors.opj")
+    monkeypatch.setattr(
+        cli_module,
+        "load_project",
+        lambda _path, **_kwargs: Project(name="selectors", schematic=_selector_design_for_cli()),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["-P", str(opj), "list", "components", "--component", "U*", "--component", "!U2"],
+    )
+
+    assert result.exit_code == 0
+    assert "U1" in result.output
+    assert "U2" not in result.output
+
+
+def test_cli_list_components_unmatched_glob_returns_empty_filter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opj = _write_opj(tmp_path / "selectors.opj")
+    monkeypatch.setattr(
+        cli_module,
+        "load_project",
+        lambda _path, **_kwargs: Project(name="selectors", schematic=_selector_design_for_cli()),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["-P", str(opj), "list", "components", "--component", "X*"])
+
+    assert result.exit_code == 0
+    assert result.output.strip() == "No components found."
+    assert "U1" not in result.output
+    assert "U2" not in result.output
+    assert "J1" not in result.output
+
+
+def test_cli_list_nets_by_net_selector(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    opj = _write_opj(tmp_path / "selectors.opj")
+    monkeypatch.setattr(
+        cli_module,
+        "load_project",
+        lambda _path, **_kwargs: Project(name="selectors", schematic=_selector_design_for_cli()),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["-P", str(opj), "list", "nets", "--net", "USB*"])
+
+    assert result.exit_code == 0
+    assert "USB_DP" in result.output
+    assert "USB_DM" in result.output
+    assert "GND" not in result.output
+
+
+def test_cli_show_net_selector_outputs_multiple_blocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opj = _write_opj(tmp_path / "selectors.opj")
+    monkeypatch.setattr(
+        cli_module,
+        "load_project",
+        lambda _path, **_kwargs: Project(name="selectors", schematic=_selector_design_for_cli()),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["-P", str(opj), "show", "net", "USB*"])
+
+    assert result.exit_code == 0
+    assert "NET: USB_DP" in result.output
+    assert "\n\nNET: USB_DM" in result.output
+
+
+def test_cli_show_net_unmatched_glob_reports_no_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    opj = _write_opj(tmp_path / "selectors.opj")
+    monkeypatch.setattr(
+        cli_module,
+        "load_project",
+        lambda _path, **_kwargs: Project(name="selectors", schematic=_selector_design_for_cli()),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["-P", str(opj), "show", "net", "NO_MATCH*"])
+
+    assert result.exit_code == 0
+    assert result.output.strip() == "No nets found."
 
 
 def test_cli_list_components_no_passive(tmp_path: Path):

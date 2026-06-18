@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.pcb import LayerRole
+from phosphor_eda.query.selectors import resolve_string_selectors, selector_matches
 from phosphor_eda.render.inventory import (
     InventoryItem,
     InventoryItemKind,
@@ -470,28 +471,28 @@ def _copper_order(inventory: PcbRenderInventory, source_layer_name: str) -> int 
 
 def _filter_excluded_components(
     items: tuple[InventoryItem, ...],
-    excluded_prefixes: tuple[str, ...],
+    excluded_selectors: tuple[str, ...],
 ) -> tuple[InventoryItem, ...]:
-    if not excluded_prefixes:
+    if not excluded_selectors:
         return items
-    # Exact prefix match: excluding "R" must not also hide "RV".
-    normalized = {prefix.upper() for prefix in excluded_prefixes}
-    return tuple(item for item in items if item.tags.component_prefix.upper() not in normalized)
+    refs = tuple(item.tags.component_ref for item in items if item.tags.component_ref)
+    excluded_refs = set(resolve_string_selectors(excluded_selectors, refs))
+    return tuple(item for item in items if item.tags.component_ref not in excluded_refs)
 
 
 def _highlight_net_names(
     highlight: HighlightSpec,
     net_expansions: Mapping[str, frozenset[str]] | None,
 ) -> frozenset[str]:
-    """Upper-cased net names this highlight matches."""
+    """Expanded net names this highlight matches."""
     if not highlight.net:
         return frozenset()
     if net_expansions is None or highlight.exact:
-        return frozenset({highlight.net.upper()})
+        return frozenset()
     expanded = net_expansions.get(highlight.net)
     if expanded is None:
-        return frozenset({highlight.net.upper()})
-    return frozenset(name.upper() for name in expanded)
+        return frozenset()
+    return frozenset(expanded)
 
 
 def _matches_highlight(
@@ -502,14 +503,24 @@ def _matches_highlight(
     if item.item_kind == InventoryItemKind.DRILL:
         return False
     if highlight.net:
-        return item.tags.net_name.upper() in net_names
+        net_name = item.tags.net_name
+        return bool(net_name) and (
+            net_name in net_names or selector_matches(highlight.net, (net_name,))
+        )
     if highlight.component:
-        return item.tags.component_ref.upper() == highlight.component.upper()
+        component_ref = item.tags.component_ref
+        return bool(component_ref) and selector_matches(highlight.component, (component_ref,))
     if highlight.pad:
         ref, _, pad_number = highlight.pad.partition(".")
+        if not pad_number:
+            pad_number = "*"
+        component_ref = item.tags.component_ref
+        item_pad_number = item.tags.pad_number
         return (
-            item.tags.component_ref.upper() == ref.upper()
-            and item.tags.pad_number.upper() == pad_number.upper()
+            bool(component_ref)
+            and bool(item_pad_number)
+            and selector_matches(ref, (component_ref,))
+            and selector_matches(pad_number, (item_pad_number,))
         )
     return False
 

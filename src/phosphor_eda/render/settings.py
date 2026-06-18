@@ -426,7 +426,7 @@ def render_settings_schema() -> dict[str, object]:
                             "visible": True,
                         },
                     ],
-                    "excludeComponents": ["R", "C", "L"],
+                    "excludeComponents": ["R*", "C*", "L*"],
                 },
                 "tokens": {
                     "eda.copper.front.fill": "#d17a22",

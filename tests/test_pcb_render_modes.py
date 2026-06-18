@@ -137,6 +137,23 @@ def test_eda_layers_use_board_drill_and_solder_mask_cutouts() -> None:
     assert silkscreen.mask.openings
 
 
+def test_source_exclude_components_uses_selector_patterns() -> None:
+    inventory = build_inventory(_board(), side="front")
+    settings = RenderSettings(
+        render_mode="eda",
+        side="front",
+        source=SourceSelection(
+            layers=[LayerSelectionRule(match=LayerMatch(role="copper", side="front"))],
+            exclude_components=("U*",),
+        ),
+    )
+
+    layers = build_eda_layers(inventory, settings)
+
+    assert all("pad:U1:1" not in layer.source_ids for layer in layers)
+    assert any("trace:1" in layer.source_ids for layer in layers)
+
+
 def test_realistic_board_material_uses_profile_path_for_orangecrab() -> None:
     board = parse_kicad_pcb(FIXTURES / "kicad-orangecrab/OrangeCrab.kicad_pcb")
     inventory = build_inventory(board, side="front")
@@ -165,6 +182,66 @@ def test_highlights_match_typed_inventory_tags() -> None:
     assert len(groups) == 1
     assert groups[0].target == "net:VCC"
     assert any(layer.primitives for layer in groups[0].layers)
+
+
+def test_highlights_match_selector_patterns() -> None:
+    inventory = build_inventory(_board(), side="front")
+    settings = replace(
+        load_render_settings_json('{"extends": "phosphor:realistic"}'),
+        render_mode="eda",
+        side="front",
+        source=SourceSelection(layers=[LayerSelectionRule(match=LayerMatch(role="copper"))]),
+        highlights=[
+            HighlightSpec(net="VC?"),
+            HighlightSpec(component="U*"),
+            HighlightSpec(pad="U*.1"),
+        ],
+    )
+
+    groups = build_highlight_layers(inventory, settings, warn=lambda _message: None)
+
+    assert [group.target for group in groups] == ["net:VC?", "component:U*", "pad:U*.1"]
+    assert all(any(layer.primitives for layer in group.layers) for group in groups)
+
+
+def test_component_highlight_selector_does_not_match_empty_component_tags() -> None:
+    inventory = build_inventory(_board(), side="front")
+    settings = replace(
+        load_render_settings_json('{"extends": "phosphor:realistic"}'),
+        render_mode="eda",
+        side="front",
+        source=SourceSelection(layers=[LayerSelectionRule(match=LayerMatch(role="copper"))]),
+        highlights=[HighlightSpec(component="*")],
+    )
+
+    groups = build_highlight_layers(inventory, settings, warn=lambda _message: None)
+
+    highlighted_source_ids = {
+        source_id for layer in groups[0].layers for source_id in layer.source_ids
+    }
+    assert highlighted_source_ids
+    assert "trace:1" not in highlighted_source_ids
+
+
+def test_pad_highlight_without_pad_number_matches_component_pads() -> None:
+    inventory = build_inventory(_board(), side="front")
+    settings = replace(
+        load_render_settings_json('{"extends": "phosphor:realistic"}'),
+        render_mode="eda",
+        side="front",
+        source=SourceSelection(layers=[LayerSelectionRule(match=LayerMatch(role="copper"))]),
+        highlights=[HighlightSpec(pad="U1")],
+    )
+
+    groups = build_highlight_layers(inventory, settings, warn=lambda _message: None)
+
+    highlighted_source_ids = {
+        source_id for layer in groups[0].layers for source_id in layer.source_ids
+    }
+    assert any(
+        source_id.split(":")[:3] == ["pad", "U1", "1"] for source_id in highlighted_source_ids
+    )
+    assert "trace:1" not in highlighted_source_ids
 
 
 def test_highlight_layers_use_board_and_drill_cutouts() -> None:
