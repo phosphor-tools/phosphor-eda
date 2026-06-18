@@ -12,6 +12,8 @@ from phosphor_eda.query.project_loader import load_project
 FIXTURES = Path(__file__).parent / "fixtures"
 
 JETSON_ORIN_PRO = FIXTURES / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pro"
+ORANGECRAB_PRO = FIXTURES / "kicad-orangecrab" / "OrangeCrab.kicad_pro"
+SWD_SWITCH_PCB = FIXTURES / "swd_switch.kicad_pcb"
 PI_MX8_PRJPCB = FIXTURES / "altium" / "pi-mx8" / "PiMX8MP_r0.3_release.PrjPcb"
 
 
@@ -22,6 +24,25 @@ PI_MX8_PRJPCB = FIXTURES / "altium" / "pi-mx8" / "PiMX8MP_r0.3_release.PrjPcb"
 
 @pytest.fixture(scope="module")
 def kicad_project() -> Project:
+    if not ORANGECRAB_PRO.exists():
+        pytest.skip("Fixture not available")
+    return load_project(ORANGECRAB_PRO)
+
+
+@pytest.fixture(scope="module")
+def kicad_stackup_project(tmp_path_factory: pytest.TempPathFactory) -> Project:
+    if not SWD_SWITCH_PCB.exists():
+        pytest.skip("Fixture not available")
+    project_dir = tmp_path_factory.mktemp("swd-project")
+    project_file = project_dir / "swd_switch.kicad_pro"
+    board_file = project_dir / "swd_switch.kicad_pcb"
+    board_file.write_bytes(SWD_SWITCH_PCB.read_bytes())
+    project_file.write_text("{}", encoding="utf-8")
+    return load_project(project_file)
+
+
+@pytest.fixture(scope="module")
+def jetson_project() -> Project:
     if not JETSON_ORIN_PRO.exists():
         pytest.skip("Fixture not available")
     return load_project(JETSON_ORIN_PRO)
@@ -31,21 +52,21 @@ def test_kicad_project_has_board(kicad_project: Project) -> None:
     assert kicad_project.board is not None
 
 
-def test_kicad_project_has_stackup(kicad_project: Project) -> None:
-    assert kicad_project.board is not None
-    stackup = kicad_project.board.stackup
+def test_kicad_project_has_stackup(kicad_stackup_project: Project) -> None:
+    assert kicad_stackup_project.board is not None
+    stackup = kicad_stackup_project.board.stackup
     assert stackup is not None
-    # 8-layer board → copper + dielectric layers
     copper = [ly for ly in stackup.layers if ly.layer_type == "copper"]
-    assert len(copper) == 8
+    assert len(copper) == 4
 
 
 def test_kicad_project_has_net_classes(kicad_project: Project) -> None:
-    assert len(kicad_project.net_classes) == 8
+    assert len(kicad_project.net_classes) == 1
 
 
-def test_kicad_project_has_design_rules(kicad_project: Project) -> None:
-    assert len(kicad_project.design_rules) >= 15
+@pytest.mark.behavior_lock
+def test_kicad_project_has_design_rules(jetson_project: Project) -> None:
+    assert len(jetson_project.design_rules) >= 15
 
 
 def test_kicad_project_has_schematic(kicad_project: Project) -> None:
@@ -58,7 +79,7 @@ def test_kicad_project_metadata_from_title_block(kicad_project: Project) -> None
     assert kicad_project.schematic is not None
     root = min(kicad_project.schematic.pages, key=lambda page: len(page.scope_id.path))
     assert root.title_block is not None
-    assert kicad_project.metadata.name == JETSON_ORIN_PRO.stem
+    assert kicad_project.metadata.name == ORANGECRAB_PRO.stem
     assert kicad_project.metadata.revision == root.title_block.revision
     assert kicad_project.metadata.date == root.title_block.date
 

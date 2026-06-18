@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from shapely.affinity import translate
+
 from phosphor_eda.domain.pcb import PcbText
 from phosphor_eda.geometry.text_outlines import text_outline_geometry
 
@@ -18,3 +20,12 @@ def test_text_outline_rotation_changes_bounds() -> None:
     rotated = text_outline_geometry(PcbText("PCB", 10.0, 20.0, 90.0, 1.0))
 
     assert unrotated.bounds != rotated.bounds
+
+
+def test_text_outline_geometry_translates_repeated_text_shape() -> None:
+    first = text_outline_geometry(PcbText("CACHE", 1.0, 2.0, 90.0, 1.0))
+    second = text_outline_geometry(PcbText("CACHE", 4.0, 6.0, 90.0, 1.0))
+
+    moved = translate(first, xoff=3.0, yoff=4.0)
+
+    assert moved.equals_exact(second, 1e-8)

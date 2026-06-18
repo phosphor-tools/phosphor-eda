@@ -7,7 +7,14 @@ columns, or serialization shows up as a hash mismatch naming the table.
 
 Regenerate after an intentional change:
 
-    PHOSPHOR_UPDATE_GOLDENS=1 uv run pytest cli/tests/test_sql_behavior_lock.py
+    PHOSPHOR_RUN_BEHAVIOR_LOCKS=1 PHOSPHOR_UPDATE_GOLDENS=1 \
+        uv run pytest cli/tests/test_sql_behavior_lock.py
+
+The tests are slow and skipped by default. Run them explicitly when changing
+parsers, SQL schema/loading, serialization, or any behavior that can alter
+full-project output:
+
+    uv run pytest cli/tests/test_sql_behavior_lock.py --run-behavior-locks
 """
 
 from __future__ import annotations
@@ -42,6 +49,8 @@ PROJECTS = {
     "pi-mx8": FIXTURES / "altium/pi-mx8/PiMX8MP_r0.3_release.PrjPcb",
     "jetson-orin": FIXTURES / "kicad-jetson-orin/jetson-orin-baseboard.kicad_pro",
 }
+
+pytestmark = pytest.mark.behavior_lock
 
 
 def _canon_value(table: str, column: str, value: object, *, is_geometry: bool) -> str:

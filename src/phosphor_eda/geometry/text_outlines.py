@@ -158,27 +158,10 @@ class _OutlinePen(BasePen):
 def text_outline_geometry(text: PcbText) -> BaseGeometry:
     """Return filled glyph outlines for a PCB text primitive in board units."""
     spec = _text_spec(text)
-    if not spec.text or spec.font_size <= 0:
+    geometry = _text_outline_geometry_in_font_units(spec.text)
+    if geometry.is_empty or spec.font_size <= 0:
         return GeometryCollection()
 
-    cmap = _cmap()
-    space_glyph = cmap.get(ord(" "))
-    glyph_geometries: list[BaseGeometry] = []
-    cursor_x = 0.0
-    for char in spec.text:
-        glyph_name = cmap.get(ord(char))
-        if glyph_name is None:
-            cursor_x += _glyph_advance(space_glyph)
-            continue
-        glyph_geometry = _glyph_geometry(glyph_name)
-        if not glyph_geometry.is_empty:
-            glyph_geometries.append(translate(glyph_geometry, xoff=cursor_x))
-        cursor_x += _glyph_advance(glyph_name)
-
-    if not glyph_geometries:
-        return GeometryCollection()
-
-    geometry = unary_union(glyph_geometries)
     font_scale = spec.font_size / _units_per_em()
     geometry = scale(geometry, xfact=font_scale, yfact=-font_scale, origin=(0.0, 0.0))
     min_x, min_y, max_x, max_y = geometry.bounds
@@ -192,6 +175,31 @@ def text_outline_geometry(text: PcbText) -> BaseGeometry:
     return geometry
 
 
+@functools.cache
+def _text_outline_geometry_in_font_units(text: str) -> BaseGeometry:
+    if not text:
+        return GeometryCollection()
+
+    cmap = _cmap()
+    space_glyph = cmap.get(ord(" "))
+    glyph_geometries: list[BaseGeometry] = []
+    cursor_x = 0.0
+    for char in text:
+        glyph_name = cmap.get(ord(char))
+        if glyph_name is None:
+            cursor_x += _glyph_advance(space_glyph)
+            continue
+        glyph_geometry = _glyph_geometry(glyph_name)
+        if not glyph_geometry.is_empty:
+            glyph_geometries.append(translate(glyph_geometry, xoff=cursor_x))
+        cursor_x += _glyph_advance(glyph_name)
+
+    if not glyph_geometries:
+        return GeometryCollection()
+
+    return unary_union(glyph_geometries)
+
+
 def _text_spec(text: PcbText) -> _TextSpec:
     return _TextSpec(
         text=text.text,
@@ -202,6 +210,7 @@ def _text_spec(text: PcbText) -> _TextSpec:
     )
 
 
+@functools.cache
 def _glyph_geometry(glyph_name: str) -> BaseGeometry:
     glyph = _glyph_set()[glyph_name]  # pyright: ignore[reportUnknownVariableType, reportIndexIssue]
     pen = _OutlinePen()

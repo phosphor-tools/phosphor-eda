@@ -28,21 +28,27 @@ from phosphor_eda.domain.pcb import (
     PcbViaType,
 )
 from phosphor_eda.domain.pcb_builder import PcbBuilder
-from phosphor_eda.domain.project import Project
+from phosphor_eda.domain.project import DesignRule, DiffPair, NetClass, Project
 from phosphor_eda.domain.schematic import (
     Bus,
     BusKind,
     Component,
     ComponentOccurrence,
+    DnpSource,
+    FootprintModel,
+    LibraryLink,
     Net,
     NetOccurrence,
     Page,
+    Parameter,
+    PartNumber,
     Pin,
     PinOccurrence,
     Schematic,
     SchematicDirective,
     SchematicDirectiveKind,
     ScopeId,
+    TitleBlock,
 )
 from phosphor_eda.domain.variant_materializer import materialize_project_variant
 from phosphor_eda.domain.variants import (
@@ -72,6 +78,14 @@ def _count(db: duckdb.DuckDBPyConnection, sql: str) -> int:
     return int(row[0])
 
 
+def _write_swd_project(tmp_path: Path) -> Path:
+    project_file = tmp_path / "swd_switch.kicad_pro"
+    board_file = tmp_path / "swd_switch.kicad_pcb"
+    board_file.write_bytes(SWD_SWITCH_PCB.read_bytes())
+    project_file.write_text("{}", encoding="utf-8")
+    return project_file
+
+
 def _constructed_schematic() -> Schematic:
     power_page = Page(
         id="page:power",
@@ -79,6 +93,15 @@ def _constructed_schematic() -> Schematic:
         source_file="power.kicad_sch",
         scope_id=ScopeId(path=("root", "power")),
         annotations=["First note", "Second note"],
+        title_block=TitleBlock(
+            title="Power Sheet",
+            revision="A",
+            date="2026-01-02",
+            organization="Phosphor",
+            sheet_number="1",
+            sheet_total="2",
+            comments={"1": "constructed"},
+        ),
     )
     control_page = Page(
         id="page:control",
@@ -94,6 +117,20 @@ def _constructed_schematic() -> Schematic:
         part="STM32H7",
         description="Microcontroller",
         pages=[power_page, control_page, power_page],
+        parameters=[
+            Parameter(name="MPN", value="STM32H743VI", visible=True, source="constructed"),
+            Parameter(name="Voltage", value="3.3V", source="constructed"),
+        ],
+        lib=LibraryLink(symbol="MCU_ST:STM32H743VI", library="MCU_ST", source="project"),
+        footprints=[
+            FootprintModel(
+                name="Package_QFP:LQFP-100_14x14mm_P0.5mm",
+                library="Package_QFP",
+                is_current=True,
+                description="LQFP-100",
+            )
+        ],
+        part_numbers=[PartNumber(manufacturer="ST", number="STM32H743VIT6")],
         metadata={"manufacturer": "ST"},
     )
     duplicate_a = Component(
@@ -109,6 +146,8 @@ def _constructed_schematic() -> Schematic:
         part="SN74LVC1T45",
         description="Level translator",
         pages=[control_page],
+        dnp=True,
+        dnp_source=DnpSource.EXPLICIT,
     )
 
     sync = Net(
@@ -420,6 +459,26 @@ def constructed_db() -> Iterator[duckdb.DuckDBPyConnection]:
         name="Constructed SQL",
         schematic=_constructed_schematic(),
         boards=[_constructed_pcb()],
+        net_classes=[
+            NetClass(
+                name="TIMING",
+                clearance_mm=0.15,
+                trace_width_mm=0.2,
+                via_diameter_mm=0.5,
+                via_drill_mm=0.25,
+                members=["SYNC"],
+            )
+        ],
+        design_rules=[
+            DesignRule(
+                name="Timing clearance",
+                kind="clearance",
+                priority=1,
+                scope1="InNetClass('TIMING')",
+                min_value_mm=0.15,
+            )
+        ],
+        diff_pairs=[DiffPair(name="USB", positive_net="USB_P", negative_net="USB_N")],
     )
     con = load_database(project)
     try:
@@ -572,6 +631,57 @@ class TestConstructedSchematicSql:
             ("component:control:u7", "U7"),
             ("component:power:u7", "U7"),
         ]
+
+    def test_component_enrichment_tables(self, constructed_db: duckdb.DuckDBPyConnection) -> None:
+        component_row = constructed_db.execute(
+            """
+            SELECT lib_symbol, lib_library, dnp, dnp_source
+            FROM components
+            WHERE component_id = 'component:u1'
+            """
+        ).fetchone()
+        dnp_row = constructed_db.execute(
+            """
+            SELECT dnp, dnp_source
+            FROM components
+            WHERE component_id = 'component:control:u7'
+            """
+        ).fetchone()
+        parameter_rows = constructed_db.execute(
+            """
+            SELECT name, value, visible
+            FROM component_parameters
+            WHERE component_id = 'component:u1'
+            ORDER BY ord
+            """
+        ).fetchall()
+        footprint_rows = constructed_db.execute(
+            """
+            SELECT name, library, is_current, description
+            FROM component_footprints
+            WHERE component_id = 'component:u1'
+            ORDER BY ord
+            """
+        ).fetchall()
+        part_rows = constructed_db.execute(
+            """
+            SELECT manufacturer, number
+            FROM component_part_numbers
+            WHERE component_id = 'component:u1'
+            ORDER BY ord
+            """
+        ).fetchall()
+
+        assert component_row == ("MCU_ST:STM32H743VI", "MCU_ST", False, None)
+        assert dnp_row == (True, "explicit")
+        assert parameter_rows == [
+            ("MPN", "STM32H743VI", True),
+            ("Voltage", "3.3V", False),
+        ]
+        assert footprint_rows == [
+            ("Package_QFP:LQFP-100_14x14mm_P0.5mm", "Package_QFP", True, "LQFP-100"),
+        ]
+        assert part_rows == [("ST", "STM32H743VIT6")]
 
     def test_pins_link_by_ids_and_keep_friendly_columns(
         self, constructed_db: duckdb.DuckDBPyConnection
@@ -962,6 +1072,37 @@ class TestConstructedSchematicSql:
             ("bus:control", "CTRL{SYNC RESET}", "group", "net:reset:control", "RESET", 2),
         ]
 
+    def test_project_rules_and_net_classes_are_loaded(
+        self, constructed_db: duckdb.DuckDBPyConnection
+    ) -> None:
+        net_class_rows = constructed_db.execute(
+            """
+            SELECT name, clearance_mm, trace_width_mm, via_diameter_mm, via_drill_mm
+            FROM net_classes
+            ORDER BY name
+            """
+        ).fetchall()
+        member_rows = constructed_db.execute(
+            "SELECT net_name, net_class FROM net_class_members ORDER BY net_name"
+        ).fetchall()
+        design_rule_rows = constructed_db.execute(
+            """
+            SELECT name, kind, priority, scope1, min_value_mm
+            FROM design_rules
+            ORDER BY name
+            """
+        ).fetchall()
+        net_row = constructed_db.execute(
+            "SELECT name, net_class FROM nets WHERE net_id = 'net:sync'"
+        ).fetchone()
+
+        assert net_class_rows == [("TIMING", 0.15, 0.2, 0.5, 0.25)]
+        assert member_rows == [("SYNC", "TIMING")]
+        assert design_rule_rows == [
+            ("Timing clearance", "clearance", 1, "InNetClass('TIMING')", 0.15)
+        ]
+        assert net_row == ("SYNC", "TIMING")
+
     def test_page_annotations_are_loaded(self, constructed_db: duckdb.DuckDBPyConnection) -> None:
         rows = constructed_db.execute(
             """
@@ -975,6 +1116,19 @@ class TestConstructedSchematicSql:
             ("page:control", "Control", 1, "Control note"),
             ("page:power", "Power", 1, "First note"),
             ("page:power", "Power", 2, "Second note"),
+        ]
+
+    def test_title_blocks_are_loaded(self, constructed_db: duckdb.DuckDBPyConnection) -> None:
+        rows = constructed_db.execute(
+            """
+            SELECT title, revision, date, organization, sheet_number, sheet_total, comments
+            FROM title_blocks
+            ORDER BY page_id
+            """
+        ).fetchall()
+
+        assert rows == [
+            ("Power Sheet", "A", "2026-01-02", "Phosphor", "1", "2", '{"1":"constructed"}'),
         ]
 
     def test_net_summary_groups_schematic_by_net_id_with_name_joined_pcb_counts(
@@ -1280,6 +1434,16 @@ def db() -> Iterator[duckdb.DuckDBPyConnection]:
         con.close()
 
 
+@pytest.fixture(scope="module")
+def altium_db() -> Iterator[duckdb.DuckDBPyConnection]:
+    project = load_project(PI_MX8_PRJPCB)
+    con = load_database(project)
+    try:
+        yield con
+    finally:
+        con.close()
+
+
 class TestFootprints:
     def test_count(self, db: duckdb.DuckDBPyConnection) -> None:
         assert _count(db, "SELECT count(*) FROM footprints") == 28
@@ -1319,6 +1483,9 @@ class TestTypedTables:
         assert _count(db, "SELECT count(*) FROM artwork WHERE content_kind = 'text'") > 0
         assert _count(db, "SELECT count(*) FROM artwork WHERE content_kind = 'line'") > 0
 
+    def test_artwork_geometry_is_loaded(self, db: duckdb.DuckDBPyConnection) -> None:
+        assert _count(db, "SELECT count(*) FROM artwork WHERE geom IS NOT NULL") > 0
+
     def test_board_profile_has_geometry(self, db: duckdb.DuckDBPyConnection) -> None:
         assert _count(db, "SELECT count(*) FROM board_profile WHERE geom IS NOT NULL") == 16
 
@@ -1351,22 +1518,19 @@ class TestPadsAndVias:
         assert _count(db, "SELECT count(*) FROM pads WHERE geom IS NULL") == 0
 
 
-def test_altium_free_pad_mask_apertures_are_queryable_without_freepads_footprint() -> None:
-    project = load_project(PI_MX8_PRJPCB)
-    con = load_database(project)
-    try:
-        rows = con.execute(
-            """
-            SELECT reference, mask_aperture_width, mask_aperture_height, mask_aperture_source
-            FROM pads
-            WHERE reference IS NULL
-              AND pad_number = 'MT'
-              AND mask_aperture_source IS NOT NULL
-            ORDER BY x, y
-            """
-        ).fetchall()
-    finally:
-        con.close()
+def test_altium_free_pad_mask_apertures_are_queryable_without_freepads_footprint(
+    altium_db: duckdb.DuckDBPyConnection,
+) -> None:
+    rows = altium_db.execute(
+        """
+        SELECT reference, mask_aperture_width, mask_aperture_height, mask_aperture_source
+        FROM pads
+        WHERE reference IS NULL
+          AND pad_number = 'MT'
+          AND mask_aperture_source IS NOT NULL
+        ORDER BY x, y
+        """
+    ).fetchall()
 
     assert len(rows) == 4
     for reference, width, height, source in rows:
@@ -1458,16 +1622,14 @@ def test_kicad_keepouts_are_queryable_in_sql() -> None:
         con.close()
 
 
-def test_altium_typed_tables_are_populated() -> None:
-    project = load_project(PI_MX8_PRJPCB)
-    con = load_database(project)
-    try:
-        assert _count(con, "SELECT count(*) FROM drills") > 0
-        assert _count(con, "SELECT count(*) FROM conductors") > 0
-        assert _count(con, "SELECT count(*) FROM artwork") > 0
-        assert _count(con, "SELECT count(*) FROM board_profile") > 0
-    finally:
-        con.close()
+def test_altium_typed_tables_are_populated(altium_db: duckdb.DuckDBPyConnection) -> None:
+    assert _count(altium_db, "SELECT count(*) FROM drills") > 0
+    assert _count(altium_db, "SELECT count(*) FROM conductors") > 0
+    assert _count(altium_db, "SELECT count(*) FROM artwork") > 0
+    assert _count(altium_db, "SELECT count(*) FROM board_profile") > 0
+    assert _count(altium_db, "SELECT count(*) FROM net_classes") > 0
+    assert _count(altium_db, "SELECT count(*) FROM design_rules") > 0
+    assert _count(altium_db, "SELECT count(*) FROM nets WHERE net_class IS NOT NULL") > 0
 
 
 # ---------------------------------------------------------------------------
@@ -1487,16 +1649,19 @@ def jetson_db() -> Iterator[duckdb.DuckDBPyConnection]:
         con.close()
 
 
+@pytest.mark.behavior_lock
 class TestJetsonNetClasses:
     def test_count(self, jetson_db: duckdb.DuckDBPyConnection) -> None:
         assert _count(jetson_db, "SELECT count(*) FROM net_classes") == 8
 
 
+@pytest.mark.behavior_lock
 class TestJetsonDesignRules:
     def test_count(self, jetson_db: duckdb.DuckDBPyConnection) -> None:
         assert _count(jetson_db, "SELECT count(*) FROM design_rules") == 33
 
 
+@pytest.mark.behavior_lock
 class TestJetsonComponentEnrichment:
     def test_component_parameters_loaded(self, jetson_db: duckdb.DuckDBPyConnection) -> None:
         components = _count(jetson_db, "SELECT count(*) FROM components")
@@ -1568,6 +1733,7 @@ class TestJetsonComponentEnrichment:
         assert len(row) == 4
 
 
+@pytest.mark.behavior_lock
 class TestJetsonSchematic:
     def test_components_count(self, jetson_db: duckdb.DuckDBPyConnection) -> None:
         assert _count(jetson_db, "SELECT count(*) FROM components") == 666
@@ -1587,39 +1753,42 @@ class TestJetsonSchematic:
 
 
 class TestCLI:
-    def test_basic_query(self) -> None:
+    def test_basic_query(self, tmp_path: Path) -> None:
+        project_file = _write_swd_project(tmp_path)
         runner = CliRunner()
         result = runner.invoke(
-            main, ["-P", str(JETSON_ORIN_PRO), "sql", "SELECT count(*) FROM footprints"]
+            main, ["-P", str(project_file), "sql", "SELECT count(*) FROM footprints"]
         )
         assert result.exit_code == 0
         assert "(1 row)" in result.output
 
     def test_schema_flag(self) -> None:
         runner = CliRunner()
-        result = runner.invoke(main, ["-P", str(JETSON_ORIN_PRO), "sql", "--schema"])
+        result = runner.invoke(main, ["sql", "--schema"])
         assert result.exit_code == 0
         assert "CREATE TABLE footprints" in result.output
 
     def test_no_query_error(self) -> None:
         runner = CliRunner()
-        result = runner.invoke(main, ["-P", str(JETSON_ORIN_PRO), "sql"])
+        result = runner.invoke(main, ["sql"])
         assert result.exit_code != 0
 
-    def test_invalid_query(self) -> None:
+    def test_invalid_query(self, tmp_path: Path) -> None:
+        project_file = _write_swd_project(tmp_path)
         runner = CliRunner()
         result = runner.invoke(
             main,
-            ["-P", str(JETSON_ORIN_PRO), "sql", "SELECT * FROM nonexistent"],
+            ["-P", str(project_file), "sql", "SELECT * FROM nonexistent"],
         )
         assert result.exit_code != 0
         assert "error" in result.output.lower()
 
-    def test_spatial_query(self) -> None:
+    def test_spatial_query(self, tmp_path: Path) -> None:
+        project_file = _write_swd_project(tmp_path)
         runner = CliRunner()
         result = runner.invoke(
             main,
-            ["-P", str(JETSON_ORIN_PRO), "sql", "SELECT ST_Area(geom) FROM footprints LIMIT 1"],
+            ["-P", str(project_file), "sql", "SELECT ST_Area(geom) FROM footprints LIMIT 1"],
         )
         assert result.exit_code == 0
         # Should contain a numeric value (the area)
