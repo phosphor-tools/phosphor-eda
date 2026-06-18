@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from phosphor_eda.domain.schematic import Net, NetNameKind, ScopeId
+from phosphor_eda.domain.schematic import Net, NetNameKind, ScopeId, TitleBlock
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode, AltiumProject
 from phosphor_eda.formats.altium.resolver import resolve_altium_source
 from phosphor_eda.formats.altium.source import (
@@ -21,6 +21,7 @@ from phosphor_eda.formats.altium.source import (
     AltiumPowerPort,
     AltiumSheetEntry,
     AltiumSheetSource,
+    AltiumSheetSymbol,
     AltiumSourceDesign,
 )
 from phosphor_eda.formats.common.diagnostics import ParseContext
@@ -83,6 +84,19 @@ def _entry(sheet: str, name: str, index: int = 1) -> AltiumSheetEntry:
         distance_from_top=0,
         harness_type="",
         io_type=0,
+    )
+
+
+def _symbol(sheet: str, name: str, child_source_file: str, index: int = 1) -> AltiumSheetSymbol:
+    return AltiumSheetSymbol(
+        id=f"{sheet}:symbol:{index}",
+        scope_id=_scope(sheet),
+        source_index=index,
+        name=name,
+        child_source_file=child_source_file,
+        location=(index, 70),
+        x_size=100,
+        y_size=100,
     )
 
 
@@ -149,6 +163,9 @@ def _sheet(
     name: str,
     local_nets: list[AltiumLocalNet],
     pins: list[AltiumPinOccurrence],
+    *,
+    sheet_number: str = "",
+    sheet_symbols: list[AltiumSheetSymbol] | None = None,
 ) -> AltiumSheetSource:
     return AltiumSheetSource(
         id=f"sheet:{name}",
@@ -156,11 +173,12 @@ def _sheet(
         source_file=f"{name}.SchDoc",
         scope_id=_scope(name),
         local_nets=local_nets,
-        sheet_symbols=[],
+        sheet_symbols=sheet_symbols or [],
         sheet_entries=[],
         harness_connectors=[],
         harness_members=[],
         pin_occurrences=pins,
+        title_block=TitleBlock(sheet_number=sheet_number) if sheet_number else None,
     )
 
 
@@ -370,16 +388,120 @@ def test_non_winning_evidence_lands_in_names_with_kinds() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Unverified naming options: diagnostic, no transform
+# Project naming options
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "option", ["append_sheet_number_to_local_nets", "name_nets_hierarchically"]
-)
-def test_unverified_naming_option_warns_and_skips_transform(option: str) -> None:
-    project = AltiumProject(hierarchy_mode=AltiumHierarchyMode.FLAT)
-    setattr(project, option, True)
+def test_append_sheet_number_to_local_nets_uses_title_block_sheet_number() -> None:
+    project = AltiumProject(
+        hierarchy_mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
+        append_sheet_number_to_local_nets=True,
+    )
+    local_net, pins = _local_net("A", "net", [("U1", "1")], labels=[_label("A", "SIG", 1)])
+
+    ctx = ParseContext()
+    net = _resolve_single_net([_sheet("A", [local_net], pins, sheet_number="5")], project, ctx)
+
+    assert net.name == "SIG_5"
+    assert "SIG" in net.aliases
+    assert not [issue for issue in ctx.issues if issue.category == "unverified_naming_option"]
+
+
+def test_append_sheet_number_to_local_nets_preserves_polarity_suffix() -> None:
+    project = AltiumProject(
+        hierarchy_mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
+        append_sheet_number_to_local_nets=True,
+    )
+    local_net, pins = _local_net("A", "net", [("U1", "1")], labels=[_label("A", "USB_P", 1)])
+
+    net = _resolve_single_net([_sheet("A", [local_net], pins, sheet_number="5")], project)
+
+    assert net.name == "USB_5_P"
+    assert "USB_P" in net.aliases
+
+
+def test_append_sheet_number_to_local_nets_suffixes_sheet_one_polarity_names() -> None:
+    project = AltiumProject(
+        hierarchy_mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
+        append_sheet_number_to_local_nets=True,
+    )
+    local_net, pins = _local_net("A", "net", [("U1", "1")], labels=[_label("A", "USB_P", 1)])
+
+    net = _resolve_single_net([_sheet("A", [local_net], pins, sheet_number="1")], project)
+
+    assert net.name == "USB_1_P"
+    assert "USB_P" in net.aliases
+
+
+def test_append_sheet_number_to_local_nets_suffixes_label_names_on_sheet_entry_nets() -> None:
+    project = AltiumProject(
+        hierarchy_mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
+        append_sheet_number_to_local_nets=True,
+        allow_port_net_names=False,
+    )
+    entry_net, entry_pins = _local_net(
+        "A",
+        "entry",
+        [("U0", "1")],
+        labels=[_label("A", "ENTRY_SIG", 0)],
+        entries=[_entry("A", "ENTRY_SIG")],
+    )
+    port_net, port_pins = _local_net(
+        "A",
+        "port",
+        [("U1", "1")],
+        labels=[_label("A", "PORT_SIG", 1)],
+        ports=[_port("A", "PORT_SIG")],
+    )
+    harness_net, harness_pins = _local_net(
+        "A",
+        "harness",
+        [("U2", "1")],
+        labels=[_label("A", "HARNESS_SIG", 2)],
+        harness_members=[_harness_member("A", "BUNDLE", "HARNESS_SIG")],
+    )
+
+    design = resolve_altium_source(
+        AltiumSourceDesign(
+            name="test",
+            project=project,
+            sheets={
+                "A": _sheet(
+                    "A",
+                    [entry_net, port_net, harness_net],
+                    [*entry_pins, *port_pins, *harness_pins],
+                    sheet_number="5",
+                )
+            },
+            root_sheet_name="A",
+        )
+    )
+
+    assert {net.name for net in design.nets} == {"ENTRY_SIG_5", "PORT_SIG", "HARNESS_SIG"}
+
+
+def test_append_sheet_number_to_local_nets_is_idempotent() -> None:
+    project = AltiumProject(
+        hierarchy_mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
+        append_sheet_number_to_local_nets=True,
+    )
+    local_net, pins = _local_net(
+        "A",
+        "net",
+        [("U1", "1")],
+        labels=[_label("A", "FPGA_CONF_CS_1", 1)],
+    )
+
+    net = _resolve_single_net([_sheet("A", [local_net], pins, sheet_number="1")], project)
+
+    assert net.name == "FPGA_CONF_CS_1"
+
+
+def test_name_nets_hierarchically_warns_and_skips_transform() -> None:
+    project = AltiumProject(
+        hierarchy_mode=AltiumHierarchyMode.FLAT,
+        name_nets_hierarchically=True,
+    )
     local_net, pins = _local_net("A", "net", [("U1", "1")], labels=[_label("A", "SIG", 1)])
 
     ctx = ParseContext()
@@ -388,8 +510,146 @@ def test_unverified_naming_option_warns_and_skips_transform(option: str) -> None
     issues = [issue for issue in ctx.issues if issue.category == "unverified_naming_option"]
     assert len(issues) == 1
     assert "unverified" in issues[0].message
-    # The name is untouched — no sheet-number suffix or hierarchical prefix.
+    # The name is untouched — no hierarchical prefix.
     assert net.name == "SIG"
+
+
+def test_hierarchical_bus_sheet_entries_connect_child_labels_by_member_name() -> None:
+    project = AltiumProject(
+        hierarchy_mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
+        allow_sheet_entry_net_names=True,
+    )
+    left_symbol = _symbol("Top", "Left", "Left.SchDoc", 1)
+    right_symbol = _symbol("Top", "Right", "Right.SchDoc", 2)
+    left_entry = _entry("Top", "GPIO[0..1]", 1)
+    left_entry.sheet_symbol_id = left_symbol.id
+    right_entry = _entry("Top", "GPIO[0..1]", 2)
+    right_entry.sheet_symbol_id = right_symbol.id
+    left_parent_net, left_parent_pins = _local_net(
+        "Top",
+        "left_bus",
+        [],
+        entries=[left_entry],
+    )
+    right_parent_net, right_parent_pins = _local_net(
+        "Top",
+        "right_bus",
+        [],
+        entries=[right_entry],
+    )
+    left_child_net, left_child_pins = _local_net(
+        "Left",
+        "gpio0",
+        [("U1", "1")],
+        labels=[_label("Left", "GPIO0", 1)],
+    )
+    right_child_net, right_child_pins = _local_net(
+        "Right",
+        "gpio0",
+        [("J1", "1")],
+        labels=[_label("Right", "GPIO0", 1)],
+    )
+
+    design = resolve_altium_source(
+        AltiumSourceDesign(
+            name="test",
+            project=project,
+            sheets={
+                "Top": _sheet(
+                    "Top",
+                    [left_parent_net, right_parent_net],
+                    [*left_parent_pins, *right_parent_pins],
+                    sheet_symbols=[left_symbol, right_symbol],
+                ),
+                "Left": _sheet("Left", [left_child_net], left_child_pins),
+                "Right": _sheet("Right", [right_child_net], right_child_pins),
+            },
+            root_sheet_name="Top",
+        )
+    )
+
+    [net] = [net for net in design.nets if net.name == "GPIO0"]
+    assert {(pin.component.reference, pin.designator) for pin in net.pins} == {
+        ("U1", "1"),
+        ("J1", "1"),
+    }
+
+
+def test_harness_members_connect_to_peer_sheet_labels_by_member_name() -> None:
+    project = AltiumProject(hierarchy_mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL)
+    left_symbol = _symbol("Top", "Left", "Left.SchDoc", 1)
+    right_symbol = _symbol("Top", "Right", "Right.SchDoc", 2)
+    left_entry = _entry("Top", "BUS", 1)
+    left_entry.sheet_symbol_id = left_symbol.id
+    left_entry.harness_type = "BUS"
+    right_entry = _entry("Top", "BUS", 2)
+    right_entry.sheet_symbol_id = right_symbol.id
+    right_entry.harness_type = "BUS"
+    parent_net, parent_pins = _local_net(
+        "Top",
+        "harness_conduit",
+        [],
+        entries=[left_entry, right_entry],
+    )
+    left_port_net, left_port_pins = _local_net(
+        "Left",
+        "bus_port",
+        [],
+        ports=[_port("Left", "BUS")],
+    )
+    left_port_net.ports[0].harness_type = "BUS"
+    left_member_net, left_member_pins = _local_net(
+        "Left",
+        "sig",
+        [("U1", "1")],
+        labels=[_label("Left", "SIG", 1)],
+    )
+    right_port_net, right_port_pins = _local_net(
+        "Right",
+        "bus_port",
+        [],
+        ports=[_port("Right", "BUS")],
+    )
+    right_port_net.ports[0].harness_type = "BUS"
+    right_member_net, right_member_pins = _local_net(
+        "Right",
+        "sig",
+        [("J1", "1")],
+        labels=[_label("Right", "SIG", 1)],
+        harness_members=[_harness_member("Right", "BUS", "SIG")],
+    )
+
+    design = resolve_altium_source(
+        AltiumSourceDesign(
+            name="test",
+            project=project,
+            sheets={
+                "Top": _sheet(
+                    "Top",
+                    [parent_net],
+                    parent_pins,
+                    sheet_symbols=[left_symbol, right_symbol],
+                ),
+                "Left": _sheet(
+                    "Left",
+                    [left_port_net, left_member_net],
+                    [*left_port_pins, *left_member_pins],
+                ),
+                "Right": _sheet(
+                    "Right",
+                    [right_port_net, right_member_net],
+                    [*right_port_pins, *right_member_pins],
+                ),
+            },
+            root_sheet_name="Top",
+        )
+    )
+
+    [net] = [net for net in design.nets if net.name == "SIG"]
+    assert {(pin.component.reference, pin.designator) for pin in net.pins} == {
+        ("U1", "1"),
+        ("J1", "1"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -405,6 +665,38 @@ def pimx8_net_names() -> tuple[set[str], set[str]]:
     schematic_names = {net.name for net in project.schematic.nets}
     pcb_names = {net.name for net in project.board.nets.values() if net.name}
     return schematic_names, pcb_names
+
+
+def test_pimx8_nets6_names_match_schematic_by_pin_membership() -> None:
+    project = load_project(PIMX8_PRJPCB)
+    assert project.schematic is not None
+    assert project.board is not None
+
+    schematic_by_members = {
+        frozenset((pin.component.reference, pin.designator) for pin in net.pins): net
+        for net in project.schematic.nets
+        if net.pins
+    }
+
+    mismatches: list[tuple[str, str]] = []
+    unmatched: list[str] = []
+    for board_net in project.board.nets.values():
+        if not board_net.name:
+            continue
+        members = frozenset(
+            (pad.footprint.reference, pad.number)
+            for pad in project.board.pads
+            if pad.net is board_net and pad.footprint is not None
+        )
+        schematic_net = schematic_by_members.get(members)
+        if schematic_net is None:
+            unmatched.append(board_net.name)
+            continue
+        if schematic_net.name != board_net.name:
+            mismatches.append((board_net.name, schematic_net.name))
+
+    assert unmatched == []
+    assert mismatches == []
 
 
 def test_pimx8_schematic_names_cover_nets6_case_insensitively(

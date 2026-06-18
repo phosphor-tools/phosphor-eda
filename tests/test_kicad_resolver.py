@@ -356,9 +356,9 @@ def test_kicad_local_label_names_are_path_qualified_and_escaped() -> None:
     )
 
     resolved = _net_for_reference(design.nets, "U1")
-    assert resolved.name == "/Amp{slash}Left/OUT{slash}N"
+    assert resolved.name == "/Amp/Left/OUT/N"
     assert len(resolved.names) == 1
-    assert resolved.names[0].name == "/Amp{slash}Left/OUT{slash}N"
+    assert resolved.names[0].name == "/Amp/Left/OUT/N"
     assert resolved.names[0].kind is NetNameKind.LABEL
     assert resolved.names[0].scope == child
     assert resolved.names[0].source == "local_label"
@@ -432,10 +432,10 @@ def test_kicad_local_power_names_are_path_qualified_and_beat_local_labels() -> N
     )
 
     resolved = _net_for_reference(design.nets, "U1")
-    assert resolved.name == "/Sheet{slash}A/VCC"
+    assert resolved.name == "/Sheet/A/VCC"
     assert {entry.name for entry in resolved.names} >= {
-        "/Sheet{slash}A/VCC",
-        "/Sheet{slash}A/LOCAL",
+        "/Sheet/A/VCC",
+        "/Sheet/A/LOCAL",
     }
 
 
@@ -586,8 +586,8 @@ def test_kicad_single_pin_net_uses_versioned_unconnected_auto_name() -> None:
 @pytest.mark.parametrize(
     ("schematic_version", "expected"),
     [
-        (20211123, "unconnected-(U1-Pad6)"),
-        (20230121, "unconnected-(U1-LV)"),
+        (20211123, "unconnected-(U1-LV-Pad6)"),
+        (20230121, "unconnected-(U1-LV-Pad6)"),
         (20231120, "unconnected-(U1-LV-Pad6)"),
     ],
 )
@@ -1163,7 +1163,7 @@ def test_local_net_with_unknown_scope_fails_resolution() -> None:
     pin = _pin(missing_scope, net_id, "U1")
 
     with pytest.raises(ResolutionInputError, match=r"local net .* unknown scope"):
-        resolve_kicad_source(
+        _ = resolve_kicad_source(
             _source(
                 [_local_net(missing_scope, "sig", pins=[pin])],
                 [pin],
@@ -1179,7 +1179,7 @@ def test_pin_occurrence_with_unknown_scope_fails_resolution() -> None:
     pin = _pin(missing_scope, net_id, "U1")
 
     with pytest.raises(ResolutionInputError, match=r"pin .* unknown scope"):
-        resolve_kicad_source(
+        _ = resolve_kicad_source(
             _source(
                 [_local_net(root, "sig", pins=[pin])],
                 [pin],
@@ -1194,7 +1194,7 @@ def test_pin_occurrence_with_unknown_local_net_fails_resolution() -> None:
     pin = _pin(root, missing_net_id, "U1")
 
     with pytest.raises(ResolutionInputError, match=r"pin .* unknown local net"):
-        resolve_kicad_source(
+        _ = resolve_kicad_source(
             _source(
                 [_local_net(root, "sig")],
                 [pin],
@@ -1211,7 +1211,7 @@ def test_repeated_pin_occurrence_with_unknown_local_net_fails_resolution() -> No
     second_pin = _pin(root, missing_net_id, "U1", index=2)
 
     with pytest.raises(ResolutionInputError, match=r"pin .* unknown local net"):
-        resolve_kicad_source(
+        _ = resolve_kicad_source(
             _source(
                 [_local_net(root, "sig", pins=[first_pin])],
                 [first_pin, second_pin],
@@ -1249,7 +1249,7 @@ def test_global_label_with_unknown_local_net_fails_resolution() -> None:
     label = _global_label(root, "root:local:missing", "VCC")
 
     with pytest.raises(ResolutionInputError, match=r"global label .* unknown local net"):
-        resolve_kicad_source(
+        _ = resolve_kicad_source(
             _source(
                 [_local_net(root, "sig", global_labels=[label])],
                 [_pin(root, net_id, "U1")],
@@ -1266,7 +1266,7 @@ def test_global_label_scope_must_match_local_net_scope() -> None:
     pin = _pin(root, net_id, "U1")
 
     with pytest.raises(ResolutionInputError, match=r"global label .* scope .* local net"):
-        resolve_kicad_source(
+        _ = resolve_kicad_source(
             _source(
                 [_local_net(root, "sig", global_labels=[label], pins=[pin])],
                 [pin],
@@ -1296,4 +1296,4 @@ def test_top_level_sheet_pin_with_unknown_local_net_fails_resolution() -> None:
     source.sheet_pins.append(_sheet_pin(root, "root:local:missing", "SIG", symbol_id, child))
 
     with pytest.raises(ResolutionInputError, match=r"sheet pin .* unknown local net"):
-        resolve_kicad_source(source)
+        _ = resolve_kicad_source(source)

@@ -17,8 +17,8 @@ from phosphor_eda.formats.kicad.source import (
     KiCadSheetPin,
 )
 from phosphor_eda.formats.kicad.source_extractor import (
-    _generated_local_net_name,
     extract_sheet_sources,
+    generated_local_net_name,
 )
 from phosphor_eda.formats.kicad.to_schematic import kicad_to_source
 
@@ -95,7 +95,7 @@ def test_pin_occurrences_keep_scope_and_local_net_id() -> None:
 
 def test_generated_local_net_name_keeps_full_anonymous_source_key() -> None:
     assert (
-        _generated_local_net_name(
+        generated_local_net_name(
             "root:local_net:0001:12.0000:34.0000",
             [],
             [],
@@ -165,7 +165,7 @@ def test_netclass_flag_properties_attach_to_touched_local_net() -> None:
 
 def test_multi_pin_power_symbol_attaches_evidence_to_each_local_net(tmp_path: Path) -> None:
     schematic_path = tmp_path / "multi_pin_power.kicad_sch"
-    schematic_path.write_text(
+    _ = schematic_path.write_text(
         """
 (kicad_sch (version 20230121) (generator eeschema)
   (uuid 10000000-0000-0000-0000-000000000001)
@@ -244,7 +244,7 @@ def test_multi_pin_power_symbol_attaches_evidence_to_each_local_net(tmp_path: Pa
 
 def test_bus_entries_connect_vector_bus_members(tmp_path: Path) -> None:
     schematic_path = tmp_path / "bus_entries.kicad_sch"
-    schematic_path.write_text(
+    _ = schematic_path.write_text(
         """
 (kicad_sch (version 20231120) (generator eeschema)
   (uuid 10000000-0000-0000-0000-000000000001)
@@ -310,7 +310,7 @@ def test_bus_entries_connect_vector_bus_members(tmp_path: Path) -> None:
 
 def test_bus_entries_use_bus_junctions_to_find_labels(tmp_path: Path) -> None:
     schematic_path = tmp_path / "bus_entry_junction.kicad_sch"
-    schematic_path.write_text(
+    _ = schematic_path.write_text(
         """
 (kicad_sch (version 20231120) (generator eeschema)
   (uuid 10000000-0000-0000-0000-000000000001)
@@ -365,7 +365,7 @@ def test_bus_entries_use_bus_junctions_to_find_labels(tmp_path: Path) -> None:
 
 
 def _write_single_pin_label_schematic(path: Path, label_name: str) -> None:
-    path.write_text(
+    _ = path.write_text(
         f"""
 (kicad_sch (version 20231120) (generator eeschema)
   (uuid 10000000-0000-0000-0000-000000000001)
@@ -403,7 +403,7 @@ def test_project_text_variables_are_resolved_in_kicad_net_names(tmp_path: Path) 
     schematic_path = tmp_path / "textvars.kicad_sch"
     project_path = tmp_path / "textvars.kicad_pro"
     _write_single_pin_label_schematic(schematic_path, "${NET}")
-    project_path.write_text(
+    _ = project_path.write_text(
         '{"text_variables": {"NET": "USB/DP"}, "net_settings": {}}',
         encoding="utf-8",
     )
@@ -412,7 +412,7 @@ def test_project_text_variables_are_resolved_in_kicad_net_names(tmp_path: Path) 
 
     assert [label.name for label in source.local_labels] == ["USB/DP"]
     [net] = resolve_kicad_source(source).nets
-    assert net.name == "/USB{slash}DP"
+    assert net.name == "/USB/DP"
 
 
 def test_unresolved_project_text_variables_are_reported(tmp_path: Path) -> None:
@@ -430,7 +430,7 @@ def test_unresolved_project_text_variables_are_reported(tmp_path: Path) -> None:
 
 def test_local_power_symbol_kind_is_extracted_from_kicad_lib_symbol(tmp_path: Path) -> None:
     schematic_path = tmp_path / "local_power.kicad_sch"
-    schematic_path.write_text(
+    _ = schematic_path.write_text(
         """
 (kicad_sch (version 20250227) (generator eeschema)
   (uuid 10000000-0000-0000-0000-000000000001)
@@ -485,7 +485,7 @@ def test_local_power_symbol_kind_is_extracted_from_kicad_lib_symbol(tmp_path: Pa
 
 def test_overline_label_markup_is_preserved_in_kicad_net_name(tmp_path: Path) -> None:
     schematic_path = tmp_path / "overline_label.kicad_sch"
-    schematic_path.write_text(
+    _ = schematic_path.write_text(
         """
 (kicad_sch (version 20231120) (generator eeschema)
   (uuid 10000000-0000-0000-0000-000000000001)
@@ -527,7 +527,7 @@ def test_overline_label_markup_is_preserved_in_kicad_net_name(tmp_path: Path) ->
 
 def test_overline_pin_markup_is_preserved_for_kicad_auto_net_name(tmp_path: Path) -> None:
     schematic_path = tmp_path / "overline_pin.kicad_sch"
-    schematic_path.write_text(
+    _ = schematic_path.write_text(
         """
 (kicad_sch (version 20231120) (generator eeschema)
   (uuid 10000000-0000-0000-0000-000000000001)
@@ -589,7 +589,7 @@ def test_sheet_traversal_skips_ancestor_file_cycles(
 ) -> None:
     root = tmp_path / "root.kicad_sch"
     child = tmp_path / "child.kicad_sch"
-    root.write_text(
+    _ = root.write_text(
         """
 (kicad_sch (version 20230121) (generator eeschema)
   (sheet (at 10 10) (size 10 10)
@@ -600,7 +600,7 @@ def test_sheet_traversal_skips_ancestor_file_cycles(
 """,
         encoding="utf-8",
     )
-    child.write_text(
+    _ = child.write_text(
         """
 (kicad_sch (version 20230121) (generator eeschema)
   (sheet (at 10 10) (size 10 10)

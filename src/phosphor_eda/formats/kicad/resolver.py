@@ -26,7 +26,6 @@ from phosphor_eda.formats.common.resolved_graph import (
     ResolvedPinInput,
     build_resolved_schematic,
 )
-from phosphor_eda.formats.kicad.lib_symbols import strip_kicad_markup
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -198,6 +197,10 @@ def _merge_same_scope_names(net_union: NetUnion, local_nets: Iterable[KiCadLocal
     label_ids: dict[tuple[ScopeId, str], list[str]] = {}
 
     for local_net in local_nets:
+        for label in local_net.global_labels:
+            name = _mergeable_name(label.name)
+            if name is not None:
+                label_ids.setdefault((label.scope_id, name), []).append(local_net.id)
         for label in local_net.local_labels:
             name = _mergeable_name(label.name)
             if name is not None:
@@ -808,7 +811,7 @@ def _candidate(
 
 def _candidate_sort_key(candidate: _NameCandidate) -> tuple[int, int, int, int, str, int]:
     sheet_pin_rank = 0 if candidate.sheet_pin_direction.lower() == "output" else 1
-    pad_rank = 1 if "-Pad" in candidate.name else 0
+    pad_rank = 1 if "-Pad" in candidate.name or candidate.name.endswith("-SHIELD)") else 0
     return (
         -candidate.priority,
         pad_rank,
@@ -864,7 +867,7 @@ def _sheet_path_prefix(scope_id: ScopeId, sheet_names_by_scope: dict[ScopeId, st
 
 
 def _escape_net_name(name: str) -> str:
-    return _clean_name(name).replace("\r", "").replace("\n", "").replace("/", "{slash}")
+    return _clean_name(name).replace("\r", "").replace("\n", "")
 
 
 def _pin_default_net_name(
@@ -879,12 +882,6 @@ def _pin_default_net_name(
     pad = _escape_net_name(pin.pin_designator)
 
     if force_unconnected:
-        if (
-            _unconnected_uses_pin_name_without_pad(schematic_version)
-            and pin_name
-            and pin_name != pad
-        ):
-            return f"{prefix}{ref}{_unit_suffix(pin)}-{pin_name})"
         if _unconnected_uses_pin_name_with_pad(schematic_version) and pin_name and pin_name != pad:
             return f"{prefix}{ref}{_unit_suffix(pin)}-{pin_name}-Pad{pad})"
         return f"{prefix}{ref}-Pad{pad})"
@@ -904,12 +901,9 @@ def _unit_suffix(pin: KiCadPinOccurrence) -> str:
     return str(pin.component_unit)
 
 
-def _unconnected_uses_pin_name_without_pad(schematic_version: int) -> bool:
-    return 20230121 <= schematic_version < 20231120
-
-
 def _unconnected_uses_pin_name_with_pad(schematic_version: int) -> bool:
-    return schematic_version >= 20231120
+    _ = schematic_version
+    return True
 
 
 def _synthesized_name(local_nets: Iterable[KiCadLocalNet], net_index: int) -> str:
@@ -957,19 +951,11 @@ def _bus_entry_names(local_net: KiCadLocalNet) -> list[str]:
 
 def _mergeable_name(name: str) -> str | None:
     cleaned = _clean_name(name)
-    if _is_bus_name(cleaned):
-        return None
     return cleaned or None
 
 
-def _is_bus_name(name: str) -> bool:
-    if "${" in name:
-        return False
-    return bus_kind_for_name(strip_kicad_markup(name)) is not None
-
-
 def _clean_name(name: str) -> str:
-    return name.replace("\\", "").strip()
+    return name.replace("\\", "").replace("{slash}", "/").strip()
 
 
 def _dedupe(names: Iterable[str]) -> list[str]:

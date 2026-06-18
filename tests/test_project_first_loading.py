@@ -15,6 +15,31 @@ DSN_FILE = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
 JETSON_ORIN_PRO = FIXTURES / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pro"
 JETSON_ORIN_PCB = FIXTURES / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pcb"
 PIMX8_PRJPCB = FIXTURES / "altium/pi-mx8/PiMX8MP_r0.3_release.PrjPcb"
+OPENCELLULAR_BREAKOUT = FIXTURES / "orcad/opencellular-breakout"
+OPENCELLULAR_BREAKOUT_OPJ = (
+    OPENCELLULAR_BREAKOUT
+    / "orcad/OpenCellular/electronics/breakout/schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.opj"
+)
+OPENCELLULAR_BREAKOUT_DSN = (
+    OPENCELLULAR_BREAKOUT
+    / "orcad/OpenCellular/electronics/breakout/schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.DSN"
+)
+OPENCELLULAR_BREAKOUT_BOARD = (
+    OPENCELLULAR_BREAKOUT
+    / "allegro/OpenCellular/electronics/breakout/board/OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
+)
+OPENCELLULAR_SYNC = FIXTURES / "orcad/opencellular-sync"
+OPENCELLULAR_SYNC_OPJ = (
+    OPENCELLULAR_SYNC
+    / "orcad/OpenCellular/electronics/sync/schematics/dsn/FB_CONNECT1_SYNC_LIFE-3_V1P1.opj"
+)
+OPENCELLULAR_SYNC_DSN = (
+    OPENCELLULAR_SYNC
+    / "orcad/OpenCellular/electronics/sync/schematics/dsn/FB_CONNECT1_SYNC_LIFE-3_V1P1.DSN"
+)
+OPENCELLULAR_SYNC_BOARD = (
+    OPENCELLULAR_SYNC / "allegro/OpenCellular/electronics/sync/board/Fb_Connect1_SYNC_Life-3.brd"
+)
 
 
 def _write_opj(path: Path, dsn_path: Path = DSN_FILE) -> Path:
@@ -23,7 +48,7 @@ def _write_opj(path: Path, dsn_path: Path = DSN_FILE) -> Path:
         if dsn_path.is_relative_to(path.parent)
         else dsn_path.as_posix()
     )
-    path.write_text(
+    _ = path.write_text(
         f"""(ExpressProject "Pico Project"
   (ProjectVersion "19981106")
   (ProjectType "PCB")
@@ -50,7 +75,7 @@ def _write_opj(path: Path, dsn_path: Path = DSN_FILE) -> Path:
 def test_load_project_rejects_direct_document_entrypoints() -> None:
     for path in (DSN_FILE, JETSON_ORIN_PCB):
         with pytest.raises(ValueError, match="project file required"):
-            load_project(path)
+            _ = load_project(path)
 
 
 def test_load_project_accepts_project_entrypoints(tmp_path: Path) -> None:
@@ -90,9 +115,52 @@ def test_opj_project_manifest_and_schematic_loading(tmp_path: Path) -> None:
     )
 
 
+def test_opencellular_sync_project_fixture_loads_from_preserved_tree() -> None:
+    project = load_project(OPENCELLULAR_SYNC_OPJ)
+
+    assert OPENCELLULAR_SYNC_DSN.exists()
+    assert OPENCELLULAR_SYNC_BOARD.exists()
+    assert project.name == "FB_CONNECT1_SYNC_LIFE-3_V1P1"
+    assert project.metadata.format == "orcad"
+    assert project.schematic is not None
+    schematic_docs = [doc for doc in project.documents if doc.kind is DocumentKind.SCHEMATIC]
+    assert len(schematic_docs) == 1
+    assert schematic_docs[0].exists
+    assert schematic_docs[0].parsed
+    assert schematic_docs[0].metadata["resolved_path"] == str(OPENCELLULAR_SYNC_DSN)
+
+
+def test_opencellular_breakout_project_fixture_loads_from_preserved_tree() -> None:
+    project = load_project(OPENCELLULAR_BREAKOUT_OPJ)
+
+    assert OPENCELLULAR_BREAKOUT_DSN.exists()
+    assert OPENCELLULAR_BREAKOUT_BOARD.exists()
+    assert project.name == "OC_CONNECT_1_BRKOUT_BRD"
+    assert project.metadata.format == "orcad"
+    assert project.schematic is not None
+    schematic_docs = [doc for doc in project.documents if doc.kind is DocumentKind.SCHEMATIC]
+    assert len(schematic_docs) == 1
+    assert schematic_docs[0].exists
+    assert schematic_docs[0].parsed
+    assert schematic_docs[0].metadata["resolved_path"] == str(OPENCELLULAR_BREAKOUT_DSN)
+
+
+def test_opj_local_paths_resolve_case_insensitively(tmp_path: Path) -> None:
+    dsn = tmp_path / "UPPERCASE.DSN"
+    _ = dsn.write_bytes(DSN_FILE.read_bytes())
+    opj = _write_opj(tmp_path / "case.opj", dsn_path=tmp_path / "uppercase.dsn")
+
+    project = load_project(opj)
+
+    assert project.schematic is not None
+    schematic_docs = [doc for doc in project.documents if doc.kind is DocumentKind.SCHEMATIC]
+    assert len(schematic_docs) == 1
+    assert schematic_docs[0].metadata["resolved_path"] == str(dsn)
+
+
 def test_opj_project_preserves_manifest_when_dsn_parse_fails(tmp_path: Path) -> None:
     dsn = tmp_path / "broken.dsn"
-    dsn.write_text("not a valid dsn", encoding="utf-8")
+    _ = dsn.write_text("not a valid dsn", encoding="utf-8")
     opj = _write_opj(tmp_path / "broken.opj", dsn_path=dsn)
 
     project = load_project(opj)

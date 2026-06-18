@@ -344,7 +344,7 @@ def resolve_local_net_groups(
     bus_entry_points: list[tuple[tuple[int, int], tuple[int, int]]] = []
 
     # Net labels
-    label_groups: dict[str, list[tuple[int, int]]] = {}
+    label_groups: dict[tuple[str, bool], list[tuple[int, int]]] = {}
     for label in sheet.by_type(NetLabelRec):
         if not label.text:
             continue
@@ -358,7 +358,7 @@ def resolve_local_net_groups(
         all_named_points.add(lp)
         _connect_point_to_wire_group(lp, sheet, uf)
         label_points.append((label, lp))
-        label_groups.setdefault(label.text, []).append(lp)
+        label_groups.setdefault((label.text, label.has_overline), []).append(lp)
 
     # Same-name net labels on the same sheet merge their groups
     for _name, points in label_groups.items():

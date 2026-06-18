@@ -87,6 +87,7 @@ def resolve_dsn_source(source: DsnSourceDesign, ctx: ParseContext | None = None)
     net_union = NetUnion(ref.local_net.id for ref in local_refs)
     pin_occurrences = _collect_pin_occurrences(source.pages)
 
+    _merge_stored_page_net_names(source.pages, net_union, local_net_ids)
     _merge_repeated_logical_pins(net_union, pin_occurrences, local_net_ids)
     _merge_globals(source.pages, net_union, local_net_ids)
     _merge_known_scope_off_page_connectors(source.pages, net_union, local_net_ids)
@@ -248,6 +249,24 @@ def _merge_repeated_logical_pins(
         net_ids_by_pin.setdefault(key, []).append(pin_occurrence.local_net_id)
 
     for net_ids in net_ids_by_pin.values():
+        _merge_ids(net_union, net_ids)
+
+
+def _merge_stored_page_net_names(
+    pages: Iterable[DsnPageSource],
+    net_union: NetUnion,
+    local_net_ids: set[str],
+) -> None:
+    ids_by_name: dict[str, list[str]] = {}
+    for page in pages:
+        for local_net in page.nets:
+            if local_net.id in local_net_ids and local_net.name_key:
+                ids_by_name.setdefault(local_net.name_key, []).append(local_net.id)
+        for global_ in page.globals:
+            if global_.local_net_id in local_net_ids and global_.name_key:
+                ids_by_name.setdefault(global_.name_key, []).append(global_.local_net_id)
+
+    for net_ids in ids_by_name.values():
         _merge_ids(net_union, net_ids)
 
 

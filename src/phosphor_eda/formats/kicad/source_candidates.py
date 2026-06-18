@@ -186,6 +186,7 @@ def extract_source_candidates(
         "label",
         "local_label",
         wire_graph,
+        bus_graph,
         variables,
         ctx,
         warned_variables,
@@ -196,6 +197,7 @@ def extract_source_candidates(
         "global_label",
         "global_label",
         wire_graph,
+        bus_graph,
         variables,
         ctx,
         warned_variables,
@@ -206,6 +208,7 @@ def extract_source_candidates(
         "hierarchical_label",
         "hierarchical_label",
         wire_graph,
+        bus_graph,
         variables,
         ctx,
         warned_variables,
@@ -296,6 +299,7 @@ def _label_candidates(
     tag_name: str,
     id_kind: str,
     wire_graph: WireGraph,
+    bus_graph: BusGraph,
     text_variables: Mapping[str, str],
     ctx: ParseContext | None,
     warned_variables: set[str],
@@ -308,12 +312,12 @@ def _label_candidates(
             ctx,
             warned_variables,
         )
-        if _is_bus_label_text(label_name):
-            continue
         at_node = sexp.find(label[2:], "at")
         if at_node is None:
             continue
         location = point_from_at(at_node)
+        if _is_bus_label_text(label_name) and bus_graph.touches_bus(location):
+            continue
         wire_graph.connect_point(location)
         source_key = _node_value(label[2:], "uuid") or str(index)
         candidates.append(
@@ -357,15 +361,14 @@ def _bus_label_candidates(
             if at_node is None:
                 continue
             location = point_from_at(at_node)
-            if bus_graph.touches_bus(location):
-                bus_graph.connect_point(location)
-                bus_group_id = _source_id(
-                    scope_id,
-                    "bus_group",
-                    _point_key(bus_graph.find(location)),
-                )
-            else:
-                bus_group_id = ""
+            if not bus_graph.touches_bus(location):
+                continue
+            bus_graph.connect_point(location)
+            bus_group_id = _source_id(
+                scope_id,
+                "bus_group",
+                _point_key(bus_graph.find(location)),
+            )
             source_key = _node_value(label[2:], "uuid") or str(index)
             candidates.append(
                 _BusLabelCandidate(
