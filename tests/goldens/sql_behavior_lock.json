@@ -1,6 +1,6 @@
 {
   "jetson-orin": {
-    "serialize_sha256": "ea77c3a7651347f49111dfb0ea92f56d7974d130bdf3e2d8dfd679ea2c70f0f3",
+    "serialize_sha256": "af9a974601486f21d01de03cec81c5a63dff9ebf2d97c8acde0b92e03add0cf5",
     "tables": {
       "artwork": {
         "rows": 149352,
@@ -83,8 +83,8 @@
         "sha256": "9fd9803d4935e68f36361890a23ef684b25851f6a19907de52c36cf5178388b7"
       },
       "net_aliases": {
-        "rows": 160,
-        "sha256": "c0e4c570917de55fb7450525bc391e2d8e1ca8f9ed75b88d2d0840fd81d85995"
+        "rows": 163,
+        "sha256": "2a2fb562d94ff23b31f874586d8064e4ac6817cf342189133d778b6b4c9889b4"
       },
       "net_class_members": {
         "rows": 208,
@@ -95,28 +95,28 @@
         "sha256": "e4dfe7b6178349130f2356b2d8e9f6e8c3079fac6d7036401020bf27f2edfb7e"
       },
       "net_metadata": {
-        "rows": 797,
-        "sha256": "33320246518dfa736dee26501935e7b00327d56519b55242f4fd1184d64c01e1"
+        "rows": 791,
+        "sha256": "21804c5bee482e73efdac3f3c2a985c41a64b9a7fa462c5ca75aa39970274361"
       },
       "net_occurrence_metadata": {
         "rows": 0,
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       "net_occurrence_source_names": {
-        "rows": 1331,
-        "sha256": "c701523eda41d828836d0a38661edde9131c8b90c985f0226fc26812ac3667d9"
+        "rows": 1333,
+        "sha256": "35aed5299eac7c4783aa88a0ac13cafcc80f0dd16f468ba5e1d0d895eaa6f061"
       },
       "net_occurrences": {
         "rows": 1579,
-        "sha256": "265b521f9613227b6e2f0b21376a10dc48999ef9ec06d6dcf948d2020c880c41"
+        "sha256": "d813037e2c0b39ff6293b372a7dc6c713493e455f0e419bf4d28f2f5bcbc5094"
       },
       "net_pages": {
-        "rows": 1033,
-        "sha256": "6f4f390c459f7905fa84e3b3611980bc07fd69b913797689f372008cc211eb86"
+        "rows": 1027,
+        "sha256": "8e15b31876fd4389484b4d13cdb3409ba19332294574f7393056f01a7f19c7e4"
       },
       "nets": {
-        "rows": 797,
-        "sha256": "e0f36f466ae8d9eea13fac9e79736a4334bfb6437e79da112121539ee40901d5"
+        "rows": 791,
+        "sha256": "0b69d58161046bd0a7c645cb716c176842c8403d21aa527d59b8ad95b3841b54"
       },
       "pads": {
         "rows": 2827,
@@ -128,7 +128,7 @@
       },
       "pages": {
         "rows": 10,
-        "sha256": "0c8caf998eccbf6a8dff51375cb808879d81665e641b840800c435ad2f85e7dd"
+        "sha256": "e2d6384c7ba35a6226e5b8e022a656662608cfdf473e0e5b817612667007bd2b"
       },
       "pin_occurrence_metadata": {
         "rows": 2670,
@@ -140,7 +140,7 @@
       },
       "pins": {
         "rows": 2670,
-        "sha256": "f2eb209a04ab8486ee654af8ad96d34d45fe9027d14a41a18af733155f5aca75"
+        "sha256": "f7d3690013fcfb852ad346a7ed310e3defdee36eb3e2610076379a1e00c628ee"
       },
       "pours": {
         "rows": 117,
@@ -160,7 +160,7 @@
       },
       "schematic_directives": {
         "rows": 5,
-        "sha256": "6e9ce9ef4fb4be4a202dc10fdfa0824ed3373f4fe0eb4152cd7ebc92f2e2adff"
+        "sha256": "5f658199b85845f7b7a7de25fe232d10181c2fd206765c8ab5dccb65e0c7e09e"
       },
       "title_blocks": {
         "rows": 10,
@@ -173,7 +173,7 @@
     }
   },
   "pi-mx8": {
-    "serialize_sha256": "cf60ba355fcc1da7cd24ceccacdc2470a45d2c46e98e057150ff4ba0f19cef60",
+    "serialize_sha256": "c138c56699441253b61a2cea30a1a46a29253ee5156346f04d82e3f374fabbf5",
     "tables": {
       "artwork": {
         "rows": 11460,
@@ -192,12 +192,12 @@
         "sha256": "48f264ac36e21597a35a6bfcdee43d5b034cb903c7c18859f8784a0227668264"
       },
       "bus_members": {
-        "rows": 274,
-        "sha256": "73ad75e588b54d277e9467d52c3453d2d145850d334d6eb355b4e55f458ae3fb"
+        "rows": 246,
+        "sha256": "d168be3380b87c01c16b5f732f300682cd9838d8ba2e8b2a009574810f1b5e82"
       },
       "buses": {
         "rows": 25,
-        "sha256": "b468ca38c8fd090e454bb4fa7b16ec7106bf4fd52837b9fd780ea5d38b4882d0"
+        "sha256": "ba6905a9e4a2f408c2ee4475610eafc5743004e0a8ca9ecc6e3965e06bab97ca"
       },
       "component_footprints": {
         "rows": 589,
@@ -256,8 +256,8 @@
         "sha256": "3a1d8cf41ae9acebb4941fef9eb91086c02fb70198b7204f380a8900e2596249"
       },
       "net_aliases": {
-        "rows": 259,
-        "sha256": "b6e7754a3cad906b41675a7447f9dd88dd14c03fe21cfef5f3010133834b7894"
+        "rows": 267,
+        "sha256": "aa315a9a0e62c5516eb3a6468eb2dcb1f0b70c735e33299a9fae73194a310bd1"
       },
       "net_class_members": {
         "rows": 2200,
@@ -268,28 +268,28 @@
         "sha256": "211966f5c2da35d9630d579748de1a1745e1c09be14575e0d3effea6fce773e6"
       },
       "net_metadata": {
-        "rows": 546,
-        "sha256": "985c444de3436bf85e269de4319bcf1759a6a8f2bb79c8812fc89935bc629286"
+        "rows": 487,
+        "sha256": "c6d6d4d82b276cb7251547210ac3f2802470dbe8190b6ad6ec7d690b1158e34e"
       },
       "net_occurrence_metadata": {
         "rows": 0,
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       "net_occurrence_source_names": {
-        "rows": 1596,
-        "sha256": "9c6014fe196d80f890ff4e5ffdfb7beefdc539389c262658ff5a9c11f5c5f029"
+        "rows": 1597,
+        "sha256": "99645ccbab9e26b1ffcf05a79708940e78e233e712cc9d9f4f15efc9ec3ffd0a"
       },
       "net_occurrences": {
-        "rows": 1185,
-        "sha256": "4545c150cd33b974749331809fd72ce59307fe5bd0ee4b97bf7f4956b83dd6d2"
+        "rows": 1186,
+        "sha256": "246b1b5ee213ec47115f0eaaba261f58aa2ea04ec5d1fc13daced4f2228a53ea"
       },
       "net_pages": {
-        "rows": 898,
-        "sha256": "49208a433cc5f671b639f572993c3ac55bf65aae307cd390f9fc4f0314d5c5bb"
+        "rows": 899,
+        "sha256": "0f6e45f667cc10c1e189b193cdc2a5ddb6f5c102b6583430418d13f7a4a608b7"
       },
       "nets": {
-        "rows": 546,
-        "sha256": "2060d4b75edeccc6b44e7c32bbbdaddf0c9685d0225d7a648b9007880a1881f3"
+        "rows": 487,
+        "sha256": "27c7b03d26feadfdd9a6e1284fa54b9582e5e38e302d8e62404756643c439017"
       },
       "pads": {
         "rows": 2606,
@@ -301,7 +301,7 @@
       },
       "pages": {
         "rows": 16,
-        "sha256": "efbae75cee3603ce57e33bef29f6b5a891c35697f534c5128eae29d78a79ea65"
+        "sha256": "c7501661cb2d3ff851fe1aa27f34a198b13722e689671f5b8a6181ae77cb7d9a"
       },
       "pin_occurrence_metadata": {
         "rows": 4632,
@@ -313,7 +313,7 @@
       },
       "pins": {
         "rows": 2316,
-        "sha256": "207da60576877ea784bf5177c57a9a6c4e2896b2c07bdb05263e115a0052c9ef"
+        "sha256": "9550c54dfa99d049aca3d97694f831271315116c7f955dc8dda7b7456e1620af"
       },
       "pours": {
         "rows": 48,
@@ -333,7 +333,7 @@
       },
       "schematic_directives": {
         "rows": 280,
-        "sha256": "83b70105248031844583f6583324ae08f6fd9a4c7f729da303367ecf4fdc1f07"
+        "sha256": "9b055032d5ee775093b73a36d96e9c6b57a286992c4c329b30c1f2fbe54dea65"
       },
       "title_blocks": {
         "rows": 16,

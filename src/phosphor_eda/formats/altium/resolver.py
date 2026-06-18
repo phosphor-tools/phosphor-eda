@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from phosphor_eda.formats.altium.project import AltiumProject
     from phosphor_eda.formats.altium.source import (
         AltiumLocalNet,
+        AltiumNetLabel,
         AltiumPinOccurrence,
         AltiumSheetEntry,
         AltiumSheetSource,
@@ -70,6 +71,7 @@ class _NameEvidence:
     sheet_entries: list[_NameCandidate]
     ports: list[_NameCandidate]
     harness_members: list[_NameCandidate]
+    extra_names: list[_NameCandidate]
 
 
 def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None = None) -> Schematic:
@@ -342,12 +344,14 @@ def _merge_hierarchy(
     known_source_files = _known_source_files(source)
     child_sheets_by_file = _child_sheets_by_source_file(source)
     repeated_child_files = _repeated_child_source_files(source, known_source_files, ctx)
-    child_port_nets = _child_port_net_ids(source)
+    child_interface_nets = _child_interface_net_ids(source, source.project)
+    bus_member_net_ids: dict[tuple[str, str, str], list[str]] = {}
     for ref in local_refs:
         referencing_dir = _parent_dir(_source_file_key(ref.sheet.source_file))
         for entry in ref.local_net.sheet_entries:
             entry_name = _mergeable_name(entry.name)
-            if entry_name is None:
+            entry_members = _mergeable_bus_member_names(entry.name)
+            if entry_name is None and not entry_members:
                 continue
             sheet_symbol = next(
                 (
@@ -368,9 +372,23 @@ def _merge_hierarchy(
                 ctx,
             )
             for child_sheet in child_sheets:
-                for child_net_id in child_port_nets.get((child_sheet.id, entry_name), []):
-                    if child_net_id in local_net_by_id:
-                        _ = net_union.union(ref.local_net.id, child_net_id)
+                if entry_members:
+                    bus_name = _clean_name(entry.name)
+                    for member_name in entry_members:
+                        key = (ref.sheet.id, bus_name, member_name)
+                        bus_member_net_ids.setdefault(key, []).extend(
+                            child_interface_nets.get((child_sheet.id, member_name), [])
+                        )
+                    continue
+                if entry_name is not None:
+                    for child_net_id in child_interface_nets.get((child_sheet.id, entry_name), []):
+                        if child_net_id in local_net_by_id:
+                            _ = net_union.union(ref.local_net.id, child_net_id)
+
+    for net_ids in bus_member_net_ids.values():
+        mergeable_ids = [net_id for net_id in net_ids if net_id in local_net_by_id]
+        for net_id in mergeable_ids[1:]:
+            _ = net_union.union(mergeable_ids[0], net_id)
 
     _merge_harness_members(
         source,
@@ -409,8 +427,13 @@ def _merge_harness_members(
       no pins and unioning it would short all members together)
     """
     members_by_interface: dict[tuple[str, str], dict[str, list[str]]] = {}
+    label_ids_by_sheet_and_name: dict[tuple[str, str], list[str]] = {}
     for sheet in source.sheets.values():
         for local_net in sheet.local_nets:
+            for label_name in _label_names(local_net):
+                label_ids_by_sheet_and_name.setdefault((sheet.id, label_name), []).append(
+                    local_net.id
+                )
             for member in local_net.harness_members:
                 port_name = _clean_name(member.port_name)
                 member_name = _clean_name(member.name)
@@ -473,6 +496,12 @@ def _merge_harness_members(
         for interface in bundle:
             for member_name, net_ids in members_by_interface.get(interface, {}).items():
                 nets_by_member.setdefault(member_name, []).extend(net_ids)
+        for interface in bundle:
+            sheet_id, _port_name = interface
+            for member_name in tuple(nets_by_member):
+                nets_by_member[member_name].extend(
+                    label_ids_by_sheet_and_name.get((sheet_id, member_name), [])
+                )
         for net_ids in nets_by_member.values():
             for net_id in net_ids[1:]:
                 _ = net_union.union(net_ids[0], net_id)
@@ -579,6 +608,20 @@ def _child_port_net_ids(source: AltiumSourceDesign) -> dict[tuple[str, str], lis
     for sheet in source.sheets.values():
         for local_net in sheet.local_nets:
             for name in _port_names(local_net):
+                result.setdefault((sheet.id, name), []).append(local_net.id)
+    return result
+
+
+def _child_interface_net_ids(
+    source: AltiumSourceDesign,
+    project: AltiumProject,
+) -> dict[tuple[str, str], list[str]]:
+    result = _child_port_net_ids(source)
+    if not project.allow_sheet_entry_net_names:
+        return result
+    for sheet in source.sheets.values():
+        for local_net in sheet.local_nets:
+            for name in _label_names(local_net):
                 result.setdefault((sheet.id, name), []).append(local_net.id)
     return result
 
@@ -757,13 +800,14 @@ def _altium_net_input_for_group(
     group_local_nets: tuple[ResolvedLocalNetInput, ...],
 ) -> ResolvedNetInput:
     refs = [local_net_by_id[local_net.id] for local_net in group_local_nets]
-    evidence = _collect_name_evidence(refs)
+    evidence = _collect_name_evidence(source.project, refs)
     names = [
         *evidence.labels,
         *evidence.powers,
         *evidence.sheet_entries,
         *evidence.ports,
         *evidence.harness_members,
+        *evidence.extra_names,
     ]
     canonical = _select_canonical(source.project, evidence)
     if canonical is None:
@@ -884,16 +928,13 @@ def _net_members_by_local_net(
 def _warn_unverified_naming_options(project: AltiumProject, ctx: ParseContext | None) -> None:
     """Warn when a project enables a naming option we have no verified sample for.
 
-    ``AppendSheetNumberToLocalNets`` and ``NameNetsHierarchically`` are 0 in
-    every corpus project; their exact output formats are undocumented, so the
-    resolver proceeds without the suffix/prefix transform.
+    ``NameNetsHierarchically`` is 0 in every public corpus project; its exact
+    output format is undocumented, so the resolver proceeds without the prefix
+    transform.
     """
     if ctx is None:
         return
-    unverified = (
-        ("AppendSheetNumberToLocalNets", project.append_sheet_number_to_local_nets),
-        ("NameNetsHierarchically", project.name_nets_hierarchically),
-    )
+    unverified = (("NameNetsHierarchically", project.name_nets_hierarchically),)
     for option, enabled in unverified:
         if enabled:
             ctx.warn(
@@ -1051,18 +1092,19 @@ def _parent_dir(source_file_key: str) -> str:
     return head if sep else ""
 
 
-def _collect_name_evidence(refs: Iterable[_LocalNetRef]) -> _NameEvidence:
+def _collect_name_evidence(project: AltiumProject, refs: Iterable[_LocalNetRef]) -> _NameEvidence:
     """Collect per-tier name candidates in document order."""
     labels: list[_NameCandidate] = []
     powers: list[_NameCandidate] = []
     sheet_entries: list[_NameCandidate] = []
     ports: list[_NameCandidate] = []
     harness_members: list[_NameCandidate] = []
+    extra_names: list[_NameCandidate] = []
 
     for ref in refs:
         scope = ref.local_net.scope_id
         for label in ref.local_net.net_labels:
-            _append_candidate(labels, label.name, NetNameKind.LABEL, scope, label.id)
+            _append_label_candidate(project, ref, label, labels, extra_names)
         for power_port in ref.local_net.power_ports:
             _append_candidate(powers, power_port.name, NetNameKind.LABEL, scope, power_port.id)
         for entry in ref.local_net.sheet_entries:
@@ -1106,7 +1148,63 @@ def _collect_name_evidence(refs: Iterable[_LocalNetRef]) -> _NameEvidence:
         sheet_entries=sheet_entries,
         ports=ports,
         harness_members=harness_members,
+        extra_names=extra_names,
     )
+
+
+def _append_label_candidate(
+    project: AltiumProject,
+    ref: _LocalNetRef,
+    label: AltiumNetLabel,
+    candidates: list[_NameCandidate],
+    extra_names: list[_NameCandidate],
+) -> None:
+    name = _mergeable_name(label.name)
+    if name is None:
+        return
+    sheet_number = (
+        _sheet_number_suffix(ref)
+        if project.append_sheet_number_to_local_nets and _is_local_label_net(ref.local_net)
+        else ""
+    )
+    if not sheet_number:
+        candidates.append(
+            _NameCandidate(name=name, kind=NetNameKind.LABEL, scope=label.scope_id, source=label.id)
+        )
+        return
+    candidates.append(
+        _NameCandidate(
+            name=_append_sheet_number(name, sheet_number),
+            kind=NetNameKind.LABEL,
+            scope=label.scope_id,
+            source=label.id,
+        )
+    )
+    extra_names.append(
+        _NameCandidate(name=name, kind=NetNameKind.LABEL, scope=label.scope_id, source=label.id)
+    )
+
+
+def _sheet_number_suffix(ref: _LocalNetRef) -> str:
+    title_block = ref.sheet.title_block
+    if title_block is None:
+        return ""
+    return title_block.sheet_number.strip()
+
+
+def _append_sheet_number(name: str, sheet_number: str) -> str:
+    stem, sep, suffix = name.rpartition("_")
+    if sep and suffix in {"P", "N"} and stem:
+        if stem.endswith(f"_{sheet_number}"):
+            return name
+        return f"{stem}_{sheet_number}_{suffix}"
+    if name.endswith(f"_{sheet_number}"):
+        return name
+    return f"{name}_{sheet_number}"
+
+
+def _is_local_label_net(local_net: AltiumLocalNet) -> bool:
+    return not local_net.ports and not local_net.harness_members
 
 
 def _append_candidate(
@@ -1162,6 +1260,16 @@ def _sheet_entry_names(local_net: AltiumLocalNet) -> list[str]:
         if name is not None:
             names.append(name)
     return _dedupe(names)
+
+
+def _mergeable_bus_member_names(name: str) -> list[str]:
+    cleaned = _clean_name(name)
+    if not cleaned:
+        return []
+    members = expand_bus_members(cleaned)
+    if members is None:
+        return []
+    return _dedupe(member for member in (_mergeable_name(member) for member in members) if member)
 
 
 def _harness_member_names(local_net: AltiumLocalNet) -> list[str]:

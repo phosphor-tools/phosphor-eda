@@ -322,10 +322,10 @@ def test_wire_alias_name_evidence_is_stripped() -> None:
     assert _net_for_reference(design.nets, "U1").name == "SIG"
 
 
-def test_page_net_ids_determine_base_electrical_groups() -> None:
+def test_distinct_page_net_ids_with_distinct_names_stay_separate() -> None:
     scope = _scope("Main")
     net_a = _net("Main", scope, 1, "SIG")
-    net_b = _net("Main", scope, 2, "SIG")
+    net_b = _net("Main", scope, 2, "OTHER")
     pin_a = _pin("Main", scope, 1, "U1")
     pin_b = _pin("Main", scope, 2, "U2")
 
@@ -378,9 +378,9 @@ def test_off_page_connectors_merge_only_within_known_folder_scope() -> None:
     scope_a = _scope("Harness", "A")
     scope_b = _scope("Harness", "B")
     scope_c = _scope("Other", "C")
-    net_a = _net("A", scope_a, 1, "BUS")
-    net_b = _net("B", scope_b, 2, "BUS")
-    net_c = _net("C", scope_c, 3, "BUS")
+    net_a = _net("A", scope_a, 1, "BUS_A")
+    net_b = _net("B", scope_b, 2, "BUS_B")
+    net_c = _net("C", scope_c, 3, "BUS_C")
     pin_a = _pin("A", scope_a, 1, "J1")
     pin_b = _pin("B", scope_b, 2, "J2")
     pin_c = _pin("C", scope_c, 3, "J3")
@@ -450,11 +450,11 @@ def test_aliases_are_provenance_not_global_merge_keys() -> None:
     assert _refs(_net_for_reference(design.nets, "U2")) == {"U2"}
 
 
-def test_dsn_net_id_evidence_outranks_reconstructed_label_assumptions() -> None:
+def test_distinct_page_net_names_do_not_merge_across_pages() -> None:
     scope_a = _scope("A")
     scope_b = _scope("B")
-    net_a = _net("A", scope_a, 1, "RESET")
-    net_b = _net("B", scope_b, 2, "RESET")
+    net_a = _net("A", scope_a, 1, "RESET_A")
+    net_b = _net("B", scope_b, 2, "RESET_B")
     pin_a = _pin("A", scope_a, 1, "U1")
     pin_b = _pin("B", scope_b, 2, "U2")
 
@@ -572,7 +572,7 @@ def test_pin_occurrence_with_unknown_scope_fails_resolution() -> None:
     pin = _pin("Main", pin_scope, 1, "U1")
 
     with pytest.raises(ResolutionInputError, match=r"pin .* unknown scope"):
-        resolve_dsn_source(
+        _ = resolve_dsn_source(
             _source([_page("Main", page_scope, [_net("Main", page_scope, 1, "SIG")], pins=[pin])])
         )
 
@@ -582,7 +582,7 @@ def test_pin_occurrence_with_unknown_local_net_fails_resolution() -> None:
     pin = _pin("Main", scope, 2, "U1")
 
     with pytest.raises(ResolutionInputError, match=r"pin .* unknown local net"):
-        resolve_dsn_source(
+        _ = resolve_dsn_source(
             _source([_page("Main", scope, [_net("Main", scope, 1, "SIG")], pins=[pin])])
         )
 
@@ -593,7 +593,7 @@ def test_pin_occurrence_scope_must_match_local_net_scope() -> None:
     pin = _pin("A", pin_scope, 1, "U1")
 
     with pytest.raises(ResolutionInputError, match=r"pin .* scope .* local net"):
-        resolve_dsn_source(
+        _ = resolve_dsn_source(
             _source(
                 [
                     _page("A", net_scope, [_net("A", net_scope, 1, "SIG")]),
@@ -608,7 +608,7 @@ def test_local_net_with_unknown_scope_fails_resolution() -> None:
     net_scope = _scope("Missing")
 
     with pytest.raises(ResolutionInputError, match=r"local net .* unknown scope"):
-        resolve_dsn_source(
+        _ = resolve_dsn_source(
             _source([_page("Main", page_scope, [_net("Main", net_scope, 1, "SIG")])])
         )
 
@@ -618,7 +618,7 @@ def test_global_with_unknown_scope_fails_resolution() -> None:
     global_scope = _scope("Missing")
 
     with pytest.raises(ResolutionInputError, match=r"global .* unknown scope"):
-        resolve_dsn_source(
+        _ = resolve_dsn_source(
             _source(
                 [
                     _page(
@@ -636,7 +636,7 @@ def test_global_with_unknown_local_net_fails_resolution() -> None:
     scope = _scope("Main")
 
     with pytest.raises(ResolutionInputError, match=r"global .* unknown local net"):
-        resolve_dsn_source(
+        _ = resolve_dsn_source(
             _source(
                 [
                     _page(

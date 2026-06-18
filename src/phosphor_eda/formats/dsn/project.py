@@ -16,6 +16,7 @@ import sexpdata
 from phosphor_eda.domain.project import DocumentKind, Project, ProjectDocument, ProjectMetadata
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.dsn.errors import DsnFormatError
+from phosphor_eda.formats.dsn.package_netlist import apply_packaged_pin_names
 from phosphor_eda.formats.dsn.parser import parse_dsn
 from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
 
@@ -66,7 +67,7 @@ def load_orcad_project(opj_path: Path) -> Project:
         resolved_path = doc.metadata.get("resolved_path")
         if not resolved_path:
             continue
-        schematic_by_path.setdefault(resolved_path, doc)
+        _ = schematic_by_path.setdefault(resolved_path, doc)
     schematic_docs = list(schematic_by_path.values())
     if len(schematic_docs) > 1:
         paths = ", ".join(doc.path for doc in schematic_docs)
@@ -80,6 +81,7 @@ def load_orcad_project(opj_path: Path) -> Project:
         ctx = ParseContext()
         try:
             raw = parse_dsn(dsn_path, ctx)
+            apply_packaged_pin_names(raw, dsn_path.parent.parent / "Netlist")
             schematic = dsn_to_design(raw, name=project_info.name or opj_path.stem, ctx=ctx)
             schematic_docs[0].parsed = True
         except (DsnFormatError, OSError, ValueError) as exc:
@@ -127,8 +129,28 @@ def resolve_opj_path(base_path: Path, raw_path: str) -> Path | None:
         return None
     candidate = Path(normalized)
     if candidate.is_absolute():
-        return candidate
-    return base_path.parent / candidate
+        return _resolve_case_insensitive(candidate)
+    return _resolve_case_insensitive(base_path.parent / candidate)
+
+
+def _resolve_case_insensitive(path: Path) -> Path:
+    """Resolve Windows-authored OPJ paths on case-sensitive filesystems."""
+    parent = path.parent
+    if parent == path:
+        return path
+    resolved_parent = _resolve_case_insensitive(parent)
+    if resolved_parent.exists():
+        target = path.name.casefold()
+        try:
+            children = sorted(resolved_parent.iterdir(), key=lambda child: child.name.casefold())
+        except OSError:
+            return path
+        for child in children:
+            if child.name.casefold() == target:
+                return child
+    if path.exists():
+        return path
+    return path
 
 
 def _walk(node: object, project: OrCadProject, *, base_path: Path | None) -> None:
