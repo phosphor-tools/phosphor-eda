@@ -19,6 +19,7 @@ from phosphor_eda.formats.common.raw_models import (
     SchematicPage,
     Wire,
 )
+from phosphor_eda.formats.dsn.package_netlist import parse_pstchip_pin_maps
 from phosphor_eda.formats.dsn.parser import parse_dsn
 from phosphor_eda.formats.dsn.resolver import resolve_dsn_source
 from phosphor_eda.formats.dsn.source import (
@@ -33,7 +34,7 @@ from phosphor_eda.formats.dsn.source import (
     dsn_name_key,
 )
 from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
-from phosphor_eda.query.convert import load_project
+from phosphor_eda.query.project_loader import load_project
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 PICO_DSN = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
@@ -191,6 +192,27 @@ def _net_named(nets: list[Net], name: str) -> Net:
 
 
 # --- selection policy on synthetic sources ---
+
+
+def test_pstchip_pin_map_preserves_scalar_pins_when_mixed_numbering(tmp_path: Path) -> None:
+    pstchip = tmp_path / "pstchip.dat"
+    pstchip.write_text(
+        """\
+primitive 'MIXED_PRIMITIVE';
+  pin
+    'A':
+      PIN_NUMBER='(1)';
+    'BUS':
+      PIN_NUMBER='(2,3)';
+    'D':
+      PIN_NUMBER='(4)';
+  end_pin;
+end_primitive;
+""",
+        encoding="utf-8",
+    )
+
+    assert parse_pstchip_pin_maps(pstchip) == {"MIXED_PRIMITIVE": {"1": "A", "3": "D"}}
 
 
 def test_stored_page_net_name_wins_over_label_evidence() -> None:

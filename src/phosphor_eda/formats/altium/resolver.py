@@ -772,6 +772,7 @@ def _page_inputs(source: AltiumSourceDesign) -> list[ResolvedPageInput]:
             name=sheet.name,
             source_file=sheet.source_file,
             scope_id=sheet.scope_id,
+            annotations=tuple(sheet.annotations),
             title_block=sheet.title_block,
         )
         for sheet in source.sheets.values()

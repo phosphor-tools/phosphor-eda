@@ -13,7 +13,12 @@ from typing import TYPE_CHECKING, cast
 
 import sexpdata
 
-from phosphor_eda.domain.project import DocumentKind, ProjectDocument
+from phosphor_eda.domain.project import DocumentKind, Project, ProjectDocument, ProjectMetadata
+from phosphor_eda.formats.common.diagnostics import ParseContext
+from phosphor_eda.formats.dsn.errors import DsnFormatError
+from phosphor_eda.formats.dsn.package_netlist import apply_packaged_pin_names
+from phosphor_eda.formats.dsn.parser import parse_dsn
+from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
 
 if TYPE_CHECKING:
     from phosphor_eda.formats.kicad.sexp import SExpItem, SExpNode
@@ -50,6 +55,51 @@ _PARAMETER_KEYS = {
 def parse_opj_file(path: Path) -> OrCadProject:
     """Read and parse an OrCAD Capture .OPJ project file."""
     return parse_opj(path.read_text(encoding="utf-8", errors="replace"), base_path=path)
+
+
+def load_orcad_project(opj_path: Path) -> Project:
+    """Load an OrCAD project from a .OPJ manifest."""
+    project_info = parse_opj_file(opj_path)
+    schematic_by_path: dict[str, ProjectDocument] = {}
+    for doc in project_info.documents:
+        if doc.kind is not DocumentKind.SCHEMATIC or not doc.exists:
+            continue
+        resolved_path = doc.metadata.get("resolved_path")
+        if not resolved_path:
+            continue
+        _ = schematic_by_path.setdefault(resolved_path, doc)
+    schematic_docs = list(schematic_by_path.values())
+    if len(schematic_docs) > 1:
+        paths = ", ".join(doc.path for doc in schematic_docs)
+        raise ValueError(
+            f"{opj_path.name} references multiple existing schematic DSN files: {paths}"
+        )
+
+    schematic = None
+    if schematic_docs:
+        dsn_path = Path(schematic_docs[0].metadata["resolved_path"])
+        ctx = ParseContext()
+        try:
+            raw = parse_dsn(dsn_path, ctx)
+            apply_packaged_pin_names(raw, dsn_path.parent.parent / "Netlist")
+            schematic = dsn_to_design(raw, name=project_info.name or opj_path.stem, ctx=ctx)
+            schematic_docs[0].parsed = True
+        except (DsnFormatError, OSError, ValueError) as exc:
+            schematic_docs[0].metadata["parse_error"] = str(exc)
+
+    name = project_info.name or opj_path.stem
+    return Project(
+        name=name,
+        metadata=ProjectMetadata(
+            name=name,
+            format="orcad",
+            format_version=project_info.version,
+            source_paths=[str(opj_path)],
+        ),
+        parameters=project_info.parameters,
+        documents=project_info.documents,
+        schematic=schematic,
+    )
 
 
 def parse_opj(text: str, *, base_path: Path | None = None) -> OrCadProject:

@@ -104,7 +104,8 @@ def _format_net_directive(directive: SchematicDirective) -> str:
     return f"  [directive: {directive.kind.value}={directive.value} source={source}{native}]"
 
 
-def _component_mpn_label(comp: Component) -> str:
+def component_mpn_label(comp: Component) -> str:
+    """Return the best manufacturer part-number label for a component."""
     part_number_labels: list[str] = []
     seen: set[str] = set()
     for part_number in comp.part_numbers:
@@ -131,6 +132,10 @@ def _component_mpn_label(comp: Component) -> str:
         or comp.metadata.get("Manufacturer", "").strip()
     )
     return f"{maker} {metadata_part_number}" if maker else metadata_part_number
+
+
+def _component_mpn_label(comp: Component) -> str:
+    return component_mpn_label(comp)
 
 
 def _component_header(design: Schematic, comp: Component) -> str:

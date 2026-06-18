@@ -2,12 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from phosphor_eda.query.convert import (
-    SCHEMATIC_EXTENSIONS,
-    load_design,
-    resolve_prjpcb_pcbdoc,
-)
+from phosphor_eda.formats.altium.project_loader import resolve_prjpcb_pcbdoc
 from phosphor_eda.query.format import serialize_design
+from phosphor_eda.query.project_loader import SCHEMATIC_EXTENSIONS, load_design
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 DSN_FILE = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"

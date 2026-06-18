@@ -7,7 +7,7 @@ from click.testing import CliRunner
 
 from phosphor_eda.cli import main
 from phosphor_eda.domain.project import DocumentKind
-from phosphor_eda.query.convert import load_project
+from phosphor_eda.query.project_loader import load_project
 from phosphor_eda.query.sql import load_database
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -46,7 +46,7 @@ def _write_opj(path: Path, dsn_path: Path = DSN_FILE) -> Path:
     relative_dsn = (
         dsn_path.relative_to(path.parent).as_posix()
         if dsn_path.is_relative_to(path.parent)
-        else str(dsn_path)
+        else dsn_path.as_posix()
     )
     _ = path.write_text(
         f"""(ExpressProject "Pico Project"
@@ -171,6 +171,46 @@ def test_opj_project_preserves_manifest_when_dsn_parse_fails(tmp_path: Path) -> 
     assert schematic_docs[0].exists
     assert not schematic_docs[0].parsed
     assert schematic_docs[0].metadata["parse_error"]
+
+
+def test_opj_project_deduplicates_duplicate_schematic_entries(tmp_path: Path) -> None:
+    dsn = tmp_path / "broken.dsn"
+    dsn.write_text("not a valid dsn", encoding="utf-8")
+    opj = tmp_path / "duplicate.opj"
+    opj.write_text(
+        f"""(ExpressProject "Duplicate Project"
+  (ProjectVersion "19981106")
+  (ProjectType "PCB")
+  (Folder "Design Resources"
+    (File "{dsn.name}"
+      (Type "Schematic Design"))
+    (File ".\\{dsn.name}"
+      (Type "Schematic Design"))))
+""",
+        encoding="utf-8",
+    )
+
+    project = load_project(opj)
+
+    assert project.schematic is None
+    schematic_docs = [doc for doc in project.documents if doc.kind is DocumentKind.SCHEMATIC]
+    assert len(schematic_docs) == 2
+    assert all(doc.exists for doc in schematic_docs)
+    assert schematic_docs[0].metadata["parse_error"]
+
+
+def test_kicad_project_marks_empty_dru_as_parsed(tmp_path: Path) -> None:
+    project_file = tmp_path / "empty-rules.kicad_pro"
+    project_file.write_text("{}", encoding="utf-8")
+    dru_file = tmp_path / "empty-rules.kicad_dru"
+    dru_file.write_text("", encoding="utf-8")
+
+    project = load_project(project_file)
+
+    dru_doc = next(doc for doc in project.documents if doc.native_kind == ".kicad_dru")
+    assert dru_doc.exists
+    assert dru_doc.parsed
+    assert project.design_rules == []
 
 
 def test_sql_exposes_project_manifest_and_parameters(tmp_path: Path) -> None:

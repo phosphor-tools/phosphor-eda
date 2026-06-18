@@ -122,6 +122,10 @@
         "rows": 2827,
         "sha256": "815c10e2dc8ae24920543dfeec6dde8aa58a86be64b8267cd4091dc4c0fc85d3"
       },
+      "page_annotations": {
+        "rows": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
       "pages": {
         "rows": 10,
         "sha256": "e2d6384c7ba35a6226e5b8e022a656662608cfdf473e0e5b817612667007bd2b"
@@ -290,6 +294,10 @@
       "pads": {
         "rows": 2606,
         "sha256": "f05917d8683591fae3f37cde6ea259adbc5ac8151d2c81821818ee484eafdca7"
+      },
+      "page_annotations": {
+        "rows": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       "pages": {
         "rows": 16,

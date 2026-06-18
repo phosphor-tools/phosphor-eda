@@ -24,7 +24,7 @@ def apply_packaged_pin_names(raw: ParsedDesign, netlist_dir: Path) -> None:
         return
 
     primitive_by_ref = _parse_pstxprt_primitives(pstxprt)
-    pins_by_primitive = _parse_pstchip_pin_maps(pstchip)
+    pins_by_primitive = parse_pstchip_pin_maps(pstchip)
     if not primitive_by_ref or not pins_by_primitive:
         return
 
@@ -49,19 +49,21 @@ def _parse_pstxprt_primitives(path: Path) -> dict[str, str]:
     return primitives
 
 
-def _parse_pstchip_pin_maps(path: Path) -> dict[str, dict[str, str]]:
+def parse_pstchip_pin_maps(path: Path) -> dict[str, dict[str, str]]:
     primitives: dict[str, dict[str, str]] = {}
     current_primitive = ""
-    current_pins: list[str] = []
-    current_numbers_are_scalar = True
+    current_pin_name = ""
+    current_pin_index = 0
+    current_pins: list[tuple[int, str, str]] = []
     in_pin_block = False
 
     for line in path.read_text(errors="replace").splitlines():
         primitive_match = _PRIMITIVE_RE.match(line)
         if primitive_match is not None:
             current_primitive = primitive_match.group(1)
+            current_pin_name = ""
+            current_pin_index = 0
             current_pins = []
-            current_numbers_are_scalar = True
             in_pin_block = False
             if current_primitive not in primitives:
                 primitives[current_primitive] = {}
@@ -71,27 +73,38 @@ def _parse_pstchip_pin_maps(path: Path) -> dict[str, dict[str, str]]:
         stripped = line.strip()
         if stripped == "pin":
             in_pin_block = True
+            current_pin_index = 0
+            current_pins = []
             continue
         if stripped == "end_pin;":
-            if current_numbers_are_scalar:
+            if all(_is_scalar_pin_number(value) for _, _, value in current_pins):
                 primitives[current_primitive] = {
-                    str(index): name for index, name in enumerate(current_pins, start=1)
+                    str(index): name for index, name, _ in current_pins
                 }
+            else:
+                primitives[current_primitive].update(
+                    {
+                        str(index): name
+                        for index, name, value in current_pins
+                        if _is_decimal_scalar_pin_number(value)
+                    }
+                )
             in_pin_block = False
+            current_pin_name = ""
+            current_pin_index = 0
             current_pins = []
-            current_numbers_are_scalar = True
             continue
         if not in_pin_block:
             continue
         pin_match = _PIN_RE.match(line)
         if pin_match is not None:
-            current_pins.append(pin_match.group(1))
+            current_pin_index += 1
+            current_pin_name = pin_match.group(1)
             continue
         number_match = _PIN_NUMBER_RE.match(line)
         if number_match is not None:
-            current_numbers_are_scalar = current_numbers_are_scalar and _is_scalar_pin_number(
-                number_match.group(1)
-            )
+            if current_pin_name:
+                current_pins.append((current_pin_index, current_pin_name, number_match.group(1)))
             continue
 
     return primitives
@@ -100,3 +113,8 @@ def _parse_pstchip_pin_maps(path: Path) -> dict[str, dict[str, str]]:
 def _is_scalar_pin_number(value: str) -> bool:
     parts = [part.strip() for part in value.split(",") if part.strip()]
     return len(parts) == 1 and parts[0] != "0"
+
+
+def _is_decimal_scalar_pin_number(value: str) -> bool:
+    parts = [part.strip() for part in value.split(",") if part.strip()]
+    return len(parts) == 1 and parts[0].isdigit() and parts[0] != "0"
