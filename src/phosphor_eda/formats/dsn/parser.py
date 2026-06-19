@@ -899,6 +899,19 @@ def parse_hierarchy(data: bytes) -> list[NetIdMapping]:
     return mappings
 
 
+def _merge_net_id_mappings(*mapping_groups: Iterable[NetIdMapping]) -> list[NetIdMapping]:
+    """Merge hierarchy net mappings in stream order, keeping the first DB ID."""
+    merged: list[NetIdMapping] = []
+    seen_db_ids: set[int] = set()
+    for mappings in mapping_groups:
+        for mapping in mappings:
+            if mapping.db_id in seen_db_ids:
+                continue
+            seen_db_ids.add(mapping.db_id)
+            merged.append(mapping)
+    return merged
+
+
 def parse_hierarchy_occurrences(
     data: bytes,
     placed_instance_db_ids: Iterable[int],
@@ -1185,7 +1198,10 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
             path = "/".join(entry)
             if "Hierarchy/Hierarchy" in path:
                 hier_data = ole.openstream(entry).read()
-                design.net_id_mappings = parse_hierarchy(hier_data)
+                design.net_id_mappings = _merge_net_id_mappings(
+                    design.net_id_mappings,
+                    parse_hierarchy(hier_data),
+                )
                 design.hierarchy_occurrences.extend(
                     parse_hierarchy_occurrences(hier_data, instance_db_id_set)
                 )
