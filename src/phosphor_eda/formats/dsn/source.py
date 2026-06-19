@@ -16,6 +16,26 @@ def dsn_name_key(name: str) -> str:
     return name.casefold()
 
 
+def dsn_page_id(page_name: str) -> str:
+    """Public source ID for a DSN schematic page."""
+    return f"page:{page_name or 'unnamed'}"
+
+
+def dsn_component_source_id(page_id: str, db_id: int, instance_index: int) -> str:
+    """Public source ID for a DSN placed component instance."""
+    return f"{page_id}:component:{db_id or instance_index}"
+
+
+def dsn_component_public_id(component_source_id: str) -> str:
+    """Public component ID for a DSN placed component instance."""
+    return f"dsn:component:{component_source_id}"
+
+
+def dsn_pin_public_id(component_source_id: str, pin_designator: str) -> str:
+    """Public pin ID for a DSN placed pin."""
+    return f"{dsn_component_public_id(component_source_id)}:pin:{pin_designator}"
+
+
 @dataclass(slots=True)
 class DsnWireAlias:
     id: str
@@ -86,6 +106,7 @@ class DsnPinOccurrence:
     pin_designator: str
     pin_name: str
     location: DsnPoint
+    no_connect: bool = False
     # Instance-level evidence shared by all pins of a placed instance:
     # name/value properties (insertion-ordered as parsed) and placement
     # coordinates in raw DSN units.
