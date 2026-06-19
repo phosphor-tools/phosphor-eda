@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     )
     from phosphor_eda.formats.common.raw_models import ParsedDesign as RawDesign
     from phosphor_eda.formats.common.raw_models import SchematicPage as RawPage
+    from phosphor_eda.formats.dsn.package_evidence import PackageLookup
 
 
 def _page_id(raw_page: RawPage) -> str:
@@ -379,7 +380,10 @@ def _graphic_sources(
 
 
 def _source_page(
-    raw_page: RawPage, raw: RawDesign, ctx: ParseContext | None = None
+    raw_page: RawPage,
+    raw: RawDesign,
+    packages_by_key: PackageLookup,
+    ctx: ParseContext | None = None,
 ) -> DsnPageSource:
     page_id = _page_id(raw_page)
     scope_id = ScopeId(path=(_page_scope_name(raw_page),))
@@ -409,7 +413,6 @@ def _source_page(
         page_source.nets.append(page_net)
         page_nets_by_id[raw_net.net_id] = page_net
     source_page_net_ids = set(page_nets_by_id)
-    packages_by_key = build_package_lookup(raw)
 
     for index, raw_wire in enumerate(raw_page.wires):
         page_net = _add_page_net_if_missing(
@@ -616,9 +619,10 @@ def dsn_to_source(
     raw: RawDesign, name: str = "", ctx: ParseContext | None = None
 ) -> DsnSourceDesign:
     """Extract OrCAD DSN-native source connectivity from already parsed records."""
+    packages_by_key = build_package_lookup(raw)
     return DsnSourceDesign(
         name=name,
-        pages=[_source_page(raw_page, raw, ctx) for raw_page in raw.pages],
+        pages=[_source_page(raw_page, raw, packages_by_key, ctx) for raw_page in raw.pages],
         hierarchy_mappings=[
             DsnHierarchyMapping(
                 id=f"hierarchy:net:{index}",
