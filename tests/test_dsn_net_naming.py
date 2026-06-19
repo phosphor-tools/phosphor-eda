@@ -217,7 +217,7 @@ def test_pstchip_pin_map_preserves_scalar_pins_when_mixed_numbering(tmp_path: Pa
 primitive 'MIXED_PRIMITIVE';
   pin
     'A':
-      PIN_NUMBER='(1)';
+      PIN_NUMBER='(A1)';
     'BUS':
       PIN_NUMBER='(2,3)';
     'D':
@@ -234,6 +234,7 @@ end_primitive;
         "1": "A",
         "3": "D",
     }
+    assert evidence["MIXED_PRIMITIVE"]["1"].package_pin == "A1"
 
 
 def test_pstchip_pin_number_map_preserves_physical_pin_numbers(tmp_path: Path) -> None:
