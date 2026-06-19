@@ -17,6 +17,7 @@ import olefile
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.common.raw_models import (
     DsnBusEntry,
+    DsnHierarchyOccurrence,
     DsnNetBundleMap,
     DsnNetBundleMember,
     GraphicInst,
@@ -673,6 +674,47 @@ def parse_hierarchy(data: bytes) -> list[NetIdMapping]:
     return mappings
 
 
+def parse_hierarchy_occurrences(
+    data: bytes,
+    placed_instance_db_ids: Iterable[int],
+) -> list[DsnHierarchyOccurrence]:
+    """Parse raw hierarchy occurrence links to placed instance DB IDs.
+
+    Capture hierarchy streams contain occurrence/object IDs that are distinct
+    from the placed-instance DB IDs exposed by page records. In fixture-backed
+    streams, the hierarchy occurrence ID is immediately followed by the page
+    placed-instance DB ID and then a `0x42` structure marker. Preserve these
+    links so CIS group rows can later resolve to schematic objects.
+    """
+    instance_ids = {db_id for db_id in placed_instance_db_ids if db_id > 0}
+    if not instance_ids:
+        return []
+
+    occurrences: list[DsnHierarchyOccurrence] = []
+    seen: set[tuple[int, int]] = set()
+    for offset in range(0, max(0, len(data) - 8)):
+        if data[offset + 8] != 0x42:
+            continue
+        occurrence_id = struct.unpack_from("<I", data, offset)[0]
+        instance_db_id = struct.unpack_from("<I", data, offset + 4)[0]
+        key = (occurrence_id, instance_db_id)
+        if (
+            occurrence_id <= 0
+            or occurrence_id == instance_db_id
+            or instance_db_id not in instance_ids
+            or key in seen
+        ):
+            continue
+        seen.add(key)
+        occurrences.append(
+            DsnHierarchyOccurrence(
+                occurrence_id=occurrence_id,
+                instance_db_id=instance_db_id,
+            )
+        )
+    return occurrences
+
+
 def _can_read_string_len_zero(data: bytes, pos: int) -> bool:
     """Check if readStringLenZeroTerm would succeed at `pos`.
 
@@ -873,11 +915,18 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
             design.pages.append(page)
 
     # 3. Parse Hierarchy stream
+    instance_db_ids = (
+        instance.db_id for page in design.pages for instance in page.instances if instance.db_id
+    )
+    instance_db_id_set = set(instance_db_ids)
     for entry in ole.listdir():
         path = "/".join(entry)
         if "Hierarchy/Hierarchy" in path:
             hier_data = ole.openstream(entry).read()
             design.net_id_mappings = parse_hierarchy(hier_data)
+            design.hierarchy_occurrences.extend(
+                parse_hierarchy_occurrences(hier_data, instance_db_id_set)
+            )
 
     # 4. Parse Cache stream for symbol pin names
     for entry in ole.listdir():

@@ -100,6 +100,14 @@ class NetIdMapping:
 
 
 @dataclass
+class DsnHierarchyOccurrence:
+    """Raw OrCAD hierarchy occurrence linked to a placed instance."""
+
+    occurrence_id: int = 0
+    instance_db_id: int = 0
+
+
+@dataclass
 class PageNetEntry:
     """Net name + ID from the page-level net list."""
 
@@ -162,6 +170,7 @@ class ParsedDesign:
 
     # Hierarchy data
     net_id_mappings: list[NetIdMapping] = field(default_factory=list)
+    hierarchy_occurrences: list[DsnHierarchyOccurrence] = field(default_factory=list)
 
     # Cache data: symbol_name -> [pin_name_1, pin_name_2, ...]
     # Pin order matches T0x10 pin_number (1-indexed: pin_number=1 -> index 0)
