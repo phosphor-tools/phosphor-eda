@@ -392,6 +392,27 @@ def test_malformed_erc_symbol_stream_warns() -> None:
     assert any(issue.category == "dsn_erc_symbol" for issue in ctx.issues)
 
 
+def test_overrun_erc_symbol_stream_warns() -> None:
+    ctx = ParseContext()
+    body = (
+        PREAMBLE
+        + struct.pack("<I", 0)
+        + _dsn_string("E")
+        + _dsn_string("L")
+        + struct.pack("<I", 48)
+        + struct.pack("<H", 0)
+    )
+    data = _structure_with_end_offset(dsn_parser.STRUCT_ERC_SYMBOL, body, byte_offset=24)
+
+    symbol = parse_erc_symbol_stream(data, "Symbols/ERC", ctx)
+
+    assert symbol is None
+    assert any(
+        issue.category == "dsn_erc_symbol" and "ERC symbol parsed to byte" in issue.message
+        for issue in ctx.issues
+    )
+
+
 def test_unsupported_page_tail_erc_object_warns() -> None:
     ctx = ParseContext()
     page = DsnSchematicPage(name="PAGE1")
@@ -413,6 +434,26 @@ def test_malformed_page_tail_erc_object_does_not_parse_misaligned_bus_entries() 
     assert page.erc_objects == []
     assert page.bus_entries == []
     assert any(issue.category == "dsn_page_tail" for issue in ctx.issues)
+
+
+def test_page_tail_erc_object_overrun_warns_without_rewinding() -> None:
+    ctx = ParseContext()
+    page = DsnSchematicPage(name="PAGE1")
+    malformed_object = _structure_with_end_offset(
+        dsn_parser.STRUCT_ERC_OBJECT,
+        _erc_object()[3:],
+        byte_offset=50,
+    )
+    data = struct.pack("<H", 1) + malformed_object + struct.pack("<H", 0)
+
+    parse_page_tail_objects(BinaryReader(data, "page-tail"), page, ctx)
+
+    assert page.erc_objects == []
+    assert page.bus_entries == []
+    assert any(
+        issue.category == "dsn_page_tail" and "ERC object parsed to byte" in issue.message
+        for issue in ctx.issues
+    )
 
 
 def test_page_tail_erc_object_decodes_raw_fields() -> None:
