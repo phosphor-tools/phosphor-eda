@@ -7,9 +7,10 @@ import pytest
 
 import phosphor_eda.formats.dsn.parser as dsn_parser
 from phosphor_eda.formats.common.diagnostics import ParseContext
-from phosphor_eda.formats.common.raw_models import DsnView
+from phosphor_eda.formats.common.raw_models import DsnView, NetIdMapping
 from phosphor_eda.formats.dsn.cis import parse_cis_variant_store
 from phosphor_eda.formats.dsn.parser import (
+    _merge_net_id_mappings,
     _parse_net_bundle_map_streams,
     parse_dsn,
     parse_net_bundle_map_data,
@@ -101,6 +102,25 @@ def test_parse_net_bundle_map_streams_accumulates_multiple_streams() -> None:
     )
 
     assert [bundle.name for bundle in bundles] == ["I2C", "SPI"]
+
+
+def test_merge_net_id_mappings_preserves_order_and_first_db_id() -> None:
+    mappings = _merge_net_id_mappings(
+        [
+            NetIdMapping(db_id=2, name="SECOND"),
+            NetIdMapping(db_id=1, name="FIRST"),
+        ],
+        [
+            NetIdMapping(db_id=2, name="SECOND_REDECLARED"),
+            NetIdMapping(db_id=3, name="THIRD"),
+        ],
+    )
+
+    assert [(mapping.db_id, mapping.name) for mapping in mappings] == [
+        (2, "SECOND"),
+        (1, "FIRST"),
+        (3, "THIRD"),
+    ]
 
 
 def test_malformed_net_bundle_map_data_warns_and_returns_no_bundles() -> None:
