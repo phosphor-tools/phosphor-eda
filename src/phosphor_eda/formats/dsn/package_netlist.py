@@ -251,11 +251,7 @@ def _parse_pstchip_pin_entries(path: Path) -> dict[str, list[tuple[int, str, str
 def _scalar_pin_entries(entries: list[tuple[int, str, str]]) -> list[tuple[int, str, str]]:
     if all(_is_scalar_pin_number(value) for _, _, value in entries):
         return entries
-    return [
-        (index, name, value)
-        for index, name, value in entries
-        if _is_decimal_scalar_pin_number(value)
-    ]
+    return [(index, name, value) for index, name, value in entries if _is_scalar_pin_number(value)]
 
 
 def _scalar_pin_number(value: str) -> str:
@@ -297,11 +293,6 @@ def _compare_native_package_evidence(
 def _is_scalar_pin_number(value: str) -> bool:
     parts = [part.strip() for part in value.split(",") if part.strip()]
     return len(parts) == 1 and parts[0] != "0"
-
-
-def _is_decimal_scalar_pin_number(value: str) -> bool:
-    parts = [part.strip() for part in value.split(",") if part.strip()]
-    return len(parts) == 1 and parts[0].isdigit() and parts[0] != "0"
 
 
 type _NoConnectCandidate = tuple[PinConnection, str, str]
@@ -347,15 +338,16 @@ def _resolve_no_connect_candidate(
         _warn_no_connect_ambiguous(no_connect, "physical pin number", ctx)
         return None
 
-    pin_name_key = no_connect.pin_name.casefold()
-    name_matches = [
-        candidate for candidate in candidates if candidate[1].casefold() == pin_name_key
-    ]
-    if len(name_matches) == 1:
-        return name_matches[0]
-    if len(name_matches) > 1:
-        _warn_no_connect_ambiguous(no_connect, "pin name", ctx)
-        return None
+    if no_connect.pin_name:
+        pin_name_key = no_connect.pin_name.casefold()
+        name_matches = [
+            candidate for candidate in candidates if candidate[1].casefold() == pin_name_key
+        ]
+        if len(name_matches) == 1:
+            return name_matches[0]
+        if len(name_matches) > 1:
+            _warn_no_connect_ambiguous(no_connect, "pin name", ctx)
+            return None
     if ctx is not None:
         ctx.warn(
             "dsn_sidecar_no_connect_unresolved",
