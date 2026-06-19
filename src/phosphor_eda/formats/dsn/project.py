@@ -19,8 +19,11 @@ from phosphor_eda.formats.dsn.errors import DsnFormatError
 from phosphor_eda.formats.dsn.package_netlist import apply_packaged_pin_names
 from phosphor_eda.formats.dsn.parser import parse_dsn
 from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
+from phosphor_eda.formats.dsn.variants import map_orcad_cis_not_fitted_variants
 
 if TYPE_CHECKING:
+    from phosphor_eda.domain.schematic import Schematic
+    from phosphor_eda.domain.variants import Variant
     from phosphor_eda.formats.kicad.sexp import SExpItem, SExpNode
 
 
@@ -83,7 +86,8 @@ def load_orcad_project(opj_path: Path) -> Project:
             f"{opj_path.name} references multiple existing schematic DSN files: {paths}"
         )
 
-    schematic = None
+    schematic: Schematic | None = None
+    variants: list[Variant] = []
     if schematic_docs:
         dsn_path = Path(schematic_docs[0].metadata["resolved_path"])
         ctx = ParseContext()
@@ -91,6 +95,7 @@ def load_orcad_project(opj_path: Path) -> Project:
             raw = parse_dsn(dsn_path, ctx)
             apply_packaged_pin_names(raw, dsn_path.parent.parent / "Netlist")
             schematic = dsn_to_design(raw, name=project_info.name or opj_path.stem, ctx=ctx)
+            variants = map_orcad_cis_not_fitted_variants(raw, schematic)
             schematic_docs[0].parsed = True
         except (DsnFormatError, OSError, ValueError) as exc:
             schematic_docs[0].metadata["parse_error"] = str(exc)
@@ -107,6 +112,7 @@ def load_orcad_project(opj_path: Path) -> Project:
         parameters=project_info.parameters,
         documents=project_info.documents,
         schematic=schematic,
+        variants=variants,
     )
 
 
