@@ -407,6 +407,9 @@ def _parse_package_library_part(r: BinaryReader, stream_path: str) -> DsnPackage
     if end_offset <= 0:
         msg = "library part lacks an end offset"
         raise DsnPackageStreamError(start_offset, msg)
+    if r.pos > end_offset:
+        msg = f"library part parsed to byte {r.pos}, expected end offset {end_offset}"
+        raise DsnPackageStreamError(r.pos, msg)
     r.pos = end_offset
     return library_part
 
