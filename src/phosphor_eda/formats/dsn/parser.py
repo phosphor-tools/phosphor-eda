@@ -17,6 +17,8 @@ import olefile
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.common.raw_models import (
     DsnBusEntry,
+    DsnErcObject,
+    DsnErcSymbol,
     DsnHierarchyOccurrence,
     DsnLibraryHeader,
     DsnNetBundleMap,
@@ -41,6 +43,8 @@ from phosphor_eda.formats.dsn.binary_reader import (
     PREAMBLE,
     STRUCT_BUS_ENTRY,
     STRUCT_DEVICE,
+    STRUCT_ERC_OBJECT,
+    STRUCT_ERC_SYMBOL,
     STRUCT_GLOBAL,
     STRUCT_LIBRARY_PART,
     STRUCT_NET_GROUP,
@@ -139,6 +143,8 @@ _MAX_PACKAGE_PART_CELLS = 4096
 _MAX_PACKAGE_LIBRARY_PARTS = 4096
 _MAX_PACKAGE_DEVICES = 4096
 _MAX_PACKAGE_DEVICE_PINS = 4096
+_MAX_ERC_OBJECTS = 4096
+_MAX_ERC_DISPLAY_PROPS = 4096
 
 
 def _parse_wire_aliases(
@@ -773,15 +779,23 @@ def _parse_page_tail_objects(
     """Parse known post-connector page structures without guessing at the rest."""
     if r.remaining() < 2:
         return
+    erc_parse_failed = False
     try:
         num_erc_objects = r.read_uint16()
+        if num_erc_objects > _MAX_ERC_OBJECTS:
+            msg = f"implausible page-tail ERC object count {num_erc_objects}"
+            raise ValueError(msg)
         for _ in range(num_erc_objects):
-            skip_structure(r)
+            erc_object = _parse_erc_object(r, page.name, ctx)
+            if erc_object is not None:
+                page.erc_objects.append(erc_object)
     except (struct.error, IndexError, ValueError) as e:
         _warn(ctx, "dsn_page_tail", f"Page tail ERC object parse error: {e}")
-        return
+        # A hard ERC decode failure can leave the page-tail cursor ambiguous.
+        # Skip bus entries rather than risking bogus connectivity-adjacent data.
+        erc_parse_failed = True
 
-    if r.remaining() < 2:
+    if erc_parse_failed or r.remaining() < 2:
         return
     try:
         num_bus_entries = r.read_uint16()
@@ -804,6 +818,65 @@ def _parse_page_tail_objects(
                 page.bus_entries.append(entry)
     except (struct.error, IndexError, ValueError) as e:
         _warn(ctx, "dsn_bus_entry", f"Bus entry parse error: {e}")
+
+
+def _parse_erc_object(
+    r: BinaryReader,
+    page_name: str,
+    ctx: ParseContext | None,
+) -> DsnErcObject | None:
+    start_offset = r.pos
+    type_id, end_offset, _pairs = r.read_prefix_chain()
+    try:
+        if type_id != STRUCT_ERC_OBJECT:
+            _warn(
+                ctx,
+                "dsn_erc_object",
+                f"{page_name}: unsupported ERC object type 0x{type_id:02x} "
+                f"at offset {start_offset}",
+            )
+            return None
+        # StructERCObject embeds StructGraphicInst, then stores the three
+        # diagnostic strings as s0/s1/s2.
+        r.try_read_preamble()
+        r.skip(8)
+        symbol_name = r.read_string_len_zero()
+        db_id = r.read_uint32()
+        loc_y = r.read_int16()
+        loc_x = r.read_int16()
+        bbox_y2 = r.read_int16()
+        bbox_x2 = r.read_int16()
+        bbox_x1 = r.read_int16()
+        bbox_y1 = r.read_int16()
+        color = r.read_uint8()
+        erc_object = DsnErcObject(
+            page_name=page_name,
+            type_id=type_id,
+            symbol_name=symbol_name,
+            db_id=db_id,
+            loc_y=loc_y,
+            loc_x=loc_x,
+            bbox_y2=bbox_y2,
+            bbox_x2=bbox_x2,
+            bbox_x1=bbox_x1,
+            bbox_y1=bbox_y1,
+            color=color,
+        )
+        r.skip(3)
+        num_display_props = r.read_uint16()
+        if num_display_props > _MAX_ERC_DISPLAY_PROPS:
+            msg = f"implausible ERC display-prop count {num_display_props}"
+            raise ValueError(msg)
+        for _ in range(num_display_props):
+            skip_structure(r)
+        erc_object.unknown_flag = r.read_uint8()
+        erc_object.s0 = r.read_string_len_zero()
+        erc_object.s1 = r.read_string_len_zero()
+        erc_object.s2 = r.read_string_len_zero()
+        return erc_object
+    finally:
+        if end_offset > 0:
+            r.pos = end_offset
 
 
 def parse_net_bundle_map_data(
@@ -869,6 +942,52 @@ def _parse_net_bundle_map_streams(
     for stream in streams:
         net_bundle_maps.extend(parse_net_bundle_map_data(stream, ctx))
     return net_bundle_maps
+
+
+def _erc_marker_category(stream_path: str) -> str:
+    if stream_path.endswith("ERC_PHYSICAL"):
+        return "erc_physical"
+    return "erc"
+
+
+def parse_erc_symbol_stream(
+    data: bytes,
+    stream_path: str,
+    ctx: ParseContext | None = None,
+) -> DsnErcSymbol | None:
+    """Parse the fixture-proven header of a ``Symbols/ERC*`` stream.
+
+    OpenOrCadParser models this as one ``StructERCSymbol`` containing a raw
+    ``StructSthInPages0`` payload. For this slice, preserve the marker name,
+    source library, category, and remaining primitive bytes without promoting
+    any geometry semantics.
+    """
+    r = BinaryReader(data, stream_path)
+    try:
+        type_id, end_offset, _pairs = r.read_prefix_chain()
+        if type_id != STRUCT_ERC_SYMBOL:
+            _warn(
+                ctx,
+                "dsn_erc_symbol",
+                f"{stream_path}: unsupported ERC symbol type 0x{type_id:02x}",
+            )
+            return None
+        r.try_read_preamble()
+        symbol = DsnErcSymbol(
+            stream_path=stream_path,
+            type_id=type_id,
+            name=r.read_string_len_zero(),
+            source_library=r.read_string_len_zero(),
+            marker_category=_erc_marker_category(stream_path),
+            color=r.read_uint32(),
+            primitive_count=r.read_uint16(),
+        )
+        stop = end_offset if end_offset > 0 else len(data)
+        symbol.raw_payload = data[r.pos : stop]
+        return symbol
+    except (struct.error, IndexError, ValueError) as e:
+        _warn(ctx, "dsn_erc_symbol", f"{stream_path}: ERC symbol parse error: {e}")
+        return None
 
 
 def parse_hierarchy(data: bytes) -> list[NetIdMapping]:
@@ -1236,6 +1355,14 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
             if path == "NetBundleMapData" or path.endswith("/NetBundleMapData"):
                 bundle_data = ole.openstream(entry).read()
                 design.net_bundle_maps.extend(_parse_net_bundle_map_streams([bundle_data], ctx))
+
+        # 9. Parse raw ERC marker symbol catalog entries.
+        for entry in sorted(ole.listdir(), key=lambda item: "/".join(item)):
+            path = "/".join(entry)
+            if path.startswith("Symbols/ERC"):
+                erc_symbol = parse_erc_symbol_stream(ole.openstream(entry).read(), path, ctx)
+                if erc_symbol is not None:
+                    design.erc_symbols.append(erc_symbol)
 
         return design
     finally:

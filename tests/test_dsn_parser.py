@@ -8,9 +8,13 @@ import pytest
 import phosphor_eda.formats.dsn.parser as dsn_parser
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.common.raw_models import DsnView
+from phosphor_eda.formats.dsn.binary_reader import PREAMBLE, BinaryReader
 from phosphor_eda.formats.dsn.cis import parse_cis_variant_store
 from phosphor_eda.formats.dsn.parser import (
+    DsnSchematicPage,
+    _parse_page_tail_objects,
     parse_dsn,
+    parse_erc_symbol_stream,
     parse_net_bundle_map_data,
     parse_package_stream,
 )
@@ -75,6 +79,36 @@ def _net_bundle_map_stream(name: str, members: list[str]) -> bytes:
         + (b"\x00" * 6)
         + struct.pack("<H", len(members))
         + member_data
+    )
+
+
+def _erc_object(
+    *,
+    symbol_name: str = "ERC",
+    message: str = "ERROR(ORCAP-1620): Port has a type which is inconsistent",
+    subject: str = "NET_A ",
+    detail: str = "SCHEMATIC1, PAGE1  (30.48, 78.74) ",
+) -> bytes:
+    return (
+        _short_prefix(77)
+        + PREAMBLE
+        + struct.pack("<I", 0)
+        + (b"\x00" * 8)
+        + _dsn_string(symbol_name)
+        + struct.pack("<I", 12345)
+        + struct.pack("<h", 305)
+        + struct.pack("<h", 1195)
+        + struct.pack("<h", 315)
+        + struct.pack("<h", 1205)
+        + struct.pack("<h", 1200)
+        + struct.pack("<h", 310)
+        + struct.pack("<B", 48)
+        + (b"\x00" * 3)
+        + struct.pack("<H", 0)
+        + struct.pack("<B", 0x4B)
+        + _dsn_string(message)
+        + _dsn_string(subject)
+        + _dsn_string(detail)
     )
 
 
@@ -326,3 +360,70 @@ def test_unique_view_page_names_do_not_warn_about_repeated_sheet_identity() -> N
     )
 
     assert ctx.issues == []
+
+
+def test_unsupported_erc_symbol_stream_warns() -> None:
+    ctx = ParseContext()
+
+    symbol = parse_erc_symbol_stream(_short_prefix(0x4E), "Symbols/ERC", ctx)
+
+    assert symbol is None
+    assert any(issue.category == "dsn_erc_symbol" for issue in ctx.issues)
+
+
+def test_malformed_erc_symbol_stream_warns() -> None:
+    ctx = ParseContext()
+
+    symbol = parse_erc_symbol_stream(b"", "Symbols/ERC", ctx)
+
+    assert symbol is None
+    assert any(issue.category == "dsn_erc_symbol" for issue in ctx.issues)
+
+
+def test_unsupported_page_tail_erc_object_warns() -> None:
+    ctx = ParseContext()
+    page = DsnSchematicPage(name="PAGE1")
+    data = struct.pack("<H", 1) + _short_prefix(0x4E) + struct.pack("<H", 0)
+
+    _parse_page_tail_objects(BinaryReader(data, "page-tail"), page, ctx)
+
+    assert page.erc_objects == []
+    assert any(issue.category == "dsn_erc_object" for issue in ctx.issues)
+
+
+def test_malformed_page_tail_erc_object_does_not_parse_misaligned_bus_entries() -> None:
+    ctx = ParseContext()
+    page = DsnSchematicPage(name="PAGE1")
+    data = struct.pack("<H", 1) + _short_prefix(77) + struct.pack("<H", 1)
+
+    _parse_page_tail_objects(BinaryReader(data, "page-tail"), page, ctx)
+
+    assert page.erc_objects == []
+    assert page.bus_entries == []
+    assert any(issue.category == "dsn_page_tail" for issue in ctx.issues)
+
+
+def test_page_tail_erc_object_decodes_raw_fields() -> None:
+    ctx = ParseContext()
+    page = DsnSchematicPage(name="PAGE1")
+    data = struct.pack("<H", 1) + _erc_object() + struct.pack("<H", 0)
+
+    _parse_page_tail_objects(BinaryReader(data, "page-tail"), page, ctx)
+
+    assert len(page.erc_objects) == 1
+    erc_object = page.erc_objects[0]
+    assert erc_object.page_name == "PAGE1"
+    assert erc_object.symbol_name == "ERC"
+    assert erc_object.db_id == 12345
+    assert erc_object.loc_x == 1195
+    assert erc_object.loc_y == 305
+    assert erc_object.bbox_x1 == 1200
+    assert erc_object.bbox_y1 == 310
+    assert erc_object.bbox_x2 == 1205
+    assert erc_object.bbox_y2 == 315
+    assert erc_object.color == 48
+    assert erc_object.unknown_flag == 0x4B
+    assert erc_object.message == "ERROR(ORCAP-1620): Port has a type which is inconsistent"
+    assert erc_object.subject == "NET_A "
+    assert erc_object.detail == "SCHEMATIC1, PAGE1  (30.48, 78.74) "
+    assert not ctx.issues
