@@ -319,6 +319,53 @@ class DsnBusEntry:
 
 
 @dataclass
+class DsnErcSymbol:
+    """Raw OrCAD ERC marker symbol catalog entry."""
+
+    stream_path: str = ""
+    type_id: int = 0
+    name: str = ""
+    source_library: str = ""
+    marker_category: str = ""
+    color: int = 0
+    primitive_count: int = 0
+    raw_payload: bytes = b""
+
+
+@dataclass
+class DsnErcObject:
+    """Raw OrCAD page-tail ERC object instance."""
+
+    page_name: str = ""
+    type_id: int = 0
+    symbol_name: str = ""
+    db_id: int = 0
+    loc_x: int = 0
+    loc_y: int = 0
+    bbox_x1: int = 0
+    bbox_y1: int = 0
+    bbox_x2: int = 0
+    bbox_y2: int = 0
+    color: int = 0
+    unknown_flag: int = 0
+    s0: str = ""
+    s1: str = ""
+    s2: str = ""
+
+    @property
+    def message(self) -> str:
+        return self.s0
+
+    @property
+    def subject(self) -> str:
+        return self.s1
+
+    @property
+    def detail(self) -> str:
+        return self.s2
+
+
+@dataclass
 class SchematicPage:
     """A single schematic page within a design."""
 
@@ -333,6 +380,7 @@ class SchematicPage:
     globals: list[GraphicInst] = field(default_factory=list)
     off_page_connectors: list[GraphicInst] = field(default_factory=list)
     bus_entries: list[DsnBusEntry] = field(default_factory=list)
+    erc_objects: list[DsnErcObject] = field(default_factory=list)
     # Internal: coordinate -> set of net_ids, used by build_netlist
     wire_net_map: dict[tuple[int, int], set[int]] = field(default_factory=dict)
 
@@ -365,6 +413,9 @@ class ParsedDesign:
     # Raw OrCAD Capture CIS VariantStore evidence. Public project variants are
     # mapped only by later slices after raw row semantics are fixture-locked.
     cis_variant_store: DsnCisVariantStore = field(default_factory=DsnCisVariantStore)
+
+    # OrCAD Capture Symbols/ERC* marker catalog entries.
+    erc_symbols: list[DsnErcSymbol] = field(default_factory=list)
 
 
 @dataclass
