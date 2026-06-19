@@ -53,6 +53,11 @@ from phosphor_eda.formats.dsn.binary_reader import (
     BinaryReader,
 )
 from phosphor_eda.formats.dsn.errors import DsnFormatError
+from phosphor_eda.formats.dsn.views import (
+    parse_view_schematic,
+    view_name_from_path,
+    warn_repeated_sheet_identity,
+)
 
 
 @dataclass
@@ -1129,6 +1134,28 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
             if package is not None:
                 design.packages[path] = package
 
+    stream_paths = ["/".join(entry) for entry in ole.listdir()]
+    hierarchy_stream_paths_by_view: dict[str, list[str]] = {}
+    for path in stream_paths:
+        if path.startswith("Views/") and "/Hierarchy/Hierarchy" in path:
+            hierarchy_stream_paths_by_view.setdefault(view_name_from_path(path), []).append(path)
+
+    # 2. Parse schematic view metadata.
+    for entry in ole.listdir():
+        path = "/".join(entry)
+        if path.startswith("Views/") and path.endswith("/Schematic"):
+            view_name = view_name_from_path(path)
+            view_data = ole.openstream(entry).read()
+            view = parse_view_schematic(
+                view_data,
+                stream_path=path,
+                hierarchy_stream_paths=hierarchy_stream_paths_by_view.get(view_name, []),
+                ctx=ctx,
+            )
+            if view is not None:
+                design.views.append(view)
+    warn_repeated_sheet_identity(design.views, ctx)
+
     # 3. Parse Page stream(s)
     for entry in ole.listdir():
         path = "/".join(entry)
@@ -1141,6 +1168,8 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
                 # it — a misread page header poisons everything after it.
                 ctx.error("dsn_format", f"page {path!r}: {exc}")
                 raise
+            page.view_name = view_name_from_path(path)
+            page.stream_path = path
             design.pages.append(page)
 
     # 4. Parse Hierarchy stream

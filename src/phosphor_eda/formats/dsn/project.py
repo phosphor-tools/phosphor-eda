@@ -31,6 +31,14 @@ class OrCadProject:
     project_type: str = ""
     parameters: dict[str, str] = field(default_factory=dict)
     documents: list[ProjectDocument] = field(default_factory=list)
+    hierarchy_documents: list[OrCadHierarchyDocument] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class OrCadHierarchyDocument:
+    path: str
+    schematic: str
+    page: str
 
 
 _PARAMETER_PREFIXES = (
@@ -112,6 +120,7 @@ def parse_opj(text: str, *, base_path: Path | None = None) -> OrCadProject:
     _walk(data, project, base_path=base_path)
     project.version = project.parameters.get("ProjectVersion", "")
     project.project_type = project.parameters.get("ProjectType", "")
+    _attach_hierarchy_view_metadata(project)
     _add_allegro_board_documents(project, base_path=base_path)
     return project
 
@@ -161,6 +170,10 @@ def _walk(node: object, project: OrCadProject, *, base_path: Path | None) -> Non
         doc = _document_from_file_node(items, len(project.documents) + 1, base_path=base_path)
         if doc is not None:
             project.documents.append(doc)
+    if _tag(items) == "Doc":
+        hierarchy_doc = _hierarchy_document_from_doc_node(items)
+        if hierarchy_doc is not None:
+            project.hierarchy_documents.append(hierarchy_doc)
     _collect_parameter(items, project)
     for child in items[1:]:
         _walk(child, project, base_path=base_path)
@@ -208,6 +221,63 @@ def _document_kind(raw_path: str, native_kind: str) -> DocumentKind:
     return DocumentKind.OTHER
 
 
+def _hierarchy_document_from_doc_node(node: SExpNode) -> OrCadHierarchyDocument | None:
+    if _child_value(node, "Type") != "COrSchematicDoc":
+        return None
+    schematic = _child_value(node, "Schematic")
+    page = _child_value(node, "Page")
+    path = _child_value(node, "Path")
+    if not schematic or not page:
+        return None
+    return OrCadHierarchyDocument(
+        path=path,
+        schematic=schematic,
+        page=page,
+    )
+
+
+def _attach_hierarchy_view_metadata(project: OrCadProject) -> None:
+    if not project.hierarchy_documents:
+        return
+
+    schematic_docs = [doc for doc in project.documents if doc.kind is DocumentKind.SCHEMATIC]
+    schematic_docs_by_basename: dict[str, list[ProjectDocument]] = {}
+    for doc in schematic_docs:
+        names = {_path_basename(doc.path)}
+        resolved_path = doc.metadata.get("resolved_path")
+        if resolved_path:
+            names.add(_path_basename(resolved_path))
+        for name in names:
+            if name:
+                schematic_docs_by_basename.setdefault(name, []).append(doc)
+
+    hierarchy_by_doc_id: dict[int, list[OrCadHierarchyDocument]] = {}
+    for hierarchy_doc in project.hierarchy_documents:
+        matches = schematic_docs_by_basename.get(_path_basename(hierarchy_doc.path), [])
+        if not matches and len(schematic_docs) == 1:
+            matches = schematic_docs
+        if len(matches) != 1:
+            continue
+        hierarchy_by_doc_id.setdefault(id(matches[0]), []).append(hierarchy_doc)
+
+    for doc in project.documents:
+        hierarchy_docs = hierarchy_by_doc_id.get(id(doc), [])
+        if not hierarchy_docs:
+            continue
+        doc.metadata["hierarchy_view_document_count"] = str(len(hierarchy_docs))
+        doc.metadata["hierarchy_view_pages"] = ";".join(
+            f"{hierarchy_doc.schematic}/{hierarchy_doc.page}" for hierarchy_doc in hierarchy_docs
+        )
+        doc.metadata["hierarchy_view_paths"] = ";".join(
+            hierarchy_doc.path for hierarchy_doc in hierarchy_docs if hierarchy_doc.path
+        )
+
+
+def _path_basename(path: str) -> str:
+    normalized = path.replace("\\", "/")
+    return Path(normalized).name.casefold()
+
+
 def _add_allegro_board_documents(project: OrCadProject, *, base_path: Path | None) -> None:
     board_keys = (
         "Allegro Netlist Output Board File",
@@ -253,7 +323,7 @@ def _is_parameter_key(key: str) -> bool:
 
 
 def _child_value(node: SExpNode, tag_name: str) -> str:
-    for child in node[2:]:
+    for child in node[1:]:
         if isinstance(child, list) and _tag(child) == tag_name and len(child) > 1:
             return _scalar(child[1])
     return ""
