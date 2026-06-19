@@ -3,11 +3,13 @@
 import struct
 
 from phosphor_eda.formats.common.diagnostics import ParseContext
+from phosphor_eda.formats.common.raw_models import DsnView
 from phosphor_eda.formats.dsn.parser import (
     _parse_net_bundle_map_streams,
     parse_net_bundle_map_data,
     parse_package_stream,
 )
+from phosphor_eda.formats.dsn.views import parse_view_schematic, warn_repeated_sheet_identity
 
 
 def _dsn_string(value: str) -> bytes:
@@ -178,3 +180,45 @@ def test_package_library_part_overrun_is_diagnostic() -> None:
     assert len(ctx.issues) == 1
     assert ctx.issues[0].category == "dsn_package_stream"
     assert "library part parsed to byte" in ctx.issues[0].message
+
+
+def test_malformed_view_schematic_warns_and_returns_no_view() -> None:
+    ctx = ParseContext()
+
+    view = parse_view_schematic(
+        b"\x00",
+        stream_path="Views/Broken/Schematic",
+        hierarchy_stream_paths=[],
+        ctx=ctx,
+    )
+
+    assert view is None
+    assert any(issue.category == "dsn_view" for issue in ctx.issues)
+
+
+def test_repeated_sheet_identity_warning_uses_reused_page_names() -> None:
+    ctx = ParseContext()
+
+    warn_repeated_sheet_identity(
+        [
+            DsnView(name="A", page_names=["Shared"]),
+            DsnView(name="B", page_names=["Shared"]),
+        ],
+        ctx,
+    )
+
+    assert [issue.category for issue in ctx.issues] == ["dsn_repeated_sheet_identity"]
+
+
+def test_unique_view_page_names_do_not_warn_about_repeated_sheet_identity() -> None:
+    ctx = ParseContext()
+
+    warn_repeated_sheet_identity(
+        [
+            DsnView(name="A", page_names=["A1"]),
+            DsnView(name="B", page_names=["B1"]),
+        ],
+        ctx,
+    )
+
+    assert ctx.issues == []

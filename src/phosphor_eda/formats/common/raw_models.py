@@ -172,6 +172,16 @@ class DsnPackage:
 
 
 @dataclass
+class DsnView:
+    """Raw OrCAD Capture schematic view metadata."""
+
+    name: str = ""
+    page_names: list[str] = field(default_factory=list)
+    hierarchy_stream_paths: list[str] = field(default_factory=list)
+    metadata: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
 class PageNetEntry:
     """Net name + ID from the page-level net list."""
 
@@ -211,6 +221,8 @@ class SchematicPage:
     """A single schematic page within a design."""
 
     name: str = ""
+    view_name: str = ""
+    stream_path: str = ""
     size: str = ""
     nets: list[PageNetEntry] = field(default_factory=list)
     wires: list[Wire] = field(default_factory=list)
@@ -232,6 +244,7 @@ class ParsedDesign:
 
     # Pages
     pages: list[SchematicPage] = field(default_factory=list)
+    views: list[DsnView] = field(default_factory=list)
 
     # Hierarchy data
     net_id_mappings: list[NetIdMapping] = field(default_factory=list)
