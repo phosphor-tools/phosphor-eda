@@ -91,6 +91,7 @@ class DsnPinOccurrence:
     # coordinates in raw DSN units.
     component_props: dict[str, str] = field(default_factory=dict)
     component_props_list: tuple[tuple[str, str], ...] = field(default_factory=tuple)
+    pin_metadata: dict[str, str] = field(default_factory=dict)
     component_x: float | None = None
     component_y: float | None = None
     kind: str = field(default="pin", init=False)

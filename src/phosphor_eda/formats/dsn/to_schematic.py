@@ -5,8 +5,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.schematic import Schematic, ScopeId, TitleBlock
+from phosphor_eda.formats.common.electrical import set_pin_electrical
 from phosphor_eda.formats.dsn.parser import DsnSchematicPage, RawTitleBlock
-from phosphor_eda.formats.dsn.pins import normalize_package_name, resolve_pin_name
+from phosphor_eda.formats.dsn.pins import (
+    ORCAD_PORT_TYPES,
+    normalize_package_name,
+    resolve_pin_name,
+    resolve_symbol_pin,
+)
 from phosphor_eda.formats.dsn.resolver import resolve_dsn_source
 from phosphor_eda.formats.dsn.source import (
     DsnBundleMember,
@@ -27,7 +33,7 @@ from phosphor_eda.formats.dsn.source import (
 
 if TYPE_CHECKING:
     from phosphor_eda.formats.common.diagnostics import ParseContext
-    from phosphor_eda.formats.common.raw_models import GraphicInst
+    from phosphor_eda.formats.common.raw_models import DsnSymbolPin, GraphicInst
     from phosphor_eda.formats.common.raw_models import ParsedDesign as RawDesign
     from phosphor_eda.formats.common.raw_models import SchematicPage as RawPage
 
@@ -88,6 +94,23 @@ def _global_anchor(raw_page: RawPage, location: tuple[int, int]) -> GraphicInst 
         if (x1, y1) != (x2, y2) and x1 <= location[0] <= x2 and y1 <= location[1] <= y2:
             return graphic
     return None
+
+
+def _symbol_pin_metadata(symbol_pin: DsnSymbolPin | None) -> dict[str, str]:
+    if symbol_pin is None:
+        return {}
+    metadata = {
+        "dsn_symbol_pin_port_type": symbol_pin.port_type_name,
+        "dsn_symbol_pin_shape": str(symbol_pin.pin_shape),
+        "dsn_symbol_pin_start": f"{symbol_pin.start_x},{symbol_pin.start_y}",
+        "dsn_symbol_pin_hotpt": f"{symbol_pin.hotpt_x},{symbol_pin.hotpt_y}",
+        "dsn_symbol_pin_structure": ("bus" if symbol_pin.structure_type == 27 else "scalar"),
+    }
+    if symbol_pin.display_prop_count:
+        metadata["dsn_symbol_pin_display_props"] = str(symbol_pin.display_prop_count)
+    port_type = ORCAD_PORT_TYPES.get(symbol_pin.port_type)
+    set_pin_electrical(metadata, port_type.electrical if port_type is not None else None)
+    return metadata
 
 
 def _source_props(props: dict[str, str]) -> dict[str, str]:
@@ -402,6 +425,14 @@ def _source_page(
         component_x = float(raw_inst.loc_x)
         component_y = float(raw_inst.loc_y)
         for pin_index, raw_pin in enumerate(raw_inst.pin_connections):
+            pin_name = resolve_pin_name(
+                raw_inst.package_name,
+                raw_pin.pin_number,
+                raw.symbol_pin_names,
+                ctx,
+                raw_inst.reference,
+                raw_inst.pin_name_overrides,
+            )
             location = (raw_pin.pin_x, raw_pin.pin_y)
             source_net_id = _pin_source_net_id(
                 raw_page,
@@ -441,17 +472,19 @@ def _source_page(
                 component_reference=raw_inst.reference,
                 component_part=pkg,
                 pin_designator=raw_pin.pin_number,
-                pin_name=resolve_pin_name(
-                    raw_inst.package_name,
-                    raw_pin.pin_number,
-                    raw.symbol_pin_names,
-                    ctx,
-                    raw_inst.reference,
-                    raw_inst.pin_name_overrides,
-                ),
+                pin_name=pin_name,
                 location=location,
                 component_props=component_props,
                 component_props_list=component_props_list,
+                pin_metadata=_symbol_pin_metadata(
+                    resolve_symbol_pin(
+                        raw_inst.package_name,
+                        raw_pin.pin_number,
+                        raw.symbol_pins,
+                        pin_name,
+                        raw.symbol_pin_names,
+                    )
+                ),
                 component_x=component_x,
                 component_y=component_y,
             )
