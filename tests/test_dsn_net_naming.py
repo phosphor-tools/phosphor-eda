@@ -314,12 +314,25 @@ def test_packaged_netlist_diagnoses_native_package_pin_mismatch(tmp_path: Path) 
 def test_packaged_netlist_oracle_matches_native_package_evidence(
     dsn_path: Path, netlist_dir: Path
 ) -> None:
+    pstxprt = netlist_dir / "pstxprt.dat"
+    pstchip = netlist_dir / "pstchip.dat"
+    assert pstxprt.is_file()
+    assert pstchip.is_file()
+    assert parse_pstchip_pin_maps(pstchip)
+
     ctx = ParseContext()
     raw = parse_dsn(dsn_path, ctx)
     before = len(ctx.issues)
 
     apply_packaged_pin_names(raw, netlist_dir, ctx)
 
+    applied_overrides = [
+        instance.pin_name_overrides
+        for page in raw.pages
+        for instance in page.instances
+        if instance.pin_name_overrides
+    ]
+    assert applied_overrides
     mismatch_messages = [
         issue.message
         for issue in ctx.issues[before:]
