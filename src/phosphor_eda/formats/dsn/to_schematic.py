@@ -28,7 +28,9 @@ from phosphor_eda.formats.dsn.source import (
     DsnSourceDesign,
     DsnWire,
     DsnWireAlias,
+    dsn_component_source_id,
     dsn_name_key,
+    dsn_page_id,
 )
 
 if TYPE_CHECKING:
@@ -39,7 +41,7 @@ if TYPE_CHECKING:
 
 
 def _page_id(raw_page: RawPage) -> str:
-    return f"page:{_page_scope_name(raw_page)}"
+    return dsn_page_id(_page_scope_name(raw_page))
 
 
 def _page_scope_name(raw_page: RawPage) -> str:
@@ -418,7 +420,11 @@ def _source_page(
 
     for instance_index, raw_inst in enumerate(raw_page.instances):
         pkg = normalize_package_name(raw_inst.package_name)
-        component_source_id = f"{page_id}:component:{raw_inst.db_id or instance_index}"
+        component_source_id = dsn_component_source_id(
+            page_id,
+            raw_inst.db_id,
+            instance_index,
+        )
         # Instance-level evidence shared by every pin of this placement.
         component_props = dict(raw_inst.props)
         component_props_list = raw_inst.props_list or tuple(component_props.items())
@@ -463,6 +469,16 @@ def _source_page(
                     f"{raw_inst.reference} pin {raw_pin.pin_number} has a sentinel "
                     "net id and no wire or power symbol at its location; pin is netless",
                 )
+            pin_metadata = _symbol_pin_metadata(
+                resolve_symbol_pin(
+                    raw_inst.package_name,
+                    raw_pin.pin_number,
+                    raw.symbol_pins,
+                    pin_name,
+                    raw.symbol_pin_names,
+                )
+            )
+            pin_metadata.update(raw_pin.no_connect_metadata)
             pin = DsnPinOccurrence(
                 id=f"{component_source_id}:pin:{pin_index}",
                 scope_id=scope_id,
@@ -474,17 +490,10 @@ def _source_page(
                 pin_designator=raw_pin.pin_number,
                 pin_name=pin_name,
                 location=location,
+                no_connect=raw_pin.no_connect,
                 component_props=component_props,
                 component_props_list=component_props_list,
-                pin_metadata=_symbol_pin_metadata(
-                    resolve_symbol_pin(
-                        raw_inst.package_name,
-                        raw_pin.pin_number,
-                        raw.symbol_pins,
-                        pin_name,
-                        raw.symbol_pin_names,
-                    )
-                ),
+                pin_metadata=pin_metadata,
                 component_x=component_x,
                 component_y=component_y,
             )

@@ -769,7 +769,7 @@ def _pin_inputs(pin_occurrences: Iterable[DsnPinOccurrence]) -> list[ResolvedPin
                 pin_id=f"{component_id}:pin:{pin_occurrence.pin_designator}",
                 pin_designator=pin_occurrence.pin_designator,
                 pin_name=pin_occurrence.pin_name,
-                no_connect=False,
+                no_connect=pin_occurrence.no_connect,
                 component_occurrence=ResolvedComponentOccurrenceInput(
                     source_id=pin_occurrence.component_source_id,
                     part_id=pin_occurrence.component_part,

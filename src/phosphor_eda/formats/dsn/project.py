@@ -16,7 +16,10 @@ import sexpdata
 from phosphor_eda.domain.project import DocumentKind, Project, ProjectDocument, ProjectMetadata
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.dsn.errors import DsnFormatError
-from phosphor_eda.formats.dsn.package_netlist import apply_packaged_pin_names
+from phosphor_eda.formats.dsn.package_netlist import (
+    apply_packaged_no_connects,
+    apply_packaged_pin_names,
+)
 from phosphor_eda.formats.dsn.parser import parse_dsn
 from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
 from phosphor_eda.formats.dsn.variants import map_orcad_cis_not_fitted_variants
@@ -93,7 +96,12 @@ def load_orcad_project(opj_path: Path) -> Project:
         ctx = ParseContext()
         try:
             raw = parse_dsn(dsn_path, ctx)
-            apply_packaged_pin_names(raw, dsn_path.parent.parent / "Netlist")
+            netlist_dir = _select_packaged_netlist_dir(
+                _packaged_netlist_dirs(project_info, dsn_path)
+            )
+            if netlist_dir is not None:
+                apply_packaged_pin_names(raw, netlist_dir)
+                apply_packaged_no_connects(raw, netlist_dir, ctx)
             schematic = dsn_to_design(raw, name=project_info.name or opj_path.stem, ctx=ctx)
             variants = map_orcad_cis_not_fitted_variants(raw, schematic)
             schematic_docs[0].parsed = True
@@ -129,6 +137,44 @@ def parse_opj(text: str, *, base_path: Path | None = None) -> OrCadProject:
     _attach_hierarchy_view_metadata(project)
     _add_allegro_board_documents(project, base_path=base_path)
     return project
+
+
+_PACKAGED_NETLIST_FILES = frozenset({"pstxnet.dat", "pstxprt.dat", "pstchip.dat"})
+
+
+def _packaged_netlist_dirs(project_info: OrCadProject, dsn_path: Path) -> tuple[Path, ...]:
+    candidates: list[Path] = []
+    for doc in project_info.documents:
+        resolved_path = doc.metadata.get("resolved_path")
+        if not resolved_path:
+            continue
+        path = Path(resolved_path)
+        if path.name.casefold() in _PACKAGED_NETLIST_FILES:
+            candidates.append(path.parent)
+    candidates.extend((dsn_path.parent.parent / "Netlist", dsn_path.parent / "Allegro"))
+
+    result: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if any((candidate / name).exists() for name in _PACKAGED_NETLIST_FILES):
+            result.append(candidate)
+    return tuple(result)
+
+
+def _select_packaged_netlist_dir(candidates: tuple[Path, ...]) -> Path | None:
+    for required_names in (
+        ("pstxnet.dat", "pstxprt.dat", "pstchip.dat"),
+        ("pstxprt.dat", "pstchip.dat"),
+        ("pstxnet.dat",),
+    ):
+        for candidate in candidates:
+            if all((candidate / name).exists() for name in required_names):
+                return candidate
+    return None
 
 
 def resolve_opj_path(base_path: Path, raw_path: str) -> Path | None:

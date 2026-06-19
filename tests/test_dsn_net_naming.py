@@ -19,7 +19,10 @@ from phosphor_eda.formats.common.raw_models import (
     SchematicPage,
     Wire,
 )
-from phosphor_eda.formats.dsn.package_netlist import parse_pstchip_pin_maps
+from phosphor_eda.formats.dsn.package_netlist import (
+    parse_pstchip_pin_maps,
+    parse_pstchip_pin_number_maps,
+)
 from phosphor_eda.formats.dsn.parser import parse_dsn
 from phosphor_eda.formats.dsn.resolver import resolve_dsn_source
 from phosphor_eda.formats.dsn.source import (
@@ -213,6 +216,25 @@ end_primitive;
     )
 
     assert parse_pstchip_pin_maps(pstchip) == {"MIXED_PRIMITIVE": {"1": "A", "3": "D"}}
+
+
+def test_pstchip_pin_number_map_preserves_physical_pin_numbers(tmp_path: Path) -> None:
+    pstchip = tmp_path / "pstchip.dat"
+    pstchip.write_text(
+        """\
+primitive 'PKG_PRIMITIVE';
+  pin
+    'GPIO':
+      PIN_NUMBER='(A1)';
+    'RESET':
+      PIN_NUMBER='(42)';
+  end_pin;
+end_primitive;
+""",
+        encoding="utf-8",
+    )
+
+    assert parse_pstchip_pin_number_maps(pstchip) == {"PKG_PRIMITIVE": {"1": "A1", "2": "42"}}
 
 
 def test_stored_page_net_name_wins_over_label_evidence() -> None:

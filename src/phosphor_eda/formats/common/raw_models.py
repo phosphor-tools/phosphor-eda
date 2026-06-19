@@ -50,9 +50,12 @@ class PinConnection:
     """A component pin's net assignment."""
 
     pin_number: str = ""
+    package_pin_number: str = ""
     pin_x: int = 0
     pin_y: int = 0
     net_id: int = 0  # matches page net list IDs
+    no_connect: bool = False
+    no_connect_metadata: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -390,6 +393,18 @@ class DsnErcObject:
 
 
 @dataclass
+class DsnNoConnectPin:
+    """Raw OrCAD packaged-netlist NC pseudo-net member."""
+
+    source_path: str = ""
+    refdes: str = ""
+    pin_token: str = ""
+    pin_name: str = ""
+    raw_net_name: str = ""
+    matched_pin_id: str = ""
+
+
+@dataclass
 class SchematicPage:
     """A single schematic page within a design."""
 
@@ -441,6 +456,9 @@ class ParsedDesign:
 
     # OrCAD Capture Symbols/ERC* marker catalog entries.
     erc_symbols: list[DsnErcSymbol] = field(default_factory=list)
+
+    # OrCAD packaged-netlist NC pseudo-net members from pstxnet.dat sidecars.
+    no_connect_pins: list[DsnNoConnectPin] = field(default_factory=list)
 
 
 @dataclass
