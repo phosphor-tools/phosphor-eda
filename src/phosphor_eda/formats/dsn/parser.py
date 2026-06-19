@@ -18,6 +18,7 @@ from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.common.raw_models import (
     DsnBusEntry,
     DsnHierarchyOccurrence,
+    DsnLibraryHeader,
     DsnNetBundleMap,
     DsnNetBundleMember,
     GraphicInst,
@@ -258,22 +259,29 @@ def _parse_title_blocks(
 # --- Stream parsers ---
 
 
-def parse_library(data: bytes) -> tuple[list[str], list[str]]:
-    """Parse the Library stream. Returns (string_list, part_fields)."""
+def parse_library(data: bytes) -> tuple[DsnLibraryHeader, list[str], list[str]]:
+    """Parse the Library stream. Returns (header, string_list, part_fields)."""
     r = BinaryReader(data, "Library")
 
     # Introduction (32-byte padded string)
     intro_start = r.pos
-    r.read_string_zero()
+    intro = r.read_string_zero().strip()
     r.pos = intro_start + 32  # pad to 32 bytes
 
     # Version
-    r.read_uint16()  # version_major
-    r.read_uint16()  # version_minor
+    version_major = r.read_uint16()
+    version_minor = r.read_uint16()
 
     # Timestamps (uint32 + uint32 = 8 bytes)
-    r.read_uint32()  # create_date
-    r.read_uint32()  # modify_date
+    created_timestamp = r.read_uint32()
+    modified_timestamp = r.read_uint32()
+    header = DsnLibraryHeader(
+        intro=intro,
+        version_major=version_major,
+        version_minor=version_minor,
+        created_timestamp=created_timestamp,
+        modified_timestamp=modified_timestamp,
+    )
 
     # Zero padding (4 bytes)
     r.skip(4)
@@ -311,7 +319,7 @@ def parse_library(data: bytes) -> tuple[list[str], list[str]]:
     for _ in range(str_lst_len):
         string_list.append(r.read_string_len_zero())
 
-    return string_list, part_fields
+    return header, string_list, part_fields
 
 
 def parse_page(
@@ -894,9 +902,10 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
 
     # 1. Parse Library stream first (needed for string list)
     lib_data = ole.openstream("Library").read()
-    string_list, part_fields = parse_library(lib_data)
+    library_header, string_list, part_fields = parse_library(lib_data)
 
     design = ParsedDesign()
+    design.library_header = library_header
     design.string_list = string_list
     design.part_fields = part_fields
 

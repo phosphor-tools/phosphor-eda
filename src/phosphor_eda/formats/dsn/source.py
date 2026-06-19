@@ -193,3 +193,4 @@ class DsnSourceDesign:
     pages: list[DsnPageSource]
     hierarchy_mappings: list[DsnHierarchyMapping]
     net_bundles: list[DsnNetBundle] = field(default_factory=list)
+    metadata: dict[str, str] = field(default_factory=dict)

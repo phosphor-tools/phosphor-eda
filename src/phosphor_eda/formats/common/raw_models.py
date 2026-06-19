@@ -108,6 +108,17 @@ class DsnHierarchyOccurrence:
 
 
 @dataclass
+class DsnLibraryHeader:
+    """Header fields from OrCAD Capture's Library stream."""
+
+    intro: str = ""
+    version_major: int = 0
+    version_minor: int = 0
+    created_timestamp: int = 0
+    modified_timestamp: int = 0
+
+
+@dataclass
 class PageNetEntry:
     """Net name + ID from the page-level net list."""
 
@@ -162,6 +173,7 @@ class SchematicPage:
 @dataclass
 class ParsedDesign:
     # Library data
+    library_header: DsnLibraryHeader | None = None
     string_list: list[str] = field(default_factory=list)
     part_fields: list[str] = field(default_factory=list)
 

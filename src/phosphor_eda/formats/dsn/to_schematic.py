@@ -97,6 +97,24 @@ def _source_props(props: dict[str, str]) -> dict[str, str]:
 # Title block prefix-pair names mapped onto typed TitleBlock fields; all raw
 # non-empty pairs still land in TitleBlock.metadata.
 _TITLE_BLOCK_PLACEHOLDERS = frozenset({"", "*", "~"})
+_TITLE_BLOCK_FIELD_BY_NAME = {
+    "approver": "approved_by",
+    "author": "author",
+    "cage code": "cage_code",
+    "check name": "checked_by",
+    "date": "date",
+    "designer": "drawn_by",
+    "designer name": "drawn_by",
+    "doc": "document_number",
+    "drawnby": "drawn_by",
+    "orgname": "organization",
+    "page count": "sheet_total",
+    "page number": "sheet_number",
+    "revcode": "revision",
+    "title": "title",
+}
+# When several source aliases target the same field, the first parsed
+# non-placeholder value wins; every raw alias remains available in metadata.
 
 
 def _title_value(value: str) -> str:
@@ -121,24 +139,10 @@ def _title_block(raw_block: RawTitleBlock) -> TitleBlock:
         if not typed_value:
             continue
         name_key = name.casefold()
-        if name_key == "title":
-            block.title = block.title or typed_value
-        elif name_key == "revcode":
-            block.revision = block.revision or typed_value
-        elif name_key == "date":
-            block.date = block.date or typed_value
-        elif name_key == "orgname":
-            block.organization = block.organization or typed_value
-        elif name_key == "author":
-            block.author = block.author or typed_value
-        elif name_key == "doc":
-            block.document_number = block.document_number or typed_value
-        elif name_key == "page number":
-            block.sheet_number = block.sheet_number or typed_value
-        elif name_key == "page count":
-            block.sheet_total = block.sheet_total or typed_value
-        elif name_key == "cage code":
-            block.cage_code = block.cage_code or typed_value
+        field_name = _TITLE_BLOCK_FIELD_BY_NAME.get(name_key)
+        if field_name is not None:
+            if not getattr(block, field_name):
+                setattr(block, field_name, typed_value)
         elif name_key.startswith("orgaddr") and name_key[7:].isdigit():
             address_lines.setdefault(int(name_key[7:]), typed_value)
     if address_lines:
@@ -490,6 +494,20 @@ def _source_page(
     return page_source
 
 
+def _library_header_metadata(raw: RawDesign) -> dict[str, str]:
+    header = raw.library_header
+    if header is None:
+        return {}
+    metadata = {
+        "dsn_library_version": f"{header.version_major}.{header.version_minor}",
+        "dsn_library_created_timestamp": str(header.created_timestamp),
+        "dsn_library_modified_timestamp": str(header.modified_timestamp),
+    }
+    if header.intro:
+        metadata["dsn_library_intro"] = header.intro
+    return metadata
+
+
 def dsn_to_source(
     raw: RawDesign, name: str = "", ctx: ParseContext | None = None
 ) -> DsnSourceDesign:
@@ -522,6 +540,7 @@ def dsn_to_source(
             )
             for index, bundle in enumerate(raw.net_bundle_maps)
         ],
+        metadata=_library_header_metadata(raw),
     )
 
 
