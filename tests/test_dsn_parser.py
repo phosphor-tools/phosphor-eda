@@ -29,6 +29,16 @@ def _structure(type_id: int, body: bytes) -> bytes:
     )
 
 
+def _structure_with_end_offset(type_id: int, body: bytes, byte_offset: int) -> bytes:
+    return (
+        bytes([type_id])
+        + struct.pack("<I", byte_offset)
+        + (b"\x00" * 4)
+        + _short_prefix(type_id, -1)
+        + body
+    )
+
+
 def _net_bundle_map_stream(name: str, members: list[str]) -> bytes:
     member_data = b"".join(_dsn_string(member) + struct.pack("<H", 1) for member in members)
     return (
@@ -143,3 +153,28 @@ def test_package_stream_diagnostic_has_one_authoritative_offset() -> None:
     assert ctx.issues[0].message == (
         "Packages/BAD at byte offset 0: implausible part-cell count 65535"
     )
+
+
+def test_package_library_part_overrun_is_diagnostic() -> None:
+    stream_path = "Packages/BAD_LIB"
+    part_cell = _structure(
+        6,
+        _dsn_string("SYNTH_CELL")
+        + _dsn_string("unused")
+        + struct.pack("<H", 1)
+        + _dsn_string("SYNTH_CELL.Normal"),
+    )
+    library_part = _structure_with_end_offset(
+        24,
+        _dsn_string("SYNTH_CELL.Normal") + _dsn_string("synthetic.olb"),
+        byte_offset=6,
+    )
+    data = struct.pack("<H", 1) + part_cell + struct.pack("<H", 1) + library_part
+    ctx = ParseContext()
+
+    parsed = parse_package_stream(data, ctx, stream_path)
+
+    assert parsed is None
+    assert len(ctx.issues) == 1
+    assert ctx.issues[0].category == "dsn_package_stream"
+    assert "library part parsed to byte" in ctx.issues[0].message
