@@ -27,7 +27,7 @@ from phosphor_eda.formats.common.raw_models import (
 )
 from phosphor_eda.formats.dsn.package_netlist import (
     apply_packaged_pin_names,
-    parse_pstchip_pin_maps,
+    parse_pstchip_pin_evidence,
     parse_pstchip_pin_number_maps,
 )
 from phosphor_eda.formats.dsn.parser import parse_dsn
@@ -228,7 +228,12 @@ end_primitive;
         encoding="utf-8",
     )
 
-    assert parse_pstchip_pin_maps(pstchip) == {"MIXED_PRIMITIVE": {"1": "A", "3": "D"}}
+    evidence = parse_pstchip_pin_evidence(pstchip)
+
+    assert {order: item.pin_name for order, item in evidence["MIXED_PRIMITIVE"].items()} == {
+        "1": "A",
+        "3": "D",
+    }
 
 
 def test_pstchip_pin_number_map_preserves_physical_pin_numbers(tmp_path: Path) -> None:
@@ -318,7 +323,7 @@ def test_packaged_netlist_oracle_matches_native_package_evidence(
     pstchip = netlist_dir / "pstchip.dat"
     assert pstxprt.is_file()
     assert pstchip.is_file()
-    assert parse_pstchip_pin_maps(pstchip)
+    assert parse_pstchip_pin_evidence(pstchip)
 
     ctx = ParseContext()
     raw = parse_dsn(dsn_path, ctx)

@@ -89,7 +89,6 @@ def resolve_dsn_source(source: DsnSourceDesign, ctx: ParseContext | None = None)
 
     _merge_stored_page_net_names(source.pages, net_union, local_net_ids)
     _merge_repeated_logical_pins(net_union, pin_occurrences, local_net_ids)
-    _merge_globals(source.pages, net_union, local_net_ids)
     _merge_known_scope_off_page_connectors(source.pages, net_union, local_net_ids)
 
     name_evidence = _collect_name_evidence(source.pages)
@@ -264,21 +263,6 @@ def _merge_stored_page_net_names(
         for local_net in page.nets:
             if local_net.id in local_net_ids and local_net.name_key:
                 ids_by_name.setdefault(local_net.name_key, []).append(local_net.id)
-        for global_ in page.globals:
-            if global_.local_net_id in local_net_ids and global_.name_key:
-                ids_by_name.setdefault(global_.name_key, []).append(global_.local_net_id)
-
-    for net_ids in ids_by_name.values():
-        _merge_ids(net_union, net_ids)
-
-
-def _merge_globals(
-    pages: Iterable[DsnPageSource],
-    net_union: NetUnion,
-    local_net_ids: set[str],
-) -> None:
-    ids_by_name: dict[str, list[str]] = {}
-    for page in pages:
         for global_ in page.globals:
             if global_.local_net_id in local_net_ids and global_.name_key:
                 ids_by_name.setdefault(global_.name_key, []).append(global_.local_net_id)
@@ -780,7 +764,6 @@ def _pin_inputs(pin_occurrences: Iterable[DsnPinOccurrence]) -> list[ResolvedPin
                 pin_metadata={
                     **pin_occurrence.pin_metadata,
                     "dsn_pin_source_id": pin_occurrence.id,
-                    **pin_occurrence.pin_metadata,
                 },
                 pin_occurrence_metadata={
                     "dsn_source_net_id": str(pin_occurrence.source_net_id),

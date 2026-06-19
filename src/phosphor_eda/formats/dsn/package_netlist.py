@@ -175,13 +175,6 @@ def _parse_pstxprt_primitives(path: Path) -> dict[str, str]:
     return primitives
 
 
-def parse_pstchip_pin_maps(path: Path) -> dict[str, dict[str, str]]:
-    return {
-        primitive: {str(index): name for index, name, _value in _scalar_pin_entries(entries)}
-        for primitive, entries in _parse_pstchip_pin_entries(path).items()
-    }
-
-
 def parse_pstchip_pin_evidence(path: Path) -> dict[str, dict[str, PstChipPinEvidence]]:
     return {
         primitive: {

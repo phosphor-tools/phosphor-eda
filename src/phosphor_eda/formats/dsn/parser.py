@@ -1524,16 +1524,10 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
         design.string_list = string_list
         design.part_fields = part_fields
 
-        # 2. Parse raw Packages/* streams.
-        for entry in ole.listdir():
-            path = "/".join(entry)
-            if path.startswith("Packages/"):
-                package_data = ole.openstream(entry).read()
-                package = parse_package_stream(package_data, ctx, path)
-                if package is not None:
-                    design.packages[path] = package
-
-        stream_paths = ["/".join(entry) for entry in ole.listdir(streams=True, storages=False)]
+        stream_entries = [
+            ("/".join(entry), entry) for entry in ole.listdir(streams=True, storages=False)
+        ]
+        stream_paths = [path for path, _entry in stream_entries]
         storage_paths = {"/".join(entry) for entry in ole.listdir(streams=False, storages=True)}
         hierarchy_stream_paths_by_view: dict[str, list[str]] = {}
         for path in stream_paths:
@@ -1542,54 +1536,63 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
                     path
                 )
 
+        # 2. Parse raw Packages/* streams.
+        for path, entry in stream_entries:
+            if not path.startswith("Packages/"):
+                continue
+            package_data = ole.openstream(entry).read()
+            package = parse_package_stream(package_data, ctx, path)
+            if package is not None:
+                design.packages[path] = package
+
         # 3. Parse schematic view metadata.
-        for entry in ole.listdir():
-            path = "/".join(entry)
-            if path.startswith("Views/") and path.endswith("/Schematic"):
-                view_name = view_name_from_path(path)
-                view_data = ole.openstream(entry).read()
-                view = parse_view_schematic(
-                    view_data,
-                    stream_path=path,
-                    hierarchy_stream_paths=hierarchy_stream_paths_by_view.get(view_name, []),
-                    ctx=ctx,
-                )
-                if view is not None:
-                    design.views.append(view)
+        for path, entry in stream_entries:
+            if not (path.startswith("Views/") and path.endswith("/Schematic")):
+                continue
+            view_name = view_name_from_path(path)
+            view_data = ole.openstream(entry).read()
+            view = parse_view_schematic(
+                view_data,
+                stream_path=path,
+                hierarchy_stream_paths=hierarchy_stream_paths_by_view.get(view_name, []),
+                ctx=ctx,
+            )
+            if view is not None:
+                design.views.append(view)
         warn_repeated_sheet_identity(design.views, ctx)
 
         # 4. Parse Page stream(s)
-        for entry in ole.listdir():
-            path = "/".join(entry)
-            if path.startswith("Views/") and "/Pages/" in path:
-                page_data = ole.openstream(entry).read()
-                try:
-                    page = parse_page(page_data, string_list, ctx)
-                except DsnFormatError as exc:
-                    # Leave the failure observable on the context, then surface
-                    # it — a misread page header poisons everything after it.
-                    ctx.error("dsn_format", f"page {path!r}: {exc}")
-                    raise
-                page.view_name = view_name_from_path(path)
-                page.stream_path = path
-                design.pages.append(page)
+        for path, entry in stream_entries:
+            if not (path.startswith("Views/") and "/Pages/" in path):
+                continue
+            page_data = ole.openstream(entry).read()
+            try:
+                page = parse_page(page_data, string_list, ctx)
+            except DsnFormatError as exc:
+                # Leave the failure observable on the context, then surface
+                # it — a misread page header poisons everything after it.
+                ctx.error("dsn_format", f"page {path!r}: {exc}")
+                raise
+            page.view_name = view_name_from_path(path)
+            page.stream_path = path
+            design.pages.append(page)
 
         # 5. Parse Hierarchy stream
         instance_db_ids = (
             instance.db_id for page in design.pages for instance in page.instances if instance.db_id
         )
         instance_db_id_set = set(instance_db_ids)
-        for entry in ole.listdir():
-            path = "/".join(entry)
-            if "Hierarchy/Hierarchy" in path:
-                hier_data = ole.openstream(entry).read()
-                design.net_id_mappings = _merge_net_id_mappings(
-                    design.net_id_mappings,
-                    parse_hierarchy(hier_data),
-                )
-                design.hierarchy_occurrences.extend(
-                    parse_hierarchy_occurrences(hier_data, instance_db_id_set)
-                )
+        for path, entry in stream_entries:
+            if "Hierarchy/Hierarchy" not in path:
+                continue
+            hier_data = ole.openstream(entry).read()
+            design.net_id_mappings = _merge_net_id_mappings(
+                design.net_id_mappings,
+                parse_hierarchy(hier_data),
+            )
+            design.hierarchy_occurrences.extend(
+                parse_hierarchy_occurrences(hier_data, instance_db_id_set)
+            )
 
         # 6. Parse raw CIS VariantStore evidence when present.
         occurrence_to_instance = {
@@ -1597,8 +1600,7 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
             for occurrence in design.hierarchy_occurrences
         }
         cis_stream_data_by_path: dict[str, bytes] = {}
-        for entry in ole.listdir(streams=True, storages=False):
-            path = "/".join(entry)
+        for path, entry in stream_entries:
             if path.startswith("CIS/VariantStore/"):
                 cis_stream_data_by_path[path] = ole.openstream(entry).read()
         design.cis_variant_store = parse_cis_variant_store(
@@ -1609,28 +1611,28 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
         )
 
         # 7. Parse Cache stream for symbol pin names
-        for entry in ole.listdir():
-            path = "/".join(entry)
-            if path == "Cache":
-                cache_data = ole.openstream(entry).read()
-                cache_symbols = parse_cache_symbols(cache_data, ctx)
-                design.symbol_pin_names = cache_symbols.pin_names
-                design.symbol_pins = cache_symbols.pins
+        for path, entry in stream_entries:
+            if path != "Cache":
+                continue
+            cache_data = ole.openstream(entry).read()
+            cache_symbols = parse_cache_symbols(cache_data, ctx)
+            design.symbol_pin_names = cache_symbols.pin_names
+            design.symbol_pins = cache_symbols.pins
 
         # 8. Parse design-level net bundle groups when present.
-        for entry in ole.listdir():
-            path = "/".join(entry)
-            if path == "NetBundleMapData" or path.endswith("/NetBundleMapData"):
-                bundle_data = ole.openstream(entry).read()
-                design.net_bundle_maps.extend(parse_net_bundle_map_streams([bundle_data], ctx))
+        for path, entry in stream_entries:
+            if path != "NetBundleMapData" and not path.endswith("/NetBundleMapData"):
+                continue
+            bundle_data = ole.openstream(entry).read()
+            design.net_bundle_maps.extend(parse_net_bundle_map_streams([bundle_data], ctx))
 
         # 9. Parse raw ERC marker symbol catalog entries.
-        for entry in sorted(ole.listdir(), key=lambda item: "/".join(item)):
-            path = "/".join(entry)
-            if path.startswith("Symbols/ERC"):
-                erc_symbol = parse_erc_symbol_stream(ole.openstream(entry).read(), path, ctx)
-                if erc_symbol is not None:
-                    design.erc_symbols.append(erc_symbol)
+        for path, entry in sorted(stream_entries):
+            if not path.startswith("Symbols/ERC"):
+                continue
+            erc_symbol = parse_erc_symbol_stream(ole.openstream(entry).read(), path, ctx)
+            if erc_symbol is not None:
+                design.erc_symbols.append(erc_symbol)
 
         return design
     finally:
