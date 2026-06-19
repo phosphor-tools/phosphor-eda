@@ -307,6 +307,30 @@ class DsnNetBundleMap:
     members: list[DsnNetBundleMember] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class DsnSymbolPin:
+    """Structured pin definition from an OrCAD design-cache symbol."""
+
+    name: str = ""
+    structure_type: int = 0
+    start_x: int = 0
+    start_y: int = 0
+    hotpt_x: int = 0
+    hotpt_y: int = 0
+    pin_shape: int = 0
+    port_type: int = 0
+    port_type_name: str = ""
+    display_prop_count: int = 0
+
+    @property
+    def start(self) -> tuple[int, int]:
+        return (self.start_x, self.start_y)
+
+    @property
+    def hotpt(self) -> tuple[int, int]:
+        return (self.hotpt_x, self.hotpt_y)
+
+
 @dataclass
 class DsnBusEntry:
     """A page-level OrCAD bus-entry graphic."""
@@ -406,6 +430,7 @@ class ParsedDesign:
     # Cache data: symbol_name -> [pin_name_1, pin_name_2, ...]
     # Pin order matches T0x10 pin_number (1-indexed: pin_number=1 -> index 0)
     symbol_pin_names: dict[str, list[str]] = field(default_factory=dict)
+    symbol_pins: dict[str, list[DsnSymbolPin]] = field(default_factory=dict)
 
     # OrCAD Capture NetBundleMapData stream: design-level net groups.
     net_bundle_maps: list[DsnNetBundleMap] = field(default_factory=list)

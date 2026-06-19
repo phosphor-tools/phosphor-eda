@@ -28,6 +28,7 @@ from phosphor_eda.formats.common.raw_models import (
     DsnPackageDevicePin,
     DsnPackageLibraryPart,
     DsnPackagePartCell,
+    DsnSymbolPin,
     GraphicInst,
     NetIdMapping,
     PageNetEntry,
@@ -58,6 +59,7 @@ from phosphor_eda.formats.dsn.binary_reader import (
 )
 from phosphor_eda.formats.dsn.cis import parse_cis_variant_store
 from phosphor_eda.formats.dsn.errors import DsnFormatError
+from phosphor_eda.formats.dsn.pins import ORCAD_PORT_TYPES
 from phosphor_eda.formats.dsn.views import (
     parse_view_schematic,
     view_name_from_path,
@@ -90,6 +92,14 @@ class DsnPackageStreamError(ValueError):
     def __init__(self, offset: int, message: str) -> None:
         super().__init__(message)
         self.offset = offset
+
+
+@dataclass(frozen=True)
+class DsnCacheSymbols:
+    """Parsed design-cache symbol pin names plus structured pin records."""
+
+    pin_names: dict[str, list[str]]
+    pins: dict[str, list[DsnSymbolPin]]
 
 
 # --- Structure parsers ---
@@ -145,6 +155,7 @@ _MAX_PACKAGE_DEVICES = 4096
 _MAX_PACKAGE_DEVICE_PINS = 4096
 _MAX_ERC_OBJECTS = 4096
 _MAX_ERC_DISPLAY_PROPS = 4096
+_MAX_SYMBOL_PIN_DISPLAY_PROPS = 64
 
 
 def _parse_wire_aliases(
@@ -1092,11 +1103,17 @@ def _can_read_string_len_zero(data: bytes, pos: int) -> bool:
     return (null_pos - start) == length
 
 
-def parse_cache(data: bytes) -> dict[str, list[str]]:
+def parse_cache(data: bytes, ctx: ParseContext | None = None) -> dict[str, list[str]]:
     """Parse the Cache stream to extract symbol pin names.
 
     Returns a dict mapping symbol names (without .Normal suffix) to ordered
     lists of pin names. Pin order matches T0x10 pin_number (1-indexed).
+    """
+    return parse_cache_symbols(data, ctx).pin_names
+
+
+def parse_cache_symbols(data: bytes, ctx: ParseContext | None = None) -> DsnCacheSymbols:
+    """Parse the Cache stream's fixture-proven symbol pin data.
 
     The Cache stream format (per OpenOrCadParser StreamCache.cpp):
     - 4-byte header: 0x00 0x00 + 2 unknown bytes
@@ -1112,6 +1129,7 @@ def parse_cache(data: bytes) -> dict[str, list[str]]:
     r = BinaryReader(data, "Cache")
     size = len(data)
     pin_map: dict[str, list[str]] = {}
+    structured_pins: dict[str, list[DsnSymbolPin]] = {}
 
     # 4-byte header: 0x00 0x00 (assumed) + 2 unknown bytes
     r.skip(4)
@@ -1182,8 +1200,18 @@ def parse_cache(data: bytes) -> dict[str, list[str]]:
             for sym_key, pins in sub_symbols.items():
                 if pins:
                     pin_map[sym_key] = pins
+            symbol_pins = _extract_structured_symbol_pins(
+                data,
+                struct_start,
+                struct_end,
+                name,
+            )
+            for sym_key, pins in symbol_pins.items():
+                if pins:
+                    structured_pins[sym_key] = pins
 
-    return pin_map
+    _warn_for_unstructured_cache_symbols(pin_map, structured_pins, ctx)
+    return DsnCacheSymbols(pin_names=pin_map, pins=structured_pins)
 
 
 def _extract_pin_names(
@@ -1234,6 +1262,148 @@ def _extract_pin_names(
         pos = idx + 1  # advance past this preamble
 
     return result
+
+
+def _symbol_name_markers(
+    data: bytes,
+    start: int,
+    end: int,
+    sym_name: str,
+) -> list[tuple[int, str]]:
+    """Return sub-symbol markers from the legacy cache preamble convention."""
+    markers: list[tuple[int, str]] = []
+    pos = start
+    while pos < end - 4:
+        idx = data.find(PREAMBLE, pos, end)
+        if idx == -1:
+            break
+        p = idx + 4
+        if p + 4 > end:
+            break
+        data_len = struct.unpack_from("<I", data, p)[0]
+        p += 4 + data_len
+        if p >= end:
+            break
+        if _can_read_string_len_zero(data, p):
+            length = struct.unpack_from("<H", data, p)[0]
+            if length > 0:
+                name = data[p + 2 : p + 2 + length].decode("ascii", errors="replace")
+                if ".Normal" in name:
+                    markers.append((idx, name.replace(".Normal", "")))
+                elif name == sym_name:
+                    markers.append((idx, sym_name.replace(".Normal", "")))
+        pos = idx + 1
+    return markers
+
+
+def _symbol_name_for_offset(
+    offset: int,
+    outer_name: str,
+    markers: list[tuple[int, str]],
+) -> str:
+    symbol_name = outer_name.replace(".Normal", "")
+    for marker_offset, marker_name in markers:
+        if marker_offset < offset:
+            symbol_name = marker_name
+        else:
+            break
+    return symbol_name
+
+
+def _extract_structured_symbol_pins(
+    data: bytes,
+    start: int,
+    end: int,
+    sym_name: str,
+) -> dict[str, list[DsnSymbolPin]]:
+    """Extract fixture-proven StructSymbolPin records from a LibraryPart body."""
+    result: dict[str, list[DsnSymbolPin]] = {}
+    markers = _symbol_name_markers(data, start, end, sym_name)
+
+    offset = start
+    while offset < end - 20:
+        if data[offset] not in (26, 27):
+            offset += 1
+            continue
+        parsed = _try_read_structured_symbol_pin(data, offset, end)
+        if parsed is None:
+            offset += 1
+            continue
+        pin, pin_end = parsed
+        symbol_name = _symbol_name_for_offset(offset, sym_name, markers)
+        result.setdefault(symbol_name, []).append(pin)
+        offset = pin_end
+    return result
+
+
+def _try_read_structured_symbol_pin(
+    data: bytes,
+    offset: int,
+    library_part_end: int,
+) -> tuple[DsnSymbolPin, int] | None:
+    r = BinaryReader(data, "Cache.SymbolPin")
+    r.pos = offset
+    try:
+        structure_type, pin_end, _pairs = r.read_prefix_chain()
+    except ValueError:
+        return None
+    if structure_type not in (26, 27):
+        return None
+    if pin_end <= r.pos or pin_end > library_part_end:
+        return None
+    if data[r.pos : r.pos + 4] != PREAMBLE:
+        return None
+    try:
+        r.try_read_preamble()
+        name = r.read_string_len_zero()
+        start_x = r.read_int32()
+        start_y = r.read_int32()
+        hotpt_x = r.read_int32()
+        hotpt_y = r.read_int32()
+        pin_shape = r.read_uint16()
+        r.skip(2)  # StructSymbolPin unknown field after pinShape.
+        port_type = r.read_uint32()
+        r.skip(4)  # StructSymbolPin unknown field before display properties.
+        display_prop_count = r.read_uint16()
+    except (IndexError, struct.error, ValueError):
+        return None
+    if not name:
+        return None
+    port_type_info = ORCAD_PORT_TYPES.get(port_type)
+    if port_type_info is None:
+        return None
+    if display_prop_count > _MAX_SYMBOL_PIN_DISPLAY_PROPS or r.pos > pin_end:
+        return None
+    return (
+        DsnSymbolPin(
+            name=name,
+            structure_type=structure_type,
+            start_x=start_x,
+            start_y=start_y,
+            hotpt_x=hotpt_x,
+            hotpt_y=hotpt_y,
+            pin_shape=pin_shape,
+            port_type=port_type,
+            port_type_name=port_type_info.name,
+            display_prop_count=display_prop_count,
+        ),
+        pin_end,
+    )
+
+
+def _warn_for_unstructured_cache_symbols(
+    pin_map: dict[str, list[str]],
+    structured_pins: dict[str, list[DsnSymbolPin]],
+    ctx: ParseContext | None,
+) -> None:
+    if ctx is None:
+        return
+    for symbol_name in sorted(pin_map.keys() - structured_pins.keys()):
+        ctx.warn(
+            "dsn_cache_structured_pins",
+            f"{symbol_name}: Cache pin names used legacy heuristic; structured symbol-pin "
+            "layout was not recognized",
+        )
 
 
 # --- Main entry point ---
@@ -1347,7 +1517,9 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
             path = "/".join(entry)
             if path == "Cache":
                 cache_data = ole.openstream(entry).read()
-                design.symbol_pin_names = parse_cache(cache_data)
+                cache_symbols = parse_cache_symbols(cache_data, ctx)
+                design.symbol_pin_names = cache_symbols.pin_names
+                design.symbol_pins = cache_symbols.pins
 
         # 8. Parse design-level net bundle groups when present.
         for entry in ole.listdir():
