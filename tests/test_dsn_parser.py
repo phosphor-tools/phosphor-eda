@@ -4,6 +4,7 @@ import struct
 
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.common.raw_models import DsnView
+from phosphor_eda.formats.dsn.cis import parse_cis_variant_store
 from phosphor_eda.formats.dsn.parser import (
     _parse_net_bundle_map_streams,
     parse_net_bundle_map_data,
@@ -15,6 +16,14 @@ from phosphor_eda.formats.dsn.views import parse_view_schematic, warn_repeated_s
 def _dsn_string(value: str) -> bytes:
     encoded = value.encode("ascii")
     return struct.pack("<H", len(encoded)) + encoded + b"\x00"
+
+
+def _cis_size_prefixed(payload: bytes) -> bytes:
+    return struct.pack("<I", len(payload)) + payload
+
+
+def _cis_string_list(values: list[str]) -> bytes:
+    return _cis_size_prefixed(b"\xf9".join(value.encode("latin1") for value in values))
 
 
 def _short_prefix(type_id: int, size: int = 0) -> bytes:
@@ -180,6 +189,62 @@ def test_package_library_part_overrun_is_diagnostic() -> None:
     assert len(ctx.issues) == 1
     assert ctx.issues[0].category == "dsn_package_stream"
     assert "library part parsed to byte" in ctx.issues[0].message
+
+
+def test_cis_variant_store_preserves_multiple_boms_and_unknown_streams() -> None:
+    store = parse_cis_variant_store(
+        {
+            "CIS/VariantStore/BOM/BOMDataStream": _cis_string_list(["2", "BomA", "BomB"]),
+            "CIS/VariantStore/BOM/BomA/BomA": _cis_string_list(["1", "Common"]),
+            "CIS/VariantStore/BOM/BomA/BOMPartData": _cis_string_list(["1", "101"]),
+            "CIS/VariantStore/BOM/BomB/BomB": _cis_string_list(["0"]),
+            "CIS/VariantStore/UnexpectedStream": b"raw",
+        },
+        {"CIS/VariantStore"},
+        {101: 201},
+    )
+
+    assert [bom.name for bom in store.boms] == ["BomA", "BomB"]
+    assert store.boms[0].entries[0].raw_id == 101
+    assert store.boms[0].entries[0].resolved_instance_db_id == 201
+    assert store.boms[1].entries == []
+    assert [(stream.stream_path, stream.size) for stream in store.unknown_streams] == [
+        ("CIS/VariantStore/UnexpectedStream", 3)
+    ]
+
+
+def test_cis_update_storage_rows_preserve_mismatches_without_external_corpus() -> None:
+    update_payload = (
+        b"101\xb0Part Number^Value\xc0PN-1^10k~102\xb0Part Number^Value^Description\xc0PN-2^20k"
+    )
+    store = parse_cis_variant_store(
+        {
+            "CIS/VariantStore/Groups/GroupsDataStream": _cis_size_prefixed(b"DNI\xb00\xb0\xb0"),
+            "CIS/VariantStore/Groups/DNI/DNI": _cis_size_prefixed(b"0\xb0101"),
+            "CIS/VariantStore/Groups/DNI/UpdateStorageGroupDataStream": (
+                _cis_size_prefixed(update_payload)
+            ),
+        },
+        {"CIS/VariantStore"},
+        {101: 201},
+    )
+
+    assert len(store.groups) == 1
+    rows = store.groups[0].update_storage_rows
+    assert len(rows) == 2
+    assert rows[0].occurrence_id == 101
+    assert rows[0].resolved_instance_db_id == 201
+    assert rows[0].columns == ["Part Number", "Value"]
+    assert rows[0].values == ["PN-1", "10k"]
+    assert rows[0].diagnostics == []
+    assert rows[1].occurrence_id == 102
+    assert rows[1].resolved_instance_db_id is None
+    assert rows[1].columns == ["Part Number", "Value", "Description"]
+    assert rows[1].values == ["PN-2", "20k"]
+    assert rows[1].diagnostics == [
+        "update-storage ID did not resolve through hierarchy occurrences",
+        "update-storage row has 3 columns and 2 values",
+    ]
 
 
 def test_malformed_view_schematic_warns_and_returns_no_view() -> None:
