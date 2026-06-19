@@ -766,12 +766,12 @@ def parse_page(
             page.off_page_connectors.append(connector)
         r.skip(5)  # trailing data
 
-    _parse_page_tail_objects(r, page, ctx)
+    parse_page_tail_objects(r, page, ctx)
 
     return page
 
 
-def _parse_page_tail_objects(
+def parse_page_tail_objects(
     r: BinaryReader,
     page: DsnSchematicPage,
     ctx: ParseContext | None,
@@ -934,7 +934,7 @@ def parse_net_bundle_map_data(
     return groups
 
 
-def _parse_net_bundle_map_streams(
+def parse_net_bundle_map_streams(
     streams: Iterable[bytes],
     ctx: ParseContext | None = None,
 ) -> list[DsnNetBundleMap]:
@@ -1354,7 +1354,7 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
             path = "/".join(entry)
             if path == "NetBundleMapData" or path.endswith("/NetBundleMapData"):
                 bundle_data = ole.openstream(entry).read()
-                design.net_bundle_maps.extend(_parse_net_bundle_map_streams([bundle_data], ctx))
+                design.net_bundle_maps.extend(parse_net_bundle_map_streams([bundle_data], ctx))
 
         # 9. Parse raw ERC marker symbol catalog entries.
         for entry in sorted(ole.listdir(), key=lambda item: "/".join(item)):

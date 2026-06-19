@@ -12,11 +12,12 @@ from phosphor_eda.formats.dsn.binary_reader import PREAMBLE, BinaryReader
 from phosphor_eda.formats.dsn.cis import parse_cis_variant_store
 from phosphor_eda.formats.dsn.parser import (
     DsnSchematicPage,
-    _parse_page_tail_objects,
     parse_dsn,
     parse_erc_symbol_stream,
     parse_net_bundle_map_data,
+    parse_net_bundle_map_streams,
     parse_package_stream,
+    parse_page_tail_objects,
 )
 from phosphor_eda.formats.dsn.views import parse_view_schematic, warn_repeated_sheet_identity
 
@@ -123,6 +124,17 @@ def test_parse_net_bundle_map_data_stream() -> None:
         ("SDA", 1),
         ("SCL", 1),
     ]
+
+
+def test_parse_net_bundle_map_streams_accumulates_multiple_streams() -> None:
+    bundles = parse_net_bundle_map_streams(
+        [
+            _net_bundle_map_stream("I2C", ["SDA", "SCL"]),
+            _net_bundle_map_stream("SPI", ["MOSI", "MISO"]),
+        ]
+    )
+
+    assert [bundle.name for bundle in bundles] == ["I2C", "SPI"]
 
 
 def test_malformed_net_bundle_map_data_warns_and_returns_no_bundles() -> None:
@@ -385,7 +397,7 @@ def test_unsupported_page_tail_erc_object_warns() -> None:
     page = DsnSchematicPage(name="PAGE1")
     data = struct.pack("<H", 1) + _short_prefix(0x4E) + struct.pack("<H", 0)
 
-    _parse_page_tail_objects(BinaryReader(data, "page-tail"), page, ctx)
+    parse_page_tail_objects(BinaryReader(data, "page-tail"), page, ctx)
 
     assert page.erc_objects == []
     assert any(issue.category == "dsn_erc_object" for issue in ctx.issues)
@@ -396,7 +408,7 @@ def test_malformed_page_tail_erc_object_does_not_parse_misaligned_bus_entries() 
     page = DsnSchematicPage(name="PAGE1")
     data = struct.pack("<H", 1) + _short_prefix(77) + struct.pack("<H", 1)
 
-    _parse_page_tail_objects(BinaryReader(data, "page-tail"), page, ctx)
+    parse_page_tail_objects(BinaryReader(data, "page-tail"), page, ctx)
 
     assert page.erc_objects == []
     assert page.bus_entries == []
@@ -408,7 +420,7 @@ def test_page_tail_erc_object_decodes_raw_fields() -> None:
     page = DsnSchematicPage(name="PAGE1")
     data = struct.pack("<H", 1) + _erc_object() + struct.pack("<H", 0)
 
-    _parse_page_tail_objects(BinaryReader(data, "page-tail"), page, ctx)
+    parse_page_tail_objects(BinaryReader(data, "page-tail"), page, ctx)
 
     assert len(page.erc_objects) == 1
     erc_object = page.erc_objects[0]
