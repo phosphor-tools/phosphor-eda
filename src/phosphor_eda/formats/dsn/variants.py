@@ -186,8 +186,6 @@ def _evidence_order(value: str) -> int:
         "group_name": 0,
         "component_properties": 1,
         "bom_child_stream": 2,
-        "sidecar_bom_row": 3,
-        "update_storage_row": 4,
     }
     return order.get(value, len(order))
 
