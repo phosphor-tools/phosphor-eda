@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from phosphor_eda.formats.common.raw_models import DsnNoConnectPin, PinConnection
 from phosphor_eda.formats.common.text import strip_overline
+from phosphor_eda.formats.dsn.package_evidence import (
+    build_package_lookup,
+    native_package_device,
+    native_package_for_instance,
+    native_package_pin,
+)
 from phosphor_eda.formats.dsn.pins import resolve_pin_name
 from phosphor_eda.formats.dsn.source import (
     dsn_component_source_id,
@@ -18,7 +25,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from phosphor_eda.formats.common.diagnostics import ParseContext
-    from phosphor_eda.formats.common.raw_models import ParsedDesign
+    from phosphor_eda.formats.common.raw_models import ParsedDesign, PlacedInstance
+    from phosphor_eda.formats.dsn.package_evidence import PackageLookup
 
 _PART_RE = re.compile(r"^\s+(\S+)\s+'([^']+)':;")
 _PRIMITIVE_RE = re.compile(r"^primitive '([^']+)';")
@@ -70,7 +78,18 @@ def parse_pstxnet_no_connects(path: Path) -> list[DsnNoConnectPin]:
     return no_connects
 
 
-def apply_packaged_pin_names(raw: ParsedDesign, netlist_dir: Path) -> None:
+@dataclass(frozen=True, slots=True)
+class PstChipPinEvidence:
+    order: int
+    pin_name: str
+    package_pin: str
+
+
+def apply_packaged_pin_names(
+    raw: ParsedDesign,
+    netlist_dir: Path,
+    ctx: ParseContext | None = None,
+) -> None:
     """Apply pstxprt/pstchip primitive pin-number maps to placed instances."""
     pstxprt = netlist_dir / "pstxprt.dat"
     pstchip = netlist_dir / "pstchip.dat"
@@ -78,10 +97,15 @@ def apply_packaged_pin_names(raw: ParsedDesign, netlist_dir: Path) -> None:
         return
 
     primitive_by_ref = _parse_pstxprt_primitives(pstxprt)
-    pins_by_primitive = parse_pstchip_pin_maps(pstchip)
+    pin_evidence_by_primitive = parse_pstchip_pin_evidence(pstchip)
+    pins_by_primitive = {
+        primitive: {order: evidence.pin_name for order, evidence in pins.items()}
+        for primitive, pins in pin_evidence_by_primitive.items()
+    }
     pin_numbers_by_primitive = parse_pstchip_pin_number_maps(pstchip)
-    if not primitive_by_ref or (not pins_by_primitive and not pin_numbers_by_primitive):
+    if not primitive_by_ref or (not pin_evidence_by_primitive and not pin_numbers_by_primitive):
         return
+    packages_by_key = build_package_lookup(raw)
 
     for page in raw.pages:
         for instance in page.instances:
@@ -91,6 +115,12 @@ def apply_packaged_pin_names(raw: ParsedDesign, netlist_dir: Path) -> None:
             pin_names = pins_by_primitive.get(primitive)
             if pin_names:
                 instance.pin_name_overrides = pin_names
+                _compare_native_package_evidence(
+                    instance,
+                    pin_evidence_by_primitive.get(primitive, {}),
+                    packages_by_key,
+                    ctx,
+                )
             pin_numbers = pin_numbers_by_primitive.get(primitive, {})
             for pin in instance.pin_connections:
                 package_pin_number = pin_numbers.get(pin.pin_number)
@@ -149,6 +179,21 @@ def parse_pstchip_pin_maps(path: Path) -> dict[str, dict[str, str]]:
     return {
         primitive: {str(index): name for index, name, _value in _scalar_pin_entries(entries)}
         for primitive, entries in _parse_pstchip_pin_entries(path).items()
+    }
+
+
+def parse_pstchip_pin_evidence(path: Path) -> dict[str, dict[str, PstChipPinEvidence]]:
+    return {
+        primitive: {
+            str(index): PstChipPinEvidence(
+                order=index,
+                pin_name=name,
+                package_pin=_scalar_pin_number(value),
+            )
+            for index, name, value in scalar_entries
+        }
+        for primitive, entries in _parse_pstchip_pin_entries(path).items()
+        if (scalar_entries := _scalar_pin_entries(entries))
     }
 
 
@@ -222,6 +267,38 @@ def _scalar_pin_entries(entries: list[tuple[int, str, str]]) -> list[tuple[int, 
 
 def _scalar_pin_number(value: str) -> str:
     return next(part.strip() for part in value.split(",") if part.strip())
+
+
+def _compare_native_package_evidence(
+    instance: PlacedInstance,
+    sidecar_pins: dict[str, PstChipPinEvidence],
+    packages_by_key: PackageLookup,
+    ctx: ParseContext | None,
+) -> None:
+    if ctx is None or not sidecar_pins:
+        return
+    package = native_package_for_instance(instance, packages_by_key, ctx)
+    if package is None:
+        return
+    device = native_package_device(instance, package, ctx)
+    if device is None:
+        return
+    for pin in instance.pin_connections:
+        sidecar = sidecar_pins.get(pin.pin_number)
+        native_pin = native_package_pin(pin, device, instance, ctx)
+        if sidecar is None or native_pin is None:
+            continue
+        if (
+            native_pin.package_pin
+            and sidecar.package_pin
+            and native_pin.package_pin != sidecar.package_pin
+        ):
+            ctx.warn(
+                "dsn_package_evidence",
+                f"{instance.reference} pin order {pin.pin_number}: native package pin "
+                f"{native_pin.package_pin!r} differs from pstchip.dat pin "
+                f"{sidecar.package_pin!r}",
+            )
 
 
 def _is_scalar_pin_number(value: str) -> bool:

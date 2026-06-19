@@ -100,7 +100,7 @@ def load_orcad_project(opj_path: Path) -> Project:
                 _packaged_netlist_dirs(project_info, dsn_path)
             )
             if netlist_dir is not None:
-                apply_packaged_pin_names(raw, netlist_dir)
+                apply_packaged_pin_names(raw, netlist_dir, ctx)
                 apply_packaged_no_connects(raw, netlist_dir, ctx)
             schematic = dsn_to_design(raw, name=project_info.name or opj_path.stem, ctx=ctx)
             variants = map_orcad_cis_not_fitted_variants(raw, schematic)

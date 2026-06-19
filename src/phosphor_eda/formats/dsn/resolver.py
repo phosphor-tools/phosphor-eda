@@ -742,6 +742,7 @@ def _component_info(pin_occurrence: DsnPinOccurrence) -> ResolvedComponentInfo:
 def _component_metadata(pin_occurrence: DsnPinOccurrence) -> dict[str, str]:
     """Convenience dict of instance properties; empty values are dropped."""
     metadata = {name: value for name, value in pin_occurrence.component_props.items() if value}
+    metadata.update(pin_occurrence.component_metadata)
     metadata["dsn_component_source_ids"] = pin_occurrence.component_source_id
     return metadata
 
@@ -779,10 +780,12 @@ def _pin_inputs(pin_occurrences: Iterable[DsnPinOccurrence]) -> list[ResolvedPin
                 pin_metadata={
                     **pin_occurrence.pin_metadata,
                     "dsn_pin_source_id": pin_occurrence.id,
+                    **pin_occurrence.pin_metadata,
                 },
                 pin_occurrence_metadata={
                     "dsn_source_net_id": str(pin_occurrence.source_net_id),
                     "dsn_local_net_id": pin_occurrence.local_net_id or "",
+                    **pin_occurrence.pin_occurrence_metadata,
                 },
                 component_metadata=_component_metadata(pin_occurrence),
                 component_info=component_info,

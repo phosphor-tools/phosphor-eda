@@ -58,6 +58,17 @@ from phosphor_eda.domain.variants import (
     VariantTarget,
     VariantTargetKind,
 )
+from phosphor_eda.formats.common.raw_models import (
+    DsnPackage,
+    DsnPackageDevice,
+    DsnPackageDevicePin,
+    PageNetEntry,
+    ParsedDesign,
+    PinConnection,
+    PlacedInstance,
+    SchematicPage,
+)
+from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
 from phosphor_eda.formats.kicad.board import parse_kicad_pcb
 from phosphor_eda.query.project_loader import load_project
 from phosphor_eda.query.sql import load_database
@@ -76,6 +87,69 @@ def _count(db: duckdb.DuckDBPyConnection, sql: str) -> int:
     row = db.execute(sql).fetchone()
     assert row is not None
     return int(row[0])
+
+
+def test_orcad_package_pin_metadata_is_queryable_in_sql() -> None:
+    raw = ParsedDesign(
+        pages=[
+            SchematicPage(
+                name="Main",
+                nets=[PageNetEntry(name="SIG", net_id=1)],
+                instances=[
+                    PlacedInstance(
+                        package_name="SYNTH.Normal",
+                        source_package="SYNTH",
+                        db_id=100,
+                        reference="U1",
+                        pin_connections=[PinConnection(pin_number="1", net_id=1)],
+                    )
+                ],
+            )
+        ],
+        packages={
+            "Packages/SYNTH": DsnPackage(
+                name="SYNTH",
+                source_library="synthetic.olb",
+                devices=[
+                    DsnPackageDevice(
+                        refdes_suffix="SYNTH",
+                        pins=[DsnPackageDevicePin(order=0, package_pin="A1")],
+                    )
+                ],
+            )
+        },
+        symbol_pin_names={"SYNTH": ["IN"]},
+    )
+    con = load_database(Project(name="orcad", schematic=dsn_to_design(raw)))
+    try:
+        pin_rows = con.execute(
+            """
+            SELECT p.reference, p.designator, pom.key, pom.value
+            FROM pins p
+            JOIN pin_occurrence_metadata pom USING (pin_id)
+            WHERE pom.key IN ('dsn_package_device', 'dsn_package_pin')
+            ORDER BY pom.key
+            """
+        ).fetchall()
+        component_rows = con.execute(
+            """
+            SELECT reference, key, value
+            FROM component_metadata
+            WHERE key IN ('dsn_package_name', 'dsn_source_library')
+            ORDER BY key
+            """
+        ).fetchall()
+    finally:
+        con.close()
+
+    assert pin_rows == [
+        ("U1", "1", "dsn_package_device", "SYNTH"),
+        ("U1", "1", "dsn_package_pin", "A1"),
+    ]
+    assert component_rows == [
+        ("U1", "dsn_package_name", "SYNTH"),
+        ("U1", "dsn_source_library", "synthetic.olb"),
+    ]
 
 
 def _write_swd_project(tmp_path: Path) -> Path:

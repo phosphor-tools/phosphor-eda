@@ -6,6 +6,12 @@ from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.schematic import Schematic, ScopeId, TitleBlock
 from phosphor_eda.formats.common.electrical import set_pin_electrical
+from phosphor_eda.formats.dsn.package_evidence import (
+    build_package_lookup,
+    native_package_device,
+    native_package_for_instance,
+    native_package_pin,
+)
 from phosphor_eda.formats.dsn.parser import DsnSchematicPage, RawTitleBlock
 from phosphor_eda.formats.dsn.pins import (
     ORCAD_PORT_TYPES,
@@ -35,7 +41,13 @@ from phosphor_eda.formats.dsn.source import (
 
 if TYPE_CHECKING:
     from phosphor_eda.formats.common.diagnostics import ParseContext
-    from phosphor_eda.formats.common.raw_models import DsnSymbolPin, GraphicInst
+    from phosphor_eda.formats.common.raw_models import (
+        DsnPackage,
+        DsnPackageDevice,
+        DsnPackageDevicePin,
+        DsnSymbolPin,
+        GraphicInst,
+    )
     from phosphor_eda.formats.common.raw_models import ParsedDesign as RawDesign
     from phosphor_eda.formats.common.raw_models import SchematicPage as RawPage
 
@@ -56,6 +68,34 @@ def _local_net_id(page_id: str, net_id: int) -> str:
 # (seen on pins whose connection comes from a power symbol at the pin
 # coordinate). They must never materialize as nets.
 _SENTINEL_NET_IDS = frozenset({0, 0xFFFFFFFF})
+
+
+def _package_pin_metadata(
+    *,
+    package_pin: DsnPackageDevicePin,
+    resolved_pin_name: str,
+) -> dict[str, str]:
+    # OrCAD Packages/* gives the physical pin and order; the pin name is the
+    # resolved logical symbol/sidecar name for that order.
+    return {
+        "dsn_package_pin": package_pin.package_pin,
+        "dsn_package_pin_name": resolved_pin_name,
+        "dsn_symbol_pin_order": str(package_pin.order),
+        "dsn_pin_group": package_pin.group,
+        "dsn_pin_ignored": "true" if package_pin.ignored else "false",
+    }
+
+
+def _package_component_metadata(package: DsnPackage) -> dict[str, str]:
+    metadata = {"dsn_package_name": package.name}
+    if package.source_library:
+        metadata["dsn_source_library"] = package.source_library
+    return metadata
+
+
+def _package_occurrence_metadata(device: DsnPackageDevice) -> dict[str, str]:
+    name = device.refdes_suffix or device.unit_ref
+    return {"dsn_package_device": name} if name else {}
 
 
 def _source_net_ids_at(raw_page: RawPage, location: tuple[int, int]) -> list[int]:
@@ -369,6 +409,7 @@ def _source_page(
         page_source.nets.append(page_net)
         page_nets_by_id[raw_net.net_id] = page_net
     source_page_net_ids = set(page_nets_by_id)
+    packages_by_key = build_package_lookup(raw)
 
     for index, raw_wire in enumerate(raw_page.wires):
         page_net = _add_page_net_if_missing(
@@ -425,6 +466,10 @@ def _source_page(
             raw_inst.db_id,
             instance_index,
         )
+        package = native_package_for_instance(raw_inst, packages_by_key, ctx)
+        package_device = (
+            native_package_device(raw_inst, package, ctx) if package is not None else None
+        )
         # Instance-level evidence shared by every pin of this placement.
         component_props = dict(raw_inst.props)
         component_props_list = raw_inst.props_list or tuple(component_props.items())
@@ -479,6 +524,21 @@ def _source_page(
                 )
             )
             pin_metadata.update(raw_pin.no_connect_metadata)
+            pin_occurrence_metadata: dict[str, str] = {}
+            component_metadata: dict[str, str] = {}
+            if package is not None and package_device is not None:
+                component_metadata.update(_package_component_metadata(package))
+                pin_occurrence_metadata.update(_package_occurrence_metadata(package_device))
+                if package_pin := native_package_pin(raw_pin, package_device, raw_inst, ctx):
+                    pin_metadata.update(
+                        _package_pin_metadata(
+                            package_pin=package_pin,
+                            resolved_pin_name=pin_name,
+                        )
+                    )
+                    # SQL exposes occurrence metadata, while callers read the
+                    # same logical pin evidence from Pin.metadata.
+                    pin_occurrence_metadata.update(pin_metadata)
             pin = DsnPinOccurrence(
                 id=f"{component_source_id}:pin:{pin_index}",
                 scope_id=scope_id,
@@ -493,9 +553,11 @@ def _source_page(
                 no_connect=raw_pin.no_connect,
                 component_props=component_props,
                 component_props_list=component_props_list,
-                pin_metadata=pin_metadata,
                 component_x=component_x,
                 component_y=component_y,
+                pin_metadata=pin_metadata,
+                pin_occurrence_metadata=pin_occurrence_metadata,
+                component_metadata=component_metadata,
             )
             page_source.pin_occurrences.append(pin)
             if page_net is not None:
