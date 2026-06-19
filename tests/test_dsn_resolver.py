@@ -566,6 +566,42 @@ def test_dsn_to_design_routes_through_source_resolver() -> None:
     assert design.metadata["dsn_resolver"] == "source"
 
 
+def test_source_metadata_cannot_override_resolver_owned_keys() -> None:
+    clean_source = DsnSourceDesign(
+        name="Board",
+        pages=[],
+        hierarchy_mappings=[],
+        metadata={
+            "dsn_resolver": "spoofed",
+            "parse_issue_count": "999",
+        },
+    )
+
+    clean_design = resolve_dsn_source(clean_source)
+
+    assert clean_design.metadata["dsn_resolver"] == "source"
+    assert "parse_issue_count" not in clean_design.metadata
+
+    ctx = ParseContext()
+    ctx.warn("fixture_warning", "synthetic warning")
+    source = DsnSourceDesign(
+        name="Board",
+        pages=[],
+        hierarchy_mappings=[],
+        metadata={
+            "dsn_library_version": "3.2",
+            "dsn_resolver": "spoofed",
+            "parse_issue_count": "999",
+        },
+    )
+
+    design = resolve_dsn_source(source, ctx=ctx)
+
+    assert design.metadata["dsn_library_version"] == "3.2"
+    assert design.metadata["dsn_resolver"] == "source"
+    assert design.metadata["parse_issue_count"] == "1"
+
+
 def test_pin_occurrence_with_unknown_scope_fails_resolution() -> None:
     page_scope = _scope("Main")
     pin_scope = _scope("Missing")
