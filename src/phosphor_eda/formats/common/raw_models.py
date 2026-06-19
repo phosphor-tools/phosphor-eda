@@ -182,6 +182,108 @@ class DsnView:
 
 
 @dataclass
+class DsnCisVariantName:
+    """Raw OrCAD CIS variant name in stream order."""
+
+    stream_path: str = ""
+    order: int = 0
+    duplicate_index: int = 0
+    name: str = ""
+
+
+@dataclass
+class DsnCisStringList:
+    """Raw OrCAD CIS string-list stream."""
+
+    stream_path: str = ""
+    values: list[str] = field(default_factory=list)
+
+
+@dataclass
+class DsnCisBomEntry:
+    """Raw OrCAD CIS BOMPartData ID with best-effort resolution."""
+
+    stream_path: str = ""
+    row_order: int = 0
+    raw_id: int = 0
+    resolved_instance_db_id: int | None = None
+    resolution_kind: str = "unresolved"
+    diagnostics: list[str] = field(default_factory=list)
+
+
+@dataclass
+class DsnCisBom:
+    """Raw OrCAD CIS BOM stream and child rows."""
+
+    name: str = ""
+    stream_path: str = ""
+    raw_fields: list[str] = field(default_factory=list)
+    child_string_lists: list[DsnCisStringList] = field(default_factory=list)
+    entries: list[DsnCisBomEntry] = field(default_factory=list)
+
+
+@dataclass
+class DsnCisGroupMember:
+    """Raw OrCAD CIS group membership row."""
+
+    stream_path: str = ""
+    row_order: int = 0
+    state: str = ""
+    occurrence_id: int = 0
+    resolved_instance_db_id: int | None = None
+    resolution_kind: str = "unresolved"
+    diagnostics: list[str] = field(default_factory=list)
+
+
+@dataclass
+class DsnCisUpdateStorageRow:
+    """Raw OrCAD CIS update-storage row."""
+
+    stream_path: str = ""
+    row_order: int = 0
+    occurrence_id: int = 0
+    resolved_instance_db_id: int | None = None
+    resolution_kind: str = "unresolved"
+    columns: list[str] = field(default_factory=list)
+    values: list[str] = field(default_factory=list)
+    diagnostics: list[str] = field(default_factory=list)
+
+
+@dataclass
+class DsnCisGroup:
+    """Raw OrCAD CIS group definition plus membership/update rows."""
+
+    name: str = ""
+    stream_path: str = ""
+    row_order: int = 0
+    raw_fields: list[str] = field(default_factory=list)
+    members: list[DsnCisGroupMember] = field(default_factory=list)
+    update_storage_rows: list[DsnCisUpdateStorageRow] = field(default_factory=list)
+
+
+@dataclass
+class DsnCisRawStream:
+    """Raw OrCAD CIS stream preserved for unsupported children."""
+
+    stream_path: str = ""
+    size: int = 0
+    reason: str = ""
+
+
+@dataclass
+class DsnCisVariantStore:
+    """Raw OrCAD CIS VariantStore evidence."""
+
+    present: bool = False
+    placeholder: bool = False
+    variant_names: list[DsnCisVariantName] = field(default_factory=list)
+    boms: list[DsnCisBom] = field(default_factory=list)
+    groups: list[DsnCisGroup] = field(default_factory=list)
+    unknown_streams: list[DsnCisRawStream] = field(default_factory=list)
+    diagnostics: list[str] = field(default_factory=list)
+
+
+@dataclass
 class PageNetEntry:
     """Net name + ID from the page-level net list."""
 
@@ -259,6 +361,10 @@ class ParsedDesign:
 
     # OrCAD Capture NetBundleMapData stream: design-level net groups.
     net_bundle_maps: list[DsnNetBundleMap] = field(default_factory=list)
+
+    # Raw OrCAD Capture CIS VariantStore evidence. Public project variants are
+    # mapped only by later slices after raw row semantics are fixture-locked.
+    cis_variant_store: DsnCisVariantStore = field(default_factory=DsnCisVariantStore)
 
 
 @dataclass

@@ -52,6 +52,7 @@ from phosphor_eda.formats.dsn.binary_reader import (
     STRUCT_WIRE_SCALAR,
     BinaryReader,
 )
+from phosphor_eda.formats.dsn.cis import parse_cis_variant_store
 from phosphor_eda.formats.dsn.errors import DsnFormatError
 from phosphor_eda.formats.dsn.views import (
     parse_view_schematic,
@@ -1134,7 +1135,8 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
             if package is not None:
                 design.packages[path] = package
 
-    stream_paths = ["/".join(entry) for entry in ole.listdir()]
+    stream_paths = ["/".join(entry) for entry in ole.listdir(streams=True, storages=False)]
+    storage_paths = {"/".join(entry) for entry in ole.listdir(streams=False, storages=True)}
     hierarchy_stream_paths_by_view: dict[str, list[str]] = {}
     for path in stream_paths:
         if path.startswith("Views/") and "/Hierarchy/Hierarchy" in path:
@@ -1186,14 +1188,31 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
                 parse_hierarchy_occurrences(hier_data, instance_db_id_set)
             )
 
-    # 5. Parse Cache stream for symbol pin names
+    # 5. Parse raw CIS VariantStore evidence when present.
+    occurrence_to_instance = {
+        occurrence.occurrence_id: occurrence.instance_db_id
+        for occurrence in design.hierarchy_occurrences
+    }
+    cis_stream_data_by_path: dict[str, bytes] = {}
+    for entry in ole.listdir(streams=True, storages=False):
+        path = "/".join(entry)
+        if path.startswith("CIS/VariantStore/"):
+            cis_stream_data_by_path[path] = ole.openstream(entry).read()
+    design.cis_variant_store = parse_cis_variant_store(
+        cis_stream_data_by_path,
+        storage_paths,
+        occurrence_to_instance,
+        ctx,
+    )
+
+    # 6. Parse Cache stream for symbol pin names
     for entry in ole.listdir():
         path = "/".join(entry)
         if path == "Cache":
             cache_data = ole.openstream(entry).read()
             design.symbol_pin_names = parse_cache(cache_data)
 
-    # 6. Parse design-level net bundle groups when present.
+    # 7. Parse design-level net bundle groups when present.
     for entry in ole.listdir():
         path = "/".join(entry)
         if path == "NetBundleMapData" or path.endswith("/NetBundleMapData"):
