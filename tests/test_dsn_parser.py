@@ -1,12 +1,17 @@
 """Tests for OrCAD DSN binary stream parsing."""
 
 import struct
+from pathlib import Path
 
+import pytest
+
+import phosphor_eda.formats.dsn.parser as dsn_parser
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.common.raw_models import DsnView
 from phosphor_eda.formats.dsn.cis import parse_cis_variant_store
 from phosphor_eda.formats.dsn.parser import (
     _parse_net_bundle_map_streams,
+    parse_dsn,
     parse_net_bundle_map_data,
     parse_package_stream,
 )
@@ -48,6 +53,17 @@ def _structure_with_end_offset(type_id: int, body: bytes, byte_offset: int) -> b
         + _short_prefix(type_id, -1)
         + body
     )
+
+
+def _cis_variant_names(names: list[tuple[str, bool]]) -> bytes:
+    payload = bytearray(struct.pack("<II", 900, len(names)))
+    for name, has_null in names:
+        encoded = name.encode("latin1")
+        payload.extend(struct.pack("<H", len(encoded)))
+        payload.extend(encoded)
+        if has_null:
+            payload.append(0)
+    return bytes(payload)
 
 
 def _net_bundle_map_stream(name: str, members: list[str]) -> bytes:
@@ -191,6 +207,27 @@ def test_package_library_part_overrun_is_diagnostic() -> None:
     assert "library part parsed to byte" in ctx.issues[0].message
 
 
+def test_parse_dsn_closes_ole_file_when_parse_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    closed: list[bool] = []
+
+    class _BrokenOle:
+        def __init__(self, _path: str) -> None:
+            pass
+
+        def openstream(self, _path: str) -> object:
+            raise RuntimeError("boom")
+
+        def close(self) -> None:
+            closed.append(True)
+
+    monkeypatch.setattr(dsn_parser.olefile, "OleFileIO", _BrokenOle)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        parse_dsn(Path("broken.dsn"))
+
+    assert closed == [True]
+
+
 def test_cis_variant_store_preserves_multiple_boms_and_unknown_streams() -> None:
     store = parse_cis_variant_store(
         {
@@ -211,6 +248,20 @@ def test_cis_variant_store_preserves_multiple_boms_and_unknown_streams() -> None
     assert [(stream.stream_path, stream.size) for stream in store.unknown_streams] == [
         ("CIS/VariantStore/UnexpectedStream", 3)
     ]
+
+
+def test_cis_variant_names_missing_null_does_not_skip_next_length_prefix() -> None:
+    ctx = ParseContext()
+
+    store = parse_cis_variant_store(
+        {"CIS/VariantStore/VariantNames": _cis_variant_names([("DNI", False), ("Common", True)])},
+        {"CIS/VariantStore"},
+        {},
+        ctx,
+    )
+
+    assert [name.name for name in store.variant_names] == ["DNI", "Common"]
+    assert any("missing null terminator after 'DNI'" in issue.message for issue in ctx.issues)
 
 
 def test_cis_update_storage_rows_preserve_mismatches_without_external_corpus() -> None:

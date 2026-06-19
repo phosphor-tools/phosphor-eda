@@ -426,7 +426,6 @@ def _parse_variant_names(
             pos += 1
         elif pos < len(data):
             _warn(store, ctx, f"{stream_path}: missing null terminator after {name!r}")
-            pos += 1
         duplicate_index = seen[name]
         seen[name] += 1
         names.append(

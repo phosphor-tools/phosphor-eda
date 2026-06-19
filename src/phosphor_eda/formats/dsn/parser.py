@@ -1116,108 +1116,111 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
     if ctx is None:
         ctx = ParseContext()
     ole = olefile.OleFileIO(str(dsn_path))
+    try:
+        # 1. Parse Library stream first (needed for string list)
+        lib_data = ole.openstream("Library").read()
+        library_header, string_list, part_fields = parse_library(lib_data)
 
-    # 1. Parse Library stream first (needed for string list)
-    lib_data = ole.openstream("Library").read()
-    library_header, string_list, part_fields = parse_library(lib_data)
+        design = ParsedDesign()
+        design.library_header = library_header
+        design.string_list = string_list
+        design.part_fields = part_fields
 
-    design = ParsedDesign()
-    design.library_header = library_header
-    design.string_list = string_list
-    design.part_fields = part_fields
+        # 2. Parse raw Packages/* streams.
+        for entry in ole.listdir():
+            path = "/".join(entry)
+            if path.startswith("Packages/"):
+                package_data = ole.openstream(entry).read()
+                package = parse_package_stream(package_data, ctx, path)
+                if package is not None:
+                    design.packages[path] = package
 
-    # 2. Parse raw Packages/* streams.
-    for entry in ole.listdir():
-        path = "/".join(entry)
-        if path.startswith("Packages/"):
-            package_data = ole.openstream(entry).read()
-            package = parse_package_stream(package_data, ctx, path)
-            if package is not None:
-                design.packages[path] = package
+        stream_paths = ["/".join(entry) for entry in ole.listdir(streams=True, storages=False)]
+        storage_paths = {"/".join(entry) for entry in ole.listdir(streams=False, storages=True)}
+        hierarchy_stream_paths_by_view: dict[str, list[str]] = {}
+        for path in stream_paths:
+            if path.startswith("Views/") and "/Hierarchy/Hierarchy" in path:
+                hierarchy_stream_paths_by_view.setdefault(view_name_from_path(path), []).append(
+                    path
+                )
 
-    stream_paths = ["/".join(entry) for entry in ole.listdir(streams=True, storages=False)]
-    storage_paths = {"/".join(entry) for entry in ole.listdir(streams=False, storages=True)}
-    hierarchy_stream_paths_by_view: dict[str, list[str]] = {}
-    for path in stream_paths:
-        if path.startswith("Views/") and "/Hierarchy/Hierarchy" in path:
-            hierarchy_stream_paths_by_view.setdefault(view_name_from_path(path), []).append(path)
+        # 3. Parse schematic view metadata.
+        for entry in ole.listdir():
+            path = "/".join(entry)
+            if path.startswith("Views/") and path.endswith("/Schematic"):
+                view_name = view_name_from_path(path)
+                view_data = ole.openstream(entry).read()
+                view = parse_view_schematic(
+                    view_data,
+                    stream_path=path,
+                    hierarchy_stream_paths=hierarchy_stream_paths_by_view.get(view_name, []),
+                    ctx=ctx,
+                )
+                if view is not None:
+                    design.views.append(view)
+        warn_repeated_sheet_identity(design.views, ctx)
 
-    # 2. Parse schematic view metadata.
-    for entry in ole.listdir():
-        path = "/".join(entry)
-        if path.startswith("Views/") and path.endswith("/Schematic"):
-            view_name = view_name_from_path(path)
-            view_data = ole.openstream(entry).read()
-            view = parse_view_schematic(
-                view_data,
-                stream_path=path,
-                hierarchy_stream_paths=hierarchy_stream_paths_by_view.get(view_name, []),
-                ctx=ctx,
-            )
-            if view is not None:
-                design.views.append(view)
-    warn_repeated_sheet_identity(design.views, ctx)
+        # 4. Parse Page stream(s)
+        for entry in ole.listdir():
+            path = "/".join(entry)
+            if path.startswith("Views/") and "/Pages/" in path:
+                page_data = ole.openstream(entry).read()
+                try:
+                    page = parse_page(page_data, string_list, ctx)
+                except DsnFormatError as exc:
+                    # Leave the failure observable on the context, then surface
+                    # it — a misread page header poisons everything after it.
+                    ctx.error("dsn_format", f"page {path!r}: {exc}")
+                    raise
+                page.view_name = view_name_from_path(path)
+                page.stream_path = path
+                design.pages.append(page)
 
-    # 3. Parse Page stream(s)
-    for entry in ole.listdir():
-        path = "/".join(entry)
-        if path.startswith("Views/") and "/Pages/" in path:
-            page_data = ole.openstream(entry).read()
-            try:
-                page = parse_page(page_data, string_list, ctx)
-            except DsnFormatError as exc:
-                # Leave the failure observable on the context, then surface
-                # it — a misread page header poisons everything after it.
-                ctx.error("dsn_format", f"page {path!r}: {exc}")
-                raise
-            page.view_name = view_name_from_path(path)
-            page.stream_path = path
-            design.pages.append(page)
+        # 5. Parse Hierarchy stream
+        instance_db_ids = (
+            instance.db_id for page in design.pages for instance in page.instances if instance.db_id
+        )
+        instance_db_id_set = set(instance_db_ids)
+        for entry in ole.listdir():
+            path = "/".join(entry)
+            if "Hierarchy/Hierarchy" in path:
+                hier_data = ole.openstream(entry).read()
+                design.net_id_mappings = parse_hierarchy(hier_data)
+                design.hierarchy_occurrences.extend(
+                    parse_hierarchy_occurrences(hier_data, instance_db_id_set)
+                )
 
-    # 4. Parse Hierarchy stream
-    instance_db_ids = (
-        instance.db_id for page in design.pages for instance in page.instances if instance.db_id
-    )
-    instance_db_id_set = set(instance_db_ids)
-    for entry in ole.listdir():
-        path = "/".join(entry)
-        if "Hierarchy/Hierarchy" in path:
-            hier_data = ole.openstream(entry).read()
-            design.net_id_mappings = parse_hierarchy(hier_data)
-            design.hierarchy_occurrences.extend(
-                parse_hierarchy_occurrences(hier_data, instance_db_id_set)
-            )
+        # 6. Parse raw CIS VariantStore evidence when present.
+        occurrence_to_instance = {
+            occurrence.occurrence_id: occurrence.instance_db_id
+            for occurrence in design.hierarchy_occurrences
+        }
+        cis_stream_data_by_path: dict[str, bytes] = {}
+        for entry in ole.listdir(streams=True, storages=False):
+            path = "/".join(entry)
+            if path.startswith("CIS/VariantStore/"):
+                cis_stream_data_by_path[path] = ole.openstream(entry).read()
+        design.cis_variant_store = parse_cis_variant_store(
+            cis_stream_data_by_path,
+            storage_paths,
+            occurrence_to_instance,
+            ctx,
+        )
 
-    # 5. Parse raw CIS VariantStore evidence when present.
-    occurrence_to_instance = {
-        occurrence.occurrence_id: occurrence.instance_db_id
-        for occurrence in design.hierarchy_occurrences
-    }
-    cis_stream_data_by_path: dict[str, bytes] = {}
-    for entry in ole.listdir(streams=True, storages=False):
-        path = "/".join(entry)
-        if path.startswith("CIS/VariantStore/"):
-            cis_stream_data_by_path[path] = ole.openstream(entry).read()
-    design.cis_variant_store = parse_cis_variant_store(
-        cis_stream_data_by_path,
-        storage_paths,
-        occurrence_to_instance,
-        ctx,
-    )
+        # 7. Parse Cache stream for symbol pin names
+        for entry in ole.listdir():
+            path = "/".join(entry)
+            if path == "Cache":
+                cache_data = ole.openstream(entry).read()
+                design.symbol_pin_names = parse_cache(cache_data)
 
-    # 6. Parse Cache stream for symbol pin names
-    for entry in ole.listdir():
-        path = "/".join(entry)
-        if path == "Cache":
-            cache_data = ole.openstream(entry).read()
-            design.symbol_pin_names = parse_cache(cache_data)
+        # 8. Parse design-level net bundle groups when present.
+        for entry in ole.listdir():
+            path = "/".join(entry)
+            if path == "NetBundleMapData" or path.endswith("/NetBundleMapData"):
+                bundle_data = ole.openstream(entry).read()
+                design.net_bundle_maps.extend(_parse_net_bundle_map_streams([bundle_data], ctx))
 
-    # 7. Parse design-level net bundle groups when present.
-    for entry in ole.listdir():
-        path = "/".join(entry)
-        if path == "NetBundleMapData" or path.endswith("/NetBundleMapData"):
-            bundle_data = ole.openstream(entry).read()
-            design.net_bundle_maps.extend(_parse_net_bundle_map_streams([bundle_data], ctx))
-
-    ole.close()
-    return design
+        return design
+    finally:
+        ole.close()
