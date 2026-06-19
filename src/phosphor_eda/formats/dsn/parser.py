@@ -884,6 +884,9 @@ def _parse_erc_object(
         erc_object.s0 = r.read_string_len_zero()
         erc_object.s1 = r.read_string_len_zero()
         erc_object.s2 = r.read_string_len_zero()
+        if end_offset > 0 and r.pos > end_offset:
+            msg = f"ERC object parsed to byte {r.pos}, expected end offset {end_offset}"
+            raise ValueError(msg)
         return erc_object
     finally:
         if end_offset > 0:
@@ -994,6 +997,9 @@ def parse_erc_symbol_stream(
             primitive_count=r.read_uint16(),
         )
         stop = end_offset if end_offset > 0 else len(data)
+        if r.pos > stop:
+            msg = f"ERC symbol parsed to byte {r.pos}, expected end offset {stop}"
+            raise ValueError(msg)
         symbol.raw_payload = data[r.pos : stop]
         return symbol
     except (struct.error, IndexError, ValueError) as e:
