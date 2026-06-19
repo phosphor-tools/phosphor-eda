@@ -119,6 +119,59 @@ class DsnLibraryHeader:
 
 
 @dataclass
+class DsnPackageLibraryPart:
+    """Raw OrCAD package library-part reference."""
+
+    name: str = ""
+    source_library: str = ""
+
+
+@dataclass
+class DsnPackagePartCell:
+    """Raw OrCAD package part-cell record from a Packages/* stream."""
+
+    ref: str = ""
+    name: str = ""
+    normal_name: str = ""
+    convert_name: str = ""
+    library_parts: list[DsnPackageLibraryPart] = field(default_factory=list)
+
+
+@dataclass
+class DsnPackageDevicePin:
+    """Raw OrCAD package device pin mapping."""
+
+    order: int = 0
+    package_pin: str = ""
+    ignored: bool = False
+    group: str = ""
+
+
+@dataclass
+class DsnPackageDevice:
+    """Raw OrCAD package device section."""
+
+    unit_ref: str = ""
+    refdes_suffix: str = ""
+    pins: list[DsnPackageDevicePin] = field(default_factory=list)
+
+
+@dataclass
+class DsnPackage:
+    """Raw OrCAD Packages/* stream inventory."""
+
+    stream_path: str = ""
+    name: str = ""
+    source_library: str = ""
+    refdes_prefix: str = ""
+    unknown_name: str = ""
+    pcb_footprint: str = ""
+    part_cells: list[DsnPackagePartCell] = field(default_factory=list)
+    library_parts: list[DsnPackageLibraryPart] = field(default_factory=list)
+    devices: list[DsnPackageDevice] = field(default_factory=list)
+
+
+@dataclass
 class PageNetEntry:
     """Net name + ID from the page-level net list."""
 
@@ -183,6 +236,9 @@ class ParsedDesign:
     # Hierarchy data
     net_id_mappings: list[NetIdMapping] = field(default_factory=list)
     hierarchy_occurrences: list[DsnHierarchyOccurrence] = field(default_factory=list)
+
+    # Raw OrCAD Capture Packages/* streams, keyed by OLE stream path.
+    packages: dict[str, DsnPackage] = field(default_factory=dict)
 
     # Cache data: symbol_name -> [pin_name_1, pin_name_2, ...]
     # Pin order matches T0x10 pin_number (1-indexed: pin_number=1 -> index 0)
