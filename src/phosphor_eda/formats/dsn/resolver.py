@@ -94,8 +94,9 @@ def resolve_dsn_source(source: DsnSourceDesign, ctx: ParseContext | None = None)
 
     name_evidence = _collect_name_evidence(source.pages)
     name_decisions = _resolve_net_names(source, local_refs, net_union, name_evidence, ctx)
-    metadata = {"dsn_resolver": "source"}
-    metadata.update(source.metadata)
+    metadata = dict(source.metadata)
+    metadata.pop("parse_issue_count", None)
+    metadata["dsn_resolver"] = "source"
     if ctx is not None and ctx.issues:
         metadata["parse_issue_count"] = str(len(ctx.issues))
     design = build_resolved_schematic(
