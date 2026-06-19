@@ -439,12 +439,42 @@ def test_malformed_page_tail_erc_object_does_not_parse_misaligned_bus_entries() 
 def test_page_tail_erc_object_overrun_warns_without_rewinding() -> None:
     ctx = ParseContext()
     page = DsnSchematicPage(name="PAGE1")
+    body_before_bus_count = (
+        PREAMBLE
+        + struct.pack("<I", 0)
+        + (b"\x00" * 8)
+        + _dsn_string("ERC")
+        + struct.pack("<I", 12345)
+        + struct.pack("<h", 305)
+        + struct.pack("<h", 1195)
+        + struct.pack("<h", 315)
+        + struct.pack("<h", 1205)
+        + struct.pack("<h", 1200)
+        + struct.pack("<h", 310)
+        + struct.pack("<B", 48)
+        + (b"\x00" * 3)
+        + struct.pack("<H", 0)
+        + struct.pack("<B", 0x4B)
+        + _dsn_string("ERROR")
+        + _dsn_string("NET_A")
+    )
+    bus_entry = (
+        _short_prefix(dsn_parser.STRUCT_BUS_ENTRY)
+        + PREAMBLE
+        + struct.pack("<I", 0)
+        + struct.pack("<I", 0xAABBCCDD)
+        + struct.pack("<i", 11)
+        + struct.pack("<i", 22)
+        + struct.pack("<i", 33)
+        + struct.pack("<i", 44)
+        + b"TRAILING!"
+    )
     malformed_object = _structure_with_end_offset(
         dsn_parser.STRUCT_ERC_OBJECT,
-        _erc_object()[3:],
-        byte_offset=50,
+        body_before_bus_count + struct.pack("<H", 1) + bus_entry,
+        byte_offset=3 + len(body_before_bus_count),
     )
-    data = struct.pack("<H", 1) + malformed_object + struct.pack("<H", 0)
+    data = struct.pack("<H", 1) + malformed_object
 
     parse_page_tail_objects(BinaryReader(data, "page-tail"), page, ctx)
 
