@@ -287,6 +287,32 @@ class DsnCisVariantStore:
 
 
 @dataclass
+class DsnLibraryPackageInventory:
+    """Summary of a raw OrCAD library package stream."""
+
+    stream_path: str = ""
+    name: str = ""
+    source_package_names: list[str] = field(default_factory=list)
+    source_library_references: list[str] = field(default_factory=list)
+    pcb_footprint: str = ""
+    device_count: int = 0
+    pin_count: int = 0
+
+
+@dataclass
+class DsnLibraryInventory:
+    """Raw OrCAD DSN/OLB library and design-cache inventory."""
+
+    path: str = ""
+    string_list: list[str] = field(default_factory=list)
+    part_fields: list[str] = field(default_factory=list)
+    packages: dict[str, DsnPackage] = field(default_factory=dict)
+    package_inventory: list[DsnLibraryPackageInventory] = field(default_factory=list)
+    cache_part_names: list[str] = field(default_factory=list)
+    cache_pin_counts: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
 class PageNetEntry:
     """Net name + ID from the page-level net list."""
 

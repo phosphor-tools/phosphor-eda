@@ -21,6 +21,8 @@ from phosphor_eda.formats.common.raw_models import (
     DsnErcSymbol,
     DsnHierarchyOccurrence,
     DsnLibraryHeader,
+    DsnLibraryInventory,
+    DsnLibraryPackageInventory,
     DsnNetBundleMap,
     DsnNetBundleMember,
     DsnPackage,
@@ -1410,6 +1412,94 @@ def _warn_for_unstructured_cache_symbols(
             f"{symbol_name}: Cache pin names used legacy heuristic; structured symbol-pin "
             "layout was not recognized",
         )
+
+
+def _ole_entries(ole: olefile.OleFileIO) -> list[tuple[list[str], str]]:
+    return [(entry, "/".join(entry)) for entry in ole.listdir()]
+
+
+def _parse_package_streams_from_ole(
+    ole: olefile.OleFileIO,
+    ctx: ParseContext | None,
+    entries: Iterable[tuple[list[str], str]] | None = None,
+) -> dict[str, DsnPackage]:
+    packages: dict[str, DsnPackage] = {}
+    for entry, path in entries if entries is not None else _ole_entries(ole):
+        if path.startswith("Packages/"):
+            package_data = ole.openstream(entry).read()
+            package = parse_package_stream(package_data, ctx, path)
+            if package is not None:
+                packages[path] = package
+    return packages
+
+
+def _parse_cache_from_ole(
+    ole: olefile.OleFileIO,
+    entries: Iterable[tuple[list[str], str]] | None = None,
+) -> dict[str, list[str]]:
+    for entry, path in entries if entries is not None else _ole_entries(ole):
+        if path == "Cache":
+            return parse_cache(ole.openstream(entry).read())
+    return {}
+
+
+def _append_unique(values: list[str], value: str) -> None:
+    if value and value not in values:
+        values.append(value)
+
+
+def _package_inventory(package: DsnPackage) -> DsnLibraryPackageInventory:
+    source_package_names: list[str] = []
+    source_library_references: list[str] = []
+    _append_unique(source_package_names, package.name)
+    _append_unique(source_library_references, package.source_library)
+    for part_cell in package.part_cells:
+        _append_unique(source_package_names, part_cell.name)
+        _append_unique(source_package_names, part_cell.normal_name)
+        _append_unique(source_package_names, part_cell.convert_name)
+        for library_part in part_cell.library_parts:
+            _append_unique(source_package_names, library_part.name)
+            _append_unique(source_library_references, library_part.source_library)
+    for library_part in package.library_parts:
+        _append_unique(source_package_names, library_part.name)
+        _append_unique(source_library_references, library_part.source_library)
+
+    return DsnLibraryPackageInventory(
+        stream_path=package.stream_path,
+        name=package.name,
+        source_package_names=source_package_names,
+        source_library_references=source_library_references,
+        pcb_footprint=package.pcb_footprint,
+        device_count=len(package.devices),
+        pin_count=sum(len(device.pins) for device in package.devices),
+    )
+
+
+def parse_library_inventory(
+    library_path: Path,
+    ctx: ParseContext | None = None,
+) -> DsnLibraryInventory:
+    """Parse OrCAD DSN/OLB library streams without requiring schematic pages."""
+    if ctx is None:
+        ctx = ParseContext()
+
+    with olefile.OleFileIO(str(library_path)) as ole:
+        entries = _ole_entries(ole)
+        lib_data = ole.openstream("Library").read()
+        _library_header, string_list, part_fields = parse_library(lib_data)
+        packages = _parse_package_streams_from_ole(ole, ctx, entries)
+        symbol_pin_names = _parse_cache_from_ole(ole, entries)
+
+    cache_part_names = sorted(symbol_pin_names)
+    return DsnLibraryInventory(
+        path=str(library_path),
+        string_list=string_list,
+        part_fields=part_fields,
+        packages=packages,
+        package_inventory=[_package_inventory(package) for package in packages.values()],
+        cache_part_names=cache_part_names,
+        cache_pin_counts={name: len(symbol_pin_names[name]) for name in cache_part_names},
+    )
 
 
 # --- Main entry point ---
