@@ -115,7 +115,6 @@ class DsnPinOccurrence:
     pin_metadata: dict[str, str] = field(default_factory=dict)
     component_x: float | None = None
     component_y: float | None = None
-    pin_metadata: dict[str, str] = field(default_factory=dict)
     pin_occurrence_metadata: dict[str, str] = field(default_factory=dict)
     component_metadata: dict[str, str] = field(default_factory=dict)
     kind: str = field(default="pin", init=False)
