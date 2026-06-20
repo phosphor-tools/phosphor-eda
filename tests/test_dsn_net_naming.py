@@ -15,6 +15,7 @@ from dsn_oracle_helpers import compare_net_names, compare_schematic_net_names
 from phosphor_eda.domain.schematic import Net, NetNameKind, ScopeId
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.dsn.package_netlist import (
+    _scalar_pin_number,
     apply_packaged_pin_names,
     parse_pstchip_pin_evidence,
     parse_pstchip_pin_number_maps,
@@ -254,6 +255,10 @@ end_primitive;
     )
 
     assert parse_pstchip_pin_number_maps(pstchip) == {"PKG_PRIMITIVE": {"1": "A1", "2": "42"}}
+
+
+def test_scalar_pin_number_handles_empty_packaged_netlist_values() -> None:
+    assert _scalar_pin_number(" , ") == ""
 
 
 def test_packaged_netlist_diagnoses_native_package_pin_mismatch(tmp_path: Path) -> None:

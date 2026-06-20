@@ -63,7 +63,7 @@ if TYPE_CHECKING:
         AllegroSidecarSet,
     )
 
-_REFDES_RE = re.compile(r"^[A-Z]+[A-Z0-9]*\d+[A-Z0-9]*$")
+_REFDES_RE = re.compile(r"^[A-Z]+[A-Z0-9]*\d+[A-Z0-9]*$", re.IGNORECASE)
 _DIAG_COMPONENT_PAD_CHAIN_CYCLE = "component-pad-chain-cycle"
 _DIAG_UNRESOLVED_COMPONENT_PAD = "unresolved-component-pad"
 _DIAG_UNRESOLVED_FOOTPRINT_INSTANCE = "unresolved-footprint-instance"
@@ -965,7 +965,7 @@ def _native_layer_id(record: AllegroRecord) -> str:
 
 
 def _looks_like_refdes(value: str) -> bool:
-    return bool(_REFDES_RE.match(value))
+    return bool(_REFDES_RE.match(value.strip()))
 
 
 def _unique_ref(refdes: str, used_refs: set[str]) -> str:

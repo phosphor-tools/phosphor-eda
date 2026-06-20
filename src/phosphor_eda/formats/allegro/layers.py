@@ -446,7 +446,7 @@ def _component_text_roles(class_id: int, subclass_id: int) -> tuple[LayerRole, .
 def _name_roles(name: str) -> tuple[LayerRole, ...]:
     normalized = name.lower().replace("-", "_").replace(" ", "_")
     roles: list[LayerRole] = []
-    if any(token in normalized for token in ("soldermask", "solder_mask", "sold")):
+    if any(token in normalized for token in ("soldermask", "solder_mask", "solder", "smask")):
         roles.append(LayerRole.SOLDER_MASK)
     if "paste" in normalized:
         roles.append(LayerRole.SOLDER_PASTE)

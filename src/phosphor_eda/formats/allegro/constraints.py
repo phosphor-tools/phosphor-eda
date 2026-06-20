@@ -136,8 +136,8 @@ def extract_allegro_constraints(record_set: AllegroRecordSet) -> AllegroConstrai
                 name=f"Allegro physical constraint set {name}",
                 kind="allegro_physical_constraint_set",
                 enabled=True,
-                min_value_mm=clearance_mm or None,
-                preferred_value_mm=trace_width_mm or None,
+                min_value_mm=clearance_mm,
+                preferred_value_mm=trace_width_mm,
                 properties=dict(properties),
             )
         )

@@ -919,26 +919,12 @@ def _parse_field_substruct(
         entry_count = reader.read_uint32()
         _require_dynamic_count(reader, entry_count, offset=offset, label="0x03 subtype 0x6C")
         payload["value"] = tuple(reader.read_uint32() for _ in range(entry_count))
-        _require_field_substruct_size(
-            reader,
-            start_offset=start_offset,
-            declared_size=size,
-            offset=offset,
-            subtype=subtype,
-        )
     elif subtype in {0x70, 0x74}:
         x0 = reader.read_uint16()
         x1 = reader.read_uint16()
         entry_bytes = x1 + 4 * x0
         _require_dynamic_count(reader, entry_bytes, offset=offset, label="0x03 subtype 0x70")
         payload["value"] = reader.read_bytes(entry_bytes)
-        _require_field_substruct_size(
-            reader,
-            start_offset=start_offset,
-            declared_size=size,
-            offset=offset,
-            subtype=subtype,
-        )
     elif subtype == 0xF6:
         payload["value"] = tuple(reader.read_uint32() for _ in range(20))
     elif size == 4:
@@ -951,6 +937,14 @@ def _parse_field_substruct(
             code="record-length-invalid",
             offset=offset,
             source_name=reader.source_name,
+        )
+    if size != 0:
+        _require_field_substruct_size(
+            reader,
+            start_offset=start_offset,
+            declared_size=size,
+            offset=offset,
+            subtype=subtype,
         )
 
 

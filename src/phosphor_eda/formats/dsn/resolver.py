@@ -887,9 +887,9 @@ def _pin_inputs(pin_occurrences: Iterable[DsnPinOccurrence]) -> list[ResolvedPin
                     "dsn_pin_source_id": pin_occurrence.id,
                 },
                 pin_occurrence_metadata={
+                    **pin_occurrence.pin_occurrence_metadata,
                     "dsn_source_net_id": str(pin_occurrence.source_net_id),
                     "dsn_local_net_id": pin_occurrence.local_net_id or "",
-                    **pin_occurrence.pin_occurrence_metadata,
                 },
                 component_metadata=_component_metadata(pin_occurrence),
                 component_info=component_info,

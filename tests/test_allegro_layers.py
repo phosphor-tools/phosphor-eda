@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import phosphor_eda.formats.allegro.layers as allegro_layers
 from phosphor_eda.domain.pcb import LayerRole
 from phosphor_eda.formats.allegro.layers import AllegroLayerMap, build_allegro_layers
 from phosphor_eda.formats.allegro.parser import parse_allegro_records
@@ -118,6 +119,12 @@ def test_allegro_fixed_class_subclass_roles_are_concrete_layers() -> None:
     _assert_roles(result, 0x0E, 0xFD, LayerRole.KEEPOUT)
     _assert_roles(result, 0x0F, 0xFC, LayerRole.KEEPOUT, LayerRole.FRONT)
     _assert_roles(result, 0x07, 0xF7, LayerRole.DRILL, LayerRole.DRILL_DRAWING)
+
+
+def test_allegro_layer_name_roles_do_not_treat_solid_as_solder_mask() -> None:
+    assert LayerRole.SOLDER_MASK not in allegro_layers._name_roles("solid_fill")
+    assert LayerRole.SOLDER_MASK in allegro_layers._name_roles("solder_mask_top")
+    assert LayerRole.SOLDER_MASK in allegro_layers._name_roles("smask_bottom")
 
 
 def test_allegro_layer_info_records_preserve_native_class_and_subclass() -> None:

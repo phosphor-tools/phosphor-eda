@@ -4,6 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import MappingProxyType
 
+import phosphor_eda.formats.allegro.build as allegro_build
 from phosphor_eda.formats.allegro.build import build_allegro_board
 from phosphor_eda.formats.allegro.oracle import parse_packaged_netlist_summary
 from phosphor_eda.formats.allegro.parser import parse_allegro_records
@@ -57,6 +58,11 @@ def test_allegro_board_assembly_emits_connectivity_padstacks_and_drills() -> Non
     assert board.drills
     assert all(via.drill.owner is via for via in board.vias)
     assert all(drill.layers for drill in board.drills)
+
+
+def test_allegro_refdes_detection_preserves_lowercase_source_identifiers() -> None:
+    assert allegro_build._looks_like_refdes("r1")
+    assert allegro_build._looks_like_refdes(" R1 ")
 
 
 def test_allegro_board_assembly_reports_unresolved_via_padstack_reference() -> None:

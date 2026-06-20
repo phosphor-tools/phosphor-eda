@@ -255,7 +255,7 @@ def _scalar_pin_entries(entries: list[tuple[int, str, str]]) -> list[tuple[int, 
 
 
 def _scalar_pin_number(value: str) -> str:
-    return next(part.strip() for part in value.split(",") if part.strip())
+    return next((part.strip() for part in value.split(",") if part.strip()), "")
 
 
 def _compare_native_package_evidence(

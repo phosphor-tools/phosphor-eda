@@ -82,6 +82,43 @@ def test_physical_constraint_units_are_exhaustive_and_do_not_fabricate_diff_pair
     assert net_class.diff_pair_width_mm == 0.0
 
 
+def test_physical_constraint_design_rules_preserve_explicit_zero_values() -> None:
+    record_set = AllegroRecordSet(
+        header=AllegroHeader(
+            magic=0,
+            version=AllegroVersion.V_172,
+            version_string="",
+            object_count=1,
+            max_key=1,
+            record_0x27_end=0,
+            string_count=0,
+            board_units=AllegroBoardUnits.MICROMETERS,
+            unit_divisor=1,
+            linked_lists=(),
+            layer_map=(),
+        ),
+        string_table=None,
+        records=(
+            AllegroRecord(
+                tag=0x1D,
+                offset=0,
+                end_offset=56,
+                key=1,
+                next_key=None,
+                payload={"data_b_fields": ((0,) * 14,)},
+            ),
+        ),
+        end_offset=56,
+    )
+
+    constraints = extract_allegro_constraints(record_set)
+
+    assert constraints.net_classes[0].trace_width_mm == 0.0
+    assert constraints.net_classes[0].clearance_mm == 0.0
+    assert constraints.design_rules[0].min_value_mm == 0.0
+    assert constraints.design_rules[0].preferred_value_mm == 0.0
+
+
 def test_nets_without_explicit_constraint_set_inherit_default_net_class() -> None:
     record_set = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
 
