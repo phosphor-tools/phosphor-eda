@@ -24,11 +24,13 @@ from phosphor_eda.formats.allegro.errors import (
     AllegroParseError,
     AllegroUnsupportedVersionError,
 )
+from phosphor_eda.formats.allegro.record_parser import parse_allegro_record_stream
 from phosphor_eda.formats.allegro.records import (
     AllegroBinaryContainer,
     AllegroHeader,
     AllegroLayerMapEntry,
     AllegroLinkedListDescriptor,
+    AllegroRecordSet,
     AllegroStringEntry,
     AllegroStringTable,
 )
@@ -45,14 +47,13 @@ _PRE_V18_SHARED_LINKED_LIST_COUNT = 18
 _PRE_V18_FILE_REFERENCE_EXTENT_U32_COUNT = 2
 _PRE_V18_TRAILING_LINKED_LIST_COUNT = 4
 _PRE_V18_UNKNOWN3_U32_COUNT = 1
-_V18_UNKNOWN2_BEFORE_STRING_COUNT_U32_COUNT = 5
+_V18_UNKNOWN2_AFTER_RECORD_EXTENT_U32_COUNT = 2
 _V18_UNKNOWN2_AFTER_STRING_COUNT_U32_COUNT = 1
 _V18_LINKED_LIST_COUNT = 28
 _V18_FILE_REFERENCE_EXTENT_U32_COUNT = 2
 _PRE_V18_UNKNOWN5_U32_COUNT = 17
 _V18_UNKNOWN5_U32_COUNT = 9
 _BOARD_UNITS_PADDING_BYTES = 3
-_PRE_V18_0X27_AND_STRING_COUNT_PREFIX_U32_COUNT = 4
 _V18_STRING_COUNT_PREFIX_U32_COUNT = 2
 _UNKNOWN9_U32_COUNT = 50
 _UNKNOWN10_U32_COUNT = 3
@@ -63,10 +64,9 @@ _PRE_LAYER_MAP_PADDING_U32_COUNT = 110
 class _VersionLayout:
     version_string_offset: int
     unknown5_u32_count: int
-    string_count_prefix_u32_count: int
     read_header_prefix: Callable[
         [BoundedBinaryReader],
-        tuple[tuple[AllegroLinkedListDescriptor, ...], int | None],
+        tuple[tuple[AllegroLinkedListDescriptor, ...], int | None, int | None],
     ]
 
 
@@ -80,7 +80,7 @@ def parse_allegro_header(data: bytes, *, source_name: str = "<bytes>") -> Allegr
     object_count = reader.read_uint32()
     _skip_u32(reader, _HEADER_MAGIC_AND_FLAGS_U32_COUNT)
 
-    linked_lists, prefix_string_count = layout.read_header_prefix(reader)
+    linked_lists, prefix_string_count, prefix_record_0x27_end = layout.read_header_prefix(reader)
     _require_offset(reader, layout.version_string_offset, source_name=source_name)
 
     version_string = _decode_fixed_string(reader.read_bytes(VERSION_STRING_BYTES))
@@ -100,8 +100,22 @@ def parse_allegro_header(data: bytes, *, source_name: str = "<bytes>") -> Allegr
         )
     reader.skip(_BOARD_UNITS_PADDING_BYTES)
 
-    _skip_u32(reader, layout.string_count_prefix_u32_count)
-    string_count = prefix_string_count if prefix_string_count is not None else reader.read_uint32()
+    if version is AllegroVersion.V_180:
+        _skip_u32(reader, _V18_STRING_COUNT_PREFIX_U32_COUNT)
+        string_count = prefix_string_count
+        record_0x27_end = prefix_record_0x27_end
+    else:
+        _skip_u32(reader, 2)
+        record_0x27_end = reader.read_uint32()
+        _skip_u32(reader, 1)
+        string_count = reader.read_uint32()
+    if string_count is None or record_0x27_end is None:
+        raise AllegroParseError(
+            "header did not expose string count or 0x27 record extent",
+            code="header-layout-mismatch",
+            offset=reader.offset,
+            source_name=source_name,
+        )
 
     _skip_u32(reader, _UNKNOWN9_U32_COUNT)
     _skip_u32(reader, _UNKNOWN10_U32_COUNT)
@@ -129,6 +143,7 @@ def parse_allegro_header(data: bytes, *, source_name: str = "<bytes>") -> Allegr
         version_string=version_string,
         object_count=object_count,
         max_key=max_key,
+        record_0x27_end=record_0x27_end,
         string_count=string_count,
         board_units=board_units,
         unit_divisor=unit_divisor,
@@ -145,6 +160,16 @@ def parse_allegro_container(data: bytes, *, source_name: str = "<bytes>") -> All
         source_name=source_name,
     )
     return AllegroBinaryContainer(header=header, string_table=string_table)
+
+
+def parse_allegro_records(data: bytes, *, source_name: str = "<bytes>") -> AllegroRecordSet:
+    container = parse_allegro_container(data, source_name=source_name)
+    return parse_allegro_record_stream(
+        data,
+        header=container.header,
+        string_table=container.string_table,
+        source_name=source_name,
+    )
 
 
 def parse_allegro_string_table(
@@ -179,7 +204,7 @@ def parse_allegro_string_table(
 
 def _read_pre_v18_header_prefix(
     reader: BoundedBinaryReader,
-) -> tuple[tuple[AllegroLinkedListDescriptor, ...], int | None]:
+) -> tuple[tuple[AllegroLinkedListDescriptor, ...], int | None, int | None]:
     _skip_u32(reader, _PRE_V18_UNKNOWN2_U32_COUNT)
     linked_lists = [
         _read_linked_list(reader, index=index, v18_word_order=False)
@@ -194,13 +219,15 @@ def _read_pre_v18_header_prefix(
         )
     )
     _skip_u32(reader, _PRE_V18_UNKNOWN3_U32_COUNT)
-    return tuple(linked_lists), None
+    return tuple(linked_lists), None, None
 
 
 def _read_v18_header_prefix(
     reader: BoundedBinaryReader,
-) -> tuple[tuple[AllegroLinkedListDescriptor, ...], int | None]:
-    _skip_u32(reader, _V18_UNKNOWN2_BEFORE_STRING_COUNT_U32_COUNT)
+) -> tuple[tuple[AllegroLinkedListDescriptor, ...], int | None, int | None]:
+    _skip_u32(reader, 2)
+    record_0x27_end = reader.read_uint32()
+    _skip_u32(reader, _V18_UNKNOWN2_AFTER_RECORD_EXTENT_U32_COUNT)
     string_count = reader.read_uint32()
     _skip_u32(reader, _V18_UNKNOWN2_AFTER_STRING_COUNT_U32_COUNT)
 
@@ -209,20 +236,18 @@ def _read_v18_header_prefix(
         for index in range(_V18_LINKED_LIST_COUNT)
     ]
     _skip_u32(reader, _V18_FILE_REFERENCE_EXTENT_U32_COUNT)
-    return tuple(linked_lists), string_count
+    return tuple(linked_lists), string_count, record_0x27_end
 
 
 _PRE_V18_LAYOUT = _VersionLayout(
     version_string_offset=PRE_V18_VERSION_STRING_OFFSET,
     unknown5_u32_count=_PRE_V18_UNKNOWN5_U32_COUNT,
-    string_count_prefix_u32_count=_PRE_V18_0X27_AND_STRING_COUNT_PREFIX_U32_COUNT,
     read_header_prefix=_read_pre_v18_header_prefix,
 )
 
 _V18_LAYOUT = _VersionLayout(
     version_string_offset=V18_VERSION_STRING_OFFSET,
     unknown5_u32_count=_V18_UNKNOWN5_U32_COUNT,
-    string_count_prefix_u32_count=_V18_STRING_COUNT_PREFIX_U32_COUNT,
     read_header_prefix=_read_v18_header_prefix,
 )
 
