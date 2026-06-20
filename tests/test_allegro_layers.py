@@ -17,7 +17,7 @@ COMMITTED_LAYER_EXPECTATIONS = (
         / "opencellular-breakout"
         / "allegro/OpenCellular/electronics/breakout/board"
         / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd",
-        184,
+        186,
         ("TOP", "L2_GND", "L3_PLANE", "BOTTOM"),
     ),
     (
@@ -26,7 +26,7 @@ COMMITTED_LAYER_EXPECTATIONS = (
         / "opencellular-sync"
         / "allegro/OpenCellular/electronics/sync/board"
         / "Fb_Connect1_SYNC_Life-3.brd",
-        107,
+        109,
         ("ETCH_1", "GND", "SIG1", "ETCH_4", "ETCH_5", "BOTTOM"),
     ),
     (
@@ -35,7 +35,7 @@ COMMITTED_LAYER_EXPECTATIONS = (
         / "cp-smartgarden-launchxl-cc1310"
         / "Document/Hardware/mcu/swrc319/Cadence/Allegro"
         / "LAUNCHXL-CC1310.brd",
-        89,
+        91,
         ("TOP", "ETCH_2", "ETCH_3", "BOTTOM"),
     ),
     (
@@ -44,7 +44,7 @@ COMMITTED_LAYER_EXPECTATIONS = (
         / "rohm-stepper-driver-ctrl"
         / "Design Files for Rev 1.0"
         / "STEPPER EVAL BRD - PCB Board File - Rev 1.0.brd",
-        77,
+        79,
         ("TOP", "ETCH_2", "PWR", "BOTTOM"),
     ),
 )
@@ -112,6 +112,7 @@ def test_allegro_fixed_class_subclass_roles_are_concrete_layers() -> None:
     _assert_roles(result, 0x09, 0xED, LayerRole.SOLDER_PASTE, LayerRole.FRONT)
     _assert_roles(result, 0x09, 0xF6, LayerRole.SILKSCREEN, LayerRole.BACK)
     _assert_roles(result, 0x09, 0xFB, LayerRole.COURTYARD, LayerRole.FRONT)
+    _assert_roles(result, 0x09, 0xF8, LayerRole.FABRICATION, LayerRole.USER)
     _assert_roles(result, 0x0D, 0xFB, LayerRole.DESIGNATOR, LayerRole.SILKSCREEN, LayerRole.FRONT)
     _assert_roles(result, 0x02, 0xFC, LayerRole.VALUE, LayerRole.ASSEMBLY, LayerRole.BACK)
     _assert_roles(result, 0x0E, 0xFD, LayerRole.KEEPOUT)

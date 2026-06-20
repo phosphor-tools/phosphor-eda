@@ -105,6 +105,16 @@ _FIXED_ROLES: dict[tuple[int, int], tuple[LayerRole, ...]] = {
     ),
     (_CLASS_PACKAGE_GEOMETRY, 0xF6): (LayerRole.SILKSCREEN, LayerRole.BACK),
     (_CLASS_PACKAGE_GEOMETRY, 0xF7): (LayerRole.SILKSCREEN, LayerRole.FRONT),
+    (_CLASS_PACKAGE_GEOMETRY, 0xF8): (
+        LayerRole.FABRICATION,
+        LayerRole.COMPONENT_OUTLINE,
+        LayerRole.USER,
+    ),
+    (_CLASS_PACKAGE_GEOMETRY, 0xF9): (
+        LayerRole.FABRICATION,
+        LayerRole.COMPONENT_OUTLINE,
+        LayerRole.USER,
+    ),
     (_CLASS_PACKAGE_GEOMETRY, 0xFA): (
         LayerRole.FABRICATION,
         LayerRole.COURTYARD,

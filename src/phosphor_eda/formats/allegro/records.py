@@ -41,7 +41,15 @@ class AllegroLayerListEntry:
     unidentified_word: int | None = None
 
 
-type AllegroPayloadValue = int | str | tuple[AllegroLayerListEntry, ...]
+type AllegroPayloadValue = (
+    bytes
+    | float
+    | int
+    | str
+    | tuple[int, ...]
+    | tuple[tuple[int, ...], ...]
+    | tuple[AllegroLayerListEntry, ...]
+)
 
 
 @dataclass(frozen=True)
