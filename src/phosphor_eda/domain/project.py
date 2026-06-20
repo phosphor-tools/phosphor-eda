@@ -124,6 +124,7 @@ class DiffPair:
     name: str
     positive_net: str
     negative_net: str
+    properties: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
