@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.pcb import (
@@ -22,6 +22,7 @@ from phosphor_eda.formats.allegro.primitives import (
     AllegroCopper,
     AllegroGraphicPrimitive,
     AllegroGraphics,
+    AllegroPourPrimitive,
     AllegroPrimitiveKind,
     AllegroPrimitiveRole,
 )
@@ -36,6 +37,13 @@ if TYPE_CHECKING:
 _CLASS_BOARD_GEOMETRY = 0x01
 _CLASS_ETCH = 0x06
 _OUTLINE_SUBCLASSES = {0xEA, 0xFD}
+
+
+@dataclass(frozen=True)
+class _NetAssignedItem:
+    assignment: AllegroRecord
+    item: AllegroRecord
+    net_key: int
 
 
 def extract_allegro_graphics(
@@ -124,12 +132,25 @@ def extract_allegro_copper(
 ) -> AllegroCopper:
     graph = graph or build_allegro_object_graph(record_set)
     diagnostics: list[AllegroRecordDiagnostic] = list(graph.diagnostics)
+    net_items = _net_assigned_items(record_set, graph, diagnostics)
+    shape_pours, shape_fills = _shape_pours_and_fills(
+        record_set,
+        graph,
+        layer_map,
+        diagnostics,
+        net_items=net_items,
+    )
     conductors = [
-        *_track_conductors(record_set, graph, layer_map, diagnostics),
+        *_track_conductors(record_set, graph, layer_map, diagnostics, net_items=net_items),
+        *shape_fills,
         *_rectangle_region_conductors(record_set, layer_map, diagnostics),
         *_graphic_segment_conductors(record_set, graph, layer_map, diagnostics),
     ]
-    return AllegroCopper(conductors=tuple(conductors), diagnostics=tuple(diagnostics))
+    return AllegroCopper(
+        pours=shape_pours,
+        conductors=tuple(conductors),
+        diagnostics=tuple(diagnostics),
+    )
 
 
 def _track_conductors(
@@ -137,9 +158,14 @@ def _track_conductors(
     graph: AllegroObjectGraph,
     layer_map: AllegroLayerMap,
     diagnostics: list[AllegroRecordDiagnostic],
+    *,
+    net_items: tuple[_NetAssignedItem, ...],
 ) -> tuple[AllegroConductorPrimitive, ...]:
     conductors: list[AllegroConductorPrimitive] = []
-    for track, net_key in _net_owned_tracks(record_set, graph, diagnostics):
+    for item in net_items:
+        track = item.item
+        if track.tag != 0x05:
+            continue
         layer = _copper_layer(track, layer_map, diagnostics, require_etch=True)
         if layer is None:
             continue
@@ -164,11 +190,96 @@ def _track_conductors(
                 track=track,
                 header=record_set.header,
                 layer=layer,
-                net_key=net_key,
+                net_key=item.net_key,
             )
             if conductor is not None:
                 conductors.append(conductor)
     return tuple(conductors)
+
+
+def _shape_pours_and_fills(
+    record_set: AllegroRecordSet,
+    graph: AllegroObjectGraph,
+    layer_map: AllegroLayerMap,
+    diagnostics: list[AllegroRecordDiagnostic],
+    *,
+    net_items: tuple[_NetAssignedItem, ...],
+) -> tuple[tuple[AllegroPourPrimitive, ...], tuple[AllegroConductorPrimitive, ...]]:
+    pours: list[AllegroPourPrimitive] = []
+    fills: list[AllegroConductorPrimitive] = []
+    for item in net_items:
+        shape = item.item
+        if shape.tag != 0x28:
+            continue
+        layer = _copper_layer(shape, layer_map, diagnostics, require_etch=True)
+        if layer is None:
+            continue
+        polygon = _polygon_from_segment_chain(
+            shape,
+            graph=graph,
+            header=record_set.header,
+            layer=layer,
+            head_key=_payload_int(shape, "first_segment_key"),
+            diagnostics=diagnostics,
+            diagnostic_prefix="shape",
+        )
+        if polygon is None:
+            continue
+        pour_id = f"allegro:{shape.key}:pour"
+        metadata = _shape_fill_metadata(
+            shape,
+            layer=layer,
+            assignment_key=item.assignment.key,
+            net_key=item.net_key,
+        )
+        dynamic_shape_flags = _payload_int(shape, "dynamic_shape_flags")
+        if dynamic_shape_flags & 0x1000:
+            diagnostics.append(
+                _drop_diagnostic(
+                    shape,
+                    code="unsupported-dynamic-shape-rules",
+                    message=(
+                        f"dynamic shape record {shape.key} has native flags "
+                        f"0x{dynamic_shape_flags:X}; preserving fill geometry without "
+                        "reconstructing Allegro dynamic rules"
+                    ),
+                )
+            )
+        pours.append(
+            AllegroPourPrimitive(
+                id=pour_id,
+                boundary=polygon,
+                layer=layer,
+                net_key=item.net_key,
+                metadata=replace(metadata, native_type="copper_shape_pour"),
+            )
+        )
+        first_keepout_key = _payload_int(shape, "first_keepout_key")
+        if first_keepout_key:
+            diagnostics.append(
+                _drop_diagnostic(
+                    shape,
+                    code="unsupported-shape-voids",
+                    message=(
+                        f"shape record {shape.key} references void/keepout chain "
+                        f"{first_keepout_key}; skipping uncut positive copper fill"
+                    ),
+                    reference_key=first_keepout_key,
+                )
+            )
+            continue
+        fills.append(
+            AllegroConductorPrimitive(
+                id=f"allegro:{shape.key}:fill",
+                kind=PcbConductorKind.POUR_FILL,
+                data=polygon,
+                layer=layer,
+                net_key=item.net_key,
+                pour_id=pour_id,
+                metadata=metadata,
+            )
+        )
+    return tuple(pours), tuple(fills)
 
 
 def _rectangle_region_conductors(
@@ -240,12 +351,12 @@ def _copper_layer(
     return layer if layer.has_role(LayerRole.COPPER) else None
 
 
-def _net_owned_tracks(
+def _net_assigned_items(
     record_set: AllegroRecordSet,
     graph: AllegroObjectGraph,
     diagnostics: list[AllegroRecordDiagnostic],
-) -> tuple[tuple[AllegroRecord, int], ...]:
-    result: list[tuple[AllegroRecord, int]] = []
+) -> tuple[_NetAssignedItem, ...]:
+    result: list[_NetAssignedItem] = []
     for net in (record for record in record_set.records if record.tag == 0x1B):
         net_key = net.key
         if net_key is None:
@@ -302,8 +413,14 @@ def _net_owned_tracks(
                         reference_key=connected_key,
                     )
                 )
-            if connected_item is not None and connected_item.tag == 0x05:
-                result.append((connected_item, _payload_int(assignment, "net_key") or net_key))
+            if connected_item is not None:
+                result.append(
+                    _NetAssignedItem(
+                        assignment=assignment,
+                        item=connected_item,
+                        net_key=_payload_int(assignment, "net_key") or net_key,
+                    )
+                )
             current_key = assignment.next_key or 0
     return tuple(result)
 
@@ -461,12 +578,48 @@ def _keepout_primitive(
         diagnostics.append(_missing_layer_diagnostic(record))
         return None
     segment_key = _payload_int(record, "first_segment_key")
-    if segment_key == 0:
+    polygon = _polygon_from_segment_chain(
+        record,
+        graph=graph,
+        header=header,
+        layer=layer,
+        head_key=segment_key,
+        diagnostics=diagnostics,
+        diagnostic_prefix="keepout",
+    )
+    if polygon is None:
+        return None
+    return AllegroGraphicPrimitive(
+        id=f"allegro:{record.key}",
+        kind=AllegroPrimitiveKind.POLYGON,
+        roles=(AllegroPrimitiveRole.KEEPOUT,),
+        data=polygon,
+        layer=layer,
+        source_tag=record.tag,
+        source_key=record.key or 0,
+        metadata=_metadata(record, layer),
+    )
+
+
+def _polygon_from_segment_chain(
+    record: AllegroRecord,
+    *,
+    graph: AllegroObjectGraph,
+    header: AllegroHeader | None,
+    layer: PcbLayer,
+    head_key: int,
+    diagnostics: list[AllegroRecordDiagnostic],
+    diagnostic_prefix: str,
+) -> PcbPolygon | None:
+    if header is None:
+        diagnostics.append(_missing_header_diagnostic(record))
+        return None
+    if head_key == 0:
         diagnostics.append(
             _drop_diagnostic(
                 record,
-                code="missing-keepout-segment-chain",
-                message=f"keepout record {record.key} has no first segment key",
+                code=f"missing-{diagnostic_prefix}-segment-chain",
+                message=f"{diagnostic_prefix} record {record.key} has no first segment key",
             )
         )
         return None
@@ -474,17 +627,17 @@ def _keepout_primitive(
     for segment in _owned_segment_chain(
         record,
         graph=graph,
-        head_key=segment_key,
+        head_key=head_key,
         diagnostics=diagnostics,
     ):
         if segment.tag == 0x01:
             diagnostics.append(
                 _drop_diagnostic(
                     record,
-                    code="approximated-keepout-arc",
+                    code=f"approximated-{diagnostic_prefix}-arc",
                     message=(
-                        f"keepout record {record.key} includes arc segment {segment.key}; "
-                        "point-based keepout boundary preserves only segment vertices"
+                        f"{diagnostic_prefix} record {record.key} includes arc segment "
+                        f"{segment.key}; polygon boundary preserves only segment vertices"
                     ),
                     reference_key=segment.key,
                 )
@@ -499,21 +652,12 @@ def _keepout_primitive(
         diagnostics.append(
             _drop_diagnostic(
                 record,
-                code="invalid-keepout-boundary",
-                message=(f"keepout record {record.key} resolved to {len(points)} boundary points"),
+                code=f"invalid-{diagnostic_prefix}-boundary",
+                message=f"{diagnostic_prefix} record {record.key} resolved to {len(points)} points",
             )
         )
         return None
-    return AllegroGraphicPrimitive(
-        id=f"allegro:{record.key}",
-        kind=AllegroPrimitiveKind.POLYGON,
-        roles=(AllegroPrimitiveRole.KEEPOUT,),
-        data=PcbPolygon(points=points),
-        layer=layer,
-        source_tag=record.tag,
-        source_key=record.key or 0,
-        metadata=_metadata(record, layer),
-    )
+    return PcbPolygon(points=points)
 
 
 def _text_primitive(
@@ -817,6 +961,33 @@ def _metadata(record: AllegroRecord, layer: PcbLayer) -> PcbObjectMetadata:
             "native_subclass_id": str(subclass_id),
             "native_layer_name": layer.name,
         },
+    )
+
+
+def _shape_fill_metadata(
+    record: AllegroRecord,
+    *,
+    layer: PcbLayer,
+    assignment_key: int | None,
+    net_key: int,
+) -> PcbObjectMetadata:
+    metadata = _metadata(record, layer)
+    properties = dict(metadata.properties)
+    properties["native_assignment_key"] = str(assignment_key or "")
+    properties["native_net_key"] = str(net_key)
+    first_keepout_key = _payload_int(record, "first_keepout_key")
+    if first_keepout_key:
+        properties["native_first_keepout_key"] = str(first_keepout_key)
+    dynamic_shape_flags = _payload_int(record, "dynamic_shape_flags")
+    if dynamic_shape_flags:
+        properties["native_dynamic_shape_flags"] = str(dynamic_shape_flags)
+    if dynamic_shape_flags & 0x1000:
+        properties["dynamic_shape_degraded"] = "true"
+    return replace(
+        metadata,
+        native_type="copper_shape_fill",
+        native_id=str(record.key or ""),
+        properties=properties,
     )
 
 
