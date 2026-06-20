@@ -574,6 +574,7 @@ def constructed_db() -> Iterator[duckdb.DuckDBPyConnection]:
                 via_diameter_mm=0.5,
                 via_drill_mm=0.25,
                 members=["SYNC"],
+                properties={"source_format": "constructed"},
             )
         ],
         design_rules=[
@@ -583,9 +584,17 @@ def constructed_db() -> Iterator[duckdb.DuckDBPyConnection]:
                 priority=1,
                 scope1="InNetClass('TIMING')",
                 min_value_mm=0.15,
+                properties={"source_format": "constructed"},
             )
         ],
-        diff_pairs=[DiffPair(name="USB", positive_net="USB_P", negative_net="USB_N")],
+        diff_pairs=[
+            DiffPair(
+                name="USB",
+                positive_net="USB_P",
+                negative_net="USB_N",
+                properties={"source_format": "constructed"},
+            )
+        ],
     )
     con = load_database(project)
     try:
@@ -1184,7 +1193,7 @@ class TestConstructedSchematicSql:
     ) -> None:
         net_class_rows = constructed_db.execute(
             """
-            SELECT name, clearance_mm, trace_width_mm, via_diameter_mm, via_drill_mm
+            SELECT name, clearance_mm, trace_width_mm, via_diameter_mm, via_drill_mm, properties
             FROM net_classes
             ORDER BY name
             """
@@ -1194,8 +1203,15 @@ class TestConstructedSchematicSql:
         ).fetchall()
         design_rule_rows = constructed_db.execute(
             """
-            SELECT name, kind, priority, scope1, min_value_mm
+            SELECT name, kind, priority, scope1, min_value_mm, properties
             FROM design_rules
+            ORDER BY name
+            """
+        ).fetchall()
+        diff_pair_rows = constructed_db.execute(
+            """
+            SELECT name, positive_net, negative_net, properties
+            FROM diff_pairs
             ORDER BY name
             """
         ).fetchall()
@@ -1203,11 +1219,21 @@ class TestConstructedSchematicSql:
             "SELECT name, net_class FROM nets WHERE net_id = 'net:sync'"
         ).fetchone()
 
-        assert net_class_rows == [("TIMING", 0.15, 0.2, 0.5, 0.25)]
+        assert net_class_rows == [
+            ("TIMING", 0.15, 0.2, 0.5, 0.25, '{"source_format":"constructed"}')
+        ]
         assert member_rows == [("SYNC", "TIMING")]
         assert design_rule_rows == [
-            ("Timing clearance", "clearance", 1, "InNetClass('TIMING')", 0.15)
+            (
+                "Timing clearance",
+                "clearance",
+                1,
+                "InNetClass('TIMING')",
+                0.15,
+                '{"source_format":"constructed"}',
+            )
         ]
+        assert diff_pair_rows == [("USB", "USB_P", "USB_N", '{"source_format":"constructed"}')]
         assert net_row == ("SYNC", "TIMING")
 
     def test_page_annotations_are_loaded(self, constructed_db: duckdb.DuckDBPyConnection) -> None:
