@@ -68,3 +68,29 @@ def test_parse_allegro_records_rejects_unaligned_0x27_reference_payload() -> Non
     assert error.code == "record-length-invalid"
     assert error.source_name == "unaligned-0x27.brd"
     assert "0x27 reference payload" in str(error)
+
+
+def test_parse_allegro_records_rejects_mismatched_field_substructure_size() -> None:
+    data = bytearray(BREAKOUT_BOARD.read_bytes())
+    field_record = next(
+        (
+            record
+            for record in parse_allegro_records(
+                BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name
+            ).records
+            if record.tag == 0x03 and record.payload["subtype"] == 0x6C
+        ),
+        None,
+    )
+    assert field_record is not None, "fixture must contain a 0x03 subtype 0x6C field record"
+    size_offset = field_record.offset + 14
+    data[size_offset : size_offset + 2] = (4).to_bytes(2, "little")
+
+    with pytest.raises(AllegroParseError) as exc_info:
+        parse_allegro_records(bytes(data), source_name="bad-field-size.brd")
+
+    error = exc_info.value
+    assert error.code == "record-length-invalid"
+    assert error.offset == field_record.offset
+    assert error.source_name == "bad-field-size.brd"
+    assert "0x03 subtype 0x6C consumed" in str(error)
