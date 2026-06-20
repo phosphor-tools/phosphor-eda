@@ -7,6 +7,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from phosphor_eda.formats.allegro.binary import BoundedBinaryReader
+from phosphor_eda.formats.allegro.build import build_allegro_board
 from phosphor_eda.formats.allegro.constants import (
     BOARD_UNITS,
     LAYER_MAP_ENTRY_COUNT,
@@ -37,6 +38,10 @@ from phosphor_eda.formats.allegro.records import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
+
+    from phosphor_eda.domain.pcb import Board
+    from phosphor_eda.formats.common.diagnostics import ParseContext
 
 # Section sizes mirror KiCad's reverse-engineered FILE_HEADER read order. Keep
 # these counts close to parser cursor checks so layout drift fails loudly.
@@ -169,6 +174,19 @@ def parse_allegro_records(data: bytes, *, source_name: str = "<bytes>") -> Alleg
         header=container.header,
         string_table=container.string_table,
         source_name=source_name,
+    )
+
+
+def parse_allegro_pcb(path: Path, ctx: ParseContext | None = None) -> Board:
+    """Parse a native Allegro/OrCAD ``.brd`` file into the PCB domain model."""
+    # Accepted for loader parity with other PCB parsers. Allegro diagnostics are
+    # currently preserved in board metadata by the source record/build layers.
+    del ctx
+    record_set = parse_allegro_records(path.read_bytes(), source_name=path.name)
+    return build_allegro_board(
+        record_set,
+        name=path.stem,
+        require_board_profile=True,
     )
 
 

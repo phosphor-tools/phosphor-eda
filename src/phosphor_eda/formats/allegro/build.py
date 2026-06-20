@@ -45,6 +45,7 @@ from phosphor_eda.formats.allegro.primitives import (
     AllegroConductorPrimitive,
     AllegroCopper,
     AllegroGraphicPrimitive,
+    AllegroGraphics,
     AllegroPourPrimitive,
     AllegroPrimitiveKind,
     AllegroPrimitiveRole,
@@ -65,9 +66,15 @@ class _FootprintSource:
     package_name: str
 
 
-def build_allegro_board(record_set: AllegroRecordSet, *, name: str = "Allegro Board") -> Board:
+def build_allegro_board(
+    record_set: AllegroRecordSet,
+    *,
+    name: str = "Allegro Board",
+    require_board_profile: bool = False,
+) -> Board:
     layer_map = build_allegro_layers(record_set)
     graph = build_allegro_object_graph(record_set)
+    graphics = extract_allegro_graphics(record_set, layer_map)
     unit_to_mm = _unit_to_mm(record_set)
     builder = PcbBuilder(
         name,
@@ -142,11 +149,14 @@ def build_allegro_board(record_set: AllegroRecordSet, *, name: str = "Allegro Bo
         nets_by_key=nets_by_key,
         footprints_by_instance_key=footprints_by_instance_key,
     )
-    diagnostic_count = len(layer_map.diagnostics) + len(copper.diagnostics)
+    _add_graphics(builder, graphics, include_copper_artwork=False)
+    diagnostic_count = (
+        len(layer_map.diagnostics) + len(graphics.diagnostics) + len(copper.diagnostics)
+    )
     if diagnostic_count:
         builder.metadata.properties["parse_diagnostic_count"] = str(diagnostic_count)
 
-    board = builder.build()
+    board = builder.build(require_board_profile=require_board_profile)
     board.stackup = layer_map.stackup
     return board
 
@@ -164,13 +174,7 @@ def build_allegro_graphics_board(record_set: AllegroRecordSet, *, name: str) -> 
     for layer in layer_map.layers:
         builder.add_layer(layer, source="allegro layers")
 
-    profile_elements = tuple(_profile_element(primitive) for primitive in graphics.board_profile)
-    builder.set_board_profile(PcbBoardProfile(elements=profile_elements), source="allegro profile")
-
-    for primitive in graphics.artwork:
-        builder.add_artwork_object(_artwork(primitive), source=primitive.id)
-    for primitive in graphics.keepouts:
-        builder.add_keepout_object(_keepout(primitive), source=primitive.id)
+    _add_graphics(builder, graphics, include_copper_artwork=True)
 
     board = builder.build(require_board_profile=True)
     board.stackup = layer_map.stackup
@@ -442,6 +446,33 @@ def _add_conductors(
     for pour in pours_by_id.values():
         pour.fills = tuple(pour_fills.get(pour.id, ()))
     return copper
+
+
+def _add_graphics(
+    builder: PcbBuilder,
+    graphics: AllegroGraphics,
+    *,
+    include_copper_artwork: bool,
+) -> None:
+    profile_elements = tuple(_profile_element(primitive) for primitive in graphics.board_profile)
+    if profile_elements or include_copper_artwork:
+        builder.set_board_profile(
+            PcbBoardProfile(elements=profile_elements),
+            source="allegro profile",
+        )
+
+    for primitive in graphics.artwork:
+        if (
+            not include_copper_artwork
+            and primitive.layer is not None
+            and primitive.layer.has_role(LayerRole.COPPER)
+        ):
+            # Copper-layer graphics are emitted as conductors in the full board
+            # path; adding them as artwork would double-count manufactured copper.
+            continue
+        builder.add_artwork_object(_artwork(primitive), source=primitive.id)
+    for primitive in graphics.keepouts:
+        builder.add_keepout_object(_keepout(primitive), source=primitive.id)
 
 
 def _pour(
