@@ -97,9 +97,23 @@ def _parse_known_record(
         payload["subtype"] = reader.read_uint8()
         key = reader.read_uint32()
         next_key = reader.read_uint32()
-        reader.skip(4 + 4)
+        payload["parent_key"] = reader.read_uint32()
+        reader.skip(4)
         _skip_cond_u32(reader, version, AllegroVersion.V_172)
-        reader.skip(4 + 16 + 24 + 16)
+        payload["width"] = reader.read_uint32()
+        payload["start_x"] = reader.read_int32()
+        payload["start_y"] = reader.read_int32()
+        payload["end_x"] = reader.read_int32()
+        payload["end_y"] = reader.read_int32()
+        payload["center_x"] = reader.read_allegro_float()
+        payload["center_y"] = reader.read_allegro_float()
+        payload["radius"] = reader.read_allegro_float()
+        payload["bbox"] = (
+            reader.read_int32(),
+            reader.read_int32(),
+            reader.read_int32(),
+            reader.read_int32(),
+        )
     elif tag == 0x03:
         reader.skip(1)
         payload["field_key"] = reader.read_uint16()
@@ -176,7 +190,13 @@ def _parse_known_record(
         next_key = reader.read_uint32()
         reader.skip(4)
         _skip_cond_u32(reader, version, AllegroVersion.V_172)
-        reader.skip(4 * 4 + 4 * 4 + 5 * 4)
+        payload["coords"] = (
+            reader.read_int32(),
+            reader.read_int32(),
+            reader.read_int32(),
+            reader.read_int32(),
+        )
+        reader.skip(4 * 4 + 5 * 4)
         _skip_cond_u32(reader, version, AllegroVersion.V_174)
     elif tag == 0x0C:
         reader.skip(1)
@@ -211,9 +231,17 @@ def _parse_known_record(
         _read_layer_info(reader, payload)
         key = reader.read_uint32()
         next_key = reader.read_uint32()
-        reader.skip(4 + 3 * 4)
+        payload["footprint_key"] = reader.read_uint32()
+        reader.skip(3 * 4)
         _skip_cond_u32(reader, version, AllegroVersion.V_172, count=2)
-        reader.skip(4 * 4 + 3 * 4 + 4)
+        payload["coords"] = (
+            reader.read_int32(),
+            reader.read_int32(),
+            reader.read_int32(),
+            reader.read_int32(),
+        )
+        reader.skip(3 * 4)
+        payload["rotation_mdeg"] = reader.read_uint32()
     elif tag == 0x0F:
         reader.skip(3)
         key = reader.read_uint32()
@@ -259,9 +287,13 @@ def _parse_known_record(
         key = reader.read_uint32()
         next_key = reader.read_uint32()
         payload["parent_key"] = reader.read_uint32()
-        reader.skip(4)
+        payload["flags"] = reader.read_uint32()
         _skip_cond_u32(reader, version, AllegroVersion.V_172)
-        reader.skip(4 + 4 * 4)
+        payload["width"] = reader.read_uint32()
+        payload["start_x"] = reader.read_int32()
+        payload["start_y"] = reader.read_int32()
+        payload["end_x"] = reader.read_int32()
+        payload["end_y"] = reader.read_int32()
     elif tag == 0x1B:
         reader.skip(3)
         key = reader.read_uint32()
@@ -367,7 +399,14 @@ def _parse_known_record(
         payload["parent_key"] = reader.read_uint32()
         reader.skip(4)
         _skip_cond_u32(reader, version, AllegroVersion.V_172)
-        reader.skip(4 * 4 + 4 * 4)
+        payload["coords"] = (
+            reader.read_int32(),
+            reader.read_int32(),
+            reader.read_int32(),
+            reader.read_int32(),
+        )
+        reader.skip(3 * 4)
+        payload["rotation_mdeg"] = reader.read_uint32()
     elif tag == 0x26:
         reader.skip(3)
         key = reader.read_uint32()
@@ -497,28 +536,40 @@ def _parse_known_record(
         next_key = reader.read_uint32()
         _skip_cond_u32(reader, version, AllegroVersion.V_172, count=2)
         if _version_at_least(version, AllegroVersion.V_172):
-            reader.skip(4)
+            payload["font_key"] = reader.read_uint8()
+            payload["font_flags"] = reader.read_uint8()
+            payload["text_alignment_code"] = reader.read_uint8()
+            payload["text_reversal_code"] = reader.read_uint8()
         _skip_cond_u32(reader, version, AllegroVersion.V_172)
         _skip_cond_u32(reader, version, AllegroVersion.V_174)
         payload["string_graphic_key"] = reader.read_uint32()
         _skip_cond_u32(reader, version, AllegroVersion.V_172)
         if _version_lt(version, AllegroVersion.V_172):
             reader.skip(4)
-            reader.skip(4)
+            payload["font_key"] = reader.read_uint8()
+            payload["font_flags"] = reader.read_uint8()
+            payload["text_alignment_code"] = reader.read_uint8()
+            payload["text_reversal_code"] = reader.read_uint8()
         _skip_cond_u32(reader, version, AllegroVersion.V_172)
-        reader.skip(2 * 4 + 2 * 4)
+        payload["x"] = reader.read_int32()
+        payload["y"] = reader.read_int32()
+        reader.skip(4)
+        payload["rotation_mdeg"] = reader.read_uint32()
         if _version_lt(version, AllegroVersion.V_172):
             reader.skip(4)
     elif tag == 0x31:
-        reader.skip(3)
+        reader.skip(1)
+        payload["string_layer_code"] = reader.read_uint16()
         key = reader.read_uint32()
         payload["text_wrapper_key"] = reader.read_uint32()
-        reader.skip(2 * 4 + 2)
+        payload["x"] = reader.read_int32()
+        payload["y"] = reader.read_int32()
+        reader.skip(2)
         length = reader.read_uint16()
         _require_dynamic_count(reader, length, offset=offset, label="0x31 string")
         _skip_cond_u32(reader, version, AllegroVersion.V_174)
         payload["text_length"] = length
-        reader.skip(length)
+        payload["text"] = reader.read_fixed_string(length)
     elif tag == 0x32:
         reader.skip(1)
         _read_layer_info(reader, payload)
