@@ -17,6 +17,7 @@ from phosphor_eda.domain.pcb import (
     PcbBoardProfileElement,
     PcbCircle,
     PcbClosedPath,
+    PcbConductor,
     PcbDrill,
     PcbFootprint,
     PcbFootprintMetadata,
@@ -34,10 +35,12 @@ from phosphor_eda.domain.pcb import (
 from phosphor_eda.domain.pcb_builder import PcbBuilder
 from phosphor_eda.formats.allegro.constants import AllegroBoardUnits
 from phosphor_eda.formats.allegro.graph import AllegroObjectGraph, build_allegro_object_graph
-from phosphor_eda.formats.allegro.graphics import extract_allegro_graphics
+from phosphor_eda.formats.allegro.graphics import extract_allegro_copper, extract_allegro_graphics
 from phosphor_eda.formats.allegro.layers import build_allegro_layers
 from phosphor_eda.formats.allegro.padstacks import AllegroExpandedPadstack, expand_allegro_padstack
 from phosphor_eda.formats.allegro.primitives import (
+    AllegroConductorPrimitive,
+    AllegroCopper,
     AllegroGraphicPrimitive,
     AllegroPrimitiveKind,
     AllegroPrimitiveRole,
@@ -46,6 +49,7 @@ from phosphor_eda.formats.allegro.primitives import (
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from phosphor_eda.formats.allegro.layers import AllegroLayerMap
     from phosphor_eda.formats.allegro.records import AllegroRecord, AllegroRecordSet
 
 _REFDES_RE = re.compile(r"^[A-Z]+[A-Z0-9]*\d+[A-Z0-9]*$")
@@ -126,6 +130,17 @@ def build_allegro_board(record_set: AllegroRecordSet, *, name: str = "Allegro Bo
         unit_to_mm=unit_to_mm,
         copper_layers=copper_layers,
     )
+    copper = _add_conductors(
+        builder,
+        record_set,
+        layer_map=layer_map,
+        graph=graph,
+        nets_by_key=nets_by_key,
+        footprints_by_instance_key=footprints_by_instance_key,
+    )
+    diagnostic_count = len(layer_map.diagnostics) + len(copper.diagnostics)
+    if diagnostic_count:
+        builder.metadata.properties["parse_diagnostic_count"] = str(diagnostic_count)
 
     board = builder.build()
     board.stackup = layer_map.stackup
@@ -385,6 +400,49 @@ def _add_vias(
             ),
             source=_source("via", record),
         )
+
+
+def _add_conductors(
+    builder: PcbBuilder,
+    record_set: AllegroRecordSet,
+    *,
+    layer_map: AllegroLayerMap,
+    graph: AllegroObjectGraph,
+    nets_by_key: Mapping[int, PcbNet],
+    footprints_by_instance_key: Mapping[int, PcbFootprint],
+) -> AllegroCopper:
+    copper = extract_allegro_copper(record_set, layer_map, graph)
+    for primitive in copper.conductors:
+        builder.add_conductor_object(
+            _conductor(
+                primitive,
+                nets_by_key=nets_by_key,
+                footprints_by_instance_key=footprints_by_instance_key,
+            ),
+            source=primitive.id,
+        )
+    return copper
+
+
+def _conductor(
+    primitive: AllegroConductorPrimitive,
+    *,
+    nets_by_key: Mapping[int, PcbNet],
+    footprints_by_instance_key: Mapping[int, PcbFootprint],
+) -> PcbConductor:
+    return PcbConductor(
+        id=primitive.id,
+        kind=primitive.kind,
+        layer=primitive.layer,
+        data=primitive.data,
+        net=nets_by_key.get(primitive.net_key) if primitive.net_key is not None else None,
+        footprint=(
+            footprints_by_instance_key.get(primitive.footprint_key)
+            if primitive.footprint_key is not None
+            else None
+        ),
+        metadata=primitive.metadata,
+    )
 
 
 def _add_drill(

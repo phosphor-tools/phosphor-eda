@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.pcb import (
     PcbArc,
+    PcbConductorKind,
     PcbLayer,
     PcbLine,
     PcbObjectMetadata,
@@ -60,4 +61,21 @@ class AllegroGraphics:
     board_profile: tuple[AllegroGraphicPrimitive, ...] = ()
     artwork: tuple[AllegroGraphicPrimitive, ...] = ()
     keepouts: tuple[AllegroGraphicPrimitive, ...] = ()
+    diagnostics: tuple[AllegroRecordDiagnostic, ...] = ()
+
+
+@dataclass(frozen=True, kw_only=True)
+class AllegroConductorPrimitive:
+    id: str
+    kind: PcbConductorKind
+    data: PcbLine | PcbArc | PcbPolygon
+    layer: PcbLayer
+    net_key: int | None = None
+    footprint_key: int | None = None
+    metadata: PcbObjectMetadata = field(default_factory=PcbObjectMetadata)
+
+
+@dataclass(frozen=True)
+class AllegroCopper:
+    conductors: tuple[AllegroConductorPrimitive, ...] = ()
     diagnostics: tuple[AllegroRecordDiagnostic, ...] = ()
