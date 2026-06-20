@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from phosphor_eda.formats.allegro.parser import parse_allegro_pcb as _parse_allegro_pcb
+from phosphor_eda.formats.allegro.project_loader import (
+    load_allegro_pcb_project as _load_allegro_pcb_project,
+)
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -19,15 +24,9 @@ __all__ = [
 
 def parse_allegro_pcb(path: Path, ctx: ParseContext | None = None) -> Board:
     """Parse a native Allegro/OrCAD ``.brd`` file into the PCB domain model."""
-    from phosphor_eda.formats.allegro.parser import parse_allegro_pcb as _parse_allegro_pcb
-
     return _parse_allegro_pcb(path, ctx)
 
 
 def load_allegro_pcb_project(path: str | Path) -> Project:
     """Load board-side Allegro project enrichment."""
-    from phosphor_eda.formats.allegro.project_loader import (
-        load_allegro_pcb_project as _load_allegro_pcb_project,
-    )
-
     return _load_allegro_pcb_project(path)
