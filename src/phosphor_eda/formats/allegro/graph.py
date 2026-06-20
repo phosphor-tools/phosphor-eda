@@ -45,8 +45,6 @@ class AllegroObjectGraph:
         current_key = head_key
 
         while current_key != 0:
-            if tail_key is not None and current_key == tail_key:
-                break
             if current_key in seen:
                 diagnostics.append(
                     AllegroRecordDiagnostic(
@@ -60,6 +58,8 @@ class AllegroObjectGraph:
 
             record = self.by_key.get(current_key)
             if record is None:
+                if tail_key is not None and current_key == tail_key:
+                    break
                 diagnostics.append(
                     AllegroRecordDiagnostic(
                         code="unresolved-reference",
@@ -70,6 +70,8 @@ class AllegroObjectGraph:
                 break
 
             records.append(record)
+            if tail_key is not None and current_key == tail_key:
+                break
             current_key = record.next_key or 0
 
         return AllegroLinkedListWalk(records=tuple(records), diagnostics=tuple(diagnostics))

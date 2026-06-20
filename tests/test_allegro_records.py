@@ -16,6 +16,7 @@ BREAKOUT_BOARD = (
     / "allegro/OpenCellular/electronics/breakout/board"
     / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
 )
+BREAKOUT_RECORD_0X27_END_OFFSET = 0x18C
 
 
 def test_parse_allegro_records_starts_after_aligned_string_table_padding() -> None:
@@ -48,3 +49,22 @@ def test_parse_allegro_records_rejects_unknown_implicit_length_record() -> None:
     error = exc_info.value
     assert error.code == "unknown-record-tag"
     assert error.offset == 0x54AC
+
+
+def test_parse_allegro_records_rejects_unaligned_0x27_reference_payload() -> None:
+    data = bytearray(BREAKOUT_BOARD.read_bytes())
+    original_end = int.from_bytes(
+        data[BREAKOUT_RECORD_0X27_END_OFFSET : BREAKOUT_RECORD_0X27_END_OFFSET + 4],
+        "little",
+    )
+    data[BREAKOUT_RECORD_0X27_END_OFFSET : BREAKOUT_RECORD_0X27_END_OFFSET + 4] = (
+        original_end + 1
+    ).to_bytes(4, "little")
+
+    with pytest.raises(AllegroParseError) as exc_info:
+        parse_allegro_records(bytes(data), source_name="unaligned-0x27.brd")
+
+    error = exc_info.value
+    assert error.code == "record-length-invalid"
+    assert error.source_name == "unaligned-0x27.brd"
+    assert "0x27 reference payload" in str(error)

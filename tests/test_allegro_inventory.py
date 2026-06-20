@@ -98,3 +98,22 @@ def test_allegro_object_graph_reports_dangling_and_cyclic_linked_lists() -> None
     assert [record.key for record in cyclic.records] == [10, 20]
     assert [diagnostic.code for diagnostic in cyclic.diagnostics] == ["linked-list-cycle"]
     assert [diagnostic.code for diagnostic in dangling.diagnostics] == ["unresolved-reference"]
+
+
+def test_allegro_object_graph_includes_tail_record_when_walking_bounded_list() -> None:
+    record_set = AllegroRecordSet(
+        header=None,
+        string_table=None,
+        records=(
+            AllegroRecord(tag=0x1B, offset=0, end_offset=12, key=10, next_key=20, payload={}),
+            AllegroRecord(tag=0x1B, offset=12, end_offset=24, key=20, next_key=30, payload={}),
+            AllegroRecord(tag=0x1B, offset=24, end_offset=36, key=30, next_key=0, payload={}),
+        ),
+        end_offset=36,
+    )
+
+    graph = build_allegro_object_graph(record_set)
+    walk = graph.walk_key_chain(head_key=10, tail_key=20)
+
+    assert [record.key for record in walk.records] == [10, 20]
+    assert walk.diagnostics == ()
