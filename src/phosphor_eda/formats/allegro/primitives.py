@@ -72,10 +72,21 @@ class AllegroConductorPrimitive:
     layer: PcbLayer
     net_key: int | None = None
     footprint_key: int | None = None
+    pour_id: str | None = None
+    metadata: PcbObjectMetadata = field(default_factory=PcbObjectMetadata)
+
+
+@dataclass(frozen=True, kw_only=True)
+class AllegroPourPrimitive:
+    id: str
+    boundary: PcbPolygon
+    layer: PcbLayer
+    net_key: int | None = None
     metadata: PcbObjectMetadata = field(default_factory=PcbObjectMetadata)
 
 
 @dataclass(frozen=True)
 class AllegroCopper:
+    pours: tuple[AllegroPourPrimitive, ...] = ()
     conductors: tuple[AllegroConductorPrimitive, ...] = ()
     diagnostics: tuple[AllegroRecordDiagnostic, ...] = ()

@@ -447,8 +447,11 @@ def _parse_known_record(
         key = reader.read_uint32()
         next_key = reader.read_uint32()
         reader.skip(2 * 4)
-        _skip_cond_u32(reader, version, AllegroVersion.V_172, count=2)
-        reader.skip(3 * 4)
+        if _version_at_least(version, AllegroVersion.V_172):
+            payload["dynamic_shape_flags"] = reader.read_uint32()
+            reader.skip(4)
+        reader.skip(2 * 4)
+        payload["first_keepout_key"] = reader.read_uint32()
         payload["first_segment_key"] = reader.read_uint32()
         reader.skip(2 * 4)
         _skip_cond_u32(reader, version, AllegroVersion.V_172)

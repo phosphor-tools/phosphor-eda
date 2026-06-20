@@ -29,6 +29,9 @@ from phosphor_eda.domain.pcb import (
     PcbObjectMetadata,
     PcbPad,
     PcbPolygon,
+    PcbPour,
+    PcbPourFillMode,
+    PcbPourSettings,
     PcbVia,
     PcbViaType,
 )
@@ -42,6 +45,7 @@ from phosphor_eda.formats.allegro.primitives import (
     AllegroConductorPrimitive,
     AllegroCopper,
     AllegroGraphicPrimitive,
+    AllegroPourPrimitive,
     AllegroPrimitiveKind,
     AllegroPrimitiveRole,
 )
@@ -412,16 +416,58 @@ def _add_conductors(
     footprints_by_instance_key: Mapping[int, PcbFootprint],
 ) -> AllegroCopper:
     copper = extract_allegro_copper(record_set, layer_map, graph)
+    pours_by_id: dict[str, PcbPour] = {}
+    pour_fills: dict[str, list[PcbConductor]] = {}
+    for primitive in copper.pours:
+        pour = builder.add_pour_object(
+            _pour(
+                primitive,
+                nets_by_key=nets_by_key,
+            ),
+            source=primitive.id,
+        )
+        pours_by_id[pour.id] = pour
     for primitive in copper.conductors:
-        builder.add_conductor_object(
+        conductor = builder.add_conductor_object(
             _conductor(
                 primitive,
                 nets_by_key=nets_by_key,
                 footprints_by_instance_key=footprints_by_instance_key,
+                pours_by_id=pours_by_id,
             ),
             source=primitive.id,
         )
+        if conductor.pour is not None:
+            pour_fills.setdefault(conductor.pour.id, []).append(conductor)
+    for pour in pours_by_id.values():
+        pour.fills = tuple(pour_fills.get(pour.id, ()))
     return copper
+
+
+def _pour(
+    primitive: AllegroPourPrimitive,
+    *,
+    nets_by_key: Mapping[int, PcbNet],
+) -> PcbPour:
+    return PcbPour(
+        id=primitive.id,
+        boundary=PcbClosedPath.from_points(primitive.boundary.points),
+        layers=(primitive.layer,),
+        net=nets_by_key.get(primitive.net_key) if primitive.net_key is not None else None,
+        settings=PcbPourSettings(fill_mode=_pour_fill_mode(primitive)),
+        footprint=None,
+        metadata=primitive.metadata,
+    )
+
+
+def _pour_fill_mode(primitive: AllegroPourPrimitive) -> PcbPourFillMode:
+    properties = primitive.metadata.properties
+    if (
+        "native_first_keepout_key" in properties
+        or properties.get("dynamic_shape_degraded") == "true"
+    ):
+        return PcbPourFillMode.UNKNOWN
+    return PcbPourFillMode.SOLID
 
 
 def _conductor(
@@ -429,6 +475,7 @@ def _conductor(
     *,
     nets_by_key: Mapping[int, PcbNet],
     footprints_by_instance_key: Mapping[int, PcbFootprint],
+    pours_by_id: Mapping[str, PcbPour],
 ) -> PcbConductor:
     return PcbConductor(
         id=primitive.id,
@@ -441,6 +488,7 @@ def _conductor(
             if primitive.footprint_key is not None
             else None
         ),
+        pour=pours_by_id.get(primitive.pour_id) if primitive.pour_id is not None else None,
         metadata=primitive.metadata,
     )
 
