@@ -46,6 +46,7 @@ def test_allegro_board_assembly_emits_connectivity_padstacks_and_drills() -> Non
     footprint_pads = [pad for pad in board.pads if pad.footprint is not None]
     connected_footprint_pads = [pad for pad in footprint_pads if pad.net is not None]
     assert len(connected_footprint_pads) >= oracle.node_count - oracle.no_connect_node_count
+    assert footprint_pads[0].number == "1"
     assert all(pad.drill is None or pad.drill.owner is pad for pad in board.pads)
     assert all(pad.footprint in board.footprints for pad in footprint_pads)
 

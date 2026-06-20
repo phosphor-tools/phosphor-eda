@@ -60,6 +60,7 @@ def build_allegro_board(record_set: AllegroRecordSet, *, name: str = "Allegro Bo
 
     nets_by_key = _add_nets(builder, record_set)
     padstacks = _padstacks(record_set, unit_to_mm)
+    text_by_wrapper = _text_by_wrapper(record_set)
     pad_definitions = {
         record.key: record
         for record in record_set.records
@@ -71,6 +72,7 @@ def build_allegro_board(record_set: AllegroRecordSet, *, name: str = "Allegro Bo
         record_set,
         footprint_sources=footprint_sources,
         unit_to_mm=unit_to_mm,
+        text_by_wrapper=text_by_wrapper,
     )
 
     for component in (record for record in record_set.records if record.tag == 0x07):
@@ -95,6 +97,7 @@ def build_allegro_board(record_set: AllegroRecordSet, *, name: str = "Allegro Bo
                 nets_by_key=nets_by_key,
                 unit_to_mm=unit_to_mm,
                 copper_layers=copper_layers,
+                text_by_wrapper=text_by_wrapper,
             )
             current_key = _payload_int(pad_record, "next_in_component_key")
 
@@ -193,9 +196,9 @@ def _add_footprints(
     *,
     footprint_sources: Mapping[int, _FootprintSource],
     unit_to_mm: float,
+    text_by_wrapper: Mapping[int, str],
 ) -> dict[int, PcbFootprint]:
     string_table = _strings(record_set)
-    text_by_wrapper = _text_by_wrapper(record_set)
     copper_front = _front_copper(builder.layers)
     copper_back = _back_copper(builder.layers)
     used_refs: set[str] = set()
@@ -254,6 +257,7 @@ def _add_pad(
     nets_by_key: Mapping[int, PcbNet],
     unit_to_mm: float,
     copper_layers: tuple[PcbLayer, ...],
+    text_by_wrapper: Mapping[int, str],
 ) -> None:
     pad_definition = pad_definitions.get(_payload_int(record, "pad_definition_key"))
     if pad_definition is None:
@@ -271,7 +275,7 @@ def _add_pad(
             unit_to_mm,
             owner_prefix="pad",
         )
-        if padstack.drill_diameter > 0.0
+        if _has_drill(padstack)
         else None
     )
     metadata = _object_metadata(
@@ -286,7 +290,7 @@ def _add_pad(
     builder.add_pad_object(
         PcbPad(
             id=f"pad-{record.key}",
-            number=_pad_number(record),
+            number=_pad_number(record, text_by_wrapper),
             x=_coord(record, "coord_x", unit_to_mm),
             y=_coord(record, "coord_y", unit_to_mm),
             stack=padstack.stack,
@@ -314,7 +318,7 @@ def _add_vias(
         if record.tag != 0x33:
             continue
         padstack = padstacks.get(_payload_int(record, "padstack_key"))
-        if padstack is None:
+        if padstack is None or not _has_drill(padstack):
             continue
         drill = _add_drill(
             builder,
@@ -353,7 +357,7 @@ def _add_drill(
         id=f"{owner_prefix}-drill-{record.key}",
         x=_coord(record, "coord_x", unit_to_mm),
         y=_coord(record, "coord_y", unit_to_mm),
-        diameter=padstack.drill_diameter,
+        diameter=_drill_diameter(padstack),
         shape=padstack.drill_shape,
         plating=padstack.plating,
         width=padstack.drill_width,
@@ -369,9 +373,21 @@ def _pad_layers(
     footprint: PcbFootprint,
     padstack: AllegroExpandedPadstack,
 ) -> tuple[PcbLayer, ...]:
-    if padstack.drill_diameter > 0.0:
+    if _has_drill(padstack):
         return copper_layers
     return (footprint.layer,)
+
+
+def _has_drill(padstack: AllegroExpandedPadstack) -> bool:
+    return (
+        padstack.drill_diameter > 0.0 or padstack.drill_width > 0.0 or padstack.drill_height > 0.0
+    )
+
+
+def _drill_diameter(padstack: AllegroExpandedPadstack) -> float:
+    if padstack.drill_diameter > 0.0:
+        return padstack.drill_diameter
+    return max(padstack.drill_width, padstack.drill_height)
 
 
 def _front_copper(layers: list[PcbLayer]) -> PcbLayer:
@@ -439,9 +455,11 @@ def _coord(record: AllegroRecord, key: str, unit_to_mm: float) -> float:
     return _payload_int(record, key) * unit_to_mm
 
 
-def _pad_number(record: AllegroRecord) -> str:
-    text_key = _payload_int(record, "name_text_key")
-    return str(text_key or record.key or "")
+def _pad_number(record: AllegroRecord, text_by_wrapper: Mapping[int, str]) -> str:
+    text = text_by_wrapper.get(_payload_int(record, "name_text_key"), "")
+    if text:
+        return text
+    return str(record.key or "")
 
 
 def _object_metadata(

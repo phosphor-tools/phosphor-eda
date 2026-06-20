@@ -73,7 +73,7 @@ def expand_allegro_padstack(
         pad_height = drill_height if drill_height > 0 else pad_width
 
     metadata = {
-        "native_padstack_key": str(record.key or ""),
+        "native_padstack_key": "" if record.key is None else str(record.key),
         "native_padstack_name": name,
         "native_pad_type_code": str(pad_type_code),
         "native_layer_count": str(_payload_int(record, "layer_count")),
@@ -92,7 +92,7 @@ def expand_allegro_padstack(
             _component_offset(copper_component.offset_x if copper_component else 0, unit_to_mm),
             _component_offset(copper_component.offset_y if copper_component else 0, unit_to_mm),
         ),
-        pad_type=_pad_type(pad_type_code, drill_diameter),
+        pad_type=_pad_type(pad_type_code, drill_diameter, drill_width, drill_height),
         drill_diameter=drill_diameter,
         drill_shape=PcbDrillShape.SLOT
         if pad_type_code == _PADSTACK_TYPE_SLOT
@@ -152,8 +152,14 @@ def _component_offset(value: int, unit_to_mm: float) -> float:
     return value * unit_to_mm
 
 
-def _pad_type(pad_type_code: int, drill_diameter: float) -> PcbPadType:
-    if pad_type_code in _PADSTACK_TYPE_SMD or drill_diameter <= 0.0:
+def _pad_type(
+    pad_type_code: int,
+    drill_diameter: float,
+    drill_width: float,
+    drill_height: float,
+) -> PcbPadType:
+    has_hole = drill_diameter > 0.0 or drill_width > 0.0 or drill_height > 0.0
+    if pad_type_code in _PADSTACK_TYPE_SMD or not has_hole:
         return PcbPadType.SMD
     return PcbPadType.THROUGH_HOLE
 
