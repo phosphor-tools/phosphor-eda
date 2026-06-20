@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -31,6 +32,7 @@ class AllegroHeader:
     version_string: str
     object_count: int
     max_key: int
+    record_0x27_end: int
     string_count: int
     board_units: AllegroBoardUnits
     unit_divisor: int
@@ -60,3 +62,53 @@ class AllegroStringTable:
 class AllegroBinaryContainer:
     header: AllegroHeader
     string_table: AllegroStringTable
+
+
+@dataclass(frozen=True)
+class AllegroRecordDiagnostic:
+    code: str
+    message: str
+    offset: int | None = None
+    tag: int | None = None
+    key: int | None = None
+    reference_key: int | None = None
+
+
+@dataclass(frozen=True)
+class AllegroRecord:
+    tag: int
+    offset: int
+    end_offset: int
+    key: int | None
+    next_key: int | None
+    payload: Mapping[str, object]
+
+    @property
+    def byte_length(self) -> int:
+        return self.end_offset - self.offset
+
+
+@dataclass(frozen=True)
+class AllegroRecordSet:
+    header: AllegroHeader | None
+    string_table: AllegroStringTable | None
+    records: tuple[AllegroRecord, ...]
+    end_offset: int
+    _by_key: Mapping[int, AllegroRecord] = field(init=False, repr=False)
+    _tag_counts: Mapping[int, int] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        by_key = {record.key: record for record in self.records if record.key is not None}
+        counts: dict[int, int] = {}
+        for record in self.records:
+            counts[record.tag] = counts.get(record.tag, 0) + 1
+        object.__setattr__(self, "_by_key", MappingProxyType(by_key))
+        object.__setattr__(self, "_tag_counts", MappingProxyType(counts))
+
+    @property
+    def by_key(self) -> Mapping[int, AllegroRecord]:
+        return self._by_key
+
+    @property
+    def tag_counts(self) -> Mapping[int, int]:
+        return self._tag_counts
