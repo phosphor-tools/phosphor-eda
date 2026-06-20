@@ -388,6 +388,14 @@ def _parse_known_record(
         else:
             reader.skip(3)
             payload_bytes = total_bytes - 3
+            if payload_bytes % 4 != 0:
+                raise AllegroParseError(
+                    f"record 0x27 reference payload has {payload_bytes} bytes, "
+                    "which is not divisible by 4",
+                    code="record-length-invalid",
+                    offset=offset,
+                    source_name=reader.source_name,
+                )
             payload["reference_count"] = payload_bytes // 4
             reader.skip(payload_bytes)
     elif tag == 0x28:
