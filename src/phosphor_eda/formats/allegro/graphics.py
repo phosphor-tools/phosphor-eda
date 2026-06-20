@@ -1,4 +1,4 @@
-"""Graphics, board-profile, text, and keepout extraction for Allegro boards."""
+"""Graphics, copper, board-profile, text, and keepout extraction for Allegro boards."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from phosphor_eda.domain.pcb import (
     LayerRole,
     PcbArc,
+    PcbConductorKind,
     PcbLine,
     PcbObjectMetadata,
     PcbPolygon,
@@ -17,6 +18,8 @@ from phosphor_eda.domain.pcb import (
 from phosphor_eda.formats.allegro.constants import AllegroBoardUnits
 from phosphor_eda.formats.allegro.graph import build_allegro_object_graph
 from phosphor_eda.formats.allegro.primitives import (
+    AllegroConductorPrimitive,
+    AllegroCopper,
     AllegroGraphicPrimitive,
     AllegroGraphics,
     AllegroPrimitiveKind,
@@ -31,6 +34,7 @@ if TYPE_CHECKING:
     from phosphor_eda.formats.allegro.records import AllegroHeader, AllegroRecord, AllegroRecordSet
 
 _CLASS_BOARD_GEOMETRY = 0x01
+_CLASS_ETCH = 0x06
 _OUTLINE_SUBCLASSES = {0xEA, 0xFD}
 
 
@@ -110,6 +114,298 @@ def extract_allegro_graphics(
         artwork=tuple(artwork),
         keepouts=tuple(keepouts),
         diagnostics=tuple(diagnostics),
+    )
+
+
+def extract_allegro_copper(
+    record_set: AllegroRecordSet,
+    layer_map: AllegroLayerMap,
+    graph: AllegroObjectGraph | None = None,
+) -> AllegroCopper:
+    graph = graph or build_allegro_object_graph(record_set)
+    diagnostics: list[AllegroRecordDiagnostic] = list(graph.diagnostics)
+    conductors = [
+        *_track_conductors(record_set, graph, layer_map, diagnostics),
+        *_rectangle_region_conductors(record_set, layer_map, diagnostics),
+        *_graphic_segment_conductors(record_set, graph, layer_map, diagnostics),
+    ]
+    return AllegroCopper(conductors=tuple(conductors), diagnostics=tuple(diagnostics))
+
+
+def _track_conductors(
+    record_set: AllegroRecordSet,
+    graph: AllegroObjectGraph,
+    layer_map: AllegroLayerMap,
+    diagnostics: list[AllegroRecordDiagnostic],
+) -> tuple[AllegroConductorPrimitive, ...]:
+    conductors: list[AllegroConductorPrimitive] = []
+    for track, net_key in _net_owned_tracks(record_set, graph, diagnostics):
+        layer = _copper_layer(track, layer_map, diagnostics, require_etch=True)
+        if layer is None:
+            continue
+        segment_key = _payload_int(track, "first_segment_key")
+        if segment_key == 0:
+            diagnostics.append(
+                _drop_diagnostic(
+                    track,
+                    code="missing-track-segment-chain",
+                    message=f"track record {track.key} has no first segment key",
+                )
+            )
+            continue
+        for segment in _owned_segment_chain(
+            track,
+            graph=graph,
+            head_key=segment_key,
+            diagnostics=diagnostics,
+        ):
+            conductor = _track_conductor_primitive(
+                segment,
+                track=track,
+                header=record_set.header,
+                layer=layer,
+                net_key=net_key,
+            )
+            if conductor is not None:
+                conductors.append(conductor)
+    return tuple(conductors)
+
+
+def _rectangle_region_conductors(
+    record_set: AllegroRecordSet,
+    layer_map: AllegroLayerMap,
+    diagnostics: list[AllegroRecordDiagnostic],
+) -> tuple[AllegroConductorPrimitive, ...]:
+    conductors: list[AllegroConductorPrimitive] = []
+    for record in record_set.records:
+        if record.tag not in {0x0E, 0x24} or record.key is None:
+            continue
+        if _copper_layer(record, layer_map, diagnostics, require_etch=False) is None:
+            continue
+        rectangle = _rectangle_primitive(
+            record,
+            header=record_set.header,
+            layer_map=layer_map,
+            diagnostics=diagnostics,
+        )
+        if rectangle is not None:
+            conductor = _rectangle_region_conductor_primitive(record, rectangle)
+            if conductor is not None:
+                conductors.append(conductor)
+    return tuple(conductors)
+
+
+def _graphic_segment_conductors(
+    record_set: AllegroRecordSet,
+    graph: AllegroObjectGraph,
+    layer_map: AllegroLayerMap,
+    diagnostics: list[AllegroRecordDiagnostic],
+) -> tuple[AllegroConductorPrimitive, ...]:
+    conductors: list[AllegroConductorPrimitive] = []
+    for record in record_set.records:
+        if record.tag != 0x14 or record.key is None:
+            continue
+        layer = _copper_layer(record, layer_map, diagnostics, require_etch=True)
+        if layer is None:
+            continue
+        footprint_key = _parent_footprint_key(_payload_int(record, "parent_key"), graph)
+        primitives = _graphic_segment_primitives(
+            record,
+            graph=graph,
+            header=record_set.header,
+            layer=layer,
+            roles=(AllegroPrimitiveRole.ARTWORK,),
+            diagnostics=diagnostics,
+        )
+        for primitive in primitives:
+            conductor = _graphic_conductor_primitive(primitive, footprint_key=footprint_key)
+            if conductor is not None:
+                conductors.append(conductor)
+    return tuple(conductors)
+
+
+def _copper_layer(
+    record: AllegroRecord,
+    layer_map: AllegroLayerMap,
+    diagnostics: list[AllegroRecordDiagnostic],
+    *,
+    require_etch: bool,
+) -> PcbLayer | None:
+    layer = _record_layer(record, layer_map)
+    if layer is None:
+        diagnostics.append(_missing_layer_diagnostic(record))
+        return None
+    if require_etch and _payload_int(record, "layer_class_id") != _CLASS_ETCH:
+        return None
+    return layer if layer.has_role(LayerRole.COPPER) else None
+
+
+def _net_owned_tracks(
+    record_set: AllegroRecordSet,
+    graph: AllegroObjectGraph,
+    diagnostics: list[AllegroRecordDiagnostic],
+) -> tuple[tuple[AllegroRecord, int], ...]:
+    result: list[tuple[AllegroRecord, int]] = []
+    for net in (record for record in record_set.records if record.tag == 0x1B):
+        net_key = net.key
+        if net_key is None:
+            continue
+        current_key = _payload_int(net, "assignment_key")
+        seen: set[int] = set()
+        while current_key != 0:
+            if current_key in seen:
+                diagnostics.append(
+                    _drop_diagnostic(
+                        net,
+                        code="net-assignment-cycle",
+                        message=f"net record {net.key} assignment chain cycles at {current_key}",
+                        reference_key=current_key,
+                    )
+                )
+                break
+            seen.add(current_key)
+            assignment = graph.by_key.get(current_key)
+            if assignment is None:
+                diagnostics.append(
+                    _drop_diagnostic(
+                        net,
+                        code="unresolved-net-assignment",
+                        message=f"net record {net.key} references missing assignment {current_key}",
+                        reference_key=current_key,
+                    )
+                )
+                break
+            if assignment.tag != 0x04:
+                diagnostics.append(
+                    _drop_diagnostic(
+                        net,
+                        code="invalid-net-assignment-record",
+                        message=(
+                            f"net record {net.key} assignment chain reached "
+                            f"0x{assignment.tag:02X} record {assignment.key}"
+                        ),
+                        reference_key=assignment.key,
+                    )
+                )
+                break
+            connected_key = _payload_int(assignment, "connected_item_key")
+            connected_item = graph.by_key.get(connected_key)
+            if connected_key and connected_item is None:
+                diagnostics.append(
+                    _drop_diagnostic(
+                        assignment,
+                        code="unresolved-connected-copper-item",
+                        message=(
+                            f"net assignment {assignment.key} references missing "
+                            f"connected item {connected_key}"
+                        ),
+                        reference_key=connected_key,
+                    )
+                )
+            if connected_item is not None and connected_item.tag == 0x05:
+                result.append((connected_item, _payload_int(assignment, "net_key") or net_key))
+            current_key = assignment.next_key or 0
+    return tuple(result)
+
+
+def _track_conductor_primitive(
+    record: AllegroRecord,
+    *,
+    track: AllegroRecord,
+    header: AllegroHeader | None,
+    layer: PcbLayer,
+    net_key: int,
+) -> AllegroConductorPrimitive | None:
+    if header is None:
+        return None
+    graphic = _line_or_arc_primitive(
+        record,
+        owner=track,
+        header=header,
+        layer=layer,
+        roles=(AllegroPrimitiveRole.ARTWORK,),
+    )
+    if graphic is None:
+        return None
+    if not isinstance(graphic.data, PcbLine | PcbArc):
+        return None
+    kind = (
+        PcbConductorKind.TRACE_ARC
+        if graphic.kind is AllegroPrimitiveKind.ARC
+        else PcbConductorKind.TRACE
+    )
+    properties = dict(graphic.metadata.properties)
+    properties["native_track_key"] = str(track.key or "")
+    properties["native_net_key"] = str(net_key)
+    return AllegroConductorPrimitive(
+        id=graphic.id,
+        kind=kind,
+        data=graphic.data,
+        layer=layer,
+        net_key=net_key,
+        metadata=replace(
+            graphic.metadata,
+            native_type="track_segment" if kind is PcbConductorKind.TRACE else "track_arc",
+            native_id=str(record.key or ""),
+            properties=properties,
+        ),
+    )
+
+
+def _graphic_conductor_primitive(
+    primitive: AllegroGraphicPrimitive,
+    *,
+    footprint_key: int | None,
+) -> AllegroConductorPrimitive | None:
+    if primitive.layer is None or not isinstance(primitive.data, PcbLine | PcbArc):
+        return None
+    kind = (
+        PcbConductorKind.TRACE_ARC
+        if primitive.kind is AllegroPrimitiveKind.ARC
+        else PcbConductorKind.TRACE
+    )
+    properties = dict(primitive.metadata.properties)
+    return AllegroConductorPrimitive(
+        id=primitive.id,
+        kind=kind,
+        data=primitive.data,
+        layer=primitive.layer,
+        footprint_key=footprint_key,
+        metadata=replace(
+            primitive.metadata,
+            native_type=(
+                "copper_graphic_arc"
+                if kind is PcbConductorKind.TRACE_ARC
+                else "copper_graphic_segment"
+            ),
+            native_id=str(primitive.source_key),
+            properties=properties,
+        ),
+    )
+
+
+def _rectangle_region_conductor_primitive(
+    record: AllegroRecord,
+    primitive: AllegroGraphicPrimitive,
+) -> AllegroConductorPrimitive | None:
+    if primitive.layer is None or not isinstance(primitive.data, PcbPolygon):
+        return None
+    properties = dict(primitive.metadata.properties)
+    footprint_key = _payload_int(record, "footprint_key")
+    if footprint_key:
+        properties["native_footprint_key"] = str(footprint_key)
+    return AllegroConductorPrimitive(
+        id=primitive.id,
+        kind=PcbConductorKind.COPPER_REGION,
+        data=primitive.data,
+        layer=primitive.layer,
+        footprint_key=footprint_key or None,
+        metadata=replace(
+            primitive.metadata,
+            native_type="copper_rectangle_region",
+            native_id=str(record.key or ""),
+            properties=properties,
+        ),
     )
 
 
@@ -536,6 +832,13 @@ def _with_parent_metadata(
     if parent is not None and parent.tag == 0x2D:
         properties["native_footprint_key"] = str(parent_key)
     return replace(metadata, properties=properties)
+
+
+def _parent_footprint_key(parent_key: int, graph: AllegroObjectGraph) -> int | None:
+    parent = graph.by_key.get(parent_key)
+    if parent is not None and parent.tag == 0x2D:
+        return parent_key
+    return None
 
 
 def _missing_layer_diagnostic(record: AllegroRecord) -> AllegroRecordDiagnostic:
