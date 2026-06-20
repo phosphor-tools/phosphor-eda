@@ -23,6 +23,10 @@ class BoundedBinaryReader:
     def size(self) -> int:
         return len(self._data)
 
+    @property
+    def source_name(self) -> str:
+        return self._source_name
+
     def seek(self, offset: int) -> None:
         if offset < 0 or offset > self.size:
             raise AllegroParseError(
