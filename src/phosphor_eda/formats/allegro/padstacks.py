@@ -15,6 +15,7 @@ from phosphor_eda.formats.allegro.records import AllegroPadstackComponent
 
 if TYPE_CHECKING:
     from phosphor_eda.formats.allegro.records import AllegroRecord
+    from phosphor_eda.formats.allegro.sidecars import AllegroPadstackSidecar
 
 _PADSTACK_TYPE_VIA = 0x10
 _PADSTACK_TYPE_SMD = {0x20, 0xA0}
@@ -54,6 +55,7 @@ def expand_allegro_padstack(
     *,
     name: str,
     unit_to_mm: float,
+    sidecar: AllegroPadstackSidecar | None = None,
 ) -> AllegroExpandedPadstack:
     """Convert a decoded 0x1C source record to reusable pad/via geometry."""
     components = _pad_components(record)
@@ -81,6 +83,15 @@ def expand_allegro_padstack(
     }
     if copper_component is not None:
         metadata["native_pad_component_type"] = str(copper_component.component_type)
+    if sidecar is not None:
+        metadata.update(
+            _sidecar_metadata(
+                sidecar,
+                pad_width,
+                pad_height,
+                shape=_component_shape(copper_component),
+            )
+        )
 
     return AllegroExpandedPadstack(
         name=name,
@@ -102,6 +113,32 @@ def expand_allegro_padstack(
         plating=_plating(record, pad_type_code),
         metadata=metadata,
     )
+
+
+def _sidecar_metadata(
+    sidecar: AllegroPadstackSidecar, pad_width: float, pad_height: float, *, shape: str
+) -> dict[str, str]:
+    result = {
+        "sidecar_padstack_path": str(sidecar.path),
+        "sidecar_padstack_name": sidecar.name,
+        "sidecar_padstack_units": sidecar.units,
+        "sidecar_padstack_shape": sidecar.shape,
+        "sidecar_padstack_width_mm": repr(sidecar.width_mm),
+        "sidecar_padstack_height_mm": repr(sidecar.height_mm),
+    }
+    if (
+        _nearly_equal(sidecar.width_mm, pad_width)
+        and _nearly_equal(sidecar.height_mm, pad_height)
+        and sidecar.shape in {"", shape}
+    ):
+        result["sidecar_padstack_match"] = "geometry_confirmed"
+    else:
+        result["sidecar_padstack_match"] = "identity_only"
+    return result
+
+
+def _nearly_equal(left: float, right: float) -> bool:
+    return abs(left - right) <= 1e-6
 
 
 def _pad_components(record: AllegroRecord) -> tuple[AllegroPadstackComponent, ...]:
