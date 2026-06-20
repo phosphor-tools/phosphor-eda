@@ -308,7 +308,7 @@ def _document_kind(raw_path: str, native_kind: str) -> DocumentKind:
     suffix = Path(raw_path.replace("\\", "/")).suffix.lower()
     if "schematic design" in lower_kind or suffix == ".dsn":
         return DocumentKind.SCHEMATIC
-    if "schematic library" in lower_kind or suffix == ".olb":
+    if "schematic library" in lower_kind or suffix in {".olb", ".dra", ".pad", ".psm"}:
         return DocumentKind.LIBRARY
     if suffix == ".brd":
         return DocumentKind.PCB
