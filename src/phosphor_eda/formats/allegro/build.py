@@ -37,8 +37,9 @@ def build_allegro_graphics_board(record_set: AllegroRecordSet, *, name: str) -> 
     layer_map = build_allegro_layers(record_set)
     graphics = extract_allegro_graphics(record_set, layer_map)
     metadata = PcbMetadata(source_format="allegro")
-    if graphics.diagnostics:
-        metadata.properties["parse_diagnostic_count"] = str(len(graphics.diagnostics))
+    diagnostic_count = len(layer_map.diagnostics) + len(graphics.diagnostics)
+    if diagnostic_count:
+        metadata.properties["parse_diagnostic_count"] = str(diagnostic_count)
 
     builder = PcbBuilder(name, metadata=metadata)
     for layer in layer_map.layers:

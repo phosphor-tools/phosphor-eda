@@ -58,7 +58,10 @@ def extract_allegro_graphics(
                 diagnostics=diagnostics,
             )
             if rectangle is not None:
-                artwork.append(rectangle)
+                if rectangle.has_role(AllegroPrimitiveRole.BOARD_PROFILE):
+                    board_profile.append(rectangle)
+                else:
+                    artwork.append(rectangle)
             continue
         if record.tag == 0x34:
             keepout = _keepout_primitive(
@@ -133,10 +136,11 @@ def _rectangle_primitive(
     right = _coord_to_mm(max(x0, x1), header)
     top = -_coord_to_mm(max(y0, y1), header)
     bottom = -_coord_to_mm(min(y0, y1), header)
+    roles = _roles_for_record(record, layer)
     return AllegroGraphicPrimitive(
         id=f"allegro:{record.key}",
         kind=AllegroPrimitiveKind.RECTANGLE,
-        roles=(AllegroPrimitiveRole.ARTWORK,),
+        roles=roles,
         data=PcbPolygon(points=[(left, top), (right, top), (right, bottom), (left, bottom)]),
         layer=layer,
         source_tag=record.tag,
@@ -171,7 +175,12 @@ def _keepout_primitive(
         )
         return None
     points: list[tuple[float, float]] = []
-    for segment in _owned_segment_chain(record, graph=graph, head_key=segment_key):
+    for segment in _owned_segment_chain(
+        record,
+        graph=graph,
+        head_key=segment_key,
+        diagnostics=diagnostics,
+    ):
         if segment.tag == 0x01:
             diagnostics.append(
                 _drop_diagnostic(
@@ -308,7 +317,12 @@ def _graphic_segment_primitives(
         return ()
     primitives: list[AllegroGraphicPrimitive] = []
     parent_key = _payload_int(record, "parent_key")
-    for segment in _owned_segment_chain(record, graph=graph, head_key=segment_key):
+    for segment in _owned_segment_chain(
+        record,
+        graph=graph,
+        head_key=segment_key,
+        diagnostics=diagnostics,
+    ):
         if segment.key is None:
             continue
         primitive = _line_or_arc_primitive(
@@ -406,14 +420,47 @@ def _owned_segment_chain(
     *,
     graph: AllegroObjectGraph,
     head_key: int,
+    diagnostics: list[AllegroRecordDiagnostic],
 ) -> tuple[AllegroRecord, ...]:
     records: list[AllegroRecord] = []
     seen: set[int] = set()
     current_key = head_key
-    while current_key != 0 and current_key not in seen:
+    while current_key != 0:
+        if current_key in seen:
+            diagnostics.append(
+                _drop_diagnostic(
+                    owner,
+                    code="segment-chain-cycle",
+                    message=(f"record {owner.key} segment chain cycles at segment {current_key}"),
+                    reference_key=current_key,
+                )
+            )
+            break
         seen.add(current_key)
         segment = graph.by_key.get(current_key)
-        if segment is None or _payload_int(segment, "parent_key") != owner.key:
+        if segment is None:
+            diagnostics.append(
+                _drop_diagnostic(
+                    owner,
+                    code="unresolved-segment-record",
+                    message=f"record {owner.key} references missing segment {current_key}",
+                    reference_key=current_key,
+                )
+            )
+            break
+        parent_key = _payload_int(segment, "parent_key")
+        if parent_key != owner.key:
+            diagnostics.append(
+                _drop_diagnostic(
+                    owner,
+                    code="segment-owner-mismatch",
+                    message=(
+                        f"record {owner.key} segment chain reached segment {current_key} "
+                        f"owned by {parent_key}"
+                    ),
+                    reference_key=current_key,
+                )
+            )
             break
         records.append(segment)
         current_key = segment.next_key or 0

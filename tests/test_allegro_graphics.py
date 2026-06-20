@@ -115,6 +115,18 @@ def test_allegro_graphics_board_assembles_geometry_backed_board_profile() -> Non
     } == {"253"}
 
 
+def test_allegro_graphics_board_counts_layer_and_graphics_diagnostics() -> None:
+    record_set = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    layer_map = build_allegro_layers(record_set)
+    graphics = extract_allegro_graphics(record_set, layer_map)
+
+    board = build_allegro_graphics_board(record_set, name=BREAKOUT_BOARD.stem)
+
+    expected_count = len(layer_map.diagnostics) + len(graphics.diagnostics)
+    assert len(layer_map.diagnostics) > 0
+    assert board.metadata.properties["parse_diagnostic_count"] == str(expected_count)
+
+
 def test_allegro_graphics_extracts_text_artwork_with_layer_provenance() -> None:
     record_set = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
     layer_map = build_allegro_layers(record_set)
@@ -250,6 +262,39 @@ def test_allegro_graphics_extracts_rectangle_artwork() -> None:
     assert rectangle.metadata.properties["native_subclass_id"] == "13"
 
 
+def test_allegro_graphics_extracts_outline_rectangles_as_board_profile() -> None:
+    source = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    layer_map = build_allegro_layers(source)
+    record = AllegroRecord(
+        tag=0x24,
+        offset=100,
+        end_offset=120,
+        key=50,
+        next_key=None,
+        payload={
+            "layer_class_id": 1,
+            "layer_subclass_id": 253,
+            "coords": (0, 0, 1000, 2000),
+        },
+    )
+    record_set = AllegroRecordSet(
+        header=source.header,
+        string_table=source.string_table,
+        records=(record,),
+        end_offset=record.end_offset,
+    )
+
+    graphics = extract_allegro_graphics(record_set, layer_map)
+
+    assert graphics.artwork == ()
+    assert len(graphics.board_profile) == 1
+    rectangle = graphics.board_profile[0]
+    assert rectangle.has_role(AllegroPrimitiveRole.BOARD_PROFILE)
+    assert not rectangle.has_role(AllegroPrimitiveRole.ARTWORK)
+    assert isinstance(rectangle.data, PcbPolygon)
+    assert rectangle.metadata.properties["native_subclass_id"] == "253"
+
+
 def test_allegro_graphics_preserves_drc_markers_as_diagnostics() -> None:
     record_set = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
     layer_map = build_allegro_layers(record_set)
@@ -293,3 +338,99 @@ def test_allegro_graphics_reports_unresolved_artwork_layers() -> None:
         and diagnostic.tag == 0x24
         for diagnostic in graphics.diagnostics
     )
+
+
+def test_allegro_graphics_reports_segment_chain_truncation_diagnostics() -> None:
+    source = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    layer_map = build_allegro_layers(source)
+    missing_segment_graphic = AllegroRecord(
+        tag=0x14,
+        offset=100,
+        end_offset=120,
+        key=100,
+        next_key=None,
+        payload={
+            "layer_class_id": 1,
+            "layer_subclass_id": 240,
+            "segment_key": 999,
+        },
+    )
+    mismatched_keepout = AllegroRecord(
+        tag=0x34,
+        offset=120,
+        end_offset=140,
+        key=200,
+        next_key=None,
+        payload={
+            "layer_class_id": 21,
+            "layer_subclass_id": 0,
+            "first_segment_key": 201,
+        },
+    )
+    mismatched_segment = AllegroRecord(
+        tag=0x15,
+        offset=140,
+        end_offset=160,
+        key=201,
+        next_key=None,
+        payload={
+            "parent_key": 999,
+            "start_x": 0,
+            "start_y": 0,
+        },
+    )
+    cyclic_graphic = AllegroRecord(
+        tag=0x14,
+        offset=160,
+        end_offset=180,
+        key=300,
+        next_key=None,
+        payload={
+            "layer_class_id": 1,
+            "layer_subclass_id": 240,
+            "segment_key": 301,
+        },
+    )
+    cyclic_segment = AllegroRecord(
+        tag=0x15,
+        offset=180,
+        end_offset=200,
+        key=301,
+        next_key=301,
+        payload={
+            "parent_key": 300,
+            "start_x": 0,
+            "start_y": 0,
+            "end_x": 1000,
+            "end_y": 0,
+        },
+    )
+    record_set = AllegroRecordSet(
+        header=source.header,
+        string_table=source.string_table,
+        records=(
+            missing_segment_graphic,
+            mismatched_keepout,
+            mismatched_segment,
+            cyclic_graphic,
+            cyclic_segment,
+        ),
+        end_offset=cyclic_segment.end_offset,
+    )
+
+    graphics = extract_allegro_graphics(record_set, layer_map)
+
+    assert {
+        (diagnostic.code, diagnostic.key, diagnostic.reference_key)
+        for diagnostic in graphics.diagnostics
+        if diagnostic.code
+        in {
+            "unresolved-segment-record",
+            "segment-owner-mismatch",
+            "segment-chain-cycle",
+        }
+    } == {
+        ("unresolved-segment-record", 100, 999),
+        ("segment-owner-mismatch", 200, 201),
+        ("segment-chain-cycle", 300, 301),
+    }
