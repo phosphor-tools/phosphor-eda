@@ -286,8 +286,8 @@ def _parse_known_record(
         payload["field_key"] = reader.read_uint32()
         size_a = reader.read_uint16()
         size_b = reader.read_uint16()
-        _require_dynamic_count(size_a, offset=offset, label="0x1D dataA")
-        _require_dynamic_count(size_b, offset=offset, label="0x1D dataB")
+        _require_dynamic_count(reader, size_a, offset=offset, label="0x1D dataA")
+        _require_dynamic_count(reader, size_b, offset=offset, label="0x1D dataB")
         payload["data_a_count"] = size_a
         payload["data_b_count"] = size_b
         reader.skip(size_b * 56)
@@ -301,7 +301,7 @@ def _parse_known_record(
             reader.skip(2 + 2)
         payload["string_key"] = reader.read_uint32()
         size = reader.read_uint32()
-        _require_dynamic_count(size, offset=offset, label="0x1E string")
+        _require_dynamic_count(reader, size, offset=offset, label="0x1E string")
         payload["string_length"] = size
         reader.skip(size)
         _skip_cond_u32(reader, version, AllegroVersion.V_174)
@@ -311,7 +311,7 @@ def _parse_known_record(
         next_key = reader.read_uint32()
         reader.skip(3 * 4 + 2)
         size = reader.read_uint16()
-        _require_dynamic_count(size, offset=offset, label="0x1F entry")
+        _require_dynamic_count(reader, size, offset=offset, label="0x1F entry")
         payload["entry_count"] = size
         if _version_at_least(version, AllegroVersion.V_175):
             substruct_size = size * 384 + 8
@@ -337,6 +337,7 @@ def _parse_known_record(
                 f"record 0x21 size {size} is too small",
                 code="record-length-invalid",
                 offset=offset,
+                source_name=reader.source_name,
             )
         payload["size"] = size
         key = reader.read_uint32()
@@ -379,6 +380,7 @@ def _parse_known_record(
                 "record 0x27 header extent points before record payload",
                 code="record-length-invalid",
                 offset=offset,
+                source_name=reader.source_name,
             )
         total_bytes = end_offset - reader.offset
         if total_bytes <= 3:
@@ -410,7 +412,7 @@ def _parse_known_record(
     elif tag == 0x2A:
         reader.skip(1)
         num_entries = reader.read_uint16()
-        _require_dynamic_count(num_entries, offset=offset, label="0x2A layer")
+        _require_dynamic_count(reader, num_entries, offset=offset, label="0x2A layer")
         payload["entry_count"] = num_entries
         _skip_cond_u32(reader, version, AllegroVersion.V_174)
         if _version_lt(version, AllegroVersion.V_165):
@@ -501,7 +503,7 @@ def _parse_known_record(
         payload["text_wrapper_key"] = reader.read_uint32()
         reader.skip(2 * 4 + 2)
         length = reader.read_uint16()
-        _require_dynamic_count(length, offset=offset, label="0x31 string")
+        _require_dynamic_count(reader, length, offset=offset, label="0x31 string")
         _skip_cond_u32(reader, version, AllegroVersion.V_174)
         payload["text_length"] = length
         reader.skip(length)
@@ -588,7 +590,7 @@ def _parse_known_record(
     elif tag == 0x3B:
         reader.skip(3)
         length = reader.read_uint32()
-        _require_dynamic_count(length, offset=offset, label="0x3B value")
+        _require_dynamic_count(reader, length, offset=offset, label="0x3B value")
         payload["name"] = reader.read_fixed_string(128)
         payload["value_type"] = reader.read_fixed_string(32)
         reader.skip(2 * 4)
@@ -600,7 +602,7 @@ def _parse_known_record(
         key = reader.read_uint32()
         _skip_cond_u32(reader, version, AllegroVersion.V_174)
         num_entries = reader.read_uint32()
-        _require_dynamic_count(num_entries, offset=offset, label="0x3C entry")
+        _require_dynamic_count(reader, num_entries, offset=offset, label="0x3C entry")
         payload["entry_count"] = num_entries
         reader.skip(num_entries * 4)
     else:
@@ -608,6 +610,7 @@ def _parse_known_record(
             f"unknown Allegro record tag 0x{tag:02X}; record lengths are implicit",
             code="unknown-record-tag",
             offset=offset,
+            source_name=reader.source_name,
         )
 
     return AllegroRecord(
@@ -659,8 +662,9 @@ def _parse_padstack_record(
             f"padstack layer count {layer_count} exceeds {_MAX_PADSTACK_LAYER_COUNT}",
             code="record-value-out-of-range",
             offset=offset,
+            source_name=reader.source_name,
         )
-    _require_dynamic_count(variable_count, offset=offset, label="0x1C variable")
+    _require_dynamic_count(reader, variable_count, offset=offset, label="0x1C variable")
     payload["layer_count"] = layer_count
     payload["variable_count"] = variable_count
 
@@ -707,12 +711,13 @@ def _parse_definition_table_record(
     reader.skip(2 * 4)
     _skip_cond_u32(reader, version, AllegroVersion.V_174)
 
-    _require_dynamic_count(num_items, offset=offset, label="0x36 item")
+    _require_dynamic_count(reader, num_items, offset=offset, label="0x36 item")
     if count > num_items:
         raise AllegroParseError(
             f"definition table filled count {count} exceeds capacity {num_items}",
             code="record-value-out-of-range",
             offset=offset,
+            source_name=reader.source_name,
         )
     payload["code"] = code
     payload["item_count"] = num_items
@@ -759,6 +764,7 @@ def _parse_definition_table_record(
                 f"unknown 0x36 definition table code 0x{code:02X}; item length is implicit",
                 code="record-value-out-of-range",
                 offset=offset,
+                source_name=reader.source_name,
             )
 
     return key, next_key
@@ -767,7 +773,7 @@ def _parse_definition_table_record(
 def _skip_field_substruct(
     reader: BoundedBinaryReader, *, subtype: int, size: int, offset: int
 ) -> None:
-    _require_dynamic_count(size, offset=offset, label="0x03 field")
+    _require_dynamic_count(reader, size, offset=offset, label="0x03 field")
     if subtype == 0x65:
         return
     if subtype in {0x64, 0x66, 0x67, 0x6A}:
@@ -778,13 +784,13 @@ def _skip_field_substruct(
         reader.skip(size)
     elif subtype == 0x6C:
         entry_count = reader.read_uint32()
-        _require_dynamic_count(entry_count, offset=offset, label="0x03 subtype 0x6C")
+        _require_dynamic_count(reader, entry_count, offset=offset, label="0x03 subtype 0x6C")
         reader.skip(entry_count * 4)
     elif subtype in {0x70, 0x74}:
         x0 = reader.read_uint16()
         x1 = reader.read_uint16()
         entry_bytes = x1 + 4 * x0
-        _require_dynamic_count(entry_bytes, offset=offset, label="0x03 subtype 0x70")
+        _require_dynamic_count(reader, entry_bytes, offset=offset, label="0x03 subtype 0x70")
         reader.skip(entry_bytes)
     elif subtype == 0xF6:
         reader.skip(20 * 4)
@@ -797,15 +803,19 @@ def _skip_field_substruct(
             f"unknown 0x03 subtype 0x{subtype:02X} with size {size}",
             code="record-length-invalid",
             offset=offset,
+            source_name=reader.source_name,
         )
 
 
-def _require_dynamic_count(value: int, *, offset: int, label: str) -> None:
+def _require_dynamic_count(
+    reader: BoundedBinaryReader, value: int, *, offset: int, label: str
+) -> None:
     if value > _MAX_DYNAMIC_RECORD_ITEMS:
         raise AllegroParseError(
             f"{label} count {value} exceeds {_MAX_DYNAMIC_RECORD_ITEMS}",
             code="record-value-out-of-range",
             offset=offset,
+            source_name=reader.source_name,
         )
 
 
