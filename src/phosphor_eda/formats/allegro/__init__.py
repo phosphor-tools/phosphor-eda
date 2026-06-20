@@ -1,1 +1,1 @@
-"""Native Cadence Allegro / OrCAD PCB binary parsing helpers."""
+"""Native Cadence Allegro / OrCAD PCB parser and oracle helpers."""
