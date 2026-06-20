@@ -13,7 +13,10 @@ from typing import TYPE_CHECKING, cast
 
 import sexpdata
 
+from phosphor_eda.domain.pcb import PcbBuildError
 from phosphor_eda.domain.project import DocumentKind, Project, ProjectDocument, ProjectMetadata
+from phosphor_eda.formats.allegro.errors import AllegroParseError
+from phosphor_eda.formats.allegro.project_loader import load_allegro_pcb_project
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.dsn.errors import DsnFormatError
 from phosphor_eda.formats.dsn.package_netlist import (
@@ -25,6 +28,8 @@ from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
 from phosphor_eda.formats.dsn.variants import map_orcad_cis_not_fitted_variants
 
 if TYPE_CHECKING:
+    from phosphor_eda.domain.pcb import Board
+    from phosphor_eda.domain.project import DesignRule, DiffPair, NetClass
     from phosphor_eda.domain.schematic import Schematic
     from phosphor_eda.domain.variants import Variant
     from phosphor_eda.formats.kicad.sexp import SExpItem, SExpNode
@@ -110,6 +115,7 @@ def load_orcad_project(opj_path: Path) -> Project:
             schematic_docs[0].metadata["parse_error"] = str(exc)
 
     name = project_info.name or opj_path.stem
+    boards, net_classes, design_rules, diff_pairs = _load_board_documents(project_info)
     return Project(
         name=name,
         metadata=ProjectMetadata(
@@ -121,6 +127,10 @@ def load_orcad_project(opj_path: Path) -> Project:
         parameters=project_info.parameters,
         documents=project_info.documents,
         schematic=schematic,
+        boards=boards,
+        net_classes=net_classes,
+        design_rules=design_rules,
+        diff_pairs=diff_pairs,
         variants=variants,
     )
 
@@ -141,6 +151,41 @@ def parse_opj(text: str, *, base_path: Path | None = None) -> OrCadProject:
 
 
 _PACKAGED_NETLIST_FILES = frozenset({"pstxnet.dat", "pstxprt.dat", "pstchip.dat"})
+
+
+def _load_board_documents(
+    project_info: OrCadProject,
+) -> tuple[list[Board], list[NetClass], list[DesignRule], list[DiffPair]]:
+    boards: list[Board] = []
+    net_classes: list[NetClass] = []
+    design_rules: list[DesignRule] = []
+    diff_pairs: list[DiffPair] = []
+    loaded_paths: set[str] = set()
+    for doc in project_info.documents:
+        if doc.kind is not DocumentKind.PCB:
+            continue
+        resolved_path = doc.metadata.get("resolved_path")
+        if not resolved_path:
+            doc.metadata["parse_error"] = "board path is not local to the OPJ project"
+            continue
+        if not doc.exists:
+            doc.metadata["parse_error"] = f"missing board file: {resolved_path}"
+            continue
+        if resolved_path in loaded_paths:
+            doc.parsed = True
+            continue
+        try:
+            board_project = load_allegro_pcb_project(Path(resolved_path))
+        except (AllegroParseError, OSError, PcbBuildError) as exc:
+            doc.metadata["parse_error"] = str(exc)
+            continue
+        loaded_paths.add(resolved_path)
+        doc.parsed = True
+        boards.extend(board_project.boards)
+        net_classes.extend(board_project.net_classes)
+        design_rules.extend(board_project.design_rules)
+        diff_pairs.extend(board_project.diff_pairs)
+    return boards, net_classes, design_rules, diff_pairs
 
 
 def _packaged_netlist_dirs(project_info: OrCadProject, dsn_path: Path) -> tuple[Path, ...]:
