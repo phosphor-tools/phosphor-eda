@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from io import BytesIO
 from pathlib import Path
-from shutil import copyfile
+from shutil import copytree
+from typing import TYPE_CHECKING
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from phosphor_eda.domain.project import DocumentKind
 from phosphor_eda.formats.allegro import parse_allegro_pcb
+from phosphor_eda.formats.allegro import sidecars as allegro_sidecars
 from phosphor_eda.formats.allegro.project_loader import load_allegro_pcb_project
 from phosphor_eda.formats.allegro.sidecars import (
     parse_allegro_package_symbol_sidecar,
@@ -14,13 +16,13 @@ from phosphor_eda.formats.allegro.sidecars import (
 )
 from phosphor_eda.query.project_loader import load_project
 
+if TYPE_CHECKING:
+    from pytest import MonkeyPatch
+
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-BREAKOUT_BOARD = (
-    FIXTURES
-    / "orcad"
-    / "opencellular-breakout"
-    / "allegro/OpenCellular/electronics/breakout/board"
-    / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
+BREAKOUT_FIXTURE_ROOT = FIXTURES / "orcad" / "opencellular-breakout"
+BREAKOUT_BOARD_RELATIVE = Path(
+    "allegro/OpenCellular/electronics/breakout/board/OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
 )
 
 
@@ -32,10 +34,9 @@ def test_allegro_pad_sidecar_enriches_matching_padstack_without_changing_board_d
     The sidecar proves padstack provenance and matching geometry. It cannot
     prove unmatched package-symbol geometry, which must remain evidence only.
     """
-    board_path = tmp_path / BREAKOUT_BOARD.name
-    copyfile(BREAKOUT_BOARD, board_path)
+    board_path = _copy_breakout_tree(tmp_path)
     _write_pad_sidecar(
-        tmp_path / "R20_67.pad",
+        board_path.parent / "R20_67.pad",
         name="R20_67",
         units="Millimeters",
         width=0.1999996,
@@ -51,7 +52,7 @@ def test_allegro_pad_sidecar_enriches_matching_padstack_without_changing_board_d
     ]
     assert matching_pads
     assert all(
-        pad.metadata.properties["sidecar_padstack_path"] == str(tmp_path / "R20_67.pad")
+        pad.metadata.properties["sidecar_padstack_path"] == str(board_path.parent / "R20_67.pad")
         for pad in matching_pads
     )
     assert {pad.metadata.properties["sidecar_padstack_match"] for pad in matching_pads} == {
@@ -61,10 +62,9 @@ def test_allegro_pad_sidecar_enriches_matching_padstack_without_changing_board_d
 
 
 def test_allegro_unmatched_pad_sidecar_remains_project_evidence(tmp_path: Path) -> None:
-    board_path = tmp_path / BREAKOUT_BOARD.name
-    copyfile(BREAKOUT_BOARD, board_path)
+    board_path = _copy_breakout_tree(tmp_path)
     _write_pad_sidecar(
-        tmp_path / "unmatched.pad",
+        board_path.parent / "unmatched.pad",
         name="SIDE_ONLY",
         units="Millimeters",
         width=9.0,
@@ -82,10 +82,9 @@ def test_allegro_unmatched_pad_sidecar_remains_project_evidence(tmp_path: Path) 
 def test_allegro_matching_pad_sidecar_with_different_geometry_is_identity_only(
     tmp_path: Path,
 ) -> None:
-    board_path = tmp_path / BREAKOUT_BOARD.name
-    copyfile(BREAKOUT_BOARD, board_path)
+    board_path = _copy_breakout_tree(tmp_path)
     _write_pad_sidecar(
-        tmp_path / "R20_67.pad",
+        board_path.parent / "R20_67.pad",
         name="R20_67",
         units="Millimeters",
         width=9.0,
@@ -106,9 +105,8 @@ def test_allegro_matching_pad_sidecar_with_different_geometry_is_identity_only(
 
 
 def test_allegro_package_symbol_sidecar_enriches_matching_footprint(tmp_path: Path) -> None:
-    board_path = tmp_path / BREAKOUT_BOARD.name
-    copyfile(BREAKOUT_BOARD, board_path)
-    symbol_path = tmp_path / "R0603.psm"
+    board_path = _copy_breakout_tree(tmp_path)
+    symbol_path = board_path.parent / "R0603.psm"
     symbol_path.write_bytes(bytes.fromhex("0205140003000000"))
 
     board = parse_allegro_pcb(board_path)
@@ -130,9 +128,8 @@ def test_allegro_package_symbol_sidecar_enriches_matching_footprint(tmp_path: Pa
 def test_allegro_unmatched_package_symbol_sidecar_remains_project_evidence(
     tmp_path: Path,
 ) -> None:
-    board_path = tmp_path / BREAKOUT_BOARD.name
-    copyfile(BREAKOUT_BOARD, board_path)
-    (tmp_path / "SIDE_ONLY.dra").write_bytes(bytes.fromhex("0205140003000000"))
+    board_path = _copy_breakout_tree(tmp_path)
+    (board_path.parent / "SIDE_ONLY.dra").write_bytes(bytes.fromhex("0205140003000000"))
 
     board = parse_allegro_pcb(board_path)
 
@@ -145,9 +142,8 @@ def test_allegro_unmatched_package_symbol_sidecar_remains_project_evidence(
 
 
 def test_allegro_corrupt_pad_sidecar_preserves_parse_diagnostic(tmp_path: Path) -> None:
-    board_path = tmp_path / BREAKOUT_BOARD.name
-    copyfile(BREAKOUT_BOARD, board_path)
-    (tmp_path / "R20_67.pad").write_bytes(b"not an allegro padstack sidecar")
+    board_path = _copy_breakout_tree(tmp_path)
+    (board_path.parent / "R20_67.pad").write_bytes(b"not an allegro padstack sidecar")
 
     board = parse_allegro_pcb(board_path)
 
@@ -158,6 +154,51 @@ def test_allegro_corrupt_pad_sidecar_preserves_parse_diagnostic(tmp_path: Path) 
         == "padstack-sidecar-missing-zip"
     )
     assert all("sidecar_padstack_path" not in pad.metadata.properties for pad in board.pads)
+
+
+def test_allegro_malformed_pad_json_takes_diagnostic_path(tmp_path: Path) -> None:
+    scalar_path = tmp_path / "scalar.pad"
+    array_path = tmp_path / "array.pad"
+    _write_raw_pad_sidecar(scalar_path, '"not an object"')
+    _write_raw_pad_sidecar(array_path, '{"text": [], "padDesign": []}')
+
+    parsed_scalar, scalar_diagnostics = parse_allegro_padstack_sidecar(scalar_path)
+    parsed_array, array_diagnostics = parse_allegro_padstack_sidecar(array_path)
+
+    assert parsed_scalar is None
+    assert parsed_array is None
+    assert [diagnostic.code for diagnostic in scalar_diagnostics] == [
+        "padstack-sidecar-parse-failed"
+    ]
+    assert [diagnostic.code for diagnostic in array_diagnostics] == [
+        "padstack-sidecar-parse-failed"
+    ]
+
+
+def test_allegro_oversized_pad_zip_entry_takes_diagnostic_path(tmp_path: Path) -> None:
+    pad_path = tmp_path / "oversized.pad"
+    _write_raw_pad_sidecar(pad_path, "x" * (allegro_sidecars._MAX_ZIP_ENTRY_BYTES + 1))
+
+    parsed_pad, diagnostics = parse_allegro_padstack_sidecar(pad_path)
+
+    assert parsed_pad is None
+    assert [diagnostic.code for diagnostic in diagnostics] == ["padstack-sidecar-parse-failed"]
+    assert "exceeds maximum" in diagnostics[0].message
+
+
+def test_allegro_oversized_pad_sidecar_file_takes_diagnostic_path(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    pad_path = tmp_path / "oversized-file.pad"
+    pad_path.write_bytes(b"not a padstack")
+    monkeypatch.setattr(allegro_sidecars, "_MAX_PADSTACK_SIDECAR_BYTES", 10)
+
+    parsed_pad, diagnostics = parse_allegro_padstack_sidecar(pad_path)
+
+    assert parsed_pad is None
+    assert [diagnostic.code for diagnostic in diagnostics] == ["padstack-sidecar-parse-failed"]
+    assert "exceeds maximum" in diagnostics[0].message
 
 
 def test_allegro_missing_sidecar_files_become_parse_diagnostics(tmp_path: Path) -> None:
@@ -178,17 +219,16 @@ def test_allegro_missing_sidecar_files_become_parse_diagnostics(tmp_path: Path) 
 def test_allegro_duplicate_sidecar_names_are_preserved_as_diagnostics(
     tmp_path: Path,
 ) -> None:
-    board_path = tmp_path / BREAKOUT_BOARD.name
-    copyfile(BREAKOUT_BOARD, board_path)
+    board_path = _copy_breakout_tree(tmp_path)
     _write_pad_sidecar(
-        tmp_path / "R20_67.pad",
+        board_path.parent / "R20_67.pad",
         name="R20_67",
         units="Millimeters",
         width=0.1999996,
         height=0.675005,
         shape="Rectangle",
     )
-    library_dir = tmp_path / "library"
+    library_dir = board_path.parent / "library"
     library_dir.mkdir()
     _write_pad_sidecar(
         library_dir / "R20_67.pad",
@@ -206,14 +246,36 @@ def test_allegro_duplicate_sidecar_names_are_preserved_as_diagnostics(
         "padstack-sidecar-duplicate-name"
         in board.metadata.properties["allegro_sidecar_diagnostic_codes"]
     )
+    assert all("sidecar_padstack_path" not in pad.metadata.properties for pad in board.pads)
+
+
+def test_allegro_duplicate_package_symbol_names_are_preserved_as_diagnostics(
+    tmp_path: Path,
+) -> None:
+    board_path = _copy_breakout_tree(tmp_path)
+    (board_path.parent / "R0603.psm").write_bytes(bytes.fromhex("0205140003000000"))
+    library_dir = board_path.parent / "library"
+    library_dir.mkdir()
+    (library_dir / "R0603.dra").write_bytes(bytes.fromhex("0205140003000000"))
+
+    board = parse_allegro_pcb(board_path)
+
+    assert board.metadata.properties["allegro_package_symbol_sidecar_count"] == "2"
+    assert (
+        "package-symbol-sidecar-duplicate-name"
+        in board.metadata.properties["allegro_sidecar_diagnostic_codes"]
+    )
+    assert all(
+        "sidecar_package_symbol_path" not in footprint.metadata.properties
+        for footprint in board.footprints
+    )
 
 
 def test_load_allegro_project_preserves_sidecar_source_paths(tmp_path: Path) -> None:
-    board_path = tmp_path / BREAKOUT_BOARD.name
-    copyfile(BREAKOUT_BOARD, board_path)
-    pad_path = tmp_path / "R20_67.pad"
-    symbol_path = tmp_path / "R0603.psm"
-    corrupt_path = tmp_path / "corrupt.pad"
+    board_path = _copy_breakout_tree(tmp_path)
+    pad_path = board_path.parent / "R20_67.pad"
+    symbol_path = board_path.parent / "R0603.psm"
+    corrupt_path = board_path.parent / "corrupt.pad"
     _write_pad_sidecar(
         pad_path,
         name="R20_67",
@@ -294,7 +356,17 @@ def _write_pad_sidecar(
     ]
 }}
 }}"""
+    _write_raw_pad_sidecar(path, payload)
+
+
+def _write_raw_pad_sidecar(path: Path, payload: str) -> None:
     buffer = BytesIO()
     with ZipFile(buffer, mode="w", compression=ZIP_DEFLATED) as archive:
         archive.writestr("Users/test/AppData/Local/Temp/#Taaaaaa00001.tmp", payload)
     path.write_bytes(b"\x00" * 32 + buffer.getvalue())
+
+
+def _copy_breakout_tree(tmp_path: Path) -> Path:
+    copied_root = tmp_path / "opencellular-breakout"
+    copytree(BREAKOUT_FIXTURE_ROOT, copied_root)
+    return copied_root / BREAKOUT_BOARD_RELATIVE

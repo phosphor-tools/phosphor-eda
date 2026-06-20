@@ -7,7 +7,7 @@ import re
 import zipfile
 from dataclasses import dataclass
 from io import BytesIO
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeGuard
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -16,6 +16,15 @@ _PAD_SUFFIX = ".pad"
 _PACKAGE_SYMBOL_SUFFIXES = {".dra", ".psm"}
 _ZIP_MAGIC = b"PK\x03\x04"
 _TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
+# Padstack sidecars are small ZIP-bearing metadata files; cap both the
+# container and first decompressed entry to keep malformed local projects bounded.
+_MAX_PADSTACK_SIDECAR_BYTES = 64_000_000
+_MAX_ZIP_ENTRY_BYTES = 1_000_000
+
+
+@dataclass(frozen=True)
+class _JsonObject:
+    values: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -54,11 +63,11 @@ class AllegroSidecarSet:
 
     @property
     def padstacks_by_name(self) -> dict[str, AllegroPadstackSidecar]:
-        return {_match_key(sidecar.name): sidecar for sidecar in self.padstacks}
+        return _unique_sidecars_by_name(self.padstacks)
 
     @property
     def package_symbols_by_name(self) -> dict[str, AllegroPackageSymbolSidecar]:
-        return {_match_key(sidecar.name): sidecar for sidecar in self.package_symbols}
+        return _unique_sidecars_by_name(self.package_symbols)
 
     @property
     def has_evidence(self) -> bool:
@@ -111,7 +120,9 @@ def parse_allegro_package_symbol_sidecar(
     path: Path,
 ) -> tuple[AllegroPackageSymbolSidecar | None, tuple[AllegroSidecarDiagnostic, ...]]:
     try:
-        data = path.read_bytes()
+        byte_size = path.stat().st_size
+        with path.open("rb") as package_file:
+            signature_hex = package_file.read(8).hex()
     except OSError as exc:
         return None, (
             AllegroSidecarDiagnostic(
@@ -126,8 +137,8 @@ def parse_allegro_package_symbol_sidecar(
             path=path,
             name=path.stem,
             kind=path.suffix.lower().removeprefix("."),
-            byte_size=len(data),
-            signature_hex=data[:8].hex(),
+            byte_size=byte_size,
+            signature_hex=signature_hex,
         ),
         (),
     )
@@ -137,6 +148,13 @@ def parse_allegro_padstack_sidecar(
     path: Path,
 ) -> tuple[AllegroPadstackSidecar | None, tuple[AllegroSidecarDiagnostic, ...]]:
     try:
+        byte_size = path.stat().st_size
+        if byte_size > _MAX_PADSTACK_SIDECAR_BYTES:
+            msg = (
+                f"padstack sidecar is {byte_size} bytes, "
+                f"which exceeds maximum {_MAX_PADSTACK_SIDECAR_BYTES}"
+            )
+            raise ValueError(msg)
         data = path.read_bytes()
         zip_offset = data.find(_ZIP_MAGIC)
         if zip_offset < 0:
@@ -200,6 +218,12 @@ def _read_first_zip_payload(data: bytes) -> str:
             info = archive.getinfo(name)
             if info.is_dir():
                 continue
+            if info.file_size > _MAX_ZIP_ENTRY_BYTES:
+                msg = (
+                    f"embedded ZIP entry {name!r} is {info.file_size} bytes, "
+                    f"which exceeds maximum {_MAX_ZIP_ENTRY_BYTES}"
+                )
+                raise ValueError(msg)
             return archive.read(name).decode("utf-8-sig", errors="replace")
     msg = "embedded ZIP payload did not contain a file"
     raise ValueError(msg)
@@ -207,7 +231,8 @@ def _read_first_zip_payload(data: bytes) -> str:
 
 def _parse_padstack_json_payload(path: Path, payload: str) -> AllegroPadstackSidecar:
     cleaned = _TRAILING_COMMA_RE.sub(r"\1", payload)
-    root = cast("dict[str, object]", json.loads(cleaned))
+    loaded: object = json.loads(cleaned, object_pairs_hook=_json_object_from_pairs)
+    root = _object(loaded)
     text = _object(root.get("text"))
     component = _padstack_component(_sequence(text.get("comps")))
     pad_design = _object(root.get("padDesign"))
@@ -252,18 +277,26 @@ def _primary_pad(values: tuple[object, ...]) -> dict[str, object]:
     raise ValueError(msg)
 
 
+def _json_object_from_pairs(pairs: list[tuple[str, object]]) -> _JsonObject:
+    return _JsonObject(dict(pairs))
+
+
 def _object(value: object) -> dict[str, object]:
-    if isinstance(value, dict):
-        return cast("dict[str, object]", value)
+    if isinstance(value, _JsonObject):
+        return value.values
     msg = "expected JSON object"
     raise TypeError(msg)
 
 
 def _sequence(value: object) -> tuple[object, ...]:
-    if isinstance(value, list):
-        return tuple(cast("list[object]", value))
+    if _is_object_list(value):
+        return tuple(value)
     msg = "expected JSON array"
     raise TypeError(msg)
+
+
+def _is_object_list(value: object) -> TypeGuard[list[object]]:
+    return isinstance(value, list)
 
 
 def _string(value: object) -> str:
@@ -304,3 +337,20 @@ def _pad_shape(shape: str) -> str:
 
 def _match_key(value: str) -> str:
     return value.casefold()
+
+
+def _unique_sidecars_by_name[
+    SidecarT: (AllegroPadstackSidecar, AllegroPackageSymbolSidecar),
+](
+    sidecars: tuple[SidecarT, ...],
+) -> dict[str, SidecarT]:
+    counts: dict[str, int] = {}
+    for sidecar in sidecars:
+        key = _match_key(sidecar.name)
+        counts[key] = counts.get(key, 0) + 1
+    result: dict[str, SidecarT] = {}
+    for sidecar in sidecars:
+        key = _match_key(sidecar.name)
+        if counts[key] == 1:
+            result[key] = sidecar
+    return result
