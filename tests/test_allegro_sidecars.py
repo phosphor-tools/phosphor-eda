@@ -175,9 +175,24 @@ def test_allegro_malformed_pad_json_takes_diagnostic_path(tmp_path: Path) -> Non
     ]
 
 
+def test_allegro_boolean_pad_geometry_takes_diagnostic_path(tmp_path: Path) -> None:
+    pad_path = tmp_path / "boolean-geometry.pad"
+    _write_pad_sidecar_payload(
+        pad_path,
+        name="BOOLEAN_GEOMETRY",
+        width="true",
+        height="true",
+    )
+
+    parsed_pad, diagnostics = parse_allegro_padstack_sidecar(pad_path)
+
+    assert parsed_pad is None
+    assert [diagnostic.code for diagnostic in diagnostics] == ["padstack-sidecar-parse-failed"]
+
+
 def test_allegro_oversized_pad_zip_entry_takes_diagnostic_path(tmp_path: Path) -> None:
     pad_path = tmp_path / "oversized.pad"
-    _write_raw_pad_sidecar(pad_path, "x" * (allegro_sidecars._MAX_ZIP_ENTRY_BYTES + 1))
+    _write_raw_pad_sidecar(pad_path, "x" * 2_000_000)
 
     parsed_pad, diagnostics = parse_allegro_padstack_sidecar(pad_path)
 
@@ -333,6 +348,25 @@ def _write_pad_sidecar(
     height: float,
     shape: str,
 ) -> None:
+    _write_pad_sidecar_payload(
+        path,
+        name=name,
+        width=str(width),
+        height=str(height),
+        shape=shape,
+        units=units,
+    )
+
+
+def _write_pad_sidecar_payload(
+    path: Path,
+    *,
+    name: str,
+    width: str,
+    height: str,
+    shape: str = "Rectangle",
+    units: str = "Millimeters",
+) -> None:
     payload = f"""{{
 "text" : {{
     "comps" : [
@@ -347,8 +381,8 @@ def _write_pad_sidecar(
 "padDesign" : {{
     "pad" : [
     {{
-        "height" : {height},
         "width" : {width},
+        "height" : {height},
         "shape" : "{shape}",
         "class_name" : "ETCH",
         "subclass_name" : "BEGIN LAYER",

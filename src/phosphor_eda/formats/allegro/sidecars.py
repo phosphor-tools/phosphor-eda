@@ -304,6 +304,8 @@ def _string(value: object) -> str:
 
 
 def _number(value: object) -> float:
+    if isinstance(value, bool):
+        return 0.0
     if isinstance(value, int | float):
         return float(value)
     return 0.0
