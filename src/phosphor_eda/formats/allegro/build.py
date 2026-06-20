@@ -53,9 +53,14 @@ from phosphor_eda.formats.allegro.primitives import (
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from pathlib import Path
 
     from phosphor_eda.formats.allegro.layers import AllegroLayerMap
     from phosphor_eda.formats.allegro.records import AllegroRecord, AllegroRecordSet
+    from phosphor_eda.formats.allegro.sidecars import (
+        AllegroPackageSymbolSidecar,
+        AllegroSidecarSet,
+    )
 
 _REFDES_RE = re.compile(r"^[A-Z]+[A-Z0-9]*\d+[A-Z0-9]*$")
 
@@ -71,6 +76,7 @@ def build_allegro_board(
     *,
     name: str = "Allegro Board",
     require_board_profile: bool = False,
+    sidecars: AllegroSidecarSet | None = None,
 ) -> Board:
     layer_map = build_allegro_layers(record_set)
     graph = build_allegro_object_graph(record_set)
@@ -91,7 +97,13 @@ def build_allegro_board(
     copper_layers = tuple(layer for layer in builder.layers if layer.has_role(LayerRole.COPPER))
 
     nets_by_key = _add_nets(builder, record_set)
-    padstacks = _padstacks(record_set, unit_to_mm)
+    matched_padstack_sidecars: set[Path] = set()
+    padstacks = _padstacks(
+        record_set,
+        unit_to_mm,
+        sidecars=sidecars,
+        matched_sidecars=matched_padstack_sidecars,
+    )
     text_by_wrapper = _text_by_wrapper(record_set)
     pad_definitions = {
         record.key: record
@@ -99,12 +111,15 @@ def build_allegro_board(
         if record.tag == 0x0D and record.key is not None
     }
     footprint_sources = _footprint_sources(record_set, graph)
+    matched_package_sidecars: set[Path] = set()
     footprints_by_instance_key = _add_footprints(
         builder,
         record_set,
         footprint_sources=footprint_sources,
         unit_to_mm=unit_to_mm,
         text_by_wrapper=text_by_wrapper,
+        sidecars=sidecars,
+        matched_sidecars=matched_package_sidecars,
     )
 
     for component in (record for record in record_set.records if record.tag == 0x07):
@@ -155,6 +170,12 @@ def build_allegro_board(
     )
     if diagnostic_count:
         builder.metadata.properties["parse_diagnostic_count"] = str(diagnostic_count)
+    _add_sidecar_board_metadata(
+        builder,
+        sidecars,
+        matched_padstack_sidecars=matched_padstack_sidecars,
+        matched_package_sidecars=matched_package_sidecars,
+    )
 
     board = builder.build(require_board_profile=require_board_profile)
     board.stackup = layer_map.stackup
@@ -218,9 +239,14 @@ def _add_nets(builder: PcbBuilder, record_set: AllegroRecordSet) -> dict[int, Pc
 
 
 def _padstacks(
-    record_set: AllegroRecordSet, unit_to_mm: float
+    record_set: AllegroRecordSet,
+    unit_to_mm: float,
+    *,
+    sidecars: AllegroSidecarSet | None = None,
+    matched_sidecars: set[Path] | None = None,
 ) -> dict[int, AllegroExpandedPadstack]:
     string_table = _strings(record_set)
+    sidecars_by_name = sidecars.padstacks_by_name if sidecars is not None else {}
     result: dict[int, AllegroExpandedPadstack] = {}
     for record in record_set.records:
         if record.tag != 0x1C or record.key is None:
@@ -228,10 +254,14 @@ def _padstacks(
         padstack_name = _string(string_table, _payload_int(record, "pad_name_key"))
         if not padstack_name:
             padstack_name = f"PADSTACK_{record.key}"
+        sidecar = sidecars_by_name.get(padstack_name.casefold())
+        if sidecar is not None and matched_sidecars is not None:
+            matched_sidecars.add(sidecar.path)
         result[record.key] = expand_allegro_padstack(
             record,
             name=padstack_name,
             unit_to_mm=unit_to_mm,
+            sidecar=sidecar,
         )
     return result
 
@@ -263,10 +293,13 @@ def _add_footprints(
     footprint_sources: Mapping[int, _FootprintSource],
     unit_to_mm: float,
     text_by_wrapper: Mapping[int, str],
+    sidecars: AllegroSidecarSet | None = None,
+    matched_sidecars: set[Path] | None = None,
 ) -> dict[int, PcbFootprint]:
     string_table = _strings(record_set)
     copper_front = _front_copper(builder.layers)
     copper_back = _back_copper(builder.layers)
+    package_symbols_by_name = sidecars.package_symbols_by_name if sidecars is not None else {}
     used_refs: set[str] = set()
     result: dict[int, PcbFootprint] = {}
     for component in (record for record in record_set.records if record.tag == 0x07):
@@ -284,10 +317,22 @@ def _add_footprints(
         refdes = _unique_ref(refdes, used_refs)
         side = _payload_int(instance, "placement_side")
         layer = copper_back if side == 1 else copper_front
+        package_name = package.package_name if package else ""
+        footprint_metadata = {
+            "native_component_instance_key": str(component.key or ""),
+            "native_refdes_string_key": str(_payload_int(component, "refdes_string_key")),
+            "native_placement_side": str(side),
+        }
+        if package_name:
+            package_sidecar = package_symbols_by_name.get(package_name.casefold())
+            if package_sidecar is not None:
+                if matched_sidecars is not None:
+                    matched_sidecars.add(package_sidecar.path)
+                footprint_metadata.update(_package_symbol_metadata(package_sidecar))
         footprint = builder.add_footprint(
             PcbFootprint(
                 reference=refdes,
-                footprint_lib=package.package_name if package else "",
+                footprint_lib=package_name,
                 x=_coord(instance, "coord_x", unit_to_mm),
                 y=_coord(instance, "coord_y", unit_to_mm),
                 rotation=_payload_int(instance, "rotation_mdeg") / 1000.0,
@@ -297,20 +342,75 @@ def _add_footprints(
                     native_type="footprint_instance",
                     native_id=str(instance.key),
                     source_designator=refdes,
-                    source_footprint_library=package.package_name if package else "",
-                    properties={
-                        "native_component_instance_key": str(component.key or ""),
-                        "native_refdes_string_key": str(
-                            _payload_int(component, "refdes_string_key")
-                        ),
-                        "native_placement_side": str(side),
-                    },
+                    source_footprint_library=package_name,
+                    properties=footprint_metadata,
                 ),
             ),
             source=_source("footprint", instance),
         )
         result[instance_key] = footprint
     return result
+
+
+def _add_sidecar_board_metadata(
+    builder: PcbBuilder,
+    sidecars: AllegroSidecarSet | None,
+    *,
+    matched_padstack_sidecars: set[Path],
+    matched_package_sidecars: set[Path],
+) -> None:
+    if sidecars is None or not sidecars.has_evidence:
+        return
+    builder.metadata.properties["allegro_sidecar_root"] = str(sidecars.root)
+    builder.metadata.properties["allegro_sidecar_count"] = str(
+        len(sidecars.padstacks) + len(sidecars.package_symbols)
+    )
+    if sidecars.padstacks:
+        builder.metadata.properties["allegro_padstack_sidecar_count"] = str(len(sidecars.padstacks))
+        unmatched_padstacks = sorted(
+            sidecar.name
+            for sidecar in sidecars.padstacks
+            if sidecar.path not in matched_padstack_sidecars
+        )
+        if unmatched_padstacks:
+            builder.metadata.properties["allegro_unmatched_padstack_sidecars"] = ";".join(
+                unmatched_padstacks
+            )
+    if sidecars.package_symbols:
+        builder.metadata.properties["allegro_package_symbol_sidecar_count"] = str(
+            len(sidecars.package_symbols)
+        )
+        unmatched_package_symbols = sorted(
+            sidecar.name
+            for sidecar in sidecars.package_symbols
+            if sidecar.path not in matched_package_sidecars
+        )
+        if unmatched_package_symbols:
+            builder.metadata.properties["allegro_unmatched_package_symbol_sidecars"] = ";".join(
+                unmatched_package_symbols
+            )
+    if sidecars.diagnostics:
+        builder.metadata.properties["allegro_sidecar_diagnostic_count"] = str(
+            len(sidecars.diagnostics)
+        )
+        builder.metadata.properties["allegro_sidecar_diagnostic_codes"] = ";".join(
+            diagnostic.code for diagnostic in sidecars.diagnostics
+        )
+        builder.metadata.properties["allegro_sidecar_diagnostic_paths"] = ";".join(
+            str(diagnostic.path) for diagnostic in sidecars.diagnostics
+        )
+
+
+def _package_symbol_metadata(
+    package_sidecar: AllegroPackageSymbolSidecar,
+) -> dict[str, str]:
+    return {
+        "sidecar_package_symbol_path": str(package_sidecar.path),
+        "sidecar_package_symbol_name": package_sidecar.name,
+        "sidecar_package_symbol_kind": package_sidecar.kind,
+        "sidecar_package_symbol_byte_size": str(package_sidecar.byte_size),
+        "sidecar_package_symbol_signature": package_sidecar.signature_hex,
+    }
 
 
 def _add_pad(

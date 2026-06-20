@@ -35,6 +35,7 @@ from phosphor_eda.formats.allegro.records import (
     AllegroStringEntry,
     AllegroStringTable,
 )
+from phosphor_eda.formats.allegro.sidecars import discover_allegro_sidecars
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -183,10 +184,12 @@ def parse_allegro_pcb(path: Path, ctx: ParseContext | None = None) -> Board:
     # currently preserved in board metadata by the source record/build layers.
     del ctx
     record_set = parse_allegro_records(path.read_bytes(), source_name=path.name)
+    sidecars = discover_allegro_sidecars(path)
     return build_allegro_board(
         record_set,
         name=path.stem,
         require_board_profile=True,
+        sidecars=sidecars,
     )
 
 
