@@ -2,15 +2,21 @@ from __future__ import annotations
 
 import os
 import shutil
+from typing import TYPE_CHECKING
 
 import pytest
 from allegro_oracle_helpers import OPENCELLULAR_BREAKOUT_ROOT
 
 from phosphor_eda.formats.allegro.oracle import run_kicad_allegro_conversion_report
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 
 @pytest.mark.allegro_external_oracle
-def test_kicad_conversion_oracle_is_opt_in_and_reports_converted_board(tmp_path) -> None:
+def test_kicad_conversion_oracle_is_opt_in_and_reports_converted_board(
+    tmp_path: Path,
+) -> None:
     """Proves KiCad can independently convert an Allegro board when local tools exist.
 
     Cannot prove Cadence-native intent, Constraint Manager semantics, or source

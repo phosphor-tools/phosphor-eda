@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 from allegro_oracle_helpers import (
     CP_SMARTGARDEN_NETLIST,
@@ -16,6 +18,9 @@ from phosphor_eda.formats.allegro.oracle import (
     parse_ipc356,
     parse_packaged_netlist_summary,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def test_oracle_coverage_matrix_partitions_known_capabilities() -> None:
@@ -46,7 +51,7 @@ def test_oracle_coverage_matrix_partitions_known_capabilities() -> None:
     ids=("opencellular-breakout", "opencellular-sync"),
 )
 def test_ipc356_oracle_locks_connectivity_layers_and_pad_coordinates(
-    path,
+    path: Path,
     expected_layers: tuple[str, ...],
     expected_records: int,
     expected_nets: int,

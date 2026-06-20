@@ -8,6 +8,7 @@ do not parse native ``.brd`` data and must not become a loader fallback.
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass
 from enum import StrEnum
@@ -521,18 +522,24 @@ def parse_placement_log(path: Path) -> PlacementLog:
 def run_kicad_allegro_conversion_report(
     source_board: Path, output_board: Path
 ) -> KicadConversionReport:
+    executable = shutil.which("kicad-cli")
+    if executable is None:
+        msg = "kicad-cli executable was not found on PATH"
+        raise FileNotFoundError(msg)
+    resolved_source = source_board.resolve(strict=True)
+    resolved_output = output_board.resolve(strict=False)
     completed = subprocess.run(
-        ["kicad-cli", "pcb", "convert", str(source_board), "--output", str(output_board)],
+        [executable, "pcb", "convert", str(resolved_source), "--output", str(resolved_output)],
         check=True,
         capture_output=True,
         text=True,
         timeout=KICAD_CONVERSION_TIMEOUT_SECONDS,
     )
-    text = output_board.read_text(errors="replace")
+    text = resolved_output.read_text(errors="replace")
     return KicadConversionReport(
-        source_board=source_board,
-        output_board=output_board,
-        output_size_bytes=output_board.stat().st_size,
+        source_board=resolved_source,
+        output_board=resolved_output,
+        output_size_bytes=resolved_output.stat().st_size,
         layer_count=sum(1 for line in text.splitlines() if _KICAD_LAYER_RE.match(line)),
         stdout=completed.stdout,
         stderr=completed.stderr,
