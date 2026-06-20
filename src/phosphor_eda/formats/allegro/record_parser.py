@@ -9,6 +9,8 @@ from phosphor_eda.formats.allegro.constants import AllegroVersion
 from phosphor_eda.formats.allegro.errors import AllegroParseError
 from phosphor_eda.formats.allegro.records import (
     AllegroHeader,
+    AllegroLayerListEntry,
+    AllegroPayloadValue,
     AllegroRecord,
     AllegroRecordSet,
     AllegroStringTable,
@@ -85,7 +87,7 @@ def _parse_known_record(
     version: AllegroVersion,
     record_0x27_end: int,
 ) -> AllegroRecord:
-    payload: dict[str, object] = {}
+    payload: dict[str, AllegroPayloadValue] = {}
     key: int | None = None
     next_key: int | None = None
 
@@ -120,7 +122,7 @@ def _parse_known_record(
         _skip_cond_u32(reader, version, AllegroVersion.V_174)
     elif tag == 0x05:
         reader.skip(1)
-        _skip_layer_info(reader)
+        _read_layer_info(reader, payload)
         key = reader.read_uint32()
         next_key = reader.read_uint32()
         reader.skip(9 * 4)
@@ -169,7 +171,7 @@ def _parse_known_record(
         _skip_cond_u32(reader, version, AllegroVersion.V_174)
     elif tag == 0x0A:
         reader.skip(1)
-        _skip_layer_info(reader)
+        _read_layer_info(reader, payload)
         key = reader.read_uint32()
         next_key = reader.read_uint32()
         reader.skip(4)
@@ -178,7 +180,7 @@ def _parse_known_record(
         _skip_cond_u32(reader, version, AllegroVersion.V_174)
     elif tag == 0x0C:
         reader.skip(1)
-        _skip_layer_info(reader)
+        _read_layer_info(reader, payload)
         key = reader.read_uint32()
         next_key = reader.read_uint32()
         reader.skip(2 * 4)
@@ -206,7 +208,7 @@ def _parse_known_record(
         reader.skip(2 * 4)
     elif tag == 0x0E:
         reader.skip(1)
-        _skip_layer_info(reader)
+        _read_layer_info(reader, payload)
         key = reader.read_uint32()
         next_key = reader.read_uint32()
         reader.skip(4 + 3 * 4)
@@ -244,7 +246,7 @@ def _parse_known_record(
         _skip_cond_u32(reader, version, AllegroVersion.V_174)
     elif tag == 0x14:
         reader.skip(1)
-        _skip_layer_info(reader)
+        _read_layer_info(reader, payload)
         key = reader.read_uint32()
         next_key = reader.read_uint32()
         payload["parent_key"] = reader.read_uint32()
@@ -346,7 +348,7 @@ def _parse_known_record(
         reader.skip(8 * 4)
     elif tag == 0x23:
         reader.skip(1)
-        _skip_layer_info(reader)
+        _read_layer_info(reader, payload)
         key = reader.read_uint32()
         next_key = reader.read_uint32()
         reader.skip(2 * 4 + 3 * 4 + 5 * 4 + 4 * 4)
@@ -355,7 +357,7 @@ def _parse_known_record(
         _skip_cond_u32(reader, version, AllegroVersion.V_174)
     elif tag == 0x24:
         reader.skip(1)
-        _skip_layer_info(reader)
+        _read_layer_info(reader, payload)
         key = reader.read_uint32()
         next_key = reader.read_uint32()
         payload["parent_key"] = reader.read_uint32()
@@ -388,7 +390,7 @@ def _parse_known_record(
             reader.skip(payload_bytes)
     elif tag == 0x28:
         reader.skip(1)
-        _skip_layer_info(reader)
+        _read_layer_info(reader, payload)
         key = reader.read_uint32()
         next_key = reader.read_uint32()
         reader.skip(2 * 4)
@@ -412,9 +414,21 @@ def _parse_known_record(
         payload["entry_count"] = num_entries
         _skip_cond_u32(reader, version, AllegroVersion.V_174)
         if _version_lt(version, AllegroVersion.V_165):
-            reader.skip(num_entries * 36)
+            entries = tuple(
+                AllegroLayerListEntry(index=index, name=reader.read_fixed_string(36))
+                for index in range(num_entries)
+            )
         else:
-            reader.skip(num_entries * 12)
+            entries = tuple(
+                AllegroLayerListEntry(
+                    index=index,
+                    name_string_key=reader.read_uint32(),
+                    properties=reader.read_uint32(),
+                    unidentified_word=reader.read_uint32(),
+                )
+                for index in range(num_entries)
+            )
+        payload["layer_entries"] = entries
         key = reader.read_uint32()
     elif tag == 0x2B:
         reader.skip(3)
@@ -464,7 +478,7 @@ def _parse_known_record(
         reader.skip(6 * 4)
     elif tag == 0x30:
         reader.skip(1)
-        _skip_layer_info(reader)
+        _read_layer_info(reader, payload)
         key = reader.read_uint32()
         next_key = reader.read_uint32()
         _skip_cond_u32(reader, version, AllegroVersion.V_172, count=2)
@@ -493,7 +507,7 @@ def _parse_known_record(
         reader.skip(length)
     elif tag == 0x32:
         reader.skip(1)
-        _skip_layer_info(reader)
+        _read_layer_info(reader, payload)
         key = reader.read_uint32()
         next_key = reader.read_uint32()
         payload["net_key"] = reader.read_uint32()
@@ -508,7 +522,7 @@ def _parse_known_record(
         reader.skip(4 + 4 * 4)
     elif tag == 0x33:
         reader.skip(1)
-        _skip_layer_info(reader)
+        _read_layer_info(reader, payload)
         key = reader.read_uint32()
         next_key = reader.read_uint32()
         payload["net_key"] = reader.read_uint32()
@@ -521,7 +535,7 @@ def _parse_known_record(
         reader.skip(4 * 4 + 4 * 4)
     elif tag == 0x34:
         reader.skip(1)
-        _skip_layer_info(reader)
+        _read_layer_info(reader, payload)
         key = reader.read_uint32()
         next_key = reader.read_uint32()
         reader.skip(4)
@@ -566,7 +580,7 @@ def _parse_known_record(
         reader.skip(22 * 2)
     elif tag == 0x3A:
         reader.skip(1)
-        _skip_layer_info(reader)
+        _read_layer_info(reader, payload)
         key = reader.read_uint32()
         next_key = reader.read_uint32()
         reader.skip(4)
@@ -610,7 +624,7 @@ def _parse_padstack_record(
     reader: BoundedBinaryReader,
     *,
     version: AllegroVersion,
-    payload: dict[str, object],
+    payload: dict[str, AllegroPayloadValue],
     offset: int,
 ) -> tuple[int, int]:
     reader.skip(1)
@@ -680,7 +694,7 @@ def _parse_definition_table_record(
     reader: BoundedBinaryReader,
     *,
     version: AllegroVersion,
-    payload: dict[str, object],
+    payload: dict[str, AllegroPayloadValue],
     offset: int,
 ) -> tuple[int, int]:
     reader.skip(1)
@@ -795,8 +809,9 @@ def _require_dynamic_count(value: int, *, offset: int, label: str) -> None:
         )
 
 
-def _skip_layer_info(reader: BoundedBinaryReader) -> None:
-    reader.skip(2)
+def _read_layer_info(reader: BoundedBinaryReader, payload: dict[str, AllegroPayloadValue]) -> None:
+    payload["layer_class_id"] = reader.read_uint8()
+    payload["layer_subclass_id"] = reader.read_uint8()
 
 
 def _skip_cond_u32(

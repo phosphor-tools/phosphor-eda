@@ -26,6 +26,25 @@ class AllegroLayerMapEntry:
 
 
 @dataclass(frozen=True)
+class AllegroLayerListEntry:
+    """One 0x2A layer-list entry.
+
+    Pre-V16.5 files store inline layer names. V16.5+ files store a string-table
+    key plus two native words; the final word is retained because its semantics
+    are not identified yet in the reverse-engineered format references.
+    """
+
+    index: int
+    name: str = ""
+    name_string_key: int | None = None
+    properties: int | None = None
+    unidentified_word: int | None = None
+
+
+type AllegroPayloadValue = int | str | tuple[AllegroLayerListEntry, ...]
+
+
+@dataclass(frozen=True)
 class AllegroHeader:
     magic: int
     version: AllegroVersion
@@ -81,7 +100,7 @@ class AllegroRecord:
     end_offset: int
     key: int | None
     next_key: int | None
-    payload: Mapping[str, object]
+    payload: Mapping[str, AllegroPayloadValue]
 
     @property
     def byte_length(self) -> int:
