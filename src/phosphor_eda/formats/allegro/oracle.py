@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from phosphor_eda.domain.pcb import Board
+
 KICAD_CONVERSION_TIMEOUT_SECONDS = 120
 
 
@@ -206,6 +208,19 @@ class PackagedNetlistSummary:
     unique_refdes_count: int
     primitive_count: int
     primitive_pin_count: int
+    component_refs: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
+class PackagedNetlistBoardComparison:
+    board_component_count: int
+    sidecar_component_count: int
+    board_net_count: int
+    sidecar_net_count: int
+    board_connected_pin_count: int
+    sidecar_connected_pin_count: int
+    unresolved_component_refs: tuple[str, ...]
+    board_only_component_refs: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -495,6 +510,27 @@ def parse_packaged_netlist_summary(root: Path) -> PackagedNetlistSummary:
         unique_refdes_count=len(set(refs)),
         primitive_count=primitive_count,
         primitive_pin_count=primitive_pin_count,
+        component_refs=frozenset(refs),
+    )
+
+
+def compare_board_to_packaged_netlist(
+    board: Board,
+    summary: PackagedNetlistSummary,
+) -> PackagedNetlistBoardComparison:
+    board_refs = frozenset(footprint.reference for footprint in board.footprints)
+    connected_pins = [
+        pad for pad in board.pads if pad.footprint is not None and pad.net is not None
+    ]
+    return PackagedNetlistBoardComparison(
+        board_component_count=len(board_refs),
+        sidecar_component_count=summary.unique_refdes_count,
+        board_net_count=len(board.nets),
+        sidecar_net_count=summary.net_count,
+        board_connected_pin_count=len(connected_pins),
+        sidecar_connected_pin_count=summary.node_count - summary.no_connect_node_count,
+        unresolved_component_refs=tuple(sorted(summary.component_refs - board_refs)),
+        board_only_component_refs=tuple(sorted(board_refs - summary.component_refs)),
     )
 
 

@@ -41,6 +41,19 @@ class AllegroLayerListEntry:
     unidentified_word: int | None = None
 
 
+@dataclass(frozen=True)
+class AllegroPadstackComponent:
+    index: int
+    component_type: int
+    width: int
+    height: int
+    offset_x: int
+    offset_y: int
+    string_key: int
+    z1: int | None = None
+    z2: int | None = None
+
+
 type AllegroPayloadValue = (
     bytes
     | float
@@ -49,6 +62,7 @@ type AllegroPayloadValue = (
     | tuple[int, ...]
     | tuple[tuple[int, ...], ...]
     | tuple[AllegroLayerListEntry, ...]
+    | tuple[AllegroPadstackComponent, ...]
 )
 
 

@@ -10,6 +10,7 @@ from phosphor_eda.formats.allegro.errors import AllegroParseError
 from phosphor_eda.formats.allegro.records import (
     AllegroHeader,
     AllegroLayerListEntry,
+    AllegroPadstackComponent,
     AllegroPayloadValue,
     AllegroRecord,
     AllegroRecordSet,
@@ -503,7 +504,9 @@ def _parse_known_record(
             reader.skip(4)
         reader.skip(4 * 4)
     elif tag == 0x2D:
-        reader.skip(3)
+        reader.skip(1)
+        payload["placement_side"] = reader.read_uint8()
+        reader.skip(1)
         key = reader.read_uint32()
         next_key = reader.read_uint32()
         _skip_cond_u32(reader, version, AllegroVersion.V_172)
@@ -511,7 +514,10 @@ def _parse_known_record(
             payload["instance_ref_key"] = reader.read_uint32()
         reader.skip(2 + 2)
         _skip_cond_u32(reader, version, AllegroVersion.V_172)
-        reader.skip(4 + 4 + 2 * 4)
+        payload["flags"] = reader.read_uint32()
+        payload["rotation_mdeg"] = reader.read_uint32()
+        payload["coord_x"] = reader.read_int32()
+        payload["coord_y"] = reader.read_int32()
         if _version_at_least(version, AllegroVersion.V_172):
             payload["instance_ref_key"] = reader.read_uint32()
         payload["graphic_key"] = reader.read_uint32()
@@ -576,26 +582,36 @@ def _parse_known_record(
         key = reader.read_uint32()
         next_key = reader.read_uint32()
         payload["net_key"] = reader.read_uint32()
-        reader.skip(4)
+        payload["flags"] = reader.read_uint32()
         _skip_cond_u32(reader, version, AllegroVersion.V_172)
         payload["next_in_footprint_key"] = reader.read_uint32()
         payload["parent_footprint_key"] = reader.read_uint32()
-        reader.skip(5 * 4)
+        payload["track_key"] = reader.read_uint32()
+        payload["pad_definition_key"] = reader.read_uint32()
+        payload["auxiliary_key"] = reader.read_uint32()
+        payload["ratline_key"] = reader.read_uint32()
+        payload["pin_number_key"] = reader.read_uint32()
         payload["next_in_component_key"] = reader.read_uint32()
         _skip_cond_u32(reader, version, AllegroVersion.V_172)
         payload["name_text_key"] = reader.read_uint32()
-        reader.skip(4 + 4 * 4)
+        payload["secondary_key"] = reader.read_uint32()
+        payload["coord_x"] = reader.read_int32()
+        payload["coord_y"] = reader.read_int32()
+        payload["coord_2_x"] = reader.read_int32()
+        payload["coord_2_y"] = reader.read_int32()
     elif tag == 0x33:
         reader.skip(1)
         _read_layer_info(reader, payload)
         key = reader.read_uint32()
         next_key = reader.read_uint32()
         payload["net_key"] = reader.read_uint32()
-        reader.skip(4)
+        payload["flags"] = reader.read_uint32()
         _skip_cond_u32(reader, version, AllegroVersion.V_172)
-        reader.skip(4)
+        payload["connection_key"] = reader.read_uint32()
         _skip_cond_u32(reader, version, AllegroVersion.V_172)
-        reader.skip(2 * 4 + 4)
+        payload["coord_x"] = reader.read_int32()
+        payload["coord_y"] = reader.read_int32()
+        payload["track_key"] = reader.read_uint32()
         payload["padstack_key"] = reader.read_uint32()
         reader.skip(4 * 4 + 4 * 4)
     elif tag == 0x34:
@@ -701,21 +717,41 @@ def _parse_padstack_record(
     payload["pad_name_key"] = reader.read_uint32()
 
     if _version_lt(version, AllegroVersion.V_172):
-        reader.skip(6 * 4)
-        reader.skip(1 + 1 + 1 + 1 + 2)
+        payload["drill_size"] = reader.read_uint32()
+        reader.skip(5 * 4)
+        payload["drill_mark_shape"] = reader.read_uint8()
+        flags = reader.read_uint8()
+        payload["flags"] = flags
+        payload["plated"] = 1 if flags & 0x01 else 0
+        payload["drill_char"] = reader.read_uint8()
+        reader.skip(1)
+        payload["pad_type_code"] = reader.read_uint16()
         reader.skip(2 + 2)
         layer_count = reader.read_uint16()
-        reader.skip(8 * 4)
+        reader.skip(5 * 4)
+        payload["slot_x"] = reader.read_uint32()
+        payload["slot_y"] = reader.read_uint32()
+        reader.skip(1 * 4)
         _skip_cond_u32(reader, version, AllegroVersion.V_165)
     else:
         reader.skip(3 * 4)
-        reader.skip(1 + 1 + 1 + 1)
+        pad_type_and_a = reader.read_uint8()
+        payload["pad_type_code"] = pad_type_and_a & 0xF0
+        reader.skip(1)
+        flags = reader.read_uint8()
+        payload["flags"] = flags
+        payload["plated"] = 1 if flags & 0x20 else 0
+        reader.skip(1)
         reader.skip(2 * 4)
         reader.skip(2 + 2)
         layer_count = reader.read_uint16()
         reader.skip(2)
-        reader.skip(7 * 4)
         reader.skip(4 * 4)
+        payload["drill_size"] = reader.read_uint32()
+        reader.skip(2 * 4)
+        payload["slot_x"] = reader.read_uint32()
+        payload["slot_y"] = reader.read_uint32()
+        reader.skip(2 * 4)
         reader.skip(21 * 4)
         if _version_at_least(version, AllegroVersion.V_180):
             reader.skip(8 * 4)
@@ -739,16 +775,41 @@ def _parse_padstack_record(
         fixed_component_count = 21
     components_per_layer = 3 if _version_lt(version, AllegroVersion.V_172) else 4
     component_count = fixed_component_count + layer_count * components_per_layer
+    payload["fixed_component_count"] = fixed_component_count
+    payload["components_per_layer"] = components_per_layer
     payload["component_count"] = component_count
 
+    components: list[AllegroPadstackComponent] = []
     for index in range(component_count):
-        reader.skip(4)
-        _skip_cond_u32(reader, version, AllegroVersion.V_172)
-        reader.skip(2 * 4)
-        _skip_cond_u32(reader, version, AllegroVersion.V_172)
-        reader.skip(2 * 4 + 4)
-        if _version_at_least(version, AllegroVersion.V_172) or index < component_count - 1:
+        component_type = reader.read_uint8()
+        reader.skip(3)
+        z1 = None
+        if _version_at_least(version, AllegroVersion.V_172):
             reader.skip(4)
+        width = reader.read_int32()
+        height = reader.read_int32()
+        if _version_at_least(version, AllegroVersion.V_172):
+            z1 = reader.read_int32()
+        offset_x = reader.read_int32()
+        offset_y = reader.read_int32()
+        string_key = reader.read_uint32()
+        z2 = None
+        if _version_at_least(version, AllegroVersion.V_172) or index < component_count - 1:
+            z2 = reader.read_uint32()
+        components.append(
+            AllegroPadstackComponent(
+                index=index,
+                component_type=component_type,
+                width=width,
+                height=height,
+                offset_x=offset_x,
+                offset_y=offset_y,
+                string_key=string_key,
+                z1=z1,
+                z2=z2,
+            )
+        )
+    payload["components"] = tuple(components)
 
     unknown_entry_count = variable_count * (
         10 if _version_at_least(version, AllegroVersion.V_172) else 8
