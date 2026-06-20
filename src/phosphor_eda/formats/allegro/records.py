@@ -56,6 +56,7 @@ class AllegroPadstackComponent:
 
 type AllegroPayloadValue = (
     bytes
+    | float
     | int
     | str
     | tuple[int, ...]

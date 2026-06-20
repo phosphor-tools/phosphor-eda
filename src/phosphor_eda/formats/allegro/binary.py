@@ -72,6 +72,13 @@ class BoundedBinaryReader:
         self._offset += 4
         return value
 
+    def read_allegro_float(self) -> float:
+        """Read Allegro's word-swapped IEEE-754 double encoding."""
+        high_word = self.read_uint32()
+        low_word = self.read_uint32()
+        combined = (high_word << 32) + low_word
+        return struct.unpack("<d", struct.pack("<Q", combined))[0]
+
     def read_bytes(self, byte_count: int) -> bytes:
         if byte_count < 0:
             raise AllegroParseError(

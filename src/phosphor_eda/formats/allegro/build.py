@@ -9,22 +9,39 @@ from typing import TYPE_CHECKING
 from phosphor_eda.domain.pcb import (
     Board,
     LayerRole,
+    PcbArc,
+    PcbArtwork,
+    PcbArtworkKind,
+    PcbArtworkPurpose,
+    PcbBoardProfile,
+    PcbBoardProfileElement,
+    PcbCircle,
+    PcbClosedPath,
     PcbDrill,
     PcbFootprint,
     PcbFootprintMetadata,
+    PcbKeepout,
     PcbLayer,
+    PcbLine,
     PcbMetadata,
     PcbNet,
     PcbObjectMetadata,
     PcbPad,
+    PcbPolygon,
     PcbVia,
     PcbViaType,
 )
 from phosphor_eda.domain.pcb_builder import PcbBuilder
 from phosphor_eda.formats.allegro.constants import AllegroBoardUnits
 from phosphor_eda.formats.allegro.graph import AllegroObjectGraph, build_allegro_object_graph
+from phosphor_eda.formats.allegro.graphics import extract_allegro_graphics
 from phosphor_eda.formats.allegro.layers import build_allegro_layers
 from phosphor_eda.formats.allegro.padstacks import AllegroExpandedPadstack, expand_allegro_padstack
+from phosphor_eda.formats.allegro.primitives import (
+    AllegroGraphicPrimitive,
+    AllegroPrimitiveKind,
+    AllegroPrimitiveRole,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -111,6 +128,32 @@ def build_allegro_board(record_set: AllegroRecordSet, *, name: str = "Allegro Bo
     )
 
     board = builder.build()
+    board.stackup = layer_map.stackup
+    return board
+
+
+def build_allegro_graphics_board(record_set: AllegroRecordSet, *, name: str) -> Board:
+    """Assemble the PR04 graphics subset into a strict PCB ``Board``."""
+    layer_map = build_allegro_layers(record_set)
+    graphics = extract_allegro_graphics(record_set, layer_map)
+    metadata = PcbMetadata(source_format="allegro")
+    diagnostic_count = len(layer_map.diagnostics) + len(graphics.diagnostics)
+    if diagnostic_count:
+        metadata.properties["parse_diagnostic_count"] = str(diagnostic_count)
+
+    builder = PcbBuilder(name, metadata=metadata)
+    for layer in layer_map.layers:
+        builder.add_layer(layer, source="allegro layers")
+
+    profile_elements = tuple(_profile_element(primitive) for primitive in graphics.board_profile)
+    builder.set_board_profile(PcbBoardProfile(elements=profile_elements), source="allegro profile")
+
+    for primitive in graphics.artwork:
+        builder.add_artwork_object(_artwork(primitive), source=primitive.id)
+    for primitive in graphics.keepouts:
+        builder.add_keepout_object(_keepout(primitive), source=primitive.id)
+
+    board = builder.build(require_board_profile=True)
     board.stackup = layer_map.stackup
     return board
 
@@ -501,3 +544,59 @@ def _source(kind: str, record: AllegroRecord | None) -> str:
     if record is None:
         return f"allegro:{kind}"
     return f"allegro:{kind}:0x{record.tag:02X}:{record.key or 'unkeyed'}"
+
+
+def _profile_element(primitive: AllegroGraphicPrimitive) -> PcbBoardProfileElement:
+    if not isinstance(primitive.data, PcbLine | PcbArc | PcbCircle | PcbPolygon):
+        msg = f"board profile primitive {primitive.id} has unsupported data"
+        raise ValueError(msg)
+    return PcbBoardProfileElement(
+        id=primitive.id,
+        kind=_artwork_kind(primitive.kind),
+        layer=primitive.layer,
+        data=primitive.data,
+        is_cutout=primitive.is_cutout,
+        metadata=primitive.metadata,
+    )
+
+
+def _artwork(primitive: AllegroGraphicPrimitive) -> PcbArtwork:
+    return PcbArtwork(
+        id=primitive.id,
+        kind=_artwork_kind(primitive.kind),
+        purpose=_artwork_purpose(primitive),
+        layer=primitive.layer,
+        data=primitive.data,
+        metadata=primitive.metadata,
+    )
+
+
+def _keepout(primitive: AllegroGraphicPrimitive) -> PcbKeepout:
+    if not isinstance(primitive.data, PcbPolygon):
+        msg = f"keepout primitive {primitive.id} has unsupported data"
+        raise ValueError(msg)
+    if primitive.layer is None:
+        msg = f"keepout primitive {primitive.id} has no resolved layer"
+        raise ValueError(msg)
+    return PcbKeepout(
+        id=primitive.id,
+        boundary=PcbClosedPath.from_points(primitive.data.points),
+        layers=(primitive.layer,),
+        metadata=primitive.metadata,
+    )
+
+
+def _artwork_kind(kind: AllegroPrimitiveKind) -> PcbArtworkKind:
+    if kind is AllegroPrimitiveKind.LINE:
+        return PcbArtworkKind.LINE
+    if kind is AllegroPrimitiveKind.ARC:
+        return PcbArtworkKind.ARC
+    if kind is AllegroPrimitiveKind.TEXT:
+        return PcbArtworkKind.TEXT
+    return PcbArtworkKind.POLYGON
+
+
+def _artwork_purpose(primitive: AllegroGraphicPrimitive) -> PcbArtworkPurpose:
+    if primitive.has_role(AllegroPrimitiveRole.TEXT):
+        return PcbArtworkPurpose.USER_TEXT
+    return PcbArtworkPurpose.MECHANICAL
