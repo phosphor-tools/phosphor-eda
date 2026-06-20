@@ -1,9 +1,10 @@
 """Behavior lock for full-project output through SQL and serialization.
 
-Loads two real projects (Altium pi-mx8 via .PrjPcb, KiCad jetson-orin via
-.kicad_pro) into the DuckDB layer and pins a content hash of every table,
-plus the schematic text serialization. Any change to parsed values, SQL
-columns, or serialization shows up as a hash mismatch naming the table.
+Loads real projects (Altium pi-mx8 via .PrjPcb, KiCad jetson-orin via
+.kicad_pro, and an Allegro board-only project via .brd) into the DuckDB layer
+and pins a content hash of every table, plus schematic text serialization
+where a schematic exists. Any change to parsed values, SQL columns, or
+serialization shows up as a hash mismatch naming the table.
 
 Regenerate after an intentional change:
 
@@ -28,12 +29,15 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from phosphor_eda.formats.allegro import load_allegro_pcb_project
 from phosphor_eda.query.format import serialize_design
 from phosphor_eda.query.project_loader import load_project
 from phosphor_eda.query.sql import load_database
 from phosphor_eda.query.sql.loader import TABLE_DDL
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import duckdb
 
     from phosphor_eda.domain.project import Project
@@ -45,9 +49,18 @@ _UPDATE = os.environ.get("PHOSPHOR_UPDATE_GOLDENS") == "1"
 _COLUMN_RE = re.compile(r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s+(?P<type>[A-Z]+)\b")
 _GEOMETRY_DECIMAL_PLACES = 6
 
-PROJECTS = {
-    "pi-mx8": FIXTURES / "altium/pi-mx8/PiMX8MP_r0.3_release.PrjPcb",
-    "jetson-orin": FIXTURES / "kicad-jetson-orin/jetson-orin-baseboard.kicad_pro",
+PROJECTS: dict[str, tuple[Path, Callable[[Path], Project]]] = {
+    "allegro-breakout": (
+        FIXTURES
+        / "orcad/opencellular-breakout/allegro/OpenCellular/electronics/breakout/board"
+        / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd",
+        load_allegro_pcb_project,
+    ),
+    "pi-mx8": (FIXTURES / "altium/pi-mx8/PiMX8MP_r0.3_release.PrjPcb", load_project),
+    "jetson-orin": (
+        FIXTURES / "kicad-jetson-orin/jetson-orin-baseboard.kicad_pro",
+        load_project,
+    ),
 }
 
 pytestmark = pytest.mark.behavior_lock
@@ -162,7 +175,8 @@ def _project_snapshot(project: Project) -> dict[str, object]:
 
 @pytest.mark.parametrize("name", sorted(PROJECTS))
 def test_project_output_locked(name: str) -> None:
-    snapshot = _project_snapshot(load_project(PROJECTS[name]))
+    path, loader = PROJECTS[name]
+    snapshot = _project_snapshot(loader(path))
 
     if _UPDATE:
         existing = json.loads(GOLDEN.read_text()) if GOLDEN.exists() else {}

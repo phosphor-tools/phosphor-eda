@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from importlib.resources import as_file, files
+from pathlib import Path
 
 import pytest
 from conftest import build_render_test_board
@@ -18,6 +19,7 @@ from phosphor_eda.domain.pcb import (
     PcbObjectMetadata,
     PcbText,
 )
+from phosphor_eda.query.project_loader import load_pcb
 from phosphor_eda.render.api import render_pcb_svg
 from phosphor_eda.render.inventory import (
     InventoryItemKind,
@@ -34,6 +36,13 @@ from phosphor_eda.render.settings import (
     load_render_settings_file,
     load_render_settings_json,
     resolve_effective_settings,
+)
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+ALLEGRO_BREAKOUT_BRD = (
+    FIXTURES
+    / "orcad/opencellular-breakout/allegro/OpenCellular/electronics/breakout/board"
+    / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
 )
 
 
@@ -162,6 +171,24 @@ def test_inventory_builder_emits_typed_items() -> None:
         and item.content_kind == PcbArtworkKind.TEXT
         for item in inventory.items
     )
+
+
+def test_allegro_breakout_render_inventory_uses_typed_domain_collections() -> None:
+    board = load_pcb(ALLEGRO_BREAKOUT_BRD)
+    inventory = build_inventory(board, side="front")
+    counts: dict[InventoryItemKind, int] = {}
+    for item in inventory.items:
+        counts[item.item_kind] = counts.get(item.item_kind, 0) + 1
+
+    assert counts == {
+        InventoryItemKind.BOARD_PROFILE: 5,
+        InventoryItemKind.PAD: 1006,
+        InventoryItemKind.VIA: 1424,
+        InventoryItemKind.DRILL: 272,
+        InventoryItemKind.CONDUCTOR: 211,
+        InventoryItemKind.ARTWORK: 20713,
+        InventoryItemKind.KEEPOUT: 131,
+    }
 
 
 def test_inventory_builder_omits_hidden_domain_sources() -> None:

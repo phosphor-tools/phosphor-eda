@@ -58,6 +58,7 @@ from phosphor_eda.domain.variants import (
     VariantTarget,
     VariantTargetKind,
 )
+from phosphor_eda.formats.allegro import load_allegro_pcb_project
 from phosphor_eda.formats.dsn.parser import parse_dsn
 from phosphor_eda.formats.dsn.raw_models import (
     DsnPackage,
@@ -80,6 +81,11 @@ SWD_SWITCH_PCB = FIXTURES / "swd_switch.kicad_pcb"
 ORANGECRAB_PRO = FIXTURES / "kicad-orangecrab/OrangeCrab.kicad_pro"
 PI_MX8_PRJPCB = FIXTURES / "altium/pi-mx8/PiMX8MP_r0.3_release.PrjPcb"
 JETSON_ORIN_PRO = FIXTURES / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pro"
+ALLEGRO_BREAKOUT_BRD = (
+    FIXTURES
+    / "orcad/opencellular-breakout/allegro/OpenCellular/electronics/breakout/board"
+    / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -1577,6 +1583,16 @@ def altium_db() -> Iterator[duckdb.DuckDBPyConnection]:
         con.close()
 
 
+@pytest.fixture(scope="module")
+def allegro_db() -> Iterator[duckdb.DuckDBPyConnection]:
+    project = load_allegro_pcb_project(ALLEGRO_BREAKOUT_BRD)
+    con = load_database(project)
+    try:
+        yield con
+    finally:
+        con.close()
+
+
 class TestFootprints:
     def test_count(self, db: duckdb.DuckDBPyConnection) -> None:
         assert _count(db, "SELECT count(*) FROM footprints") == 28
@@ -1763,6 +1779,54 @@ def test_altium_typed_tables_are_populated(altium_db: duckdb.DuckDBPyConnection)
     assert _count(altium_db, "SELECT count(*) FROM net_classes") > 0
     assert _count(altium_db, "SELECT count(*) FROM design_rules") > 0
     assert _count(altium_db, "SELECT count(*) FROM nets WHERE net_class IS NOT NULL") > 0
+
+
+def test_allegro_breakout_typed_tables_are_populated(
+    allegro_db: duckdb.DuckDBPyConnection,
+) -> None:
+    assert _count(allegro_db, "SELECT count(*) FROM boards") == 1
+    assert _count(allegro_db, "SELECT count(*) FROM layers") == 186
+    assert _count(allegro_db, "SELECT count(*) FROM footprints") == 68
+    assert _count(allegro_db, "SELECT count(*) FROM pads") == 348
+    assert _count(allegro_db, "SELECT count(*) FROM vias") == 178
+    assert _count(allegro_db, "SELECT count(*) FROM drills") == 272
+    assert _count(allegro_db, "SELECT count(*) FROM conductors") == 211
+    assert _count(allegro_db, "SELECT count(*) FROM artwork") == 20713
+    assert _count(allegro_db, "SELECT count(*) FROM board_profile") == 4
+    assert _count(allegro_db, "SELECT count(*) FROM keepouts") == 131
+
+
+def test_allegro_breakout_sql_views_read_typed_board_collections(
+    allegro_db: duckdb.DuckDBPyConnection,
+) -> None:
+    route_count = _count(
+        allegro_db,
+        "SELECT count(*) FROM net_routes WHERE trace_length_mm > 0",
+    )
+    width_violation_count = _count(allegro_db, "SELECT count(*) FROM width_violations")
+    drill_histogram_rows = allegro_db.execute(
+        """
+        SELECT round(drill_mm, 4), source, count
+        FROM drill_histogram
+        ORDER BY drill_mm, source
+        """
+    ).fetchall()
+
+    assert route_count == 63
+    assert width_violation_count == 33
+    assert drill_histogram_rows == [
+        (0.3048, "via", 178),
+        (0.7, "pad", 5),
+        (0.889, "pad", 16),
+        (0.92, "pad", 4),
+        (1.0, "pad", 4),
+        (1.016, "pad", 48),
+        (1.3, "pad", 4),
+        (1.4, "pad", 4),
+        (2.286, "pad", 3),
+        (2.3, "pad", 2),
+        (4.5, "pad", 4),
+    ]
 
 
 # ---------------------------------------------------------------------------
