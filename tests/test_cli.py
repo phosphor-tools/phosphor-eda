@@ -640,7 +640,14 @@ def test_cli_render_accepts_direct_pcb_source(
         assert board is parsed_board
         return RenderResult(svg="<svg></svg>")
 
+    captured_projects: list[Project] = []
+
+    def fake_select_project_board(project: Project, _selector: str | None) -> Board:
+        captured_projects.append(project)
+        return parsed_board
+
     monkeypatch.setattr("phosphor_eda.cli.load_pcb", fake_load_pcb)
+    monkeypatch.setattr("phosphor_eda.cli._select_project_board", fake_select_project_board)
     monkeypatch.setattr("phosphor_eda.render.api.render_pcb_svg", fake_render_pcb_svg)
 
     runner = CliRunner()
@@ -648,6 +655,7 @@ def test_cli_render_accepts_direct_pcb_source(
 
     assert result.exit_code == 0, result.output
     assert parsed_paths == [pcb]
+    assert captured_projects[0].metadata.format == "kicad"
     assert "<svg></svg>" in result.output
 
 
