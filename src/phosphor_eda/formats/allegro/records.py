@@ -139,9 +139,11 @@ class AllegroRecordSet:
     _tag_counts: Mapping[int, int] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        by_key = {record.key: record for record in self.records if record.key is not None}
+        by_key: dict[int, AllegroRecord] = {}
         counts: dict[int, int] = {}
         for record in self.records:
+            if record.key is not None and record.key not in by_key:
+                by_key[record.key] = record
             counts[record.tag] = counts.get(record.tag, 0) + 1
         object.__setattr__(self, "_by_key", MappingProxyType(by_key))
         object.__setattr__(self, "_tag_counts", MappingProxyType(counts))

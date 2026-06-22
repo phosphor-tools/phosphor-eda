@@ -5,8 +5,9 @@ from pathlib import Path
 import pytest
 
 from phosphor_eda.formats.allegro.errors import AllegroParseError
+from phosphor_eda.formats.allegro.graph import build_allegro_object_graph
 from phosphor_eda.formats.allegro.parser import parse_allegro_records
-from phosphor_eda.formats.allegro.records import AllegroRecord
+from phosphor_eda.formats.allegro.records import AllegroRecord, AllegroRecordSet
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 BREAKOUT_BOARD = (
@@ -120,3 +121,34 @@ def test_parse_allegro_records_rejects_mismatched_scalar_field_substructure_size
     assert error.offset == field_record.offset
     assert error.source_name == "bad-scalar-field-size.brd"
     assert "0x03 subtype 0x64 consumed" in str(error)
+
+
+def test_record_set_key_lookup_matches_object_graph_first_record_contract() -> None:
+    first = AllegroRecord(
+        tag=0x07,
+        offset=0,
+        end_offset=4,
+        key=100,
+        next_key=None,
+        payload={},
+    )
+    duplicate = AllegroRecord(
+        tag=0x2D,
+        offset=4,
+        end_offset=8,
+        key=100,
+        next_key=None,
+        payload={},
+    )
+    record_set = AllegroRecordSet(
+        header=None,
+        string_table=None,
+        records=(first, duplicate),
+        end_offset=8,
+    )
+
+    graph = build_allegro_object_graph(record_set)
+
+    assert record_set.by_key[100] is first
+    assert graph.by_key[100] is first
+    assert [issue.code for issue in graph.diagnostics] == ["duplicate-object-key"]

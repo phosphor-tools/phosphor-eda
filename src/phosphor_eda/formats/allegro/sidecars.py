@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from io import BytesIO
 from typing import TYPE_CHECKING, TypeGuard
 
+from phosphor_eda.formats.allegro.constants import AllegroBoardUnits, allegro_unit_to_mm
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -238,7 +240,7 @@ def _parse_padstack_json_payload(path: Path, payload: str) -> AllegroPadstackSid
     pad_design = _object(root.get("padDesign"))
     pad = _primary_pad(_sequence(pad_design.get("pad")))
     units = _string(component.get("units"))
-    scale = _unit_to_mm(units)
+    scale = _sidecar_unit_to_mm(units)
     width = _number(pad.get("width")) * scale
     height = _number(pad.get("height")) * scale
     return AllegroPadstackSidecar(
@@ -311,15 +313,15 @@ def _number(value: object) -> float:
     return 0.0
 
 
-def _unit_to_mm(units: str) -> float:
+def _sidecar_unit_to_mm(units: str) -> float:
     normalized = units.casefold()
     if normalized in {"mil", "mils"}:
-        return 0.0254
+        return allegro_unit_to_mm(AllegroBoardUnits.MILS, 1)
     if normalized in {"inch", "inches"}:
-        return 25.4
+        return allegro_unit_to_mm(AllegroBoardUnits.INCHES, 1)
     if normalized in {"millimeter", "millimeters", "mm"}:
-        return 1.0
-    return 1.0
+        return allegro_unit_to_mm(AllegroBoardUnits.MILLIMETERS, 1)
+    raise ValueError(f"unsupported Allegro padstack sidecar unit {units!r}")
 
 
 def _pad_shape(shape: str) -> str:

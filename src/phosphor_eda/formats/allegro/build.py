@@ -36,7 +36,7 @@ from phosphor_eda.domain.pcb import (
     PcbViaType,
 )
 from phosphor_eda.domain.pcb_builder import PcbBuilder
-from phosphor_eda.formats.allegro.constants import AllegroBoardUnits
+from phosphor_eda.formats.allegro.constants import allegro_unit_to_mm
 from phosphor_eda.formats.allegro.graph import AllegroObjectGraph, build_allegro_object_graph
 from phosphor_eda.formats.allegro.graphics import extract_allegro_copper, extract_allegro_graphics
 from phosphor_eda.formats.allegro.layers import build_allegro_layers
@@ -826,19 +826,7 @@ def _back_copper(layers: list[PcbLayer]) -> PcbLayer:
 def _unit_to_mm(record_set: AllegroRecordSet) -> float:
     if record_set.header is None:
         return 1.0
-    divisor = record_set.header.unit_divisor
-    units = record_set.header.board_units
-    if units is AllegroBoardUnits.MILS:
-        return 0.0254 / divisor
-    if units is AllegroBoardUnits.INCHES:
-        return 25.4 / divisor
-    if units is AllegroBoardUnits.MILLIMETERS:
-        return 1.0 / divisor
-    if units is AllegroBoardUnits.CENTIMETERS:
-        return 10.0 / divisor
-    if units is AllegroBoardUnits.MICROMETERS:
-        return 0.001 / divisor
-    return 1.0 / divisor
+    return allegro_unit_to_mm(record_set.header.board_units, record_set.header.unit_divisor)
 
 
 def _text_by_wrapper(record_set: AllegroRecordSet) -> dict[int, str]:

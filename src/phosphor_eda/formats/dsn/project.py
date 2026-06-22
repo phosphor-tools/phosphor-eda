@@ -112,7 +112,7 @@ def load_orcad_project(opj_path: Path) -> Project:
             variants = map_orcad_cis_not_fitted_variants(raw, schematic, ctx)
             schematic_docs[0].parsed = True
         except (DsnFormatError, OSError, ValueError) as exc:
-            schematic_docs[0].metadata["parse_error"] = str(exc)
+            _record_document_parse_error(schematic_docs[0], exc, category="dsn_format", ctx=ctx)
 
     name = project_info.name or opj_path.stem
     boards, net_classes, design_rules, diff_pairs = _load_board_documents(project_info)
@@ -166,10 +166,18 @@ def _load_board_documents(
             continue
         resolved_path = doc.metadata.get("resolved_path")
         if not resolved_path:
-            doc.metadata["parse_error"] = "board path is not local to the OPJ project"
+            _record_document_parse_error(
+                doc,
+                "board path is not local to the OPJ project",
+                category="board_path",
+            )
             continue
         if not doc.exists:
-            doc.metadata["parse_error"] = f"missing board file: {resolved_path}"
+            _record_document_parse_error(
+                doc,
+                f"missing board file: {resolved_path}",
+                category="missing_board",
+            )
             continue
         if resolved_path in loaded_paths:
             doc.parsed = True
@@ -177,7 +185,7 @@ def _load_board_documents(
         try:
             board_project = load_allegro_pcb_project(Path(resolved_path))
         except (AllegroParseError, OSError, PcbBuildError) as exc:
-            doc.metadata["parse_error"] = str(exc)
+            _record_document_parse_error(doc, exc, category=_board_error_category(exc))
             continue
         loaded_paths.add(resolved_path)
         doc.parsed = True
@@ -186,6 +194,40 @@ def _load_board_documents(
         design_rules.extend(board_project.design_rules)
         diff_pairs.extend(board_project.diff_pairs)
     return boards, net_classes, design_rules, diff_pairs
+
+
+def _record_document_parse_error(
+    doc: ProjectDocument,
+    error: Exception | str,
+    *,
+    category: str,
+    ctx: ParseContext | None = None,
+) -> None:
+    message = str(error)
+    doc.metadata["parse_error"] = message
+    doc.metadata["parse_error_category"] = category
+
+    if isinstance(error, DsnFormatError):
+        doc.metadata["parse_error_offset"] = str(error.offset)
+        doc.metadata["parse_error_type_id"] = str(error.type_id)
+    elif isinstance(error, AllegroParseError):
+        if error.offset is not None:
+            doc.metadata["parse_error_offset"] = str(error.offset)
+        doc.metadata["parse_error_code"] = error.code
+
+    if ctx is not None:
+        ctx.error(category, message)
+        doc.metadata["parse_issue_count"] = str(len(ctx.issues))
+    else:
+        doc.metadata["parse_issue_count"] = "1"
+
+
+def _board_error_category(error: Exception) -> str:
+    if isinstance(error, AllegroParseError):
+        return "allegro_parse"
+    if isinstance(error, PcbBuildError):
+        return "pcb_build"
+    return "board_io"
 
 
 def _packaged_netlist_dirs(project_info: OrCadProject, dsn_path: Path) -> tuple[Path, ...]:

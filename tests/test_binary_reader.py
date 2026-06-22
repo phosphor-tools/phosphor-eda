@@ -1,6 +1,9 @@
 import struct
 
+import pytest
+
 from phosphor_eda.formats.dsn.binary_reader import PREAMBLE, BinaryReader
+from phosphor_eda.formats.dsn.errors import DsnFormatError
 
 
 def test_read_uint8():
@@ -48,3 +51,25 @@ def test_skip():
     r.skip(5)
     assert r.pos == 5
     assert r.remaining() == 5
+
+
+def test_read_bytes_rejects_truncated_payload_without_advancing() -> None:
+    r = BinaryReader(b"\x01", "tiny-stream")
+
+    with pytest.raises(DsnFormatError) as exc_info:
+        r.read_bytes(2)
+
+    assert exc_info.value.offset == 0
+    assert "tiny-stream" in str(exc_info.value)
+    assert r.pos == 0
+
+
+def test_read_string_zero_rejects_unterminated_string_without_advancing() -> None:
+    r = BinaryReader(b"unterminated", "string-stream")
+
+    with pytest.raises(DsnFormatError) as exc_info:
+        r.read_string_zero()
+
+    assert exc_info.value.offset == 0
+    assert "unterminated null-terminated string" in str(exc_info.value)
+    assert r.pos == 0

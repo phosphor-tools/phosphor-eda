@@ -85,6 +85,23 @@ def test_orcad_project_preserves_schematic_when_board_parse_fails(tmp_path: Path
     assert pcb_doc.metadata["parse_error"]
 
 
+def test_orcad_project_records_schematic_parse_failure_as_issue_metadata(tmp_path: Path) -> None:
+    """Proves malformed DSN loads surface structured parse issue metadata."""
+    dsn = tmp_path / "bad.DSN"
+    dsn.write_bytes(b"not a dsn")
+    opj = _write_opj_with_schematic(tmp_path / "bad-dsn.opj", schematic_path=dsn.name)
+
+    project = load_project(opj)
+
+    assert project.schematic is None
+    schematic_doc = next(doc for doc in project.documents if doc.kind is DocumentKind.SCHEMATIC)
+    assert schematic_doc.exists
+    assert not schematic_doc.parsed
+    assert schematic_doc.metadata["parse_error"]
+    assert schematic_doc.metadata["parse_error_category"] == "dsn_format"
+    assert schematic_doc.metadata["parse_issue_count"] == "1"
+
+
 def test_orcad_project_deduplicates_duplicate_resolved_board_documents(tmp_path: Path) -> None:
     """Proves duplicate board manifest entries do not duplicate Project.boards."""
     opj = _write_opj_with_duplicate_board_files(tmp_path / "duplicate-board.opj")
@@ -118,6 +135,21 @@ def _write_opj(path: Path, *, board_path: str) -> Path:
     (File "{relative_dsn}"
       (Type "Schematic Design"))
     ("Allegro Netlist Output Board File" "{board_path}")))
+""",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _write_opj_with_schematic(path: Path, *, schematic_path: str) -> Path:
+    path.write_text(
+        f"""(ExpressProject "Board Project"
+  (ProjectVersion "19981106")
+  (ProjectType "PCB")
+  (Folder "Design Resources"
+    (File "{schematic_path}"
+      (Type "Schematic Design")))
+)
 """,
         encoding="utf-8",
     )

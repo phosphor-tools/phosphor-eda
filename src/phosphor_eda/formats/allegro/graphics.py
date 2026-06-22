@@ -15,7 +15,7 @@ from phosphor_eda.domain.pcb import (
     PcbPolygon,
     PcbText,
 )
-from phosphor_eda.formats.allegro.constants import AllegroBoardUnits
+from phosphor_eda.formats.allegro.constants import allegro_unit_to_mm
 from phosphor_eda.formats.allegro.graph import build_allegro_object_graph
 from phosphor_eda.formats.allegro.primitives import (
     AllegroConductorPrimitive,
@@ -934,18 +934,7 @@ def _record_layer(record: AllegroRecord, layer_map: AllegroLayerMap) -> PcbLayer
 
 
 def _coord_to_mm(value: float | int, header: AllegroHeader) -> float:
-    source_units = float(value) / header.unit_divisor
-    if header.board_units is AllegroBoardUnits.MILS:
-        return source_units * 0.0254
-    if header.board_units is AllegroBoardUnits.INCHES:
-        return source_units * 25.4
-    if header.board_units is AllegroBoardUnits.MILLIMETERS:
-        return source_units
-    if header.board_units is AllegroBoardUnits.CENTIMETERS:
-        return source_units * 10.0
-    if header.board_units is AllegroBoardUnits.MICROMETERS:
-        return source_units / 1000.0
-    return source_units
+    return float(value) * allegro_unit_to_mm(header.board_units, header.unit_divisor)
 
 
 def _metadata(record: AllegroRecord, layer: PcbLayer) -> PcbObjectMetadata:

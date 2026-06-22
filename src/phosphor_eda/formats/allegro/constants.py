@@ -25,6 +25,23 @@ class AllegroBoardUnits(StrEnum):
     MICROMETERS = "micrometers"
 
 
+def allegro_unit_to_mm(units: AllegroBoardUnits, unit_divisor: int) -> float:
+    """Return the millimeter scale for one raw Allegro coordinate unit."""
+    if unit_divisor <= 0:
+        return 0.0
+    if units is AllegroBoardUnits.MILS:
+        return 0.0254 / unit_divisor
+    if units is AllegroBoardUnits.INCHES:
+        return 25.4 / unit_divisor
+    if units is AllegroBoardUnits.MILLIMETERS:
+        return 1.0 / unit_divisor
+    if units is AllegroBoardUnits.CENTIMETERS:
+        return 10.0 / unit_divisor
+    if units is AllegroBoardUnits.MICROMETERS:
+        return 0.001 / unit_divisor
+    raise ValueError(f"unsupported Allegro board unit {units}")
+
+
 MAGIC_TO_VERSION = {
     0x00130000: AllegroVersion.V_160,
     0x00130400: AllegroVersion.V_162,

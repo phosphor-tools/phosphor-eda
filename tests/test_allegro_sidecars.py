@@ -190,6 +190,23 @@ def test_allegro_boolean_pad_geometry_takes_diagnostic_path(tmp_path: Path) -> N
     assert [diagnostic.code for diagnostic in diagnostics] == ["padstack-sidecar-parse-failed"]
 
 
+def test_allegro_unknown_pad_sidecar_units_take_diagnostic_path(tmp_path: Path) -> None:
+    pad_path = tmp_path / "unknown-units.pad"
+    _write_pad_sidecar_payload(
+        pad_path,
+        name="UNKNOWN_UNITS",
+        width="1.0",
+        height="1.0",
+        units="Furlongs",
+    )
+
+    parsed_pad, diagnostics = parse_allegro_padstack_sidecar(pad_path)
+
+    assert parsed_pad is None
+    assert [diagnostic.code for diagnostic in diagnostics] == ["padstack-sidecar-parse-failed"]
+    assert "unsupported Allegro padstack sidecar unit" in diagnostics[0].message
+
+
 def test_allegro_oversized_pad_zip_entry_takes_diagnostic_path(tmp_path: Path) -> None:
     pad_path = tmp_path / "oversized.pad"
     _write_raw_pad_sidecar(pad_path, "x" * 2_000_000)

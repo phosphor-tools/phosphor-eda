@@ -78,13 +78,13 @@ class AllegroObjectGraph:
 
 
 def build_allegro_object_graph(record_set: AllegroRecordSet) -> AllegroObjectGraph:
-    by_key: dict[int, AllegroRecord] = {}
     diagnostics: list[AllegroRecordDiagnostic] = []
+    seen: set[int] = set()
 
     for record in record_set.records:
         if record.key is None:
             continue
-        if record.key in by_key:
+        if record.key in seen:
             diagnostics.append(
                 AllegroRecordDiagnostic(
                     code="duplicate-object-key",
@@ -94,11 +94,11 @@ def build_allegro_object_graph(record_set: AllegroRecordSet) -> AllegroObjectGra
                     key=record.key,
                 )
             )
-            continue
-        by_key[record.key] = record
+        else:
+            seen.add(record.key)
 
     return AllegroObjectGraph(
         records=record_set.records,
-        by_key=MappingProxyType(by_key),
+        by_key=MappingProxyType(dict(record_set.by_key)),
         diagnostics=tuple(diagnostics),
     )

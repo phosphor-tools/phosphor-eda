@@ -6,7 +6,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeGuard
 
 from phosphor_eda.domain.project import DesignRule, DiffPair, NetClass
-from phosphor_eda.formats.allegro.constants import AllegroBoardUnits, AllegroVersion
+from phosphor_eda.formats.allegro.constants import (
+    AllegroBoardUnits,
+    AllegroVersion,
+    allegro_unit_to_mm,
+)
 from phosphor_eda.formats.allegro.records import (
     AllegroRecord,
     AllegroRecordDiagnostic,
@@ -474,19 +478,7 @@ def _physical_values_mm(
 
 
 def _coord_to_mm(value: int, *, units: AllegroBoardUnits, unit_divisor: int) -> float:
-    if unit_divisor <= 0:
-        return 0.0
-    if units is AllegroBoardUnits.MILS:
-        return round(value / unit_divisor * 0.0254, 9)
-    if units is AllegroBoardUnits.INCHES:
-        return round(value / unit_divisor * 25.4, 9)
-    if units is AllegroBoardUnits.MILLIMETERS:
-        return round(value / unit_divisor, 9)
-    if units is AllegroBoardUnits.CENTIMETERS:
-        return round(value / unit_divisor * 10.0, 9)
-    if units is AllegroBoardUnits.MICROMETERS:
-        return round(value / unit_divisor / 1000.0, 9)
-    raise ValueError(f"unsupported Allegro board unit {units}")
+    return round(value * allegro_unit_to_mm(units, unit_divisor), 9)
 
 
 def _payload_int(record: AllegroRecord, key: str) -> int:

@@ -624,6 +624,33 @@ def test_cli_render_without_project_reports_missing_project() -> None:
     assert "-P/--project" in result.output
 
 
+def test_cli_render_accepts_direct_pcb_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pcb = tmp_path / "Board.kicad_pcb"
+    pcb.write_text("", encoding="utf-8")
+    parsed_board = _empty_board("Board", pcb)
+    parsed_paths: list[Path] = []
+
+    def fake_load_pcb(path: Path) -> Board:
+        parsed_paths.append(path)
+        return parsed_board
+
+    def fake_render_pcb_svg(board: Board, _settings: object, **_kwargs: object) -> RenderResult:
+        assert board is parsed_board
+        return RenderResult(svg="<svg></svg>")
+
+    monkeypatch.setattr("phosphor_eda.cli.load_pcb", fake_load_pcb)
+    monkeypatch.setattr("phosphor_eda.render.api.render_pcb_svg", fake_render_pcb_svg)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["pcb", "render", str(pcb)])
+
+    assert result.exit_code == 0, result.output
+    assert parsed_paths == [pcb]
+    assert "<svg></svg>" in result.output
+
+
 def test_cli_render_custom_css_file_option_is_removed(tmp_path: Path) -> None:
     project = _write_swd_project(tmp_path)
     runner = CliRunner()
