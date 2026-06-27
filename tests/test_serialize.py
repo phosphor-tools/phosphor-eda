@@ -374,6 +374,27 @@ def test_serialize_contains_summary():
     assert "2 nets" in text
 
 
+def test_serialize_major_ic_summary_uses_compact_component_format():
+    page = Page(name="Control")
+    comp = Component(
+        reference="U1",
+        part="LIB_SYMBOL",
+        description="Controller",
+        pages=[page],
+        part_numbers=[PartNumber(manufacturer="TI", number="TM4C123GH6PMI")],
+    )
+    comp.pins = [Pin(designator=str(index), name="", component=comp) for index in range(1, 6)]
+    page.components = [comp]
+    design = Schematic(name="SUMMARY", pages=[page], components=[comp])
+
+    text = serialize_design(design)
+
+    assert "Major ICs:" in text
+    assert (
+        "  U1  pins=5  page=Control  mpn=TI TM4C123GH6PMI  symbol=LIB_SYMBOL  desc=Controller"
+    ) in text
+
+
 def test_serialize_contains_component_section():
     text = serialize_design(_simple_design())
     assert (
@@ -1045,8 +1066,11 @@ def test_format_page_detail():
     design = _simple_design()
     detail = format_page_detail(design, "ADC")
     assert "PAGE: ADC" in detail
-    assert "U7" in detail
-    assert "R1" in detail
+    assert (
+        "  U7  pins=4  page=ADC  mpn=Analog Devices AD7768-1BCPZ  "
+        "symbol=AD7768-1  desc=IC - ADC - Single"
+    ) in detail
+    assert "  R1  pins=2  page=ADC  symbol=10k  desc=Resistor" in detail
 
 
 def test_format_page_detail_filters_unified_net_pins_to_selected_page():
