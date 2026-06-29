@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from phosphor_eda.domain.schematic import Schematic
 from phosphor_eda.query.validate import Severity, validate_design
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -11,7 +12,7 @@ MINIMAL_SCH = FIXTURES / "kicad-minimal/RP2040_minimal_r2.kicad_sch"
 
 
 @pytest.fixture(scope="module")
-def design():
+def design() -> Schematic:
     from phosphor_eda.formats.kicad import kicad_to_design
 
     return kicad_to_design(MINIMAL_SCH)
@@ -188,7 +189,7 @@ def test_page_metadata(design):
     assert page.source_file.endswith("RP2040_minimal_r2.kicad_sch")
 
 
-def test_page_annotations_include_kicad_free_text_notes(design):
+def test_page_annotations_include_kicad_free_text_notes(design: Schematic):
     assert "Make sure C8 is close to pin 45 of RP2040" in design.pages[0].annotations
     assert "Make sure C10 is close to pin 44 of RP2040" in design.pages[0].annotations
     assert "Make sure R3 and R4 are close to RP2040" in design.pages[0].annotations

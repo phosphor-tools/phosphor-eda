@@ -229,6 +229,7 @@ class _AnnotationEvent:
 class _TextFrameCell:
     source_index: int
     text: str
+    standalone_text: str
     x1: int
     y1: int
     x2: int
@@ -715,11 +716,11 @@ def _sheet_annotations(sheet: SheetRecords) -> list[str]:
             continue
         if isinstance(record, TextFrameRec):
             cell_text = "" if text in _TITLE_BLOCK_PLACEHOLDERS else text
-            cell = _text_frame_cell(record, cell_text)
+            cell = _text_frame_cell(record, cell_text, text)
             if cell is not None:
                 text_frame_cells.append(cell)
                 continue
-        if text in _TITLE_BLOCK_PLACEHOLDERS:
+        if not text:
             continue
         events.append(_AnnotationEvent(source_index=record.index, text=text))
     grouped_cell_indices: set[int] = set()
@@ -727,22 +728,24 @@ def _sheet_annotations(sheet: SheetRecords) -> list[str]:
         events.append(table.event)
         grouped_cell_indices.update(table.cell_source_indices)
     for cell in text_frame_cells:
-        if (
-            cell.source_index not in grouped_cell_indices
-            and cell.text not in _TITLE_BLOCK_PLACEHOLDERS
-        ):
-            events.append(_AnnotationEvent(source_index=cell.source_index, text=cell.text))
+        if cell.source_index not in grouped_cell_indices and cell.standalone_text:
+            events.append(
+                _AnnotationEvent(source_index=cell.source_index, text=cell.standalone_text)
+            )
     return [event.text for event in sorted(events, key=lambda event: event.source_index)]
 
 
-def _text_frame_cell(record: TextFrameRec, text: str) -> _TextFrameCell | None:
+def _text_frame_cell(
+    record: TextFrameRec, table_text: str, standalone_text: str
+) -> _TextFrameCell | None:
     x1, y1 = record.location
     x2, y2 = record.corner
     if x1 == x2 or y1 == y2:
         return None
     return _TextFrameCell(
         source_index=record.index,
-        text=text,
+        text=table_text,
+        standalone_text=standalone_text,
         x1=min(x1, x2),
         y1=min(y1, y2),
         x2=max(x1, x2),

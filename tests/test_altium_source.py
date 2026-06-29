@@ -449,6 +449,69 @@ def test_altium_text_frame_tables_preserve_blank_placeholder_cells(
     assert sheet.annotations == ["| Pin |  |\n| A | Enabled |"]
 
 
+def test_altium_text_frame_tables_preserve_blank_source_rows(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    records = SheetRecords(
+        records=[
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=1,
+                owner_index=-1,
+                location=(0, 0),
+                corner=(60, 10),
+                text="Pin",
+            ),
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=2,
+                owner_index=-1,
+                location=(60, 0),
+                corner=(120, 10),
+                text="Name",
+            ),
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=3,
+                owner_index=-1,
+                location=(0, 10),
+                corner=(60, 20),
+                text="*",
+            ),
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=4,
+                owner_index=-1,
+                location=(60, 10),
+                corner=(120, 20),
+                text="~",
+            ),
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=5,
+                owner_index=-1,
+                location=(0, 20),
+                corner=(60, 30),
+                text="A",
+            ),
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=6,
+                owner_index=-1,
+                location=(60, 20),
+                corner=(120, 30),
+                text="Enabled",
+            ),
+        ],
+        children={},
+        wire_index=WireIndex([]),
+        name="Notes",
+    )
+    sheet = _load_records_sheet(monkeypatch, records, "Notes.SchDoc")
+
+    assert sheet.annotations == ["| Pin | Name |\n|  |  |\n| A | Enabled |"]
+
+
 def test_altium_notes_and_ownerless_labels_become_page_annotations_in_record_order(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -498,6 +561,12 @@ def test_altium_notes_and_ownerless_labels_become_page_annotations_in_record_ord
                 owner_index=-1,
                 text="*",
             ),
+            LabelRec(
+                record_type=RecordType.LABEL,
+                index=8,
+                owner_index=-1,
+                text="~",
+            ),
         ],
         children={},
         wire_index=WireIndex([]),
@@ -509,6 +578,8 @@ def test_altium_notes_and_ownerless_labels_become_page_annotations_in_record_ord
         "Assembly note",
         "Route USB as differential pair",
         "First line\nSecond line",
+        "*",
+        "~",
     ]
 
 

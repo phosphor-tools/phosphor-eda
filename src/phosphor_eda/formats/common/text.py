@@ -8,8 +8,7 @@ def render_annotation_table(rows: Sequence[Sequence[str]]) -> str:
     rendered_rows: list[str] = []
     for row in rows:
         cells = [_table_cell_text(cell) for cell in row]
-        if any(cells):
-            rendered_rows.append("| " + " | ".join(cells) + " |")
+        rendered_rows.append("| " + " | ".join(cells) + " |")
     return "\n".join(rendered_rows)
 
 
