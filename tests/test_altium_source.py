@@ -9,6 +9,8 @@ from phosphor_eda.domain.schematic import SchematicDirectiveKind
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode
 from phosphor_eda.formats.altium.records import (
     FileNameRec,
+    LabelRec,
+    NoteRec,
     ParameterRec,
     ParameterSetRec,
     RecordType,
@@ -263,6 +265,67 @@ def test_altium_text_frames_become_page_annotations(monkeypatch: pytest.MonkeyPa
 
     assert sheet.annotations == ["Initial release\nChanged power sequencing"]
     assert sheet.title_block is None
+
+
+def test_altium_notes_and_ownerless_labels_become_page_annotations_in_record_order(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    records = SheetRecords(
+        records=[
+            LabelRec(
+                record_type=RecordType.LABEL,
+                index=1,
+                owner_index=-1,
+                text="Assembly note",
+            ),
+            NoteRec(
+                record_type=RecordType.NOTE,
+                index=2,
+                owner_index=-1,
+                text='@{"Id":"abc","ObjectType":2} Route USB as differential pair',
+            ),
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=3,
+                owner_index=-1,
+                text="First line~1Second line",
+            ),
+            LabelRec(
+                record_type=RecordType.LABEL,
+                index=4,
+                owner_index=-1,
+                text="=SheetNumber",
+            ),
+            LabelRec(
+                record_type=RecordType.LABEL,
+                index=5,
+                owner_index=10,
+                text="Owned component text",
+            ),
+            NoteRec(
+                record_type=RecordType.NOTE,
+                index=6,
+                owner_index=10,
+                text="Owned note",
+            ),
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=7,
+                owner_index=-1,
+                text="*",
+            ),
+        ],
+        children={},
+        wire_index=WireIndex([]),
+        name="Notes",
+    )
+    sheet = _load_records_sheet(monkeypatch, records, "Notes.SchDoc")
+
+    assert sheet.annotations == [
+        "Assembly note",
+        "Route USB as differential pair",
+        "First line\nSecond line",
+    ]
 
 
 def test_altium_text_frames_reach_public_page_annotations(

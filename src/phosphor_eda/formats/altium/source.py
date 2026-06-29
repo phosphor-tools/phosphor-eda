@@ -6,6 +6,7 @@ It does not construct the public ``Schematic``/``Page``/``Net`` model.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -30,6 +31,8 @@ from phosphor_eda.formats.altium.records import (
     FileNameRec,
     ImplementationListRec,
     ImplementationRec,
+    LabelRec,
+    NoteRec,
     ParameterRec,
     ParameterSetRec,
     PinRec,
@@ -619,6 +622,8 @@ _TITLE_BLOCK_FIELD_BY_NAME = {
     "sheet total": "sheet_total",
     "title": "title",
 }
+# Altium Active Link prefixes observed in SchDoc text are flat JSON-like blobs.
+_ACTIVE_LINK_PREFIX_RE = re.compile(r"^@\{[^}]*\}\s*")
 
 
 def _title_value(value: str) -> str:
@@ -672,15 +677,29 @@ def _sheet_title_block(sheet: SheetRecords) -> TitleBlock | None:
 
 def _sheet_annotations(sheet: SheetRecords) -> list[str]:
     annotations: list[str] = []
-    for frame in sheet.by_type(TextFrameRec):
-        if frame.owner_index != -1:
+    for record in sheet.records:
+        if record.owner_index != -1:
             continue
-        text = frame.text.replace("~1", "\n").strip()
+        if isinstance(record, LabelRec):
+            text = _annotation_text(record.text)
+            if text.startswith("="):
+                continue
+        elif isinstance(record, (NoteRec, TextFrameRec)):
+            text = _strip_active_link_prefix(_annotation_text(record.text))
+        else:
+            continue
         if text in _TITLE_BLOCK_PLACEHOLDERS:
             continue
-        if text:
-            annotations.append(text)
+        annotations.append(text)
     return annotations
+
+
+def _annotation_text(text: str) -> str:
+    return text.replace("~1", "\n").strip()
+
+
+def _strip_active_link_prefix(text: str) -> str:
+    return _ACTIVE_LINK_PREFIX_RE.sub("", text).strip()
 
 
 def _pin_is_visible(pin: PinRec, components_by_owner: dict[int, ComponentRec]) -> bool:

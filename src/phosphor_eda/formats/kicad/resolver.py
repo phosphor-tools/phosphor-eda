@@ -500,6 +500,9 @@ def _validate_scoped_local_net_ref(
 
 
 def _page_inputs(source: KiCadSourceDesign) -> list[ResolvedPageInput]:
+    annotations_by_scope: dict[ScopeId, list[str]] = {}
+    for annotation in source.annotations:
+        annotations_by_scope.setdefault(annotation.scope_id, []).append(annotation.text)
     return [
         ResolvedPageInput(
             id=instance.id,
@@ -507,6 +510,7 @@ def _page_inputs(source: KiCadSourceDesign) -> list[ResolvedPageInput]:
             source_file=instance.source_file,
             scope_id=instance.scope_id,
             title_block=instance.title_block,
+            annotations=tuple(annotations_by_scope.get(instance.scope_id, ())),
             metadata={
                 "kicad_sheet_symbol_id": instance.sheet_symbol_id,
             },

@@ -152,6 +152,12 @@ class _NetclassFlagCandidate:
 
 
 @dataclass(slots=True)
+class _AnnotationCandidate:
+    scope_id: ScopeId
+    text: str
+
+
+@dataclass(slots=True)
 class SheetCandidates:
     local_labels: list[_LabelCandidate]
     global_labels: list[_LabelCandidate]
@@ -164,6 +170,7 @@ class SheetCandidates:
     sheet_pins: list[_SheetPinCandidate]
     pin_occurrences: list[_PinCandidate]
     netclass_flags: list[_NetclassFlagCandidate]
+    annotations: list[_AnnotationCandidate]
 
 
 def extract_source_candidates(
@@ -247,6 +254,13 @@ def extract_source_candidates(
         root_uuid,
     )
     netclass_flag_candidates = _netclass_flag_candidates(data, scope_id, wire_graph)
+    annotation_candidates = _annotation_candidates(
+        data,
+        scope_id,
+        variables,
+        ctx,
+        warned_variables,
+    )
     return SheetCandidates(
         local_labels=local_label_candidates,
         global_labels=global_label_candidates,
@@ -259,6 +273,7 @@ def extract_source_candidates(
         sheet_pins=sheet_pin_candidates,
         pin_occurrences=pin_candidates,
         netclass_flags=netclass_flag_candidates,
+        annotations=annotation_candidates,
     )
 
 
@@ -454,6 +469,42 @@ def _bus_entry_candidates(
             )
         )
     return entries
+
+
+def _annotation_candidates(
+    data: SExpNode,
+    scope_id: ScopeId,
+    text_variables: Mapping[str, str],
+    ctx: ParseContext | None,
+    warned_variables: set[str],
+) -> list[_AnnotationCandidate]:
+    candidates: list[_AnnotationCandidate] = []
+    for item in data[1:]:
+        if (
+            not isinstance(item, list)
+            or len(item) < 2
+            or sexp.tag(item)
+            not in {
+                "text",
+                "text_box",
+            }
+        ):
+            continue
+        text = _resolve_text_variables(
+            _atom_text(item[1]),
+            text_variables,
+            ctx,
+            warned_variables,
+        ).strip()
+        if not text:
+            continue
+        candidates.append(
+            _AnnotationCandidate(
+                scope_id=scope_id,
+                text=text,
+            )
+        )
+    return candidates
 
 
 def _sheet_symbol_sources(

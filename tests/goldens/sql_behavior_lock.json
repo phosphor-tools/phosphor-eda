@@ -1,6 +1,6 @@
 {
   "jetson-orin": {
-    "serialize_sha256": "af9a974601486f21d01de03cec81c5a63dff9ebf2d97c8acde0b92e03add0cf5",
+    "serialize_sha256": "a0d286713454ebfbd06c6d8317c98a25432a5c419ffc6c5856d19ad6171b4b75",
     "tables": {
       "artwork": {
         "rows": 149352,
@@ -123,8 +123,8 @@
         "sha256": "815c10e2dc8ae24920543dfeec6dde8aa58a86be64b8267cd4091dc4c0fc85d3"
       },
       "page_annotations": {
-        "rows": 0,
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "rows": 134,
+        "sha256": "5409de3c3ccb9fc26fdb00ed2aaa4d02ac60b35a2888be650c08848e70340794"
       },
       "pages": {
         "rows": 10,
@@ -181,7 +181,7 @@
     }
   },
   "pi-mx8": {
-    "serialize_sha256": "c138c56699441253b61a2cea30a1a46a29253ee5156346f04d82e3f374fabbf5",
+    "serialize_sha256": "b62eef129c1126c451147dcbaf58ca6e4674ca004b59ccb0306d62efa221b295",
     "tables": {
       "artwork": {
         "rows": 11460,
@@ -304,8 +304,8 @@
         "sha256": "f05917d8683591fae3f37cde6ea259adbc5ac8151d2c81821818ee484eafdca7"
       },
       "page_annotations": {
-        "rows": 0,
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "rows": 453,
+        "sha256": "41f042469f32c726e936806b4856caacbe6efb4499dbe71def17bc36168f7b49"
       },
       "pages": {
         "rows": 16,

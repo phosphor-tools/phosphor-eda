@@ -188,6 +188,12 @@ def test_page_metadata(design):
     assert page.source_file.endswith("RP2040_minimal_r2.kicad_sch")
 
 
+def test_page_annotations_include_kicad_free_text_notes(design):
+    assert "Make sure C8 is close to pin 45 of RP2040" in design.pages[0].annotations
+    assert "Make sure C10 is close to pin 44 of RP2040" in design.pages[0].annotations
+    assert "Make sure R3 and R4 are close to RP2040" in design.pages[0].annotations
+
+
 def test_design_metadata(design):
     assert design.metadata["kicad_root_source_file"].endswith("RP2040_minimal_r2.kicad_sch")
 
