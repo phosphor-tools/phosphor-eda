@@ -27,6 +27,69 @@ HIERARCHY_ROOT = FIXTURES / "kicad-hierarchy" / "root.kicad_sch"
 REPEATED_ROOT = FIXTURES / "kicad-repeated-sheet" / "root.kicad_sch"
 
 
+def _write_kicad_annotation_fixture(tmp_path: Path) -> Path:
+    schematic_path = tmp_path / "annotations.kicad_sch"
+    project_path = tmp_path / "annotations.kicad_pro"
+    project_path.write_text(
+        '{"text_variables": {"NOTE_SUFFIX": "resolved"}}',
+        encoding="utf-8",
+    )
+    schematic_path.write_text(
+        """
+        (kicad_sch
+          (version 20230121)
+          (generator "phosphor-test")
+          (uuid "00000000-0000-0000-0000-000000000001")
+          (lib_symbols
+            (symbol "Test:Symbol"
+              (text "Symbol artwork" (at 0 0 0))
+            )
+          )
+          (text "Board note ${NOTE_SUFFIX}" (at 1 2 0)
+            (uuid "00000000-0000-0000-0000-000000000002")
+          )
+          (text_box "Boxed note" (start 0 0) (end 10 10)
+            (uuid "00000000-0000-0000-0000-000000000003")
+          )
+          (table
+            (column_count 3)
+            (cells
+              (table_cell "Rev" (at 0 0 0) (size 5 5))
+              (table_cell "ID" (at 5 0 0) (size 5 5))
+              (table_cell "Change" (at 10 0 0) (size 20 5))
+              (table_cell "X" (at 0 5 0) (size 5 5))
+              (table_cell "9" (at 5 5 0) (size 5 5))
+              (table_cell "Added ${NOTE_SUFFIX} | note\ncontinued" (at 10 5 0) (size 20 5))
+              (table_cell "Trailing" (at 0 10 0) (size 5 5))
+            )
+            (uuid "00000000-0000-0000-0000-000000000009")
+          )
+          (label "LOCAL_NET" (at 0 0 0)
+            (uuid "00000000-0000-0000-0000-000000000004")
+          )
+          (global_label "GLOBAL_NET" (at 1 0 0)
+            (uuid "00000000-0000-0000-0000-000000000005")
+          )
+          (hierarchical_label "HIER_NET" (at 2 0 0)
+            (uuid "00000000-0000-0000-0000-000000000006")
+          )
+          (sheet (at 20 20) (size 10 10)
+            (property "Sheetname" "Child" (at 20 20 0))
+            (property "Sheetfile" "missing.kicad_sch" (at 20 22 0))
+            (pin "SHEET_PIN" input (at 20 24 0))
+            (uuid "00000000-0000-0000-0000-000000000007")
+          )
+          (netclass_flag "" (at 3 0 0)
+            (property "Netclass" "USB" (at 3 0 0))
+            (uuid "00000000-0000-0000-0000-000000000008")
+          )
+        )
+        """,
+        encoding="utf-8",
+    )
+    return schematic_path
+
+
 def test_source_keeps_kicad_identifier_kinds_distinct() -> None:
     source = kicad_to_source(HIERARCHY_ROOT)
 
@@ -42,6 +105,20 @@ def test_source_keeps_kicad_identifier_kinds_distinct() -> None:
     assert all(isinstance(label, KiCadHierarchicalLabel) for label in source.hierarchical_labels)
     assert all(isinstance(symbol, KiCadPowerSymbol) for symbol in source.power_symbols)
     assert all(isinstance(pin, KiCadSheetPin) for pin in source.sheet_pins)
+
+
+def test_source_extracts_only_top_level_kicad_free_text_as_annotations(tmp_path: Path) -> None:
+    source = kicad_to_source(_write_kicad_annotation_fixture(tmp_path))
+
+    expected_annotations = [
+        "Board note resolved",
+        "Boxed note",
+        "| Rev | ID | Change |\n"
+        "| X | 9 | Added resolved \\| note<br>continued |\n"
+        "| Trailing |  |  |",
+    ]
+    assert [annotation.text for annotation in source.annotations] == expected_annotations
+    assert list(resolve_kicad_source(source).pages[0].annotations) == expected_annotations
 
 
 def test_sheet_scope_ids_use_instance_identifier_not_file_path() -> None:

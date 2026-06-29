@@ -113,6 +113,16 @@ def _get_description(elem: ET.Element) -> str:
     return text.strip()
 
 
+def _sheet_annotations(sheet_elem: ET.Element) -> tuple[str, ...]:
+    annotations: list[str] = []
+    for text_elem in sheet_elem.findall("./plain/text"):
+        text = "".join(text_elem.itertext()).replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not text or text.startswith(">"):
+            continue
+        annotations.append(text)
+    return tuple(annotations)
+
+
 def _optional_float(value: str | None) -> float | None:
     if value is None or not value:
         return None
@@ -266,6 +276,7 @@ def _build_pages(
                 id=page_id,
                 name=page_name,
                 scope_id=scope_id,
+                annotations=_sheet_annotations(sheet_elem),
             )
         )
 

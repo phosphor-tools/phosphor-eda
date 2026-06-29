@@ -19,6 +19,7 @@ from phosphor_eda.formats.kicad.source import (
     KiCadNetclassFlag,
     KiCadPinOccurrence,
     KiCadPowerSymbol,
+    KiCadSheetAnnotation,
     KiCadSheetPin,
     KiCadSheetSymbol,
 )
@@ -48,6 +49,7 @@ class _ExtractedSheet:
     power_symbols: list[KiCadPowerSymbol]
     sheet_symbols: list[KiCadSheetSymbol]
     sheet_pins: list[KiCadSheetPin]
+    annotations: list[KiCadSheetAnnotation]
 
 
 class _HasLocalNetId(Protocol):
@@ -185,6 +187,13 @@ def extract_sheet_sources(
     sheet_symbols = [
         symbol for symbol in candidates.sheet_symbols if symbol.child_scope_id in loaded_scopes
     ]
+    annotations = [
+        KiCadSheetAnnotation(
+            scope_id=candidate.scope_id,
+            text=candidate.text,
+        )
+        for candidate in candidates.annotations
+    ]
 
     _assign_bus_entry_members(
         bus_entries,
@@ -268,6 +277,7 @@ def extract_sheet_sources(
         power_symbols=power_symbols,
         sheet_symbols=sheet_symbols,
         sheet_pins=sheet_pins,
+        annotations=annotations,
     )
 
 

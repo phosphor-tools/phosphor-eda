@@ -134,6 +134,42 @@ def component_mpn_label(comp: Component) -> str:
     return f"{maker} {metadata_part_number}" if maker else metadata_part_number
 
 
+def format_component_compact_line(component: Component) -> str:
+    """Format a compact, MPN-first component summary line."""
+    pages = sorted({single_line_text(page.name) for page in component.pages})
+    page_key = "pages" if len(pages) > 1 else "page"
+    page_value = ", ".join(pages) if pages else ""
+    parts = [component.reference, f"pins={len(component.pins)}"]
+    if page_value:
+        parts.append(f"{page_key}={page_value}")
+
+    test_point_net = _test_point_net(component)
+    if test_point_net:
+        parts.append(f"net={single_line_text(test_point_net)}")
+
+    mpn = component_mpn_label(component)
+    if mpn:
+        parts.append(f"mpn={single_line_text(mpn)}")
+    if component.part:
+        parts.append(f"symbol={single_line_text(component.part)}")
+    if component.description:
+        parts.append(f"desc={single_line_text(component.description)}")
+    return "  ".join(parts)
+
+
+def _test_point_net(component: Component) -> str:
+    if ref_prefix(component.reference) != "TP":
+        return ""
+    connected = {pin.net.name for pin in component.pins if pin.net is not None}
+    if len(connected) == 1:
+        return next(iter(connected))
+    return ""
+
+
+def single_line_text(value: str) -> str:
+    return " ".join(value.split())
+
+
 def _component_mpn_label(comp: Component) -> str:
     return component_mpn_label(comp)
 
@@ -303,8 +339,7 @@ def _format_summary(design: Schematic) -> list[str]:
     if major:
         lines.append("Major ICs:")
         for comp in sorted(major, key=lambda c: c.reference):
-            desc = comp.description or comp.part
-            lines.append(f"  {comp.reference:6s}  {comp.part:20s}  {desc}")
+            lines.append(f"  {format_component_compact_line(comp)}")
         lines.append("")
 
     power_names = sorted(n.name for n in design.nets if is_power_net(n.name, n))
@@ -737,7 +772,7 @@ def format_page_detail_for(design: Schematic, page: Page) -> str:
         lines.append("")
         lines.append("Components:")
         for comp in sorted(page.components, key=lambda c: c.reference):
-            lines.append(f"  {comp.reference:8s} {comp.part:20s} {comp.description}")
+            lines.append(f"  {format_component_compact_line(comp)}")
 
     if page.annotations:
         lines.append("")

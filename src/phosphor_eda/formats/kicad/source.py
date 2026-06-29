@@ -144,6 +144,13 @@ class KiCadNetclassFlag:
 
 
 @dataclass(slots=True)
+class KiCadSheetAnnotation:
+    scope_id: ScopeId
+    text: str
+    kind: str = field(default="annotation", init=False)
+
+
+@dataclass(slots=True)
 class KiCadPinOccurrence:
     id: str
     scope_id: ScopeId
@@ -206,4 +213,5 @@ class KiCadSourceDesign:
     power_symbols: list[KiCadPowerSymbol]
     sheet_symbols: list[KiCadSheetSymbol]
     sheet_pins: list[KiCadSheetPin]
+    annotations: list[KiCadSheetAnnotation] = field(default_factory=list)
     schematic_version: int = 20231120

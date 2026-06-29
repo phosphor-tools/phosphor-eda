@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from phosphor_eda.query.classify import is_power_net, ref_prefix
-from phosphor_eda.query.format import component_mpn_label, tabulate
+from phosphor_eda.query.format import format_component_compact_line, single_line_text, tabulate
 from phosphor_eda.query.query import net_page_names
 from phosphor_eda.query.variants import variant_counts
 
@@ -267,42 +267,11 @@ def _important_components_section(schematic: Schematic) -> str:
             lines.append("")
         lines.append(f"  {title}")
         lines.extend(
-            f"    {_component_overview_line(comp)}"
+            f"    {format_component_compact_line(comp)}"
             for comp in sorted(components, key=_component_sort_key)
         )
         added = True
     return "\n".join(lines) if added else ""
-
-
-def _component_overview_line(component: Component) -> str:
-    pages = sorted({_single_line(page.name) for page in component.pages})
-    page_key = "pages" if len(pages) > 1 else "page"
-    page_value = ", ".join(pages) if pages else ""
-    parts = [component.reference, f"pins={len(component.pins)}"]
-    if page_value:
-        parts.append(f"{page_key}={page_value}")
-
-    test_point_net = _test_point_net(component)
-    if test_point_net:
-        parts.append(f"net={_single_line(test_point_net)}")
-
-    mpn = component_mpn_label(component)
-    if mpn:
-        parts.append(f"mpn={_single_line(mpn)}")
-    if component.part:
-        parts.append(f"symbol={_single_line(component.part)}")
-    if component.description:
-        parts.append(f"desc={_single_line(component.description)}")
-    return "  ".join(parts)
-
-
-def _test_point_net(component: Component) -> str:
-    if ref_prefix(component.reference) != "TP":
-        return ""
-    connected = {pin.net.name for pin in component.pins if pin.net is not None}
-    if len(connected) == 1:
-        return next(iter(connected))
-    return ""
 
 
 def _rails_section(schematic: Schematic) -> str:
@@ -450,13 +419,9 @@ def _comment_sort_key(key: str) -> tuple[int, int | str]:
 
 
 def _truncate(value: str, max_chars: int) -> str:
-    normalized = _single_line(value)
+    normalized = single_line_text(value)
     if len(normalized) <= max_chars:
         return normalized
     if max_chars <= len(_TRUNCATION_SUFFIX):
         return _TRUNCATION_SUFFIX[:max_chars]
     return normalized[: max_chars - len(_TRUNCATION_SUFFIX)].rstrip() + _TRUNCATION_SUFFIX
-
-
-def _single_line(value: str) -> str:
-    return " ".join(value.split())

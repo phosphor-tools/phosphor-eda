@@ -106,6 +106,66 @@ def _write_multisheet_eagle_same_name_net(tmp_path: Path) -> Path:
     return schematic
 
 
+def _write_eagle_annotations_fixture(tmp_path: Path) -> Path:
+    schematic = tmp_path / "annotations.sch"
+    schematic.write_text(
+        """<?xml version="1.0" encoding="utf-8"?>
+<eagle version="9.6.2">
+  <drawing>
+    <schematic>
+      <libraries>
+        <library name="test">
+          <symbols>
+            <symbol name="SYM">
+              <text x="0" y="0" size="1" layer="94">Symbol artwork</text>
+              <pin name="A" direction="pas"/>
+            </symbol>
+          </symbols>
+          <devicesets>
+            <deviceset name="PART" prefix="U">
+              <gates>
+                <gate name="G$1" symbol="SYM"/>
+              </gates>
+              <devices>
+                <device name="" package="PKG"/>
+              </devices>
+            </deviceset>
+          </devicesets>
+        </library>
+      </libraries>
+      <parts>
+        <part name="U1" library="test" deviceset="PART" device="" value="VALUE"/>
+      </parts>
+      <sheets>
+        <sheet>
+          <plain>
+            <text x="1" y="2" size="1.778" layer="97">Board note
+line 2</text>
+            <text x="3" y="4" size="1.778" layer="97">&gt;DRAWING_NAME</text>
+          </plain>
+          <instances>
+            <instance part="U1" gate="G$1" x="1" y="2">
+              <attribute name="NAME" value="U1" x="1" y="2"/>
+            </instance>
+          </instances>
+          <nets>
+            <net name="SDA" class="0">
+              <segment>
+                <label x="0" y="0" size="1.778" layer="95"/>
+              </segment>
+            </net>
+          </nets>
+        </sheet>
+      </sheets>
+    </schematic>
+  </drawing>
+</eagle>
+""",
+        encoding="utf-8",
+    )
+    return schematic
+
+
 def _write_multipart_eagle_component(tmp_path: Path) -> Path:
     schematic = tmp_path / "multipart.sch"
     schematic.write_text(
@@ -491,6 +551,19 @@ def test_eagle_named_net_without_pinrefs_does_not_create_empty_occurrence(tmp_pa
     assert [net.name for net in design.nets] == ["USED"]
     assert [net.name for net in design.pages[0].nets] == ["USED"]
     assert len(used.occurrences) == 1
+
+
+def test_eagle_sheet_plain_text_becomes_page_annotations(tmp_path):
+    design = eagle_to_design(_write_eagle_annotations_fixture(tmp_path))
+
+    assert design.pages[0].annotations == ["Board note\nline 2"]
+
+
+def test_eagle_fixture_includes_sheet_notes(design):
+    annotations = design.pages[0].annotations
+
+    assert any("SJ3 controls the lowest bit" in annotation for annotation in annotations)
+    assert any(annotation.startswith("MODES:") for annotation in annotations)
 
 
 # --- Validation ---

@@ -28,6 +28,7 @@ from phosphor_eda.formats.kicad.source import (
     KiCadLocalNet,
     KiCadPinOccurrence,
     KiCadPowerSymbol,
+    KiCadSheetAnnotation,
     KiCadSheetPin,
     KiCadSheetSymbol,
     KiCadSourceDesign,
@@ -70,6 +71,7 @@ def kicad_to_source(
     power_symbols: list[KiCadPowerSymbol] = []
     sheet_symbols: list[KiCadSheetSymbol] = []
     sheet_pins: list[KiCadSheetPin] = []
+    annotations: list[KiCadSheetAnnotation] = []
 
     # Sheet symbols/pins reference child scopes by UUID, but a child whose file
     # was missing or formed a cycle is never loaded and so has no scope. Drop
@@ -101,6 +103,7 @@ def kicad_to_source(
         power_symbols.extend(extracted.power_symbols)
         sheet_symbols.extend(extracted.sheet_symbols)
         sheet_pins.extend(extracted.sheet_pins)
+        annotations.extend(extracted.annotations)
 
     return KiCadSourceDesign(
         name=name or path.stem,
@@ -118,6 +121,7 @@ def kicad_to_source(
         power_symbols=power_symbols,
         sheet_symbols=sheet_symbols,
         sheet_pins=sheet_pins,
+        annotations=annotations,
         schematic_version=_root_version(sheet_tree),
     )
 
