@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from phosphor_eda.query.classify import is_power_net, ref_prefix
-from phosphor_eda.query.format import format_component_compact_line, tabulate
+from phosphor_eda.query.format import format_component_compact_line, single_line_text, tabulate
 from phosphor_eda.query.query import net_page_names
 from phosphor_eda.query.variants import variant_counts
 
@@ -419,13 +419,9 @@ def _comment_sort_key(key: str) -> tuple[int, int | str]:
 
 
 def _truncate(value: str, max_chars: int) -> str:
-    normalized = _single_line(value)
+    normalized = single_line_text(value)
     if len(normalized) <= max_chars:
         return normalized
     if max_chars <= len(_TRUNCATION_SUFFIX):
         return _TRUNCATION_SUFFIX[:max_chars]
     return normalized[: max_chars - len(_TRUNCATION_SUFFIX)].rstrip() + _TRUNCATION_SUFFIX
-
-
-def _single_line(value: str) -> str:
-    return " ".join(value.split())

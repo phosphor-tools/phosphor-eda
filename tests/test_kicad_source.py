@@ -51,6 +51,19 @@ def _write_kicad_annotation_fixture(tmp_path: Path) -> Path:
           (text_box "Boxed note" (start 0 0) (end 10 10)
             (uuid "00000000-0000-0000-0000-000000000003")
           )
+          (table
+            (column_count 3)
+            (cells
+              (table_cell "Rev" (at 0 0 0) (size 5 5))
+              (table_cell "ID" (at 5 0 0) (size 5 5))
+              (table_cell "Change" (at 10 0 0) (size 20 5))
+              (table_cell "X" (at 0 5 0) (size 5 5))
+              (table_cell "9" (at 5 5 0) (size 5 5))
+              (table_cell "Added ${NOTE_SUFFIX} | note\ncontinued" (at 10 5 0) (size 20 5))
+              (table_cell "Trailing" (at 0 10 0) (size 5 5))
+            )
+            (uuid "00000000-0000-0000-0000-000000000009")
+          )
           (label "LOCAL_NET" (at 0 0 0)
             (uuid "00000000-0000-0000-0000-000000000004")
           )
@@ -97,10 +110,15 @@ def test_source_keeps_kicad_identifier_kinds_distinct() -> None:
 def test_source_extracts_only_top_level_kicad_free_text_as_annotations(tmp_path: Path) -> None:
     source = kicad_to_source(_write_kicad_annotation_fixture(tmp_path))
 
-    assert [annotation.text for annotation in source.annotations] == [
+    expected_annotations = [
         "Board note resolved",
         "Boxed note",
+        "| Rev | ID | Change |\n"
+        "| X | 9 | Added resolved \\| note<br>continued |\n"
+        "| Trailing |  |  |",
     ]
+    assert [annotation.text for annotation in source.annotations] == expected_annotations
+    assert list(resolve_kicad_source(source).pages[0].annotations) == expected_annotations
 
 
 def test_sheet_scope_ids_use_instance_identifier_not_file_path() -> None:

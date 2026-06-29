@@ -267,6 +267,188 @@ def test_altium_text_frames_become_page_annotations(monkeypatch: pytest.MonkeyPa
     assert sheet.title_block is None
 
 
+def test_altium_adjacent_text_frame_rows_become_grouped_table_annotations(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    records = SheetRecords(
+        records=[
+            NoteRec(
+                record_type=RecordType.NOTE,
+                index=1,
+                owner_index=-1,
+                text="Before table",
+            ),
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=2,
+                owner_index=-1,
+                location=(20, 550),
+                corner=(350, 565),
+                text="Revision History",
+            ),
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=3,
+                owner_index=-1,
+                location=(20, 565),
+                corner=(45, 580),
+                text="X",
+            ),
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=4,
+                owner_index=-1,
+                location=(45, 565),
+                corner=(70, 580),
+                text="9",
+            ),
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=5,
+                owner_index=-1,
+                location=(70, 565),
+                corner=(350, 580),
+                text="Added test points",
+            ),
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=6,
+                owner_index=-1,
+                location=(20, 580),
+                corner=(45, 635),
+                text="X",
+            ),
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=7,
+                owner_index=-1,
+                location=(45, 580),
+                corner=(70, 635),
+                text="8",
+            ),
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=8,
+                owner_index=-1,
+                location=(70, 580),
+                corner=(350, 635),
+                text="Changed package~1Moved buffers",
+            ),
+            LabelRec(
+                record_type=RecordType.LABEL,
+                index=9,
+                owner_index=-1,
+                text="After table",
+            ),
+        ],
+        children={},
+        wire_index=WireIndex([]),
+        name="Notes",
+    )
+    sheet = _load_records_sheet(monkeypatch, records, "Notes.SchDoc")
+
+    assert sheet.annotations == [
+        "Before table",
+        "| Revision History |\n"
+        "| X | 9 | Added test points |\n"
+        "| X | 8 | Changed package<br>Moved buffers |",
+        "After table",
+    ]
+
+
+def test_altium_grouped_text_frame_tables_reach_public_page_annotations(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    schdoc = tmp_path / "Notes.SchDoc"
+    schdoc.write_text("", encoding="utf-8")
+    records = SheetRecords(
+        records=[
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=1,
+                owner_index=-1,
+                location=(0, 0),
+                corner=(20, 10),
+                text="X",
+            ),
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=2,
+                owner_index=-1,
+                location=(20, 0),
+                corner=(40, 10),
+                text="9",
+            ),
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=3,
+                owner_index=-1,
+                location=(40, 0),
+                corner=(180, 10),
+                text="Added test points",
+            ),
+        ],
+        children={},
+        wire_index=WireIndex([]),
+        name="Notes",
+    )
+    monkeypatch.setattr(
+        "phosphor_eda.formats.altium.source.load_sheet",
+        lambda _path, ctx: records,
+    )
+
+    design = altium_to_design(schdoc)
+
+    assert design.pages[0].annotations == ["| X | 9 | Added test points |"]
+
+
+def test_altium_text_frame_tables_preserve_blank_placeholder_cells(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    records = SheetRecords(
+        records=[
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=1,
+                owner_index=-1,
+                location=(0, 0),
+                corner=(60, 10),
+                text="Pin",
+            ),
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=2,
+                owner_index=-1,
+                location=(60, 0),
+                corner=(120, 10),
+                text="*",
+            ),
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=3,
+                owner_index=-1,
+                location=(0, 10),
+                corner=(60, 20),
+                text="A",
+            ),
+            TextFrameRec(
+                record_type=RecordType.TEXT_FRAME,
+                index=4,
+                owner_index=-1,
+                location=(60, 10),
+                corner=(120, 20),
+                text="Enabled",
+            ),
+        ],
+        children={},
+        wire_index=WireIndex([]),
+        name="Notes",
+    )
+    sheet = _load_records_sheet(monkeypatch, records, "Notes.SchDoc")
+
+    assert sheet.annotations == ["| Pin |  |\n| A | Enabled |"]
+
+
 def test_altium_notes_and_ownerless_labels_become_page_annotations_in_record_order(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -282,7 +464,9 @@ def test_altium_notes_and_ownerless_labels_become_page_annotations_in_record_ord
                 record_type=RecordType.NOTE,
                 index=2,
                 owner_index=-1,
-                text='@{"Id":"abc","ObjectType":2} Route USB as differential pair',
+                text=(
+                    '@{"Id":"abc","Label":"{route}","ObjectType":2} Route USB as differential pair'
+                ),
             ),
             TextFrameRec(
                 record_type=RecordType.TEXT_FRAME,

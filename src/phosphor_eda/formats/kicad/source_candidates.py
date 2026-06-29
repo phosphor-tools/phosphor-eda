@@ -17,6 +17,7 @@ from phosphor_eda.domain.schematic import (
     ScopeId,
 )
 from phosphor_eda.formats.common.resolved_graph import ResolvedComponentInfo
+from phosphor_eda.formats.common.text import render_annotation_table
 from phosphor_eda.formats.kicad.lib_symbols import (
     LibPins,
     LibPowerKinds,
@@ -480,22 +481,20 @@ def _annotation_candidates(
 ) -> list[_AnnotationCandidate]:
     candidates: list[_AnnotationCandidate] = []
     for item in data[1:]:
-        if (
-            not isinstance(item, list)
-            or len(item) < 2
-            or sexp.tag(item)
-            not in {
-                "text",
-                "text_box",
-            }
-        ):
+        if not isinstance(item, list) or len(item) < 2:
             continue
-        text = _resolve_text_variables(
-            _atom_text(item[1]),
-            text_variables,
-            ctx,
-            warned_variables,
-        ).strip()
+        item_tag = sexp.tag(item)
+        if item_tag in {"text", "text_box"}:
+            text = _resolve_text_variables(
+                _atom_text(item[1]),
+                text_variables,
+                ctx,
+                warned_variables,
+            ).strip()
+        elif item_tag == "table":
+            text = _annotation_table_text(item, text_variables, ctx, warned_variables)
+        else:
+            continue
         if not text:
             continue
         candidates.append(
@@ -505,6 +504,43 @@ def _annotation_candidates(
             )
         )
     return candidates
+
+
+def _annotation_table_text(
+    table_node: SExpNode,
+    text_variables: Mapping[str, str],
+    ctx: ParseContext | None,
+    warned_variables: set[str],
+) -> str:
+    column_count_node = sexp.find(table_node, "column_count")
+    if column_count_node is None:
+        return ""
+    column_count = int(sexp.num(column_count_node, 1))
+    if column_count <= 0:
+        return ""
+    cells_node = sexp.find(table_node, "cells")
+    if cells_node is None:
+        return ""
+    cells: list[str] = []
+    for cell_node in sexp.find_all(cells_node, "table_cell"):
+        if len(cell_node) < 2:
+            cells.append("")
+            continue
+        cells.append(
+            _resolve_text_variables(
+                _atom_text(cell_node[1]),
+                text_variables,
+                ctx,
+                warned_variables,
+            ).strip()
+        )
+    rows: list[list[str]] = []
+    for index in range(0, len(cells), column_count):
+        row = cells[index : index + column_count]
+        if len(row) < column_count:
+            row = [*row, *([""] * (column_count - len(row)))]
+        rows.append(row)
+    return render_annotation_table(rows)
 
 
 def _sheet_symbol_sources(

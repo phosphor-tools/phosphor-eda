@@ -136,7 +136,7 @@ def component_mpn_label(comp: Component) -> str:
 
 def format_component_compact_line(component: Component) -> str:
     """Format a compact, MPN-first component summary line."""
-    pages = sorted({_single_line(page.name) for page in component.pages})
+    pages = sorted({single_line_text(page.name) for page in component.pages})
     page_key = "pages" if len(pages) > 1 else "page"
     page_value = ", ".join(pages) if pages else ""
     parts = [component.reference, f"pins={len(component.pins)}"]
@@ -145,15 +145,15 @@ def format_component_compact_line(component: Component) -> str:
 
     test_point_net = _test_point_net(component)
     if test_point_net:
-        parts.append(f"net={_single_line(test_point_net)}")
+        parts.append(f"net={single_line_text(test_point_net)}")
 
     mpn = component_mpn_label(component)
     if mpn:
-        parts.append(f"mpn={_single_line(mpn)}")
+        parts.append(f"mpn={single_line_text(mpn)}")
     if component.part:
-        parts.append(f"symbol={_single_line(component.part)}")
+        parts.append(f"symbol={single_line_text(component.part)}")
     if component.description:
-        parts.append(f"desc={_single_line(component.description)}")
+        parts.append(f"desc={single_line_text(component.description)}")
     return "  ".join(parts)
 
 
@@ -166,7 +166,7 @@ def _test_point_net(component: Component) -> str:
     return ""
 
 
-def _single_line(value: str) -> str:
+def single_line_text(value: str) -> str:
     return " ".join(value.split())
 
 

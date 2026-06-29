@@ -6,7 +6,6 @@ It does not construct the public ``Schematic``/``Page``/``Net`` model.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -52,6 +51,7 @@ from phosphor_eda.formats.altium.sheet_builder import (
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.common.paths import resolve_document_reference
 from phosphor_eda.formats.common.resolved_graph import ResolvedComponentInfo
+from phosphor_eda.formats.common.text import render_annotation_table
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -217,6 +217,32 @@ class AltiumSheetSource:
     annotations: list[str] = field(default_factory=list)
     title_block: TitleBlock | None = None
     generic_bus_lines: list[AltiumGenericBusLine] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class _AnnotationEvent:
+    source_index: int
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class _TextFrameCell:
+    source_index: int
+    text: str
+    x1: int
+    y1: int
+    x2: int
+    y2: int
+
+    @property
+    def width(self) -> int:
+        return self.x2 - self.x1
+
+
+@dataclass(frozen=True, slots=True)
+class _GroupedTextFrameTable:
+    event: _AnnotationEvent
+    cell_source_indices: set[int]
 
 
 @dataclass(slots=True)
@@ -622,8 +648,6 @@ _TITLE_BLOCK_FIELD_BY_NAME = {
     "sheet total": "sheet_total",
     "title": "title",
 }
-# Altium Active Link prefixes observed in SchDoc text are flat JSON-like blobs.
-_ACTIVE_LINK_PREFIX_RE = re.compile(r"^@\{[^}]*\}\s*")
 
 
 def _title_value(value: str) -> str:
@@ -676,7 +700,8 @@ def _sheet_title_block(sheet: SheetRecords) -> TitleBlock | None:
 
 
 def _sheet_annotations(sheet: SheetRecords) -> list[str]:
-    annotations: list[str] = []
+    events: list[_AnnotationEvent] = []
+    text_frame_cells: list[_TextFrameCell] = []
     for record in sheet.records:
         if record.owner_index != -1:
             continue
@@ -688,10 +713,148 @@ def _sheet_annotations(sheet: SheetRecords) -> list[str]:
             text = _strip_active_link_prefix(_annotation_text(record.text))
         else:
             continue
+        if isinstance(record, TextFrameRec):
+            cell_text = "" if text in _TITLE_BLOCK_PLACEHOLDERS else text
+            cell = _text_frame_cell(record, cell_text)
+            if cell is not None:
+                text_frame_cells.append(cell)
+                continue
         if text in _TITLE_BLOCK_PLACEHOLDERS:
             continue
-        annotations.append(text)
-    return annotations
+        events.append(_AnnotationEvent(source_index=record.index, text=text))
+    grouped_cell_indices: set[int] = set()
+    for table in _grouped_text_frame_tables(text_frame_cells):
+        events.append(table.event)
+        grouped_cell_indices.update(table.cell_source_indices)
+    for cell in text_frame_cells:
+        if (
+            cell.source_index not in grouped_cell_indices
+            and cell.text not in _TITLE_BLOCK_PLACEHOLDERS
+        ):
+            events.append(_AnnotationEvent(source_index=cell.source_index, text=cell.text))
+    return [event.text for event in sorted(events, key=lambda event: event.source_index)]
+
+
+def _text_frame_cell(record: TextFrameRec, text: str) -> _TextFrameCell | None:
+    x1, y1 = record.location
+    x2, y2 = record.corner
+    if x1 == x2 or y1 == y2:
+        return None
+    return _TextFrameCell(
+        source_index=record.index,
+        text=text,
+        x1=min(x1, x2),
+        y1=min(y1, y2),
+        x2=max(x1, x2),
+        y2=max(y1, y2),
+    )
+
+
+def _grouped_text_frame_tables(cells: list[_TextFrameCell]) -> list[_GroupedTextFrameTable]:
+    tables: list[_GroupedTextFrameTable] = []
+    for component in _text_frame_components(cells):
+        rows = _table_rows_for_component(component)
+        if rows is None:
+            continue
+        table_text = render_annotation_table([[cell.text for cell in row] for row in rows])
+        if table_text:
+            tables.append(
+                _GroupedTextFrameTable(
+                    event=_AnnotationEvent(
+                        source_index=min(cell.source_index for row in rows for cell in row),
+                        text=table_text,
+                    ),
+                    cell_source_indices={cell.source_index for row in rows for cell in row},
+                )
+            )
+    return tables
+
+
+def _text_frame_components(cells: list[_TextFrameCell]) -> list[list[_TextFrameCell]]:
+    components: list[list[_TextFrameCell]] = []
+    seen: set[int] = set()
+    for index, _cell in enumerate(cells):
+        if index in seen:
+            continue
+        stack = [index]
+        seen.add(index)
+        component: list[_TextFrameCell] = []
+        while stack:
+            current_index = stack.pop()
+            current = cells[current_index]
+            component.append(current)
+            for candidate_index, candidate in enumerate(cells):
+                if candidate_index in seen:
+                    continue
+                if _rectangles_adjacent(current, candidate):
+                    seen.add(candidate_index)
+                    stack.append(candidate_index)
+        components.append(component)
+    return components
+
+
+def _rectangles_adjacent(first: _TextFrameCell, second: _TextFrameCell) -> bool:
+    tolerance = 2
+    x_overlap = min(first.x2, second.x2) - max(first.x1, second.x1)
+    y_overlap = min(first.y2, second.y2) - max(first.y1, second.y1)
+    x_touch = abs(first.x2 - second.x1) <= tolerance or abs(second.x2 - first.x1) <= tolerance
+    y_touch = abs(first.y2 - second.y1) <= tolerance or abs(second.y2 - first.y1) <= tolerance
+    return (y_overlap >= -tolerance and x_touch) or (x_overlap >= -tolerance and y_touch)
+
+
+def _table_rows_for_component(
+    component: list[_TextFrameCell],
+) -> list[list[_TextFrameCell]] | None:
+    rows = _horizontal_text_frame_rows(component)
+    strong_rows = [row for row in rows if _is_strong_table_row(row)]
+    if not strong_rows:
+        return None
+    return sorted(
+        rows, key=lambda row: (min(cell.y1 for cell in row), min(cell.x1 for cell in row))
+    )
+
+
+def _horizontal_text_frame_rows(
+    cells: list[_TextFrameCell],
+) -> list[list[_TextFrameCell]]:
+    rows: list[list[_TextFrameCell]] = []
+    seen: set[int] = set()
+    for index, _cell in enumerate(cells):
+        if index in seen:
+            continue
+        stack = [index]
+        seen.add(index)
+        row: list[_TextFrameCell] = []
+        while stack:
+            current_index = stack.pop()
+            current = cells[current_index]
+            row.append(current)
+            for candidate_index, candidate in enumerate(cells):
+                if candidate_index in seen:
+                    continue
+                if _same_table_row(current, candidate):
+                    seen.add(candidate_index)
+                    stack.append(candidate_index)
+        rows.append(sorted(row, key=lambda cell: cell.x1))
+    return rows
+
+
+def _same_table_row(first: _TextFrameCell, second: _TextFrameCell) -> bool:
+    tolerance = 2
+    y_overlap = min(first.y2, second.y2) - max(first.y1, second.y1)
+    x_touch = abs(first.x2 - second.x1) <= tolerance or abs(second.x2 - first.x1) <= tolerance
+    return y_overlap > 0 and x_touch
+
+
+def _is_strong_table_row(row: list[_TextFrameCell]) -> bool:
+    if len(row) < 2:
+        return False
+    tolerance = 2
+    top = min(cell.y1 for cell in row)
+    bottom = max(cell.y2 for cell in row)
+    return all(
+        abs(cell.y1 - top) <= tolerance and abs(cell.y2 - bottom) <= tolerance for cell in row
+    )
 
 
 def _annotation_text(text: str) -> str:
@@ -699,7 +862,30 @@ def _annotation_text(text: str) -> str:
 
 
 def _strip_active_link_prefix(text: str) -> str:
-    return _ACTIVE_LINK_PREFIX_RE.sub("", text).strip()
+    if not text.startswith("@{"):
+        return text
+    depth = 0
+    in_string = False
+    escaped = False
+    for index, char in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and in_string:
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[index + 1 :].strip()
+    return text
 
 
 def _pin_is_visible(pin: PinRec, components_by_owner: dict[int, ComponentRec]) -> bool:
