@@ -1,5 +1,6 @@
 """Tests for the KiCad .kicad_pcb parser."""
 
+import math
 from pathlib import Path
 
 import pytest
@@ -118,6 +119,62 @@ def test_kicad_custom_pad_primitives_are_modeled() -> None:
     assert geometry.area < bbox_area
 
 
+def test_kicad_without_native_stackup_gets_synthesized_fr4_stackup() -> None:
+    board = parse_kicad_pcb(ORANGECRAB_FIXTURE)
+    stackup = board.stackup
+
+    assert stackup is not None
+    assert math.isclose(stackup.total_thickness_mm, 1.6)
+    assert len(stackup.layers) == 13
+
+    copper = [layer for layer in stackup.layers if layer.layer_type == "copper"]
+    assert [layer.name for layer in copper] == [
+        "F.Cu",
+        "In1.Cu",
+        "In2.Cu",
+        "In3.Cu",
+        "In4.Cu",
+        "B.Cu",
+    ]
+
+    dielectrics = [layer for layer in stackup.layers if layer.layer_type == "dielectric"]
+    assert len(dielectrics) == 5
+    assert all(layer.material == "FR4 (assumed)" for layer in dielectrics)
+    assert all(layer.thickness_mm == 0.0 for layer in dielectrics)
+
+    masks = [layer for layer in stackup.layers if layer.layer_type == "solder_mask"]
+    assert [layer.name for layer in masks] == ["F.Mask", "B.Mask"]
+
+
+def test_synthesized_kicad_stackup_orders_copper_layers_front_to_back() -> None:
+    parsed = sexpdata.loads(
+        """
+        (kicad_pcb
+          (general (thickness 1.6))
+          (layers
+            (2 "B.Cu" signal)
+            (6 "In2.Cu" signal)
+            (0 "F.Cu" signal)
+            (4 "In1.Cu" signal)
+            (1 "F.Mask" user)
+            (3 "B.Mask" user)
+            (44 "Edge.Cuts" user)
+          )
+          (gr_line (start 0 0) (end 10 0) (layer "Edge.Cuts") (width 0.1))
+          (gr_line (start 10 0) (end 10 10) (layer "Edge.Cuts") (width 0.1))
+          (gr_line (start 10 10) (end 0 10) (layer "Edge.Cuts") (width 0.1))
+          (gr_line (start 0 10) (end 0 0) (layer "Edge.Cuts") (width 0.1))
+        )
+        """
+    )
+
+    board = parse_kicad_pcb_from_sexpr(list(parsed[1:]), default_name="scrambled")
+    assert board.stackup is not None
+    copper = [layer for layer in board.stackup.layers if layer.layer_type == "copper"]
+
+    assert [layer.name for layer in copper] == ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+
+
 def test_kicad10_name_only_net_references_synthesize_numbers() -> None:
     """KiCad 10 (version 20260206) dropped net numbers: there is no top-level
     net table and pads/segments/zones carry ``(net "NAME")`` only. Numbers
@@ -184,11 +241,11 @@ def test_kicad_pad_rotation_uses_board_coordinate_orientation() -> None:
 
     min_x, min_y, max_x, max_y = pad_polygon(pad).bounds
 
-    assert pad.x == pytest.approx(10.0)
-    assert pad.y == pytest.approx(11.0)
-    assert pad.rotation == pytest.approx(90.0)
-    assert max_x - min_x == pytest.approx(2.0)
-    assert max_y - min_y == pytest.approx(0.5)
+    assert math.isclose(pad.x, 10.0)
+    assert math.isclose(pad.y, 11.0)
+    assert math.isclose(pad.rotation, 90.0)
+    assert math.isclose(max_x - min_x, 2.0)
+    assert math.isclose(max_y - min_y, 0.5)
 
 
 def test_kicad_pad_slot_drills_use_board_coordinate_orientation() -> None:
@@ -223,8 +280,8 @@ def test_kicad_pad_slot_drills_use_board_coordinate_orientation() -> None:
 
     drill_cutout = drill_geometry(pad.drill)
 
-    assert pad.rotation == pytest.approx(45.0)
-    assert pad.drill.rotation == pytest.approx(pad.rotation)
+    assert math.isclose(pad.rotation, 45.0)
+    assert math.isclose(pad.drill.rotation, pad.rotation)
     assert drill_cutout is not None
     assert pad_polygon(pad).covers(drill_cutout)
 

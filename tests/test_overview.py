@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from click.testing import CliRunner
 
 import phosphor_eda.cli as cli_module
@@ -10,6 +12,8 @@ from phosphor_eda.domain.project import (
     Project,
     ProjectDocument,
     ProjectMetadata,
+    Stackup,
+    StackupLayer,
 )
 from phosphor_eda.domain.schematic import (
     Component,
@@ -28,6 +32,11 @@ from phosphor_eda.domain.variants import (
     VariantTargetKind,
 )
 from phosphor_eda.query.overview import format_project_overview
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from pytest import MonkeyPatch
 
 
 def _overview_project() -> Project:
@@ -126,6 +135,50 @@ def _overview_project() -> Project:
         keepouts=[],
         source_path="/tmp/Main.PcbDoc",
     )
+    board.stackup = Stackup(
+        layers=[
+            StackupLayer(
+                name="Top Solder",
+                layer_type="solder_mask",
+                thickness_mm=0.01,
+                material="LPI",
+                side="front",
+            ),
+            StackupLayer(
+                name="F.Cu",
+                layer_type="copper",
+                thickness_mm=0.035,
+                copper_weight_oz=1.0,
+                side="front",
+                copper_orientation="normal",
+            ),
+            StackupLayer(
+                name="Core",
+                layer_type="core",
+                thickness_mm=1.51,
+                material="FR4",
+                epsilon_r=4.2,
+                loss_tangent=0.02,
+            ),
+            StackupLayer(
+                name="B.Cu",
+                layer_type="copper",
+                thickness_mm=0.035,
+                copper_weight_oz=1.0,
+                side="back",
+                copper_orientation="reversed",
+            ),
+            StackupLayer(
+                name="Bottom Solder",
+                layer_type="solder_mask",
+                thickness_mm=0.01,
+                material="LPI",
+                side="back",
+            ),
+        ],
+        total_thickness_mm=1.6,
+        copper_finish="ENIG",
+    )
 
     return Project(
         name="MotorControl",
@@ -175,7 +228,23 @@ def test_format_project_overview_contains_project_inventory() -> None:
     assert "Schematic Pages\n" in output
     assert "Power Input" in output
     assert "Boards\n" in output
-    assert "3 total, 2 copper" in output
+    assert "STACKUP" in output
+    assert "2 copper, 2 solder mask, 1.600 mm" in output
+    assert "Stackup\n" in output
+    assert "Main Board: 2 copper layers, 5 physical layers, 1.600 mm total, finish ENIG" in output
+    assert any(
+        "Core" in line
+        and "core" in line
+        and "1.510 mm" in line
+        and "FR4" in line
+        and "4.2" in line
+        and "0.02" in line
+        for line in output.splitlines()
+    )
+    assert any(
+        "F.Cu" in line and "copper" in line and "0.035 mm" in line and "1.0" in line
+        for line in output.splitlines()
+    )
 
 
 def test_format_project_overview_lists_variants_when_present() -> None:
@@ -223,10 +292,14 @@ def test_format_project_overview_important_components_and_notes() -> None:
     assert "... 1 more annotation omitted" in output
 
 
-def test_overview_cli_uses_project_option(monkeypatch, tmp_path) -> None:
+def test_overview_cli_uses_project_option(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
     project_path = tmp_path / "Project.PrjPcb"
     project_path.write_text("", encoding="utf-8")
-    monkeypatch.setattr(cli_module, "load_project", lambda _path, **_kwargs: _overview_project())
+
+    def fake_load_project(_path: Path, **_kwargs: object) -> Project:
+        return _overview_project()
+
+    monkeypatch.setattr(cli_module, "load_project", fake_load_project)
 
     result = CliRunner().invoke(main, ["-P", str(project_path), "overview"])
 
