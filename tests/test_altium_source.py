@@ -8,7 +8,11 @@ from typing import TYPE_CHECKING
 from phosphor_eda.domain.schematic import SchematicDirectiveKind
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode
 from phosphor_eda.formats.altium.records import (
+    BlanketRec,
     FileNameRec,
+    HarnessConnectorRec,
+    HarnessEntryRec,
+    HarnessTypeRec,
     LabelRec,
     NoteRec,
     ParameterRec,
@@ -19,7 +23,7 @@ from phosphor_eda.formats.altium.records import (
     TextFrameRec,
     WireRec,
 )
-from phosphor_eda.formats.altium.sheet_builder import SheetRecords
+from phosphor_eda.formats.altium.sheet_builder import SheetRecords, parse_harness_groups
 from phosphor_eda.formats.altium.source import load_project_source_sheets
 from phosphor_eda.formats.altium.to_schematic import altium_to_design, altium_to_source
 from phosphor_eda.formats.common.diagnostics import ParseContext
@@ -710,3 +714,75 @@ def test_project_source_expands_nested_repeated_sheet_instances(tmp_path, monkey
         for child_scope in child_scope_paths
         if leaf.scope_id.path[: len(child_scope)] == child_scope
     } == child_scope_paths
+
+
+def test_harness_groups_survive_interspersed_additional_records():
+    """Harness entries group to their connector by document order, not OwnerIndex.
+
+    Regression: a non-harness record (e.g. a blanket) in the Additional stream
+    ahead of the harness connectors shifts every connector's position, so the
+    old OwnerIndex-relative matching handed each connector an empty member list
+    and its port lost all its signals. Grouping by document-order contiguity is
+    robust to whatever else shares the Additional stream.
+    """
+    records = [
+        BlanketRec(record_type=RecordType.BLANKET, index=0, owner_index=-1),
+        HarnessConnectorRec(
+            record_type=RecordType.HARNESS_CONNECTOR,
+            index=1,
+            owner_index=-1,
+            location=(100, 420),
+            x_size=75,
+            y_size=50,
+        ),
+        HarnessEntryRec(
+            record_type=RecordType.HARNESS_ENTRY,
+            index=2,
+            owner_index=1,
+            name="RXD0",
+            side=1,
+            distance_from_top=5,
+        ),
+        HarnessEntryRec(
+            record_type=RecordType.HARNESS_ENTRY,
+            index=3,
+            owner_index=1,
+            name="TXD0",
+            side=1,
+            distance_from_top=15,
+        ),
+        HarnessTypeRec(record_type=RecordType.HARNESS_TYPE, index=4, owner_index=1, text="RMII"),
+        HarnessConnectorRec(
+            record_type=RecordType.HARNESS_CONNECTOR,
+            index=5,
+            owner_index=-1,
+            location=(305, 330),
+            x_size=40,
+            y_size=20,
+        ),
+        HarnessEntryRec(
+            record_type=RecordType.HARNESS_ENTRY,
+            index=6,
+            owner_index=5,
+            name="MDC",
+            side=1,
+            distance_from_top=15,
+        ),
+        HarnessEntryRec(
+            record_type=RecordType.HARNESS_ENTRY,
+            index=7,
+            owner_index=5,
+            name="MDIO",
+            side=1,
+            distance_from_top=5,
+        ),
+        HarnessTypeRec(record_type=RecordType.HARNESS_TYPE, index=8, owner_index=5, text="MDIO"),
+    ]
+    sheet = SheetRecords(records=records, children={}, wire_index=WireIndex([]), name="Sheet")
+
+    groups = parse_harness_groups(sheet)
+
+    members_by_type = {
+        group.harness_type: [entry.name for entry, _coord in group.members] for group in groups
+    }
+    assert members_by_type == {"RMII": ["RXD0", "TXD0"], "MDIO": ["MDC", "MDIO"]}
