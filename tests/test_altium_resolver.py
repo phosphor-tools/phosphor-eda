@@ -1355,16 +1355,53 @@ def test_autoname_uses_physical_designator_to_disambiguate_instances():
         "\\SUID2\\CUID": AnnotationDesignator(physical_designator="U1.2", logical_designator="U1"),
     }
 
-    members = _net_members_by_local_net(occurrences, physical, symbol_uid_by_id)
+    members = _net_members_by_local_net(occurrences, physical, symbol_uid_by_id, {})
     name_a = _autoname_candidate(members["A"], 1).name
     name_b = _autoname_candidate(members["B"], 2).name
     assert name_a == "NetU1.1_4"
     assert name_b == "NetU1.2_4"
 
     # No annotation → both fall back to the logical designator and collide.
-    bare = _net_members_by_local_net(occurrences, {}, {})
+    bare = _net_members_by_local_net(occurrences, {}, {}, {})
     assert (
         _autoname_candidate(bare["A"], 1).name
         == _autoname_candidate(bare["B"], 2).name
         == "NetU1_4"
     )
+
+
+def test_physical_designator_prepends_scope_root_ancestor_uids():
+    """A base sheet's ancestor UIDs are prepended to match Altium's full path.
+
+    A single-instance nested sheet is kept as a base sheet whose scope restarts
+    at its own name, dropping the sheet-symbol UID(s) that instantiate it. The
+    ``.Annotation`` keys the full root-to-component chain, so those ancestors
+    must be prepended or the lookup misses and repeated-instance nets collide.
+    """
+    from phosphor_eda.formats.altium.resolver import _physical_designator
+
+    occurrence = AltiumPinOccurrence(
+        id="pin:1",
+        scope_id=ScopeId(path=("Pulse Control", "sym454", "biasgen")),
+        source_index=1,
+        local_net_id="A",
+        component_source_id="component",
+        component_reference="C57",
+        pin_designator="1",
+        pin_name="C57-1",
+        location=(0, 0),
+        tip=(0, 1),
+        component_metadata={"altium_component_unique_id": "RKHPCWLR"},
+    )
+    symbol_uid_by_id = {"sym454": "BWSRSQSP"}
+    physical = {
+        "\\TQZTYPUP\\BWSRSQSP\\RKHPCWLR": AnnotationDesignator(
+            physical_designator="C57.1", logical_designator="C57"
+        )
+    }
+
+    # Without the ancestor prefix the short path misses the annotation entry.
+    assert _physical_designator(occurrence, physical, symbol_uid_by_id, {}) == ""
+    # Prepending the base sheet's ancestor chain reconstructs the full path.
+    ancestors = {"Pulse Control": ("TQZTYPUP",)}
+    assert _physical_designator(occurrence, physical, symbol_uid_by_id, ancestors) == "C57.1"

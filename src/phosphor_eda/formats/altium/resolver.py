@@ -99,10 +99,12 @@ def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None =
         for symbol in sheet.sheet_symbols
         if symbol.unique_id
     }
+    scope_root_ancestor_uids = _scope_root_ancestor_uids(source, ctx)
     members_by_local_net = _net_members_by_local_net(
         pin_occurrences,
         source.physical_designators,
         symbol_uid_by_id,
+        scope_root_ancestor_uids,
     )
 
     metadata = {
@@ -121,6 +123,7 @@ def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None =
             component_source_ids_by_component_id,
             source.physical_designators,
             symbol_uid_by_id,
+            scope_root_ancestor_uids,
         ),
         net_union=net_union,
         net_factory=lambda net_index, root_id, group_local_nets: _altium_net_input_for_group(
@@ -1051,6 +1054,7 @@ def _net_members_by_local_net(
     pin_occurrences: Iterable[AltiumPinOccurrence],
     physical_designators: dict[str, AnnotationDesignator],
     symbol_uid_by_id: dict[str, str],
+    scope_root_ancestor_uids: dict[str, tuple[str, ...]],
 ) -> dict[str, list[tuple[str, str]]]:
     """Map local net id to its member ``(designator, pin)`` pairs.
 
@@ -1066,7 +1070,12 @@ def _net_members_by_local_net(
         if not pin_occurrence.local_net_id:
             continue
         designator = (
-            _physical_designator(pin_occurrence, physical_designators, symbol_uid_by_id)
+            _physical_designator(
+                pin_occurrence,
+                physical_designators,
+                symbol_uid_by_id,
+                scope_root_ancestor_uids,
+            )
             or pin_occurrence.component_reference
         )
         result.setdefault(pin_occurrence.local_net_id, []).append(
@@ -1109,6 +1118,7 @@ def _pin_inputs(
     component_source_ids_by_component_id: dict[str, list[str]],
     physical_designators: dict[str, AnnotationDesignator],
     symbol_uid_by_id: dict[str, str],
+    scope_root_ancestor_uids: dict[str, tuple[str, ...]],
 ) -> list[ResolvedPinInput]:
     pin_occurrences_tuple = tuple(pin_occurrences)
     duplicate_pin_keys = _duplicate_visible_pin_keys(pin_occurrences_tuple)
@@ -1144,6 +1154,7 @@ def _pin_inputs(
                         pin_occurrence,
                         physical_designators,
                         symbol_uid_by_id,
+                        scope_root_ancestor_uids,
                     ),
                     metadata=_component_occurrence_metadata(pin_occurrence),
                 ),
@@ -1203,10 +1214,57 @@ def _logical_pin_id(
     return f"{base_id}:{suffix}" if suffix else base_id
 
 
+def _scope_root_ancestor_uids(
+    source: AltiumSourceDesign,
+    ctx: ParseContext | None,
+) -> dict[str, tuple[str, ...]]:
+    """Ancestor sheet-symbol UIDs above each base sheet (its scope root).
+
+    A single-instance nested sheet is kept as a *base* sheet whose scope restarts
+    at its own name, so components inside it lose the sheet-symbol UIDs that
+    instantiate that base sheet from the true root. The ``.Annotation`` file keys
+    designators by the *full* root-to-component UID path, so those missing
+    ancestor UIDs must be prepended to match. Maps a base sheet's name (its scope
+    root) to that ancestor chain, root-first; a root sheet maps to ``()``.
+    """
+    known_source_files = _known_source_files(source)
+    instantiators: dict[str, list[tuple[AltiumSheetSource, AltiumSheetSymbol]]] = {}
+    for parent in source.sheets.values():
+        referencing_dir = _parent_dir(_source_file_key(parent.source_file))
+        for symbol in parent.sheet_symbols:
+            if not symbol.child_source_file:
+                continue
+            child_key = _canonical_child_key(symbol, known_source_files, referencing_dir, ctx)
+            instantiators.setdefault(child_key, []).append((parent, symbol))
+
+    cache: dict[str, tuple[str, ...]] = {}
+
+    def _ancestors(sheet: AltiumSheetSource) -> tuple[str, ...]:
+        key = _source_file_key(sheet.source_file)
+        if key in cache:
+            return cache[key]
+        cache[key] = ()  # break cycles before recursing
+        refs = instantiators.get(key, [])
+        # A base sheet has at most one instantiator; two or more would make it a
+        # repeated sheet, expanded per-instance rather than kept as a base sheet.
+        if len(refs) == 1:
+            parent, symbol = refs[0]
+            if symbol.unique_id and len(parent.scope_id.path) == 1:
+                cache[key] = (*_ancestors(parent), symbol.unique_id)
+        return cache[key]
+
+    return {
+        sheet.name: _ancestors(sheet)
+        for sheet in source.sheets.values()
+        if len(sheet.scope_id.path) == 1
+    }
+
+
 def _physical_designator(
     pin_occurrence: AltiumPinOccurrence,
     physical_designators: dict[str, AnnotationDesignator],
     symbol_uid_by_id: dict[str, str],
+    scope_root_ancestor_uids: dict[str, tuple[str, ...]],
 ) -> str:
     """Resolve a pin occurrence's per-instance physical designator, or ``""``.
 
@@ -1216,18 +1274,22 @@ def _physical_designator(
     path ``\\<sheet-symbol-uid>...\\<component-uid>``. The logical reference is
     never substituted — the physical designator is occurrence-level metadata.
     Empty when no entry resolves (single-instance / un-annotated components).
+
+    The path is reconstructed to match Altium's full root-to-component chain: the
+    scope root's ancestor sheet-symbol UIDs (dropped when a single-instance sheet
+    is kept as a base sheet) are prepended to the scope's own symbol UIDs.
     """
     if not physical_designators:
         return ""
     component_uid = pin_occurrence.component_metadata.get("altium_component_unique_id")
     if not component_uid:
         return ""
+    scope_path = pin_occurrence.scope_id.path
+    ancestor_uids = scope_root_ancestor_uids.get(scope_path[0], ()) if scope_path else ()
     symbol_uids = [
-        symbol_uid_by_id[element]
-        for element in pin_occurrence.scope_id.path
-        if element in symbol_uid_by_id
+        symbol_uid_by_id[element] for element in scope_path if element in symbol_uid_by_id
     ]
-    unique_id_path = "\\" + "\\".join([*symbol_uids, component_uid])
+    unique_id_path = "\\" + "\\".join([*ancestor_uids, *symbol_uids, component_uid])
     entry = physical_designators.get(unique_id_path)
     return entry.physical_designator if entry is not None else ""
 
