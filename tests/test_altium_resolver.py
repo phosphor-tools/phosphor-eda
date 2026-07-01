@@ -1179,3 +1179,142 @@ def test_qualified_harness_member_labels_unify_across_hierarchy():
     clk = [net for net in design.nets if net.name == "RMII.CLK_50MHZ"]
     assert len(clk) == 1, f"RMII.CLK_50MHZ should be one net, got {len(clk)}"
     assert _refs(clk[0]) == {"U_MCU", "U_PHY"}
+
+
+def test_vector_bus_members_unify_across_multi_level_hierarchy():
+    """Vector-bus members follow the bus port across a multi-level hierarchy.
+
+    Regression: a ``BUS[0..1]`` port crossing the hierarchy dropped out of the
+    interface lookup (``_mergeable_name`` rejects bus notation), so its members
+    (``BUS0``/``BUS1``) split per sheet. Here ``LeafA`` and ``LeafB`` connect
+    only through ``Mid`` (LeafA ↔ Top ↔ Mid ↔ LeafB), and each bit must unify
+    while staying distinct from the other bit.
+    """
+    sym_mid = _symbol("Top", "Mid.SchDoc", index=1)
+    sym_leafa = _symbol("Top", "LeafA.SchDoc", index=2)
+    entry_mid = _entry("Top", "BUS[0..1]", sym_mid.id, index=1)
+    entry_leafa = _entry("Top", "BUS[0..1]", sym_leafa.id, index=2)
+    top_a, _ = _local_net("Top", "to_mid", entries=[entry_mid])
+    top_b, _ = _local_net("Top", "to_leafa", entries=[entry_leafa])
+    top = _sheet(
+        "Top",
+        [top_a, top_b],
+        [],
+        sheet_symbols=[sym_mid, sym_leafa],
+        sheet_entries=[entry_mid, entry_leafa],
+    )
+
+    sym_leafb = _symbol("Mid", "LeafB.SchDoc", index=1)
+    entry_leafb = _entry("Mid", "BUS[0..1]", sym_leafb.id, index=1)
+    mid_port, _ = _local_net("Mid", "up", ports=[_port("Mid", "BUS[0..1]")])
+    mid_down, _ = _local_net("Mid", "down", entries=[entry_leafb])
+    mid = _sheet(
+        "Mid",
+        [mid_port, mid_down],
+        [],
+        sheet_symbols=[sym_leafb],
+        sheet_entries=[entry_leafb],
+        source_file="Mid.SchDoc",
+    )
+
+    def _leaf(name: str, reference: str) -> tuple[AltiumSheetSource, list[AltiumPinOccurrence]]:
+        b0, b0p = _local_net(
+            name, "b0", labels=[_label(name, "BUS0")], references=[reference], pin_designators=["1"]
+        )
+        b1, b1p = _local_net(
+            name, "b1", labels=[_label(name, "BUS1")], references=[reference], pin_designators=["2"]
+        )
+        port, _ = _local_net(name, "port", ports=[_port(name, "BUS[0..1]")])
+        return (
+            _sheet(name, [b0, b1, port], [*b0p, *b1p], source_file=f"{name}.SchDoc"),
+            [*b0p, *b1p],
+        )
+
+    leafa, _ = _leaf("LeafA", "UA")
+    leafb, _ = _leaf("LeafB", "UB")
+
+    design = resolve_altium_source(
+        _source(
+            [top, mid, leafa, leafb],
+            mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
+            allow_sheet_entry_net_names=False,
+            root_sheet_name="Top",
+        ),
+    )
+
+    bus0 = [net for net in design.nets if net.name == "BUS0"]
+    bus1 = [net for net in design.nets if net.name == "BUS1"]
+    assert len(bus0) == 1, f"BUS0 should be one net, got {len(bus0)}"
+    assert _refs(bus0[0]) == {"UA", "UB"}
+    assert len(bus1) == 1, f"BUS1 should be one net, got {len(bus1)}"
+    assert _refs(bus1[0]) == {"UA", "UB"}
+
+
+def test_bus_range_harness_members_unify_with_underscore_labels():
+    """Bus-range harness members unify when bits use ``Port_Bit`` labels.
+
+    Regression: a harness carrying a bus-range member (``RXD[1..0]``) whose
+    bits are labelled ``RMII_RXD0``/``RMII_RXD1`` (underscore) never unified,
+    because the range stub is (correctly) not mapped and the underscore labels
+    were not recognised as harness members. Each bit must unify across the
+    harness while staying distinct.
+    """
+    sym_a = _symbol("Top", "A.SchDoc", index=1)
+    sym_b = _symbol("Top", "B.SchDoc", index=2)
+    entry_a = _harness_entry("Top", "RMII", sym_a.id, index=1)
+    entry_b = _harness_entry("Top", "RMII", sym_b.id, index=2)
+    conduit = AltiumLocalNet(
+        id="Top:local:conduit",
+        scope_id=_scope("Top"),
+        wire_points=set(),
+        pin_ids=[],
+        net_labels=[],
+        power_ports=[],
+        ports=[],
+        sheet_entries=[entry_a, entry_b],
+        harness_members=[],
+        generated_name="__auto_Top_conduit",
+    )
+    top = _sheet(
+        "Top",
+        [conduit],
+        [],
+        sheet_symbols=[sym_a, sym_b],
+        sheet_entries=[entry_a, entry_b],
+    )
+
+    # A: the harness connector's bus-range member, plus per-bit labels + pins.
+    a_stub, _ = _local_net("A", "stub")
+    a_stub.harness_members = [_harness_member("A", "RMII", "RXD[1..0]")]
+    a0, a0p = _local_net(
+        "A", "rxd0", labels=[_label("A", "RMII_RXD0")], references=["UA"], pin_designators=["1"]
+    )
+    a1, a1p = _local_net(
+        "A", "rxd1", labels=[_label("A", "RMII_RXD1")], references=["UA"], pin_designators=["2"]
+    )
+    a = _sheet("A", [a_stub, a0, a1], [*a0p, *a1p], source_file="A.SchDoc")
+
+    # B: same members via per-bit labels only.
+    b0, b0p = _local_net(
+        "B", "rxd0", labels=[_label("B", "RMII_RXD0")], references=["UB"], pin_designators=["1"]
+    )
+    b1, b1p = _local_net(
+        "B", "rxd1", labels=[_label("B", "RMII_RXD1")], references=["UB"], pin_designators=["2"]
+    )
+    b = _sheet("B", [b0, b1], [*b0p, *b1p], source_file="B.SchDoc")
+
+    design = resolve_altium_source(
+        _source(
+            [top, a, b],
+            mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
+            allow_sheet_entry_net_names=False,
+            root_sheet_name="Top",
+        ),
+    )
+
+    rxd0 = [net for net in design.nets if net.name == "RMII_RXD0"]
+    rxd1 = [net for net in design.nets if net.name == "RMII_RXD1"]
+    assert len(rxd0) == 1, f"RMII_RXD0 should be one net, got {len(rxd0)}"
+    assert _refs(rxd0[0]) == {"UA", "UB"}
+    assert len(rxd1) == 1, f"RMII_RXD1 should be one net, got {len(rxd1)}"
+    assert _refs(rxd1[0]) == {"UA", "UB"}

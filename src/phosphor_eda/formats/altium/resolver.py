@@ -345,13 +345,13 @@ def _merge_hierarchy(
     child_sheets_by_file = _child_sheets_by_source_file(source)
     repeated_child_files = _repeated_child_source_files(source, known_source_files, ctx)
     child_interface_nets = _child_interface_net_ids(source, source.project)
-    bus_member_net_ids: dict[tuple[str, str, str], list[str]] = {}
     for ref in local_refs:
         referencing_dir = _parent_dir(_source_file_key(ref.sheet.source_file))
         for entry in ref.local_net.sheet_entries:
+            # Bus (vector) entries are resolved member-by-member in
+            # ``_merge_bus_members``; only scalar sheet-entry names union here.
             entry_name = _mergeable_name(entry.name)
-            entry_members = _mergeable_bus_member_names(entry.name)
-            if entry_name is None and not entry_members:
+            if entry_name is None:
                 continue
             sheet_symbol = next(
                 (
@@ -372,24 +372,18 @@ def _merge_hierarchy(
                 ctx,
             )
             for child_sheet in child_sheets:
-                if entry_members:
-                    bus_name = _clean_name(entry.name)
-                    for member_name in entry_members:
-                        key = (ref.sheet.id, bus_name, member_name)
-                        bus_member_net_ids.setdefault(key, []).extend(
-                            child_interface_nets.get((child_sheet.id, member_name), [])
-                        )
-                    continue
-                if entry_name is not None:
-                    for child_net_id in child_interface_nets.get((child_sheet.id, entry_name), []):
-                        if child_net_id in local_net_by_id:
-                            _ = net_union.union(ref.local_net.id, child_net_id)
+                for child_net_id in child_interface_nets.get((child_sheet.id, entry_name), []):
+                    if child_net_id in local_net_by_id:
+                        _ = net_union.union(ref.local_net.id, child_net_id)
 
-    for net_ids in bus_member_net_ids.values():
-        mergeable_ids = [net_id for net_id in net_ids if net_id in local_net_by_id]
-        for net_id in mergeable_ids[1:]:
-            _ = net_union.union(mergeable_ids[0], net_id)
-
+    _merge_bus_members(
+        source,
+        net_union,
+        known_source_files,
+        child_sheets_by_file,
+        repeated_child_files,
+        ctx,
+    )
     _merge_harness_members(
         source,
         local_refs,
@@ -399,6 +393,93 @@ def _merge_hierarchy(
         repeated_child_files,
         ctx,
     )
+
+
+def _merge_bus_members(
+    source: AltiumSourceDesign,
+    net_union: NetUnion,
+    known_source_files: list[str],
+    child_sheets_by_file: dict[str, list[AltiumSheetSource]],
+    repeated_child_files: set[str],
+    ctx: ParseContext | None,
+) -> None:
+    """Merge vector-bus member nets across the sheet hierarchy.
+
+    A vector bus (``NAME[a..b]``) crosses the hierarchy through bus **ports**
+    and matching bus **sheet entries**; its members (``NAME0``, ``NAME1``, …)
+    are individual net labels on each sheet. Bus-notation names are excluded
+    from plain hierarchical port matching (``_mergeable_name`` rejects them), so
+    bus connectivity is resolved structurally, member by member:
+
+    - a bus *interface* is ``(sheet_id, bus_name)`` — every same-named bus port
+      or entry on a sheet is the same bus, so they share one interface;
+    - a bus sheet entry links its owning sheet's interface to the child sheet's
+      interface of the same name, transitively bundling multi-level hierarchies
+      even when the bus segments sit on separate wire-grouped local nets;
+    - within each connected bundle, member nets (matched by their bit label,
+      e.g. ``DIG_OUT1``) union across every sheet in the bundle. The pin-less
+      bus port/entry nets themselves are never unioned.
+    """
+    member_nets = _child_bus_member_net_ids(source)
+    interface_union: UnionFind[tuple[str, str]] = UnionFind()
+    seen_interfaces: set[tuple[str, str]] = set()
+    interface_members: dict[tuple[str, str], tuple[str, ...]] = {}
+
+    def _note(sheet_id: str, bus_name: str, members: tuple[str, ...]) -> tuple[str, str]:
+        interface = (sheet_id, bus_name)
+        seen_interfaces.add(interface)
+        interface_members[interface] = members
+        return interface
+
+    for sheet in source.sheets.values():
+        referencing_dir = _parent_dir(_source_file_key(sheet.source_file))
+        for local_net in sheet.local_nets:
+            for port in local_net.ports:
+                if port.harness_type:
+                    continue
+                members = _mergeable_bus_member_names(port.name)
+                if members:
+                    _note(sheet.id, _clean_name(port.name), tuple(members))
+            for entry in local_net.sheet_entries:
+                if entry.harness_type:
+                    continue
+                members = _mergeable_bus_member_names(entry.name)
+                if not members:
+                    continue
+                bus_name = _clean_name(entry.name)
+                parent_interface = _note(sheet.id, bus_name, tuple(members))
+                sheet_symbol = next(
+                    (s for s in sheet.sheet_symbols if s.id == entry.sheet_symbol_id),
+                    None,
+                )
+                if sheet_symbol is None:
+                    continue
+                for child_sheet in _child_sheets_for_symbol(
+                    child_sheets_by_file,
+                    repeated_child_files,
+                    sheet_symbol,
+                    known_source_files,
+                    referencing_dir,
+                    ctx,
+                ):
+                    child_interface = _note(child_sheet.id, bus_name, tuple(members))
+                    interface_union.union(parent_interface, child_interface)
+
+    bundles: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    for interface in sorted(seen_interfaces):
+        bundles.setdefault(interface_union.find(interface), []).append(interface)
+
+    for bundle in bundles.values():
+        member_names: set[str] = set()
+        for interface in bundle:
+            member_names.update(interface_members.get(interface, ()))
+        for member_name in member_names:
+            net_ids: list[str] = []
+            for sheet_id, _bus_name in bundle:
+                net_ids.extend(member_nets.get((sheet_id, member_name), []))
+            deduped = list(dict.fromkeys(net_ids))
+            for net_id in deduped[1:]:
+                _ = net_union.union(deduped[0], net_id)
 
 
 def _merge_harness_members(
@@ -500,11 +581,20 @@ def _merge_harness_members(
             # A member may be labelled either bare (``RXD0``, matched by the
             # connector entry name) or qualified as Altium's ``Harness.Signal``
             # form (``RMII.RXD0``). Key connector members under both spellings
-            # so each finds its same-convention peer labels below. Bus-range
-            # entry names (``RXD[1..0]``) are left unexpanded on purpose: the
-            # single pin-less conduit stub must not union into both ``RXD0`` and
-            # ``RXD1`` — the per-bit qualified labels carry that connectivity.
+            # so each finds its same-convention peer labels below.
             for member_name, net_ids in members_by_interface.get(interface, {}).items():
+                member_bits = _mergeable_bus_member_names(member_name)
+                if member_bits:
+                    # A bus-range member (``RXD[1..0]``) carries several bits.
+                    # Its single pin-less conduit stub must not union into every
+                    # bit (that would short them), so create a qualified key per
+                    # bit — ``<port>.<bit>`` and ``<port>_<bit>`` (both spellings
+                    # occur) — for the per-bit labels to fill below, and do not
+                    # map the stub net itself.
+                    for bit in member_bits:
+                        nets_by_member.setdefault(f"{port_name}.{bit}", [])
+                        nets_by_member.setdefault(f"{port_name}_{bit}", [])
+                    continue
                 nets_by_member.setdefault(member_name, []).extend(net_ids)
                 nets_by_member.setdefault(f"{port_name}.{member_name}", []).extend(net_ids)
             # Seed groups from qualified member labels so member nets identified
@@ -640,6 +730,25 @@ def _child_interface_net_ids(
     for sheet in source.sheets.values():
         for local_net in sheet.local_nets:
             for name in _label_names(local_net):
+                result.setdefault((sheet.id, name), []).append(local_net.id)
+    return result
+
+
+def _child_bus_member_net_ids(source: AltiumSourceDesign) -> dict[tuple[str, str], list[str]]:
+    """Child-sheet nets that expose a bus member by name.
+
+    A bus carries its members across a hierarchical bus port/entry regardless of
+    ``AllowSheetEntryNetNames`` — that option governs whether a scalar sheet
+    entry's name acts as a net name, not bus membership. So bus members are
+    matched by their net LABEL (the bit's identifier, e.g. ``DIG_OUT1``), plus
+    any same-named port, independent of the project option.
+    """
+    result: dict[tuple[str, str], list[str]] = {}
+    for sheet in source.sheets.values():
+        for local_net in sheet.local_nets:
+            for name in _label_names(local_net):
+                result.setdefault((sheet.id, name), []).append(local_net.id)
+            for name in _port_names(local_net):
                 result.setdefault((sheet.id, name), []).append(local_net.id)
     return result
 
