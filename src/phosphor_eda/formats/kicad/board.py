@@ -29,7 +29,7 @@ from phosphor_eda.formats.kicad import graphics, pcb_common, sexp
 from phosphor_eda.formats.kicad.footprint import parse_footprint, parse_graphic_item
 from phosphor_eda.formats.kicad.layers import parse_layer_defs, resolve_layers
 from phosphor_eda.formats.kicad.padstack import parse_via_stack
-from phosphor_eda.formats.kicad.stackup import parse_kicad_stackup
+from phosphor_eda.formats.kicad.stackup import parse_kicad_stackup, synthesize_kicad_stackup
 from phosphor_eda.formats.kicad.zones import parse_zone
 
 if TYPE_CHECKING:
@@ -314,5 +314,5 @@ def parse_kicad_pcb_from_sexpr(sexpr: SExpNode, *, default_name: str = "") -> Bo
         PcbBoardProfile(elements=tuple(profile_elements)), source="board profile"
     )
     board = builder.build(require_board_profile=True)
-    board.stackup = parse_kicad_stackup(sexpr)
+    board.stackup = parse_kicad_stackup(sexpr) or synthesize_kicad_stackup(sexpr, board.layers)
     return board
