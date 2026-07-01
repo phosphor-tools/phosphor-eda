@@ -146,6 +146,35 @@ def test_kicad_without_native_stackup_gets_synthesized_fr4_stackup() -> None:
     assert [layer.name for layer in masks] == ["F.Mask", "B.Mask"]
 
 
+def test_synthesized_kicad_stackup_orders_copper_layers_front_to_back() -> None:
+    parsed = sexpdata.loads(
+        """
+        (kicad_pcb
+          (general (thickness 1.6))
+          (layers
+            (2 "B.Cu" signal)
+            (6 "In2.Cu" signal)
+            (0 "F.Cu" signal)
+            (4 "In1.Cu" signal)
+            (1 "F.Mask" user)
+            (3 "B.Mask" user)
+            (44 "Edge.Cuts" user)
+          )
+          (gr_line (start 0 0) (end 10 0) (layer "Edge.Cuts") (width 0.1))
+          (gr_line (start 10 0) (end 10 10) (layer "Edge.Cuts") (width 0.1))
+          (gr_line (start 10 10) (end 0 10) (layer "Edge.Cuts") (width 0.1))
+          (gr_line (start 0 10) (end 0 0) (layer "Edge.Cuts") (width 0.1))
+        )
+        """
+    )
+
+    board = parse_kicad_pcb_from_sexpr(list(parsed[1:]), default_name="scrambled")
+    assert board.stackup is not None
+    copper = [layer for layer in board.stackup.layers if layer.layer_type == "copper"]
+
+    assert [layer.name for layer in copper] == ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+
+
 def test_kicad10_name_only_net_references_synthesize_numbers() -> None:
     """KiCad 10 (version 20260206) dropped net numbers: there is no top-level
     net table and pads/segments/zones carry ``(net "NAME")`` only. Numbers

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 import sexpdata
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
     from phosphor_eda.formats.kicad.sexp import SExpNode
 
 _ASSUMED_FR4_MATERIAL = "FR4 (assumed)"
+_INNER_COPPER_RE = re.compile(r"^In(\d+)\.Cu$")
 
 
 def parse_kicad_stackup(sexpr: SExpNode) -> Stackup | None:
@@ -86,7 +88,10 @@ def parse_kicad_stackup(sexpr: SExpNode) -> Stackup | None:
 
 def synthesize_kicad_stackup(sexpr: SExpNode, layers: list[PcbLayer]) -> Stackup | None:
     """Build a conservative stackup when KiCad omits explicit construction data."""
-    copper_layers = [layer for layer in layers if layer.has_role("copper")]
+    copper_layers = sorted(
+        (layer for layer in layers if layer.has_role("copper")),
+        key=_copper_stack_order,
+    )
     if len(copper_layers) < 2:
         return None
 
@@ -139,6 +144,23 @@ def _board_thickness_mm(sexpr: SExpNode) -> float:
     if general is None:
         return 0.0
     return sexp.find_num(general, "thickness")
+
+
+def _copper_stack_order(layer: PcbLayer) -> tuple[int, int, int, str]:
+    if layer.has_role("front"):
+        return (0, 0, _layer_number(layer), layer.name)
+    if layer.has_role("back"):
+        return (2, 0, _layer_number(layer), layer.name)
+    inner_match = _INNER_COPPER_RE.match(layer.name)
+    if inner_match:
+        return (1, int(inner_match.group(1)), _layer_number(layer), layer.name)
+    if layer.has_role("inner"):
+        return (1, _layer_number(layer), _layer_number(layer), layer.name)
+    return (1, _layer_number(layer), _layer_number(layer), layer.name)
+
+
+def _layer_number(layer: PcbLayer) -> int:
+    return layer.number if layer.number is not None else 9999
 
 
 def _first_layer_with_roles(layers: list[PcbLayer], roles: tuple[str, ...]) -> PcbLayer | None:
