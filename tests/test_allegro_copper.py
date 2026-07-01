@@ -148,6 +148,37 @@ def test_allegro_board_assembly_emits_copper_rectangles_as_regions() -> None:
     assert region.metadata.properties["native_footprint_key"] == "644788264"
 
 
+def test_allegro_board_assembly_emits_unassigned_voided_shape_pours() -> None:
+    """Proves board-level Allegro shape planes are rendered even without net ownership.
+
+    The Sync fixture carries its copper planes as unassigned 0x28 shapes with
+    native void chains. The parser preserves the copper geometry and holes
+    without inventing a net.
+    """
+    record_set = parse_allegro_records(SYNC_BOARD.read_bytes(), source_name=SYNC_BOARD.name)
+
+    board = build_allegro_board(record_set, name=SYNC_BOARD.stem)
+
+    fill = next(
+        conductor for conductor in board.conductors if conductor.id == "allegro:649376864:fill"
+    )
+    assert fill.kind is PcbConductorKind.POUR_FILL
+    assert fill.net is None
+    assert fill.pour is not None
+    assert fill.pour.net is None
+    assert fill.layer.name == "GND"
+    assert isinstance(fill.data, PcbPolygon)
+    assert fill.data.holes
+    assert len(fill.data.points) >= 3
+    assert fill.metadata.native_type == "copper_shape_fill"
+    assert fill.metadata.properties["native_first_keepout_key"] == "649377592"
+    assert fill.metadata.properties["native_assignment_key"] == ""
+    assert fill.metadata.properties["native_net_key"] == ""
+
+    pour_layers = {pour.layers[0].name for pour in board.pours if pour.id.startswith("allegro:")}
+    assert {"ETCH_1", "GND", "SIG1", "ETCH_4", "ETCH_5", "BOTTOM"} <= pour_layers
+
+
 def test_allegro_board_assembly_counts_copper_diagnostics() -> None:
     """Proves copper extraction diagnostics survive board assembly."""
     source = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)

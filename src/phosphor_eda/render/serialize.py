@@ -433,13 +433,25 @@ def _stroke_primitive_style_attrs(
 ) -> dict[str, str]:
     """Style attrs for a stroke-mode primitive: paint the layer color as stroke."""
     declarations = ["fill: none"]
-    if style is not None and style.fill is not None:
-        declarations.append(f"stroke: {style.fill}")
-    if primitive.stroke_width is not None:
-        declarations.append(f"stroke-width: {primitive.stroke_width:.4f}")
+    stroke = _stroke_paint(style)
+    if stroke is not None:
+        declarations.append(f"stroke: {stroke}")
+    stroke_width = primitive.stroke_width
+    if stroke_width is None and style is not None:
+        stroke_width = style.stroke_width_mm
+    if stroke_width is not None:
+        declarations.append(f"stroke-width: {stroke_width:.4f}")
     if primitive.stroke_linecap is not None:
         declarations.append(f"stroke-linecap: {primitive.stroke_linecap}")
     return {"style": "; ".join(declarations)}
+
+
+def _stroke_paint(style: ResolvedStyle | None) -> str | None:
+    if style is None:
+        return None
+    if style.stroke is not None and style.stroke != "none":
+        return style.stroke
+    return style.fill
 
 
 def _layer_mask_path_attrs(primitive: SvgPrimitive, *, fill: str) -> dict[str, str]:

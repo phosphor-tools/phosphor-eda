@@ -48,7 +48,7 @@ from phosphor_eda.geometry.pcb_geometry import (
     footprint_bbox_polygon,
     footprint_side,
     pad_polygon,
-    polygon_geometry,
+    polygon_shape_geometry,
     segment_geometry,
     trace_arc_geometry,
     via_geometry,
@@ -206,7 +206,7 @@ def _shape_geometry(payload: PcbShape) -> BaseGeometry | None:
             )
         )
     if isinstance(payload, PcbPolygon):
-        return polygon_geometry(payload)
+        return polygon_shape_geometry(payload)
     if isinstance(payload, PcbCircle):
         outer = Point(payload.cx, payload.cy).buffer(payload.radius, quad_segs=_QUAD_SEGS_CIRCLE)
         if payload.fill:

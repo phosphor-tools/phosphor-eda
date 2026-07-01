@@ -379,7 +379,7 @@ def _custom_pad_shape_geometry(
         if inner_radius <= 0.0:
             return outer
         return outer.difference(Point(shape.cx, shape.cy).buffer(inner_radius))
-    return polygon_geometry(shape)
+    return polygon_shape_geometry(shape)
 
 
 # ---------------------------------------------------------------------------
@@ -547,6 +547,28 @@ def polygon_geometry(poly: PcbPolygon) -> BaseGeometry:
         return GeometryCollection()
     holes = [h for h in poly.holes if len(h) >= 3]
     return normalize_geometry(Polygon(poly.points, holes=holes or None))
+
+
+def polygon_shape_geometry(poly: PcbPolygon) -> BaseGeometry:
+    """Return the physical filled area for a polygon payload.
+
+    ``polygon_geometry`` intentionally returns the enclosed region for consumers
+    such as board-profile assembly.  This helper applies PCB paint semantics:
+    unfilled polygons describe a stroked closed outline.
+    """
+    geometry = polygon_geometry(poly)
+    if poly.fill or poly.width <= 0.0 or geometry.is_empty:
+        return geometry
+    # Stroke the drawn rings rather than the normalized region's boundary: a
+    # self-intersecting outline normalizes to a GeometryCollection (whose
+    # boundary is undefined), but the painted stroke still follows the rings
+    # as authored.
+    outlines = [
+        LineString([*ring, ring[0]]).buffer(poly.width / 2.0, cap_style="round", join_style="round")
+        for ring in (poly.points, *poly.holes)
+        if len(ring) >= 2
+    ]
+    return normalize_geometry(unary_union(outlines))
 
 
 def closed_path_geometry(path: PcbClosedPath) -> Polygon | None:

@@ -86,6 +86,7 @@ _REALISTIC_DEFAULTS: dict[tuple[str, str], object] = {
     ("exposed_copper", "fill"): "#b87333",
     ("exposed_copper", "opacity"): 0.9,
     ("silkscreen", "fill"): "#ffffff",
+    ("silkscreen", "strokeWidthMm"): 0.08,
 }
 _EDA_STYLE_FALLBACK_FUNCTIONS = {
     "assembly": ("fabrication", "mechanical"),
@@ -312,6 +313,8 @@ def _resolve_eda_silkscreen_default(role: VisualRole, prop: str) -> object | Non
         return 1.0
     if prop == "stroke":
         return "none"
+    if prop == "strokeWidthMm":
+        return 0.08
     return None
 
 

@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from pathlib import Path
 from types import MappingProxyType
 
 import phosphor_eda.formats.allegro.build as allegro_build
+from phosphor_eda.domain.pcb import LayerRole, PcbArtworkPurpose
 from phosphor_eda.formats.allegro.build import build_allegro_board
 from phosphor_eda.formats.allegro.oracle import parse_packaged_netlist_summary
 from phosphor_eda.formats.allegro.parser import parse_allegro_records
 from phosphor_eda.formats.allegro.records import AllegroRecordSet
+from phosphor_eda.render.inventory import build_inventory
+from phosphor_eda.render.modes import build_realistic_layers
+from phosphor_eda.render.settings import (
+    CliOverrides,
+    load_render_settings_json,
+    resolve_effective_settings,
+)
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 BREAKOUT_BOARD = (
@@ -24,6 +33,24 @@ BREAKOUT_NETLIST = (
     / "opencellular-breakout"
     / "orcad/OpenCellular/electronics/breakout/schematic/Netlist"
 )
+SYNC_BOARD = (
+    FIXTURES
+    / "orcad"
+    / "opencellular-sync"
+    / "allegro/OpenCellular/electronics/sync/board"
+    / "Fb_Connect1_SYNC_Life-3.brd"
+)
+ROHM_BOARD = (
+    FIXTURES
+    / "orcad"
+    / "rohm-stepper-driver-ctrl"
+    / "Design Files for Rev 1.0"
+    / "STEPPER EVAL BRD - PCB Board File - Rev 1.0.brd"
+)
+
+
+def _assert_close(actual: float, expected: float) -> None:
+    assert math.isclose(actual, expected, abs_tol=1e-6)
 
 
 def test_allegro_board_assembly_emits_connectivity_padstacks_and_drills() -> None:
@@ -60,9 +87,104 @@ def test_allegro_board_assembly_emits_connectivity_padstacks_and_drills() -> Non
     assert all(drill.layers for drill in board.drills)
 
 
+def test_allegro_board_assembly_places_padstack_objects_in_profile_coordinate_space() -> None:
+    """Proves pads, vias, drills, and placements share the profile coordinate frame."""
+    record_set = parse_allegro_records(SYNC_BOARD.read_bytes(), source_name=SYNC_BOARD.name)
+
+    board = build_allegro_board(record_set, name=SYNC_BOARD.stem)
+
+    bbox = board.bbox()
+    assert bbox is not None
+    min_x, min_y, max_x, max_y = bbox
+    assert min_y < 0 <= max_y
+    assert board.footprints
+    assert board.pads
+    assert board.vias
+    assert board.drills
+    for x, y in (
+        *((footprint.x, footprint.y) for footprint in board.footprints),
+        *((pad.x, pad.y) for pad in board.pads),
+        *((via.x, via.y) for via in board.vias),
+        *((drill.x, drill.y) for drill in board.drills),
+    ):
+        assert min_x <= x <= max_x
+        assert min_y <= y <= max_y
+
+
+def test_allegro_board_assembly_centers_placed_pads_from_native_extent() -> None:
+    record_set = parse_allegro_records(ROHM_BOARD.read_bytes(), source_name=ROHM_BOARD.name)
+
+    board = build_allegro_board(record_set, name=ROHM_BOARD.stem)
+
+    pad = next(pad for pad in board.pads if pad.id == "pad-109476824")
+    assert pad.number == "1"
+    assert pad.footprint is not None
+    assert pad.footprint.reference == "TP29"
+    _assert_close(pad.x, 102.87)
+    _assert_close(pad.y, -38.735)
+    _assert_close(pad.x, pad.footprint.x)
+    _assert_close(pad.y, pad.footprint.y)
+
+
+def test_allegro_board_assembly_centers_pad_drills_from_native_extent() -> None:
+    record_set = parse_allegro_records(ROHM_BOARD.read_bytes(), source_name=ROHM_BOARD.name)
+
+    board = build_allegro_board(record_set, name=ROHM_BOARD.stem)
+
+    pad = next(pad for pad in board.pads if pad.id == "pad-109494784")
+    assert pad.number == "1"
+    assert pad.footprint is not None
+    assert pad.footprint.reference == "POT1"
+    assert pad.drill is not None
+    _assert_close(pad.x, 45.72)
+    _assert_close(pad.y, -62.23)
+    _assert_close(pad.drill.x, 45.72)
+    _assert_close(pad.drill.y, -62.23)
+
+
 def test_allegro_refdes_detection_preserves_lowercase_source_identifiers() -> None:
-    assert allegro_build._looks_like_refdes("r1")
-    assert allegro_build._looks_like_refdes(" R1 ")
+    assert allegro_build.looks_like_refdes("r1")
+    assert allegro_build.looks_like_refdes(" R1 ")
+
+
+def test_allegro_board_assembly_classifies_device_type_text_as_fabrication() -> None:
+    record_set = parse_allegro_records(ROHM_BOARD.read_bytes(), source_name=ROHM_BOARD.name)
+
+    board = build_allegro_board(record_set, name=ROHM_BOARD.stem)
+
+    device_type_artwork = [
+        artwork
+        for artwork in board.artwork
+        if artwork.metadata.properties.get("native_class_id") == "3"
+        and artwork.metadata.properties.get("native_subclass_id") == "251"
+    ]
+    assert device_type_artwork
+    assert {artwork.purpose for artwork in device_type_artwork} == {PcbArtworkPurpose.FABRICATION}
+    assert all(
+        artwork.layer is not None and not artwork.layer.has_role(LayerRole.SILKSCREEN)
+        for artwork in device_type_artwork
+    )
+
+
+def test_allegro_realistic_projection_excludes_part_numbers_from_silkscreen() -> None:
+    record_set = parse_allegro_records(ROHM_BOARD.read_bytes(), source_name=ROHM_BOARD.name)
+    board = build_allegro_board(record_set, name=ROHM_BOARD.stem)
+    base = load_render_settings_json('{"extends": "phosphor:realistic"}')
+    settings = resolve_effective_settings(base, CliOverrides(side="front"))
+
+    layers = build_realistic_layers(build_inventory(board, side="front"), settings)
+
+    realistic_silkscreen = next(layer for layer in layers if layer.role.function == "silkscreen")
+    text_content = {
+        primitive.text.content
+        for primitive in realistic_silkscreen.primitives
+        if primitive.text is not None
+    }
+    assert "RES_0_1/10W_0603PKG_RESC2612X65" not in text_content
+    assert "BD8377FV-M_2_SOP65P640X125-20N_" not in text_content
+    assert "ROHM STEPPER MOTOR" in text_content
+    assert "CONTINUOUS MODE" in text_content
+    assert "R42" in text_content
 
 
 def test_allegro_board_assembly_reports_unresolved_via_padstack_reference() -> None:

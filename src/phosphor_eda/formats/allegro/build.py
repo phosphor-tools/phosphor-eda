@@ -83,6 +83,21 @@ _BOARD_ASSEMBLY_DIAGNOSTIC_CODES = {
     _DIAG_UNSUPPORTED_VIA_WITHOUT_DRILL,
 }
 _DIAGNOSTIC_PROVENANCE_LIMIT = 128
+_ARTWORK_PURPOSE_BY_LAYER_ROLE: tuple[tuple[LayerRole, PcbArtworkPurpose], ...] = (
+    (LayerRole.DESIGNATOR, PcbArtworkPurpose.DESIGNATOR),
+    (LayerRole.VALUE, PcbArtworkPurpose.VALUE),
+    (LayerRole.SILKSCREEN, PcbArtworkPurpose.SILKSCREEN),
+    (LayerRole.FABRICATION, PcbArtworkPurpose.FABRICATION),
+    (LayerRole.ASSEMBLY, PcbArtworkPurpose.ASSEMBLY),
+    (LayerRole.COURTYARD, PcbArtworkPurpose.COURTYARD),
+    (LayerRole.SOLDER_MASK, PcbArtworkPurpose.SOLDER_MASK),
+    (LayerRole.SOLDER_PASTE, PcbArtworkPurpose.SOLDER_PASTE),
+    (LayerRole.DIMENSION, PcbArtworkPurpose.DIMENSION),
+    (LayerRole.KEEPOUT, PcbArtworkPurpose.KEEPOUT),
+    (LayerRole.COPPER, PcbArtworkPurpose.COPPER),
+    (LayerRole.USER, PcbArtworkPurpose.USER),
+    (LayerRole.MECHANICAL, PcbArtworkPurpose.MECHANICAL),
+)
 
 
 @dataclass(frozen=True)
@@ -400,9 +415,9 @@ def _add_footprints(
             continue
         package = footprint_sources.get(instance_key)
         refdes = _string(string_table, _payload_int(component, "refdes_string_key"))
-        if not _looks_like_refdes(refdes):
+        if not looks_like_refdes(refdes):
             text = text_by_wrapper.get(_payload_int(instance, "text_key"), "")
-            refdes = text if _looks_like_refdes(text) else ""
+            refdes = text if looks_like_refdes(text) else ""
         if not refdes:
             refdes = f"REF_{component.key or instance_key}"
         refdes = _unique_ref(refdes, used_refs)
@@ -425,7 +440,7 @@ def _add_footprints(
                 reference=refdes,
                 footprint_lib=package_name,
                 x=_coord(instance, "coord_x", unit_to_mm),
-                y=_coord(instance, "coord_y", unit_to_mm),
+                y=_coord_y(instance, "coord_y", unit_to_mm),
                 rotation=_payload_int(instance, "rotation_mdeg") / 1000.0,
                 layer=layer,
                 metadata=PcbFootprintMetadata(
@@ -571,8 +586,8 @@ def _add_pad(
         PcbPad(
             id=f"pad-{record.key}",
             number=_pad_number(record, text_by_wrapper),
-            x=_coord(record, "coord_x", unit_to_mm),
-            y=_coord(record, "coord_y", unit_to_mm),
+            x=_record_center_x(record, unit_to_mm),
+            y=_record_center_y(record, unit_to_mm),
             stack=padstack.stack,
             pad_type=padstack.pad_type,
             layers=layers,
@@ -637,7 +652,7 @@ def _add_vias(
             PcbVia(
                 id=f"via-{record.key}",
                 x=_coord(record, "coord_x", unit_to_mm),
-                y=_coord(record, "coord_y", unit_to_mm),
+                y=_coord_y(record, "coord_y", unit_to_mm),
                 stack=padstack.stack,
                 layers=copper_layers,
                 drill=drill,
@@ -733,9 +748,8 @@ def _pour(
 def _pour_fill_mode(primitive: AllegroPourPrimitive) -> PcbPourFillMode:
     properties = primitive.metadata.properties
     if (
-        "native_first_keepout_key" in properties
-        or properties.get("dynamic_shape_degraded") == "true"
-    ):
+        "native_first_keepout_key" in properties and "native_void_hole_count" not in properties
+    ) or properties.get("dynamic_shape_degraded") == "true":
         return PcbPourFillMode.UNKNOWN
     return PcbPourFillMode.SOLID
 
@@ -774,8 +788,8 @@ def _add_drill(
 ) -> PcbDrill:
     drill = PcbDrill(
         id=f"{owner_prefix}-drill-{record.key}",
-        x=_coord(record, "coord_x", unit_to_mm),
-        y=_coord(record, "coord_y", unit_to_mm),
+        x=_record_center_x(record, unit_to_mm),
+        y=_record_center_y(record, unit_to_mm),
         diameter=_drill_diameter(padstack),
         shape=padstack.drill_shape,
         plating=padstack.plating,
@@ -860,6 +874,24 @@ def _payload_int(record: AllegroRecord, key: str) -> int:
 
 def _coord(record: AllegroRecord, key: str, unit_to_mm: float) -> float:
     return _payload_int(record, key) * unit_to_mm
+
+
+def _coord_y(record: AllegroRecord, key: str, unit_to_mm: float) -> float:
+    return -_coord(record, key, unit_to_mm)
+
+
+def _record_center_x(record: AllegroRecord, unit_to_mm: float) -> float:
+    coord_2_x = record.payload.get("coord_2_x")
+    if isinstance(coord_2_x, int):
+        return (_payload_int(record, "coord_x") + coord_2_x) * unit_to_mm / 2.0
+    return _coord(record, "coord_x", unit_to_mm)
+
+
+def _record_center_y(record: AllegroRecord, unit_to_mm: float) -> float:
+    coord_2_y = record.payload.get("coord_2_y")
+    if isinstance(coord_2_y, int):
+        return -((_payload_int(record, "coord_y") + coord_2_y) * unit_to_mm / 2.0)
+    return _coord_y(record, "coord_y", unit_to_mm)
 
 
 def _pad_number(record: AllegroRecord, text_by_wrapper: Mapping[int, str]) -> str:
@@ -952,7 +984,7 @@ def _native_layer_id(record: AllegroRecord) -> str:
     return f"{class_id}:{subclass_id}"
 
 
-def _looks_like_refdes(value: str) -> bool:
+def looks_like_refdes(value: str) -> bool:
     return bool(_REFDES_RE.match(value.strip()))
 
 
@@ -1017,12 +1049,18 @@ def _artwork_kind(kind: AllegroPrimitiveKind) -> PcbArtworkKind:
         return PcbArtworkKind.LINE
     if kind is AllegroPrimitiveKind.ARC:
         return PcbArtworkKind.ARC
+    if kind is AllegroPrimitiveKind.CIRCLE:
+        return PcbArtworkKind.CIRCLE
     if kind is AllegroPrimitiveKind.TEXT:
         return PcbArtworkKind.TEXT
     return PcbArtworkKind.POLYGON
 
 
 def _artwork_purpose(primitive: AllegroGraphicPrimitive) -> PcbArtworkPurpose:
+    if primitive.layer is not None:
+        for role, purpose in _ARTWORK_PURPOSE_BY_LAYER_ROLE:
+            if primitive.layer.has_role(role):
+                return purpose
     if primitive.has_role(AllegroPrimitiveRole.TEXT):
         return PcbArtworkPurpose.USER_TEXT
     return PcbArtworkPurpose.MECHANICAL

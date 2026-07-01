@@ -60,6 +60,18 @@ _CLASS_NAMES: dict[int, str] = {
     _CLASS_CONSTRAINTS_REGION: "Constraints Region",
 }
 
+_SILKSCREEN_COMPONENT_TEXT_CLASSES = {
+    _CLASS_COMPONENT_VALUE,
+    _CLASS_REF_DES,
+}
+_ASSEMBLY_COMPONENT_TEXT_CLASSES = {
+    _CLASS_COMPONENT_VALUE,
+    _CLASS_DEVICE_TYPE,
+    _CLASS_REF_DES,
+    _CLASS_TOLERANCE,
+    _CLASS_USER_PART_NUMBER,
+}
+
 _FIXED_ROLES: dict[tuple[int, int], tuple[LayerRole, ...]] = {
     (_CLASS_BOARD_GEOMETRY, 0xEA): (
         LayerRole.MECHANICAL,
@@ -427,6 +439,8 @@ def _static_layer_roles() -> tuple[tuple[tuple[int, int], tuple[LayerRole, ...]]
 
 
 def _component_text_roles(class_id: int, subclass_id: int) -> tuple[LayerRole, ...]:
+    if subclass_id not in {0xF8, 0xF9, 0xFA, 0xFB, 0xFC, 0xFD}:
+        return ()
     base = [LayerRole.FABRICATION]
     if class_id == _CLASS_COMPONENT_VALUE:
         base.append(LayerRole.VALUE)
@@ -436,11 +450,11 @@ def _component_text_roles(class_id: int, subclass_id: int) -> tuple[LayerRole, .
         base.append(LayerRole.BACK)
     elif subclass_id in {0xF9, 0xFB, 0xFD}:
         base.append(LayerRole.FRONT)
-    if subclass_id in {0xFA, 0xFB}:
+    if subclass_id in {0xFA, 0xFB} and class_id in _SILKSCREEN_COMPONENT_TEXT_CLASSES:
         return tuple([LayerRole.SILKSCREEN, *base])
-    if subclass_id in {0xFC, 0xFD}:
+    if subclass_id in {0xFC, 0xFD} and class_id in _ASSEMBLY_COMPONENT_TEXT_CLASSES:
         return tuple([LayerRole.MECHANICAL, LayerRole.ASSEMBLY, *base])
-    return tuple(base) if subclass_id in {0xF8, 0xF9} else ()
+    return tuple(base)
 
 
 def _name_roles(name: str) -> tuple[LayerRole, ...]:

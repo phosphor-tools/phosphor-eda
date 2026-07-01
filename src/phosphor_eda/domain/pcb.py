@@ -252,6 +252,8 @@ class PcbCircle:
 class PcbPolygon:
     points: list[tuple[float, float]]
     holes: list[list[tuple[float, float]]] = field(default_factory=list)
+    width: float = 0.0
+    fill: bool = True
 
 
 @dataclass

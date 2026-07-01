@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from importlib.resources import as_file, files
 from pathlib import Path
+from typing import cast
 
 import pytest
 from conftest import build_render_test_board
@@ -12,11 +13,13 @@ from phosphor_eda.domain.pcb import (
     PcbArtwork,
     PcbArtworkKind,
     PcbArtworkPurpose,
+    PcbCircle,
     PcbConductorKind,
     PcbDrill,
     PcbLayer,
     PcbLine,
     PcbObjectMetadata,
+    PcbPolygon,
     PcbText,
 )
 from phosphor_eda.query.project_loader import load_pcb
@@ -44,6 +47,11 @@ ALLEGRO_BREAKOUT_BRD = (
     / "orcad/opencellular-breakout/allegro/OpenCellular/electronics/breakout/board"
     / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
 )
+ALLEGRO_ROHM_STEPPER_BRD = (
+    FIXTURES
+    / "orcad/rohm-stepper-driver-ctrl/Design Files for Rev 1.0"
+    / "STEPPER EVAL BRD - PCB Board File - Rev 1.0.brd"
+)
 
 
 def _design_settings(
@@ -58,6 +66,11 @@ def _design_settings(
         highlights=tuple(HighlightSpec(net=net) for net in highlight_nets),
     )
     return resolve_effective_settings(base, overrides)
+
+
+def _realistic_settings(*, side: str = "front") -> RenderSettings:
+    base = load_render_settings_json('{"extends": "phosphor:realistic"}')
+    return resolve_effective_settings(base, CliOverrides(side=side))
 
 
 def test_render_result_carries_unknown_highlight_warning() -> None:
@@ -117,13 +130,112 @@ def test_render_pads_use_native_arcs() -> None:
     assert any(d.count(" A ") == 2 and d.endswith("Z") for d in pad_paths)
 
 
+def test_render_outline_circles_as_stroked_paths() -> None:
+    import re
+
+    board = _board()
+    front_silk = next(layer for layer in board.layers if layer.has_role(LayerRole.SILKSCREEN))
+    board.artwork.append(
+        PcbArtwork(
+            id="silk:outline-circle",
+            kind=PcbArtworkKind.CIRCLE,
+            purpose=PcbArtworkPurpose.SILKSCREEN,
+            layer=front_silk,
+            data=PcbCircle(5.0, 7.0, 1.0, fill=False, width=0.25),
+            footprint=board.footprints[0],
+        )
+    )
+
+    svg = render_pcb_svg(board, _design_settings()).svg
+
+    match = re.search(r'<path [^>]*data-source-id="silk:outline-circle"[^>]*/>', svg)
+    assert match is not None
+    path = match.group(0)
+    assert 'style="fill: none; stroke: #ffffff; stroke-width: 0.2500' in path
+    assert 'fill-rule="evenodd"' not in path
+
+
+def test_render_zero_width_lines_use_layer_stroke_width() -> None:
+    import re
+
+    board = _board()
+    front_silk = next(layer for layer in board.layers if layer.has_role(LayerRole.SILKSCREEN))
+    board.artwork.append(
+        PcbArtwork(
+            id="silk:zero-width-line",
+            kind=PcbArtworkKind.LINE,
+            purpose=PcbArtworkPurpose.SILKSCREEN,
+            layer=front_silk,
+            data=PcbLine(1.0, 1.0, 3.0, 1.0, 0.0),
+            footprint=board.footprints[0],
+        )
+    )
+
+    for settings in (_design_settings(), _realistic_settings()):
+        svg = render_pcb_svg(board, settings).svg
+        match = re.search(r'<path [^>]*data-source-id="silk:zero-width-line"[^>]*/>', svg)
+        assert match is not None
+        path = match.group(0)
+        assert 'style="fill: none; stroke: #ffffff; stroke-width: 0.0800' in path
+        assert 'fill-rule="evenodd"' not in path
+
+
+def test_render_outline_polygons_as_stroked_closed_paths() -> None:
+    import re
+
+    board = _board()
+    front_silk = next(layer for layer in board.layers if layer.has_role(LayerRole.SILKSCREEN))
+    board.artwork.append(
+        PcbArtwork(
+            id="silk:outline-polygon",
+            kind=PcbArtworkKind.POLYGON,
+            purpose=PcbArtworkPurpose.SILKSCREEN,
+            layer=front_silk,
+            data=PcbPolygon(
+                points=[(1.0, 1.0), (3.0, 1.0), (3.0, 2.0), (1.0, 2.0)],
+                width=0.2,
+                fill=False,
+            ),
+            footprint=board.footprints[0],
+        )
+    )
+
+    svg = render_pcb_svg(board, _design_settings()).svg
+
+    match = re.search(r'<path [^>]*data-source-id="silk:outline-polygon"[^>]*/>', svg)
+    assert match is not None
+    path = match.group(0)
+    assert 'style="fill: none; stroke: #ffffff; stroke-width: 0.2000' in path
+    assert 'fill-rule="evenodd"' not in path
+
+
+def test_allegro_realistic_silkscreen_rectangles_render_as_outlines() -> None:
+    import re
+
+    board = load_pcb(ALLEGRO_ROHM_STEPPER_BRD)
+    svg = render_pcb_svg(board, _realistic_settings()).svg
+
+    match = re.search(
+        r'<path [^>]*data-source-id="allegro:109336496"[^>]*/>',
+        svg,
+    )
+    assert match is not None
+    path = match.group(0)
+    assert 'data-purpose="silkscreen"' in path
+    assert "fill: none" in path
+    assert "stroke: #ffffff" in path
+    assert "stroke-width:" in path
+
+
 def test_mask_viewports_cover_full_board_bbox() -> None:
     import re
 
     board = _board()
     svg = render_pcb_svg(board, _design_settings()).svg
 
-    min_x, min_y, max_x, max_y = board.bbox()
+    bbox = board.bbox()
+    assert bbox is not None
+    min_x, min_y, max_x, max_y = bbox
     masks = re.findall(r"<mask ([^>]*)>", svg)
     assert masks, "expected at least one solder/board mask"
     for attr_str in masks:
@@ -185,7 +297,7 @@ def test_allegro_breakout_render_inventory_uses_typed_domain_collections() -> No
         InventoryItemKind.PAD: 1006,
         InventoryItemKind.VIA: 1424,
         InventoryItemKind.DRILL: 272,
-        InventoryItemKind.CONDUCTOR: 211,
+        InventoryItemKind.CONDUCTOR: 219,
         InventoryItemKind.ARTWORK: 20713,
         InventoryItemKind.KEEPOUT: 131,
     }
@@ -400,9 +512,10 @@ def test_render_settings_schema_advertises_custom_css_max_length() -> None:
     from phosphor_eda.render.api import render_settings_schema
 
     schema = render_settings_schema()
-    properties = schema["properties"]
-    assert isinstance(properties, dict)
-    custom_css = properties["custom_css"]
+    raw_properties = schema["properties"]
+    assert isinstance(raw_properties, dict)
+    properties = cast("dict[str, object]", raw_properties)
+    custom_css = properties.get("custom_css")
     assert isinstance(custom_css, dict)
     assert custom_css["maxLength"] == MAX_CUSTOM_CSS_LENGTH
 
@@ -491,7 +604,9 @@ def test_marker_ring_enforces_minimum_screen_diameter() -> None:
     assert radii
     view_box = re.search(r'viewBox="[\d.\-]+ [\d.\-]+ ([\d.]+)', svg)
     assert view_box is not None
-    px_per_mm = float(re.search(r'width="(\d+)"', svg).group(1)) / float(view_box.group(1))
+    width = re.search(r'width="(\d+)"', svg)
+    assert width is not None
+    px_per_mm = float(width.group(1)) / float(view_box.group(1))
     assert radii[0] * px_per_mm >= 100  # half of minDiameterPx
 
     # The ring must not collapse to the pad's own size when the minimum is large.
@@ -684,8 +799,9 @@ def test_schema_rejects_invalid_settings_documents(document: dict[str, object]) 
     from phosphor_eda.render.api import render_settings_schema
 
     schema = render_settings_schema()
-    properties = schema["properties"]
-    assert isinstance(properties, dict)
+    raw_properties = schema["properties"]
+    assert isinstance(raw_properties, dict)
+    properties = cast("dict[str, object]", raw_properties)
     (key,) = document
     if key not in properties:
         # Legacy keys: additionalProperties False makes the schema reject them.
@@ -693,7 +809,7 @@ def test_schema_rejects_invalid_settings_documents(document: dict[str, object]) 
         return
     # Value-constrained keys: schema declares an enum or numeric minimum that
     # excludes the offending value.
-    constraint = properties[key]
+    constraint = properties.get(key)
     assert isinstance(constraint, dict)
     assert "enum" in constraint or "minimum" in constraint
 
@@ -729,8 +845,6 @@ def test_annotation_style_rejects_wrong_token_type() -> None:
 
 
 def test_annotation_style_rejects_non_scalar_css_value_token() -> None:
-    from typing import cast
-
     from phosphor_eda.render.plan import annotation_style_for_settings
     from phosphor_eda.render.settings import RenderSettings, TokenMap
 

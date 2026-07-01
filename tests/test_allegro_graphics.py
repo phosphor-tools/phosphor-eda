@@ -3,9 +3,7 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-import pytest
-
-from phosphor_eda.domain.pcb import PcbArc, PcbPolygon, PcbText
+from phosphor_eda.domain.pcb import PcbArc, PcbCircle, PcbPolygon, PcbText
 from phosphor_eda.formats.allegro.build import build_allegro_graphics_board
 from phosphor_eda.formats.allegro.graph import build_allegro_object_graph
 from phosphor_eda.formats.allegro.graphics import extract_allegro_graphics
@@ -22,6 +20,17 @@ BREAKOUT_BOARD = (
     / "allegro/OpenCellular/electronics/breakout/board"
     / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
 )
+ROHM_BOARD = (
+    FIXTURES
+    / "orcad"
+    / "rohm-stepper-driver-ctrl"
+    / "Design Files for Rev 1.0"
+    / "STEPPER EVAL BRD - PCB Board File - Rev 1.0.brd"
+)
+
+
+def _assert_close(actual: float, expected: float) -> None:
+    assert math.isclose(actual, expected, rel_tol=1e-9, abs_tol=1e-9)
 
 
 def test_allegro_graphic_segment_records_preserve_native_geometry() -> None:
@@ -29,22 +38,27 @@ def test_allegro_graphic_segment_records_preserve_native_geometry() -> None:
     graph = build_allegro_object_graph(record_set)
 
     graphic = graph.by_key[632_912_816]
-    segment = graph.by_key[graphic.payload["segment_key"]]
+    segment_key = graphic.payload["segment_key"]
+    assert isinstance(segment_key, int)
+    segment = graph.by_key[segment_key]
 
     assert graphic.tag == 0x14
     assert graphic.payload["layer_class_id"] == 0x01
     assert graphic.payload["layer_subclass_id"] == 0xF0
     assert segment.tag in {0x15, 0x16, 0x17}
     assert segment.payload["parent_key"] == graphic.key
-    assert segment.payload["width"] >= 0
-    assert isinstance(segment.payload["start_x"], int)
-    assert isinstance(segment.payload["start_y"], int)
-    assert isinstance(segment.payload["end_x"], int)
-    assert isinstance(segment.payload["end_y"], int)
-    assert (segment.payload["start_x"], segment.payload["start_y"]) != (
-        segment.payload["end_x"],
-        segment.payload["end_y"],
-    )
+    width = segment.payload["width"]
+    start_x = segment.payload["start_x"]
+    start_y = segment.payload["start_y"]
+    end_x = segment.payload["end_x"]
+    end_y = segment.payload["end_y"]
+    assert isinstance(width, int)
+    assert width >= 0
+    assert isinstance(start_x, int)
+    assert isinstance(start_y, int)
+    assert isinstance(end_x, int)
+    assert isinstance(end_y, int)
+    assert (start_x, start_y) != (end_x, end_y)
 
 
 def test_allegro_string_graphic_records_preserve_text_and_position() -> None:
@@ -59,6 +73,23 @@ def test_allegro_string_graphic_records_preserve_text_and_position() -> None:
     assert text.payload["x"] == 154_776
     assert text.payload["y"] == 2_429_362
     assert text.payload["text"] == "C900H450"
+
+
+def test_allegro_text_graphics_use_renderable_fallback_font_size() -> None:
+    """Proves unresolved native Allegro text sizes still render visibly."""
+    record_set = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    layer_map = build_allegro_layers(record_set)
+
+    graphics = extract_allegro_graphics(record_set, layer_map)
+
+    text = next(primitive for primitive in graphics.artwork if primitive.id == "allegro:632913096")
+    assert isinstance(text.data, PcbText)
+    assert text.data.text == "C900H450"
+    assert text.data.font_size > 0
+    assert any(
+        diagnostic.code == "unresolved-text-size" and diagnostic.key == 632_913_096
+        for diagnostic in graphics.diagnostics
+    )
 
 
 def test_allegro_graphics_extract_board_profile_primitives_with_native_provenance() -> None:
@@ -90,12 +121,36 @@ def test_allegro_graphics_arc_midpoint_is_on_arc_not_center() -> None:
     source = record_set.by_key[633_220_424]
     header = record_set.header
     assert header is not None
-    center_x = float(source.payload["center_x"]) / header.unit_divisor * 0.0254
-    center_y = -(float(source.payload["center_y"]) / header.unit_divisor * 0.0254)
-    radius = float(source.payload["radius"]) / header.unit_divisor * 0.0254
+    center_x_raw = source.payload["center_x"]
+    center_y_raw = source.payload["center_y"]
+    radius_raw = source.payload["radius"]
+    assert isinstance(center_x_raw, int | float)
+    assert isinstance(center_y_raw, int | float)
+    assert isinstance(radius_raw, int | float)
+    center_x = float(center_x_raw) / header.unit_divisor * 0.0254
+    center_y = -(float(center_y_raw) / header.unit_divisor * 0.0254)
+    radius = float(radius_raw) / header.unit_divisor * 0.0254
 
-    assert math.hypot(arc.data.mid_x - center_x, arc.data.mid_y - center_y) == pytest.approx(radius)
+    _assert_close(math.hypot(arc.data.mid_x - center_x, arc.data.mid_y - center_y), radius)
     assert math.hypot(arc.data.mid_x - center_x, arc.data.mid_y - center_y) > 0
+
+
+def test_allegro_graphics_full_circle_arc_records_become_circles() -> None:
+    """Proves full-circle Allegro arc segments are not emitted as zero-length arcs."""
+    record_set = parse_allegro_records(ROHM_BOARD.read_bytes(), source_name=ROHM_BOARD.name)
+    layer_map = build_allegro_layers(record_set)
+
+    graphics = extract_allegro_graphics(record_set, layer_map)
+
+    circle = next(
+        primitive for primitive in graphics.artwork if primitive.id == "allegro:109689296"
+    )
+    assert isinstance(circle.data, PcbCircle)
+    assert circle.kind.value == "circle"
+    _assert_close(circle.data.cx, 20.32)
+    _assert_close(circle.data.cy, -31.75)
+    _assert_close(circle.data.radius, 1.27)
+    _assert_close(circle.data.width, 0.0254)
 
 
 def test_allegro_graphics_board_assembles_geometry_backed_board_profile() -> None:
@@ -105,7 +160,10 @@ def test_allegro_graphics_board_assembles_geometry_backed_board_profile() -> Non
 
     assert board.board_profile is not None
     assert len(board.board_profile.elements) == 4
-    assert board.bbox() == pytest.approx((0.0, -76.2, 76.2, -0.0))
+    bbox = board.bbox()
+    assert bbox is not None
+    for actual, expected in zip(bbox, (0.0, -76.2, 76.2, -0.0), strict=True):
+        _assert_close(actual, expected)
     assert {
         element.metadata.properties["native_class_id"] for element in board.board_profile.elements
     } == {"1"}
@@ -258,6 +316,8 @@ def test_allegro_graphics_extracts_rectangle_artwork() -> None:
     assert rectangle.kind.value == "rectangle"
     assert isinstance(rectangle.data, PcbPolygon)
     assert len(rectangle.data.points) == 4
+    assert not rectangle.data.fill
+    assert rectangle.data.width > 0.0
     assert rectangle.metadata.properties["native_class_id"] == "4"
     assert rectangle.metadata.properties["native_subclass_id"] == "13"
 

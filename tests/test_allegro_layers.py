@@ -115,6 +115,10 @@ def test_allegro_fixed_class_subclass_roles_are_concrete_layers() -> None:
     _assert_roles(result, 0x09, 0xFB, LayerRole.COURTYARD, LayerRole.FRONT)
     _assert_roles(result, 0x09, 0xF8, LayerRole.FABRICATION, LayerRole.USER)
     _assert_roles(result, 0x0D, 0xFB, LayerRole.DESIGNATOR, LayerRole.SILKSCREEN, LayerRole.FRONT)
+    _assert_roles(result, 0x03, 0xFB, LayerRole.FABRICATION, LayerRole.FRONT)
+    _assert_lacks_roles(result, 0x03, 0xFB, LayerRole.SILKSCREEN)
+    _assert_roles(result, 0x11, 0xFB, LayerRole.FABRICATION, LayerRole.FRONT)
+    _assert_lacks_roles(result, 0x11, 0xFB, LayerRole.SILKSCREEN)
     _assert_roles(result, 0x02, 0xFC, LayerRole.VALUE, LayerRole.ASSEMBLY, LayerRole.BACK)
     _assert_roles(result, 0x0E, 0xFD, LayerRole.KEEPOUT)
     _assert_roles(result, 0x0F, 0xFC, LayerRole.KEEPOUT, LayerRole.FRONT)
@@ -199,3 +203,14 @@ def _assert_roles(
     assert all(layer.has_role(role) for role in roles)
     assert layer.metadata.properties["native_class_id"] == str(class_id)
     assert layer.metadata.properties["native_subclass_id"] == str(subclass_id)
+
+
+def _assert_lacks_roles(
+    result: AllegroLayerMap,
+    class_id: int,
+    subclass_id: int,
+    *roles: LayerRole,
+) -> None:
+    layer = result.layer_for_class_subclass(class_id, subclass_id)
+    assert layer is not None
+    assert not any(layer.has_role(role) for role in roles)

@@ -35,6 +35,7 @@ def test_allegro_board_assembly_links_net_owned_shape_fills_to_pours() -> None:
         for conductor in board.conductors
         if conductor.kind is PcbConductorKind.POUR_FILL
         and conductor.metadata.native_type == "copper_shape_fill"
+        and conductor.net is not None
     ]
     assert len(fills) == 1
     fill = fills[0]
@@ -54,12 +55,12 @@ def test_allegro_board_assembly_links_net_owned_shape_fills_to_pours() -> None:
     assert fill.metadata.properties["native_layer_name"] == fill.layer.name
 
 
-def test_allegro_shape_voids_do_not_emit_uncut_positive_copper() -> None:
-    """Proves native shape holes are not converted into unsafe positive copper.
+def test_allegro_shape_voids_emit_cut_positive_copper() -> None:
+    """Proves native shape holes are preserved as cutouts in filled copper.
 
     The synthetic 0x28/0x34 relationship proves parser behavior for the native
-    void pointer. It cannot prove boolean-subtracted manufacturing geometry
-    until a fixture with reliable void oracle output is promoted.
+    void pointer. It cannot prove Cadence dynamic shape rules beyond the
+    preserved native void geometry.
     """
     source = parse_allegro_records(LAUNCHXL_BOARD.read_bytes(), source_name=LAUNCHXL_BOARD.name)
     net = AllegroRecord(
@@ -109,26 +110,30 @@ def test_allegro_shape_voids_do_not_emit_uncut_positive_copper() -> None:
             "first_segment_key": 990_000_201,
         },
     )
+    void_segments = (
+        _line_segment(990_000_201, void.key or 0, 25_000, 25_000, 75_000, 25_000, 990_000_202),
+        _line_segment(990_000_202, void.key or 0, 75_000, 25_000, 75_000, 75_000, 990_000_203),
+        _line_segment(990_000_203, void.key or 0, 75_000, 75_000, 25_000, 75_000, 990_000_204),
+        _line_segment(990_000_204, void.key or 0, 25_000, 75_000, 25_000, 25_000, None),
+    )
     record_set = AllegroRecordSet(
         header=source.header,
         string_table=source.string_table,
-        records=(*source.records, net, assignment, shape, *shape_segments, void),
-        end_offset=void.end_offset,
+        records=(*source.records, net, assignment, shape, *shape_segments, void, *void_segments),
+        end_offset=void_segments[-1].end_offset,
     )
 
     board = build_allegro_board(record_set, name=LAUNCHXL_BOARD.stem)
 
     pour = board.pour_for("allegro:990000102:pour")
     assert pour is not None
-    assert pour.fills == ()
-    assert pour.settings.fill_mode is PcbPourFillMode.UNKNOWN
-    assert all(conductor.id != "allegro:990000102:fill" for conductor in board.conductors)
+    assert len(pour.fills) == 1
+    fill = pour.fills[0]
+    assert fill.id == "allegro:990000102:fill"
+    assert isinstance(fill.data, PcbPolygon)
+    assert fill.data.holes == [[(25.0, -25.0), (75.0, -25.0), (75.0, -75.0), (25.0, -75.0)]]
+    assert pour.settings.fill_mode is PcbPourFillMode.SOLID
     assert pour.metadata.properties["native_first_keepout_key"] == "990000200"
-    assert int(board.metadata.properties["parse_diagnostic_count"]) > int(
-        build_allegro_board(source, name=LAUNCHXL_BOARD.stem).metadata.properties[
-            "parse_diagnostic_count"
-        ]
-    )
 
 
 def test_allegro_dynamic_shape_degradation_is_metadata_and_diagnostic() -> None:

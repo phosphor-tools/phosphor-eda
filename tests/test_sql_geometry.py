@@ -27,6 +27,7 @@ from phosphor_eda.geometry.pcb_geometry import (
     board_outline_polygon,
     pad_polygon,
     polygon_geometry,
+    polygon_shape_geometry,
     segment_geometry,
     trace_arc_geometry,
     via_geometry,
@@ -107,6 +108,20 @@ def test_polygon_with_holes() -> None:
 
     assert not geom.is_empty
     assert geom.area == pytest.approx(96.0, abs=0.01)
+
+
+def test_unfilled_polygon_shape_geometry_uses_outline_corridor() -> None:
+    poly = PcbPolygon(
+        points=[(0, 0), (10, 0), (10, 10), (0, 10)],
+        width=1.0,
+        fill=False,
+    )
+
+    geom = polygon_shape_geometry(poly)
+
+    assert not geom.is_empty
+    assert geom.area < polygon_geometry(poly).area
+    assert 34.0 <= geom.area <= 46.0
 
 
 def test_polygon_degenerate_returns_empty() -> None:

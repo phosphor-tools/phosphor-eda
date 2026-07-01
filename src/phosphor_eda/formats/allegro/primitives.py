@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.pcb import (
     PcbArc,
+    PcbCircle,
     PcbConductorKind,
     PcbLayer,
     PcbLine,
@@ -31,12 +32,13 @@ class AllegroPrimitiveRole(StrEnum):
 class AllegroPrimitiveKind(StrEnum):
     LINE = "line"
     ARC = "arc"
+    CIRCLE = "circle"
     RECTANGLE = "rectangle"
     POLYGON = "polygon"
     TEXT = "text"
 
 
-type AllegroPrimitivePayload = PcbLine | PcbArc | PcbPolygon | PcbText
+type AllegroPrimitivePayload = PcbLine | PcbArc | PcbCircle | PcbPolygon | PcbText
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -68,7 +70,7 @@ class AllegroGraphics:
 class AllegroConductorPrimitive:
     id: str
     kind: PcbConductorKind
-    data: PcbLine | PcbArc | PcbPolygon
+    data: PcbLine | PcbArc | PcbCircle | PcbPolygon
     layer: PcbLayer
     net_key: int | None = None
     footprint_key: int | None = None

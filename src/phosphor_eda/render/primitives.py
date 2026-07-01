@@ -318,7 +318,7 @@ def _filled(d: str, style: Mapping[str, str] | None = None) -> _ShapeRender:
     return _ShapeRender(d=d, style=style or {})
 
 
-def _stroked(d: str, width: float) -> _ShapeRender:
+def _stroked(d: str, width: float | None) -> _ShapeRender:
     return _ShapeRender(
         d=d,
         paint=PaintMode.STROKE,
@@ -413,22 +413,27 @@ def _shape_render_for_payload(payload: object, *, filled: bool = True) -> _Shape
     """
     if isinstance(payload, PcbLine):
         width = max(payload.width, 0.0)
-        if filled and width > 0.0:
-            return _stroked(_line_path_d(payload), width)
+        if filled:
+            return _stroked(_line_path_d(payload), width if width > 0.0 else None)
         return _filled(_line_path_d(payload))
     if isinstance(payload, PcbArc):
         width = max(payload.width, 0.0)
-        if filled and width > 0.0:
-            return _stroked(_arc_path_d(payload), width)
+        if filled:
+            return _stroked(_arc_path_d(payload), width if width > 0.0 else None)
         return _filled(_arc_path_d(payload))
     if isinstance(payload, PcbCircle):
-        if payload.fill or filled:
+        if payload.fill:
             return _filled(circle_path_d(payload.cx, payload.cy, payload.radius))
-        outer = circle_path_d(payload.cx, payload.cy, payload.radius)
-        inner_radius = max(payload.radius - payload.width, 0.0)
-        inner = circle_path_d(payload.cx, payload.cy, inner_radius)
-        return _filled(f"{outer} {inner}")
+        if filled:
+            width = max(payload.width, 0.0)
+            return _stroked(
+                circle_path_d(payload.cx, payload.cy, payload.radius),
+                width if width > 0.0 else None,
+            )
+        return _filled(circle_path_d(payload.cx, payload.cy, payload.radius))
     if isinstance(payload, PcbPolygon):
+        if filled and not payload.fill:
+            return _stroked(geometry_to_svg_path_d(polygon_geometry(payload)), payload.width)
         return _filled(geometry_to_svg_path_d(polygon_geometry(payload)))
     if isinstance(payload, PcbText):
         return _text_render_for_payload(payload, mirrored=False)

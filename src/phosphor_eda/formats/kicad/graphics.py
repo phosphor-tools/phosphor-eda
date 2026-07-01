@@ -115,7 +115,7 @@ def graphic_payload(
             pcb_common.maybe_transform(point, transform)
             for point in ((sx, sy), (ex, sy), (ex, ey), (sx, ey))
         ]
-        return PcbPolygon(points)
+        return PcbPolygon(points, width=stroke_width(item), fill=fill_flag(item))
     if tag.endswith("_poly") or tag == "gr_poly":
         pts_node = sexp.find(item, "pts")
         if not pts_node:
@@ -124,7 +124,9 @@ def graphic_payload(
             pcb_common.maybe_transform(pcb_common.xy(xy_node), transform)
             for xy_node in sexp.find_all(pts_node, "xy")
         ]
-        return PcbPolygon(points) if points else None
+        return (
+            PcbPolygon(points, width=stroke_width(item), fill=fill_flag(item)) if points else None
+        )
     return None
 
 

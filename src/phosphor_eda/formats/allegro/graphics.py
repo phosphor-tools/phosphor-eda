@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from phosphor_eda.domain.pcb import (
     LayerRole,
     PcbArc,
+    PcbCircle,
     PcbConductorKind,
     PcbLine,
     PcbObjectMetadata,
@@ -28,6 +29,9 @@ from phosphor_eda.formats.allegro.primitives import (
 )
 from phosphor_eda.formats.allegro.records import AllegroRecordDiagnostic
 
+_FALLBACK_TEXT_FONT_SIZE_MM = 1.0
+_DEFAULT_RECTANGLE_STROKE_WIDTH_MM = 0.12
+
 if TYPE_CHECKING:
     from phosphor_eda.domain.pcb import PcbLayer
     from phosphor_eda.formats.allegro.graph import AllegroObjectGraph
@@ -37,6 +41,20 @@ if TYPE_CHECKING:
 _CLASS_BOARD_GEOMETRY = 0x01
 _CLASS_ETCH = 0x06
 _OUTLINE_SUBCLASSES = {0xEA, 0xFD}
+_OUTLINE_RECTANGLE_ROLES = {
+    LayerRole.SILKSCREEN,
+    LayerRole.FABRICATION,
+    LayerRole.ASSEMBLY,
+    LayerRole.COURTYARD,
+    LayerRole.DESIGNATOR,
+    LayerRole.VALUE,
+    LayerRole.USER,
+    LayerRole.MECHANICAL,
+    LayerRole.DIMENSION,
+    LayerRole.EDGE,
+    LayerRole.BOARD,
+    LayerRole.BOARD_SHAPE,
+}
 
 
 @dataclass(frozen=True)
@@ -207,9 +225,17 @@ def _shape_pours_and_fills(
 ) -> tuple[tuple[AllegroPourPrimitive, ...], tuple[AllegroConductorPrimitive, ...]]:
     pours: list[AllegroPourPrimitive] = []
     fills: list[AllegroConductorPrimitive] = []
-    for item in net_items:
-        shape = item.item
-        if shape.tag != 0x28:
+    assigned_shapes = {
+        item.item.key: item
+        for item in net_items
+        if item.item.tag == 0x28 and item.item.key is not None
+    }
+    for shape in (record for record in record_set.records if record.tag == 0x28):
+        item = assigned_shapes.get(shape.key) if shape.key is not None else None
+        if item is None and _payload_int(shape, "first_keepout_key") == 0:
+            # Unassigned, unvoided copper shapes commonly include package-symbol
+            # pad geometry in local footprint coordinates. Keep them out of the
+            # board-level copper model until native ownership is known.
             continue
         layer = _copper_layer(shape, layer_map, diagnostics, require_etch=True)
         if layer is None:
@@ -225,12 +251,21 @@ def _shape_pours_and_fills(
         )
         if polygon is None:
             continue
+        holes = _shape_void_holes(
+            shape,
+            graph=graph,
+            header=record_set.header,
+            layer=layer,
+            diagnostics=diagnostics,
+        )
+        fill_polygon = PcbPolygon(points=polygon.points, holes=holes)
         pour_id = f"allegro:{shape.key}:pour"
         metadata = _shape_fill_metadata(
             shape,
             layer=layer,
-            assignment_key=item.assignment.key,
-            net_key=item.net_key,
+            assignment_key=None if item is None else item.assignment.key,
+            net_key=None if item is None else item.net_key,
+            void_hole_count=len(holes),
         )
         dynamic_shape_flags = _payload_int(shape, "dynamic_shape_flags")
         if dynamic_shape_flags & 0x1000:
@@ -250,12 +285,12 @@ def _shape_pours_and_fills(
                 id=pour_id,
                 boundary=polygon,
                 layer=layer,
-                net_key=item.net_key,
+                net_key=None if item is None else item.net_key,
                 metadata=replace(metadata, native_type="copper_shape_pour"),
             )
         )
         first_keepout_key = _payload_int(shape, "first_keepout_key")
-        if first_keepout_key:
+        if first_keepout_key and not holes:
             diagnostics.append(
                 _drop_diagnostic(
                     shape,
@@ -272,14 +307,81 @@ def _shape_pours_and_fills(
             AllegroConductorPrimitive(
                 id=f"allegro:{shape.key}:fill",
                 kind=PcbConductorKind.POUR_FILL,
-                data=polygon,
+                data=fill_polygon,
                 layer=layer,
-                net_key=item.net_key,
+                net_key=None if item is None else item.net_key,
                 pour_id=pour_id,
                 metadata=metadata,
             )
         )
     return tuple(pours), tuple(fills)
+
+
+def _shape_void_holes(
+    shape: AllegroRecord,
+    *,
+    graph: AllegroObjectGraph,
+    header: AllegroHeader | None,
+    layer: PcbLayer,
+    diagnostics: list[AllegroRecordDiagnostic],
+) -> list[list[tuple[float, float]]]:
+    holes: list[list[tuple[float, float]]] = []
+    first_keepout_key = _payload_int(shape, "first_keepout_key")
+    if first_keepout_key == 0:
+        return holes
+    current_key = first_keepout_key
+    seen: set[int] = set()
+    while current_key != 0:
+        if current_key in seen:
+            diagnostics.append(
+                _drop_diagnostic(
+                    shape,
+                    code="shape-void-chain-cycle",
+                    message=f"shape record {shape.key} void chain cycles at {current_key}",
+                    reference_key=current_key,
+                )
+            )
+            break
+        seen.add(current_key)
+        void = graph.by_key.get(current_key)
+        if void is None:
+            diagnostics.append(
+                _drop_diagnostic(
+                    shape,
+                    code="unresolved-shape-void",
+                    message=f"shape record {shape.key} references missing void {current_key}",
+                    reference_key=current_key,
+                )
+            )
+            break
+        if void.tag != 0x34:
+            diagnostics.append(
+                _drop_diagnostic(
+                    shape,
+                    code="invalid-shape-void-record",
+                    message=(
+                        f"shape record {shape.key} void chain reached "
+                        f"0x{void.tag:02X} record {void.key}"
+                    ),
+                    reference_key=void.key,
+                )
+            )
+            break
+        polygon = _polygon_from_segment_chain(
+            void,
+            graph=graph,
+            header=header,
+            layer=layer,
+            head_key=_payload_int(void, "first_segment_key"),
+            diagnostics=diagnostics,
+            diagnostic_prefix="shape-void",
+        )
+        if polygon is not None:
+            holes.append(polygon.points)
+        next_void_key = void.next_key or 0
+        next_void = graph.by_key.get(next_void_key)
+        current_key = next_void_key if next_void is not None and next_void.tag == 0x34 else 0
+    return holes
 
 
 def _rectangle_region_conductors(
@@ -421,7 +523,13 @@ def _net_assigned_items(
                         net_key=_payload_int(assignment, "net_key") or net_key,
                     )
                 )
-            current_key = assignment.next_key or 0
+            next_assignment_key = assignment.next_key or 0
+            next_assignment = graph.by_key.get(next_assignment_key)
+            current_key = (
+                next_assignment_key
+                if next_assignment is not None and next_assignment.tag == 0x04
+                else 0
+            )
     return tuple(result)
 
 
@@ -474,11 +582,11 @@ def _graphic_conductor_primitive(
     *,
     footprint_key: int | None,
 ) -> AllegroConductorPrimitive | None:
-    if primitive.layer is None or not isinstance(primitive.data, PcbLine | PcbArc):
+    if primitive.layer is None or not isinstance(primitive.data, PcbLine | PcbArc | PcbCircle):
         return None
     kind = (
         PcbConductorKind.TRACE_ARC
-        if primitive.kind is AllegroPrimitiveKind.ARC
+        if primitive.kind in {AllegroPrimitiveKind.ARC, AllegroPrimitiveKind.CIRCLE}
         else PcbConductorKind.TRACE
     )
     properties = dict(primitive.metadata.properties)
@@ -550,16 +658,25 @@ def _rectangle_primitive(
     top = -_coord_to_mm(max(y0, y1), header)
     bottom = -_coord_to_mm(min(y0, y1), header)
     roles = _roles_for_record(record, layer)
+    fill = not _is_outline_rectangle_layer(layer)
     return AllegroGraphicPrimitive(
         id=f"allegro:{record.key}",
         kind=AllegroPrimitiveKind.RECTANGLE,
         roles=roles,
-        data=PcbPolygon(points=[(left, top), (right, top), (right, bottom), (left, bottom)]),
+        data=PcbPolygon(
+            points=[(left, top), (right, top), (right, bottom), (left, bottom)],
+            width=0.0 if fill else _DEFAULT_RECTANGLE_STROKE_WIDTH_MM,
+            fill=fill,
+        ),
         layer=layer,
         source_tag=record.tag,
         source_key=record.key or 0,
         metadata=_metadata(record, layer),
     )
+
+
+def _is_outline_rectangle_layer(layer: PcbLayer) -> bool:
+    return any(layer.has_role(role) for role in _OUTLINE_RECTANGLE_ROLES)
 
 
 def _keepout_primitive(
@@ -709,9 +826,7 @@ def _text_primitive(
         _drop_diagnostic(
             record,
             code="unresolved-text-size",
-            message=(
-                f"text wrapper {record.key} preserves text content but has unresolved native size"
-            ),
+            message=(f"text wrapper {record.key} preserves text content with fallback native size"),
             reference_key=text_key,
         )
     )
@@ -724,7 +839,7 @@ def _text_primitive(
             x=_coord_to_mm(_payload_int(record, "x"), header),
             y=-_coord_to_mm(_payload_int(record, "y"), header),
             rotation=_payload_int(record, "rotation_mdeg") / 1000.0,
-            font_size=0.0,
+            font_size=_FALLBACK_TEXT_FONT_SIZE_MM,
         ),
         layer=layer,
         source_tag=record.tag,
@@ -807,6 +922,23 @@ def _line_or_arc_primitive(
             metadata=_metadata(owner, layer),
         )
     if record.tag == 0x01:
+        if _is_full_circle_arc(record):
+            return AllegroGraphicPrimitive(
+                id=f"allegro:{record.key}",
+                kind=AllegroPrimitiveKind.CIRCLE,
+                roles=roles,
+                data=PcbCircle(
+                    cx=_coord_to_mm(_payload_float(record, "center_x"), header),
+                    cy=-_coord_to_mm(_payload_float(record, "center_y"), header),
+                    radius=_coord_to_mm(_payload_float(record, "radius"), header),
+                    width=_coord_to_mm(_payload_int(record, "width"), header),
+                    fill=False,
+                ),
+                layer=layer,
+                source_tag=record.tag,
+                source_key=record.key or 0,
+                metadata=_metadata(owner, layer),
+            )
         mid_x, mid_y = _arc_midpoint(record, header)
         return AllegroGraphicPrimitive(
             id=f"allegro:{record.key}",
@@ -827,6 +959,14 @@ def _line_or_arc_primitive(
             metadata=_metadata(owner, layer),
         )
     return None
+
+
+def _is_full_circle_arc(record: AllegroRecord) -> bool:
+    return (
+        _payload_int(record, "start_x") == _payload_int(record, "end_x")
+        and _payload_int(record, "start_y") == _payload_int(record, "end_y")
+        and _payload_float(record, "radius") > 0.0
+    )
 
 
 def _arc_midpoint(record: AllegroRecord, header: AllegroHeader) -> tuple[float, float]:
@@ -958,15 +1098,18 @@ def _shape_fill_metadata(
     *,
     layer: PcbLayer,
     assignment_key: int | None,
-    net_key: int,
+    net_key: int | None,
+    void_hole_count: int,
 ) -> PcbObjectMetadata:
     metadata = _metadata(record, layer)
     properties = dict(metadata.properties)
     properties["native_assignment_key"] = str(assignment_key or "")
-    properties["native_net_key"] = str(net_key)
+    properties["native_net_key"] = "" if net_key is None else str(net_key)
     first_keepout_key = _payload_int(record, "first_keepout_key")
     if first_keepout_key:
         properties["native_first_keepout_key"] = str(first_keepout_key)
+    if void_hole_count:
+        properties["native_void_hole_count"] = str(void_hole_count)
     dynamic_shape_flags = _payload_int(record, "dynamic_shape_flags")
     if dynamic_shape_flags:
         properties["native_dynamic_shape_flags"] = str(dynamic_shape_flags)
