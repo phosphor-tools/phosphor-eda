@@ -93,7 +93,17 @@ def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None =
     _merge_hierarchy(source, local_refs, local_net_by_id, net_union, effective_mode, ctx)
 
     component_source_ids_by_component_id = _component_source_ids_by_component_id(pin_occurrences)
-    members_by_local_net = _net_members_by_local_net(pin_occurrences)
+    symbol_uid_by_id = {
+        symbol.id: symbol.unique_id
+        for sheet in source.sheets.values()
+        for symbol in sheet.sheet_symbols
+        if symbol.unique_id
+    }
+    members_by_local_net = _net_members_by_local_net(
+        pin_occurrences,
+        source.physical_designators,
+        symbol_uid_by_id,
+    )
 
     metadata = {
         "altium_hierarchy_mode": source.project.hierarchy_mode.name,
@@ -101,13 +111,6 @@ def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None =
     }
     if ctx is not None and ctx.issues:
         metadata["parse_issue_count"] = str(len(ctx.issues))
-
-    symbol_uid_by_id = {
-        symbol.id: symbol.unique_id
-        for sheet in source.sheets.values()
-        for symbol in sheet.sheet_symbols
-        if symbol.unique_id
-    }
 
     design = build_resolved_schematic(
         name=source.name,
@@ -1040,14 +1043,28 @@ def _autoname_candidate(
 
 def _net_members_by_local_net(
     pin_occurrences: Iterable[AltiumPinOccurrence],
+    physical_designators: dict[str, AnnotationDesignator],
+    symbol_uid_by_id: dict[str, str],
 ) -> dict[str, list[tuple[str, str]]]:
-    """Map local net id to its member ``(designator, pin)`` pairs."""
+    """Map local net id to its member ``(designator, pin)`` pairs.
+
+    The per-instance **physical** designator is used when the ``.Annotation``
+    file resolves one (falling back to the logical reference), so auto-net names
+    reflect the physical board. Without this, two instances of a repeated sheet
+    both name a net after the shared logical designator (e.g. both ``NetU1_4``);
+    the physical designators (``U1.1``, ``U1.2``, …) keep them distinct, as
+    Altium's own compiled auto-net names do.
+    """
     result: dict[str, list[tuple[str, str]]] = {}
     for pin_occurrence in pin_occurrences:
         if not pin_occurrence.local_net_id:
             continue
+        designator = (
+            _physical_designator(pin_occurrence, physical_designators, symbol_uid_by_id)
+            or pin_occurrence.component_reference
+        )
         result.setdefault(pin_occurrence.local_net_id, []).append(
-            (pin_occurrence.component_reference, pin_occurrence.pin_designator)
+            (designator, pin_occurrence.pin_designator)
         )
     return result
 

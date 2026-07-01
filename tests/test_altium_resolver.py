@@ -1318,3 +1318,53 @@ def test_bus_range_harness_members_unify_with_underscore_labels():
     assert _refs(rxd0[0]) == {"UA", "UB"}
     assert len(rxd1) == 1, f"RMII_RXD1 should be one net, got {len(rxd1)}"
     assert _refs(rxd1[0]) == {"UA", "UB"}
+
+
+def test_autoname_uses_physical_designator_to_disambiguate_instances():
+    """Auto-net names use per-instance physical designators, not logical ones.
+
+    Regression: two instances of a repeated sheet share the logical designator
+    (``U1``), so their unnamed nets both auto-named to ``NetU1_4``. The
+    ``.Annotation`` physical designators (``U1.1``, ``U1.2``) keep them distinct;
+    without annotation the logical fallback still applies.
+    """
+    from phosphor_eda.formats.altium.resolver import (
+        _autoname_candidate,
+        _net_members_by_local_net,
+    )
+
+    def _occurrence(local_net_id: str, symbol: str, index: int) -> AltiumPinOccurrence:
+        return AltiumPinOccurrence(
+            id=f"pin:{index}",
+            scope_id=ScopeId(path=(symbol,)),
+            source_index=index,
+            local_net_id=local_net_id,
+            component_source_id="component",
+            component_reference="U1",
+            pin_designator="4",
+            pin_name="U1-4",
+            location=(0, 0),
+            tip=(0, 1),
+            component_metadata={"altium_component_unique_id": "CUID"},
+        )
+
+    occurrences = [_occurrence("A", "SYM1", 1), _occurrence("B", "SYM2", 2)]
+    symbol_uid_by_id = {"SYM1": "SUID1", "SYM2": "SUID2"}
+    physical = {
+        "\\SUID1\\CUID": AnnotationDesignator(physical_designator="U1.1", logical_designator="U1"),
+        "\\SUID2\\CUID": AnnotationDesignator(physical_designator="U1.2", logical_designator="U1"),
+    }
+
+    members = _net_members_by_local_net(occurrences, physical, symbol_uid_by_id)
+    name_a = _autoname_candidate(members["A"], 1).name
+    name_b = _autoname_candidate(members["B"], 2).name
+    assert name_a == "NetU1.1_4"
+    assert name_b == "NetU1.2_4"
+
+    # No annotation → both fall back to the logical designator and collide.
+    bare = _net_members_by_local_net(occurrences, {}, {})
+    assert (
+        _autoname_candidate(bare["A"], 1).name
+        == _autoname_candidate(bare["B"], 2).name
+        == "NetU1_4"
+    )
