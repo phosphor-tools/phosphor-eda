@@ -13,7 +13,7 @@ from phosphor_eda.query.variants import variant_counts
 
 if TYPE_CHECKING:
     from phosphor_eda.domain.pcb import Board
-    from phosphor_eda.domain.project import Project, ProjectDocument
+    from phosphor_eda.domain.project import Project, ProjectDocument, Stackup, StackupLayer
     from phosphor_eda.domain.schematic import Bus, Component, Page, Schematic, TitleBlock
 
 
@@ -44,6 +44,9 @@ def format_project_overview(project: Project) -> str:
 
     if project.boards:
         sections.append(_boards_section(project.boards))
+        stackup_section = _stackup_section(project.boards)
+        if stackup_section:
+            sections.append(stackup_section)
 
     if project.schematic is not None:
         sections.extend(
@@ -213,7 +216,7 @@ def _boards_section(boards: list[Board]) -> str:
         (
             board.name,
             Path(board.source_path).name if board.source_path else "",
-            f"{len(board.layers)} total, {len(board.layers_by_role('copper'))} copper",
+            _board_stackup_summary(board),
             str(len(board.footprints)),
             str(len(board.pads)),
             str(len(board.vias)),
@@ -227,12 +230,115 @@ def _boards_section(boards: list[Board]) -> str:
             *[
                 f"  {line}"
                 for line in tabulate(
-                    ("NAME", "SOURCE FILE", "LAYERS", "FOOTPRINTS", "PADS", "VIAS", "NETS"),
+                    ("NAME", "SOURCE FILE", "STACKUP", "FOOTPRINTS", "PADS", "VIAS", "NETS"),
                     rows,
                 ).splitlines()
             ],
         ]
     )
+
+
+def _board_stackup_summary(board: Board) -> str:
+    stackup = board.stackup
+    if stackup is None or not stackup.layers:
+        return "No stackup metadata"
+
+    copper_count = _stackup_layer_count(stackup, "copper")
+    mask_count = _stackup_layer_count(stackup, "solder_mask")
+    parts = [f"{copper_count} copper", f"{mask_count} solder mask"]
+    thickness = _stackup_total_thickness_mm(stackup)
+    if thickness > 0:
+        parts.append(_format_mm(thickness))
+    if stackup.copper_finish:
+        parts.append(stackup.copper_finish)
+    return ", ".join(parts)
+
+
+def _stackup_section(boards: list[Board]) -> str:
+    lines = ["Stackup"]
+    found = False
+
+    for board in boards:
+        stackup = board.stackup
+        if stackup is None or not stackup.layers:
+            continue
+
+        found = True
+        lines.append(f"  {board.name}: {_stackup_detail_summary(stackup)}")
+        rows = [_stackup_layer_row(layer) for layer in stackup.layers]
+        lines.extend(f"  {line}" for line in tabulate(_STACKUP_HEADERS, rows).splitlines())
+
+    if not found:
+        return ""
+    return "\n".join(lines)
+
+
+_STACKUP_HEADERS = (
+    "LAYER",
+    "TYPE",
+    "THICKNESS",
+    "MATERIAL",
+    "ER",
+    "LOSS",
+    "CU_OZ",
+    "ORIENT",
+)
+
+
+def _stackup_detail_summary(stackup: Stackup) -> str:
+    copper_count = _stackup_layer_count(stackup, "copper")
+    layer_count = len(stackup.layers)
+    parts = [
+        f"{copper_count} copper layers",
+        f"{layer_count} physical layers",
+    ]
+    thickness = _stackup_total_thickness_mm(stackup)
+    if thickness > 0:
+        parts.append(f"{_format_mm(thickness)} total")
+    if stackup.copper_finish:
+        parts.append(f"finish {stackup.copper_finish}")
+    return ", ".join(parts)
+
+
+def _stackup_layer_row(layer: StackupLayer) -> tuple[str, ...]:
+    return (
+        layer.name,
+        layer.layer_type,
+        _format_mm(layer.thickness_mm),
+        layer.material,
+        _format_number(layer.epsilon_r),
+        _format_number(layer.loss_tangent),
+        _format_copper_weight(layer.copper_weight_oz),
+        layer.copper_orientation,
+    )
+
+
+def _stackup_layer_count(stackup: Stackup, layer_type: str) -> int:
+    return sum(1 for layer in stackup.layers if layer.layer_type == layer_type)
+
+
+def _stackup_total_thickness_mm(stackup: Stackup) -> float:
+    if stackup.total_thickness_mm > 0:
+        return stackup.total_thickness_mm
+    return sum(layer.thickness_mm for layer in stackup.layers)
+
+
+def _format_mm(value: float) -> str:
+    if value <= 0:
+        return ""
+    return f"{value:.3f} mm"
+
+
+def _format_number(value: float) -> str:
+    if value <= 0:
+        return ""
+    return f"{value:g}"
+
+
+def _format_copper_weight(value: float) -> str:
+    if value <= 0:
+        return ""
+    return f"{value:.1f}"
 
 
 def _important_components_section(schematic: Schematic) -> str:
