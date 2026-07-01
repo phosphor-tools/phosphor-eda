@@ -7,6 +7,7 @@ from phosphor_eda.formats.altium.annotation import AnnotationDesignator
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode, AltiumProject
 from phosphor_eda.formats.altium.resolver import resolve_altium_source
 from phosphor_eda.formats.altium.source import (
+    AltiumHarnessMember,
     AltiumLocalNet,
     AltiumNetLabel,
     AltiumPinOccurrence,
@@ -1046,3 +1047,135 @@ def test_unannotated_occurrence_has_empty_physical_designator():
     for component in design.components:
         for occurrence in component.occurrences:
             assert occurrence.physical_designator == ""
+
+
+def _harness_entry(
+    sheet: str,
+    name: str,
+    sheet_symbol_id: str,
+    index: int = 1,
+) -> AltiumSheetEntry:
+    return AltiumSheetEntry(
+        id=f"{sheet}:hentry:{index}",
+        scope_id=_scope(sheet),
+        source_index=index,
+        sheet_symbol_id=sheet_symbol_id,
+        name=name,
+        coord=(index, 40),
+        side=0,
+        distance_from_top=0,
+        harness_type=name,
+        io_type=0,
+    )
+
+
+def _harness_member(sheet: str, port: str, name: str, index: int = 1) -> AltiumHarnessMember:
+    return AltiumHarnessMember(
+        id=f"{sheet}:hmember:{index}",
+        scope_id=_scope(sheet),
+        source_index=index,
+        connector_id=f"{sheet}:hconnector:1",
+        port_name=port,
+        name=name,
+        coord=(index, 70),
+        side=0,
+        distance_from_top=0,
+    )
+
+
+def test_qualified_harness_member_labels_unify_across_hierarchy():
+    """``Port.Signal`` member labels unify across a signal harness.
+
+    Regression: the harness merge keyed only off bare connector-entry names, so
+    a member labelled in Altium's qualified ``Harness.Signal`` form (e.g.
+    ``RMII.RXD0``) never matched its peer on the far side of the harness and
+    split into two identically-named nets. Two conventions must both resolve:
+
+    - ``RMII.RXD0`` — a qualified label on *both* child sheets, with no
+      scalar connector entry tying them together.
+    - ``RMII.CLK_50MHZ`` — a bare connector member (``CLK_50MHZ``) on one child
+      and a qualified label on the other.
+    """
+    symbol_mcu = _symbol("Top", "Mcu.SchDoc", index=1)
+    symbol_phy = _symbol("Top", "Phy.SchDoc", index=2)
+    entry_mcu = _harness_entry("Top", "RMII", symbol_mcu.id, index=1)
+    entry_phy = _harness_entry("Top", "RMII", symbol_phy.id, index=2)
+    # Signal-harness wire on the parent joining both sheet symbols' RMII entries.
+    conduit = AltiumLocalNet(
+        id="Top:local:conduit",
+        scope_id=_scope("Top"),
+        wire_points=set(),
+        pin_ids=[],
+        net_labels=[],
+        power_ports=[],
+        ports=[],
+        sheet_entries=[entry_mcu, entry_phy],
+        harness_members=[],
+        generated_name="__auto_Top_conduit",
+    )
+    top = _sheet(
+        "Top",
+        [conduit],
+        [],
+        sheet_symbols=[symbol_mcu, symbol_phy],
+        sheet_entries=[entry_mcu, entry_phy],
+    )
+
+    mcu_rxd0, mcu_rxd0_pins = _local_net(
+        "Mcu",
+        "rxd0",
+        labels=[_label("Mcu", "RMII.RXD0")],
+        references=["U_MCU"],
+        pin_designators=["1"],
+    )
+    mcu_clk, mcu_clk_pins = _local_net(
+        "Mcu",
+        "clk",
+        references=["U_MCU"],
+        pin_designators=["2"],
+    )
+    mcu_clk.harness_members = [_harness_member("Mcu", "RMII", "CLK_50MHZ")]
+    mcu = _sheet(
+        "Mcu",
+        [mcu_rxd0, mcu_clk],
+        [*mcu_rxd0_pins, *mcu_clk_pins],
+        source_file="Mcu.SchDoc",
+    )
+
+    phy_rxd0, phy_rxd0_pins = _local_net(
+        "Phy",
+        "rxd0",
+        labels=[_label("Phy", "RMII.RXD0")],
+        references=["U_PHY"],
+        pin_designators=["30"],
+    )
+    phy_clk, phy_clk_pins = _local_net(
+        "Phy",
+        "clk",
+        labels=[_label("Phy", "RMII.CLK_50MHZ")],
+        references=["U_PHY"],
+        pin_designators=["23"],
+    )
+    phy = _sheet(
+        "Phy",
+        [phy_rxd0, phy_clk],
+        [*phy_rxd0_pins, *phy_clk_pins],
+        source_file="Phy.SchDoc",
+    )
+
+    design = resolve_altium_source(
+        _source(
+            [top, mcu, phy],
+            mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
+            allow_sheet_entry_net_names=False,
+            root_sheet_name="Top",
+        ),
+    )
+
+    rxd0 = [net for net in design.nets if net.name == "RMII.RXD0"]
+    assert len(rxd0) == 1, f"RMII.RXD0 should be one net, got {len(rxd0)}"
+    assert _refs(rxd0[0]) == {"U_MCU", "U_PHY"}
+
+    clk = [net for net in design.nets if net.name == "RMII.CLK_50MHZ"]
+    assert len(clk) == 1, f"RMII.CLK_50MHZ should be one net, got {len(clk)}"
+    assert _refs(clk[0]) == {"U_MCU", "U_PHY"}

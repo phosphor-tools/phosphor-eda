@@ -428,12 +428,14 @@ def _merge_harness_members(
     """
     members_by_interface: dict[tuple[str, str], dict[str, list[str]]] = {}
     label_ids_by_sheet_and_name: dict[tuple[str, str], list[str]] = {}
+    labels_by_sheet: dict[str, list[tuple[str, str]]] = {}
     for sheet in source.sheets.values():
         for local_net in sheet.local_nets:
             for label_name in _label_names(local_net):
                 label_ids_by_sheet_and_name.setdefault((sheet.id, label_name), []).append(
                     local_net.id
                 )
+                labels_by_sheet.setdefault(sheet.id, []).append((label_name, local_net.id))
             for member in local_net.harness_members:
                 port_name = _clean_name(member.port_name)
                 member_name = _clean_name(member.name)
@@ -494,8 +496,23 @@ def _merge_harness_members(
     for bundle in bundles.values():
         nets_by_member: dict[str, list[str]] = {}
         for interface in bundle:
+            _sheet_id, port_name = interface
+            # A member may be labelled either bare (``RXD0``, matched by the
+            # connector entry name) or qualified as Altium's ``Harness.Signal``
+            # form (``RMII.RXD0``). Key connector members under both spellings
+            # so each finds its same-convention peer labels below. Bus-range
+            # entry names (``RXD[1..0]``) are left unexpanded on purpose: the
+            # single pin-less conduit stub must not union into both ``RXD0`` and
+            # ``RXD1`` — the per-bit qualified labels carry that connectivity.
             for member_name, net_ids in members_by_interface.get(interface, {}).items():
                 nets_by_member.setdefault(member_name, []).extend(net_ids)
+                nets_by_member.setdefault(f"{port_name}.{member_name}", []).extend(net_ids)
+            # Seed groups from qualified member labels so member nets identified
+            # only by a ``Port.Signal`` label (no connector entry) still unify.
+            qualified_prefix = f"{port_name}."
+            for label_name, net_id in labels_by_sheet.get(_sheet_id, ()):
+                if label_name.startswith(qualified_prefix):
+                    nets_by_member.setdefault(label_name, []).append(net_id)
         for interface in bundle:
             sheet_id, _port_name = interface
             for member_name in tuple(nets_by_member):
@@ -503,8 +520,9 @@ def _merge_harness_members(
                     label_ids_by_sheet_and_name.get((sheet_id, member_name), [])
                 )
         for net_ids in nets_by_member.values():
-            for net_id in net_ids[1:]:
-                _ = net_union.union(net_ids[0], net_id)
+            deduped = list(dict.fromkeys(net_ids))
+            for net_id in deduped[1:]:
+                _ = net_union.union(deduped[0], net_id)
 
 
 def _known_source_files(source: AltiumSourceDesign) -> list[str]:
