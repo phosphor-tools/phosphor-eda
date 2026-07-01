@@ -93,7 +93,19 @@ def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None =
     _merge_hierarchy(source, local_refs, local_net_by_id, net_union, effective_mode, ctx)
 
     component_source_ids_by_component_id = _component_source_ids_by_component_id(pin_occurrences)
-    members_by_local_net = _net_members_by_local_net(pin_occurrences)
+    symbol_uid_by_id = {
+        symbol.id: symbol.unique_id
+        for sheet in source.sheets.values()
+        for symbol in sheet.sheet_symbols
+        if symbol.unique_id
+    }
+    scope_root_ancestor_uids = _scope_root_ancestor_uids(source, ctx)
+    members_by_local_net = _net_members_by_local_net(
+        pin_occurrences,
+        source.physical_designators,
+        symbol_uid_by_id,
+        scope_root_ancestor_uids,
+    )
 
     metadata = {
         "altium_hierarchy_mode": source.project.hierarchy_mode.name,
@@ -101,13 +113,6 @@ def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None =
     }
     if ctx is not None and ctx.issues:
         metadata["parse_issue_count"] = str(len(ctx.issues))
-
-    symbol_uid_by_id = {
-        symbol.id: symbol.unique_id
-        for sheet in source.sheets.values()
-        for symbol in sheet.sheet_symbols
-        if symbol.unique_id
-    }
 
     design = build_resolved_schematic(
         name=source.name,
@@ -118,6 +123,7 @@ def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None =
             component_source_ids_by_component_id,
             source.physical_designators,
             symbol_uid_by_id,
+            scope_root_ancestor_uids,
         ),
         net_union=net_union,
         net_factory=lambda net_index, root_id, group_local_nets: _altium_net_input_for_group(
@@ -344,23 +350,17 @@ def _merge_hierarchy(
     known_source_files = _known_source_files(source)
     child_sheets_by_file = _child_sheets_by_source_file(source)
     repeated_child_files = _repeated_child_source_files(source, known_source_files, ctx)
+    symbol_by_id = _sheet_symbols_by_id(source)
     child_interface_nets = _child_interface_net_ids(source, source.project)
-    bus_member_net_ids: dict[tuple[str, str, str], list[str]] = {}
     for ref in local_refs:
         referencing_dir = _parent_dir(_source_file_key(ref.sheet.source_file))
         for entry in ref.local_net.sheet_entries:
+            # Bus (vector) entries are resolved member-by-member in
+            # ``_merge_bus_members``; only scalar sheet-entry names union here.
             entry_name = _mergeable_name(entry.name)
-            entry_members = _mergeable_bus_member_names(entry.name)
-            if entry_name is None and not entry_members:
+            if entry_name is None:
                 continue
-            sheet_symbol = next(
-                (
-                    symbol
-                    for symbol in ref.sheet.sheet_symbols
-                    if symbol.id == entry.sheet_symbol_id
-                ),
-                None,
-            )
+            sheet_symbol = symbol_by_id.get(entry.sheet_symbol_id)
             if sheet_symbol is None:
                 continue
             child_sheets = _child_sheets_for_symbol(
@@ -372,24 +372,19 @@ def _merge_hierarchy(
                 ctx,
             )
             for child_sheet in child_sheets:
-                if entry_members:
-                    bus_name = _clean_name(entry.name)
-                    for member_name in entry_members:
-                        key = (ref.sheet.id, bus_name, member_name)
-                        bus_member_net_ids.setdefault(key, []).extend(
-                            child_interface_nets.get((child_sheet.id, member_name), [])
-                        )
-                    continue
-                if entry_name is not None:
-                    for child_net_id in child_interface_nets.get((child_sheet.id, entry_name), []):
-                        if child_net_id in local_net_by_id:
-                            _ = net_union.union(ref.local_net.id, child_net_id)
+                for child_net_id in child_interface_nets.get((child_sheet.id, entry_name), []):
+                    if child_net_id in local_net_by_id:
+                        _ = net_union.union(ref.local_net.id, child_net_id)
 
-    for net_ids in bus_member_net_ids.values():
-        mergeable_ids = [net_id for net_id in net_ids if net_id in local_net_by_id]
-        for net_id in mergeable_ids[1:]:
-            _ = net_union.union(mergeable_ids[0], net_id)
-
+    _merge_bus_members(
+        source,
+        net_union,
+        known_source_files,
+        child_sheets_by_file,
+        repeated_child_files,
+        symbol_by_id,
+        ctx,
+    )
     _merge_harness_members(
         source,
         local_refs,
@@ -397,8 +392,88 @@ def _merge_hierarchy(
         known_source_files,
         child_sheets_by_file,
         repeated_child_files,
+        symbol_by_id,
         ctx,
     )
+
+
+def _merge_bus_members(
+    source: AltiumSourceDesign,
+    net_union: NetUnion,
+    known_source_files: list[str],
+    child_sheets_by_file: dict[str, list[AltiumSheetSource]],
+    repeated_child_files: set[str],
+    symbol_by_id: dict[str, AltiumSheetSymbol],
+    ctx: ParseContext | None,
+) -> None:
+    """Merge vector-bus member nets across the sheet hierarchy.
+
+    A vector bus (``NAME[a..b]``) crosses the hierarchy through bus **ports**
+    and matching bus **sheet entries**; its members (``NAME0``, ``NAME1``, …)
+    are individual net labels on each sheet. Bus-notation names are excluded
+    from plain hierarchical port matching (``_mergeable_name`` rejects them), so
+    bus connectivity is resolved structurally, member by member:
+
+    - a bus *interface* is ``(sheet_id, bus_name)`` — every same-named bus port
+      or entry on a sheet is the same bus, so they share one interface;
+    - a bus sheet entry links its owning sheet's interface to the child sheet's
+      interface of the same name, transitively bundling multi-level hierarchies
+      even when the bus segments sit on separate wire-grouped local nets;
+    - within each connected bundle, member nets (matched by their bit label,
+      e.g. ``DIG_OUT1``) union across every sheet in the bundle. The pin-less
+      bus port/entry nets themselves are never unioned.
+    """
+    member_nets = _child_bus_member_net_ids(source)
+    interface_union: UnionFind[tuple[str, str]] = UnionFind()
+    seen_interfaces: set[tuple[str, str]] = set()
+    interface_members: dict[tuple[str, str], tuple[str, ...]] = {}
+
+    def _note(sheet_id: str, bus_name: str, members: tuple[str, ...]) -> tuple[str, str]:
+        interface = (sheet_id, bus_name)
+        seen_interfaces.add(interface)
+        interface_members[interface] = members
+        return interface
+
+    for sheet in source.sheets.values():
+        referencing_dir = _parent_dir(_source_file_key(sheet.source_file))
+        for local_net in sheet.local_nets:
+            for port in local_net.ports:
+                if port.harness_type:
+                    continue
+                members = _mergeable_bus_member_names(port.name)
+                if members:
+                    _note(sheet.id, _clean_name(port.name), tuple(members))
+            for entry in local_net.sheet_entries:
+                if entry.harness_type:
+                    continue
+                members = _mergeable_bus_member_names(entry.name)
+                if not members:
+                    continue
+                bus_name = _clean_name(entry.name)
+                parent_interface = _note(sheet.id, bus_name, tuple(members))
+                sheet_symbol = symbol_by_id.get(entry.sheet_symbol_id)
+                if sheet_symbol is None:
+                    continue
+                for child_sheet in _child_sheets_for_symbol(
+                    child_sheets_by_file,
+                    repeated_child_files,
+                    sheet_symbol,
+                    known_source_files,
+                    referencing_dir,
+                    ctx,
+                ):
+                    child_interface = _note(child_sheet.id, bus_name, tuple(members))
+                    interface_union.union(parent_interface, child_interface)
+
+    for bundle in _bundle_interfaces(seen_interfaces, interface_union):
+        member_names: set[str] = set()
+        for interface in bundle:
+            member_names.update(interface_members.get(interface, ()))
+        for member_name in member_names:
+            net_ids: list[str] = []
+            for sheet_id, _bus_name in bundle:
+                net_ids.extend(member_nets.get((sheet_id, member_name), []))
+            _union_all(net_union, net_ids)
 
 
 def _merge_harness_members(
@@ -408,6 +483,7 @@ def _merge_harness_members(
     known_source_files: list[str],
     child_sheets_by_file: dict[str, list[AltiumSheetSource]],
     repeated_child_files: set[str],
+    symbol_by_id: dict[str, AltiumSheetSymbol],
     ctx: ParseContext | None,
 ) -> None:
     """Merge harness member nets across the sheet hierarchy.
@@ -428,12 +504,14 @@ def _merge_harness_members(
     """
     members_by_interface: dict[tuple[str, str], dict[str, list[str]]] = {}
     label_ids_by_sheet_and_name: dict[tuple[str, str], list[str]] = {}
+    labels_by_sheet: dict[str, list[tuple[str, str]]] = {}
     for sheet in source.sheets.values():
         for local_net in sheet.local_nets:
             for label_name in _label_names(local_net):
                 label_ids_by_sheet_and_name.setdefault((sheet.id, label_name), []).append(
                     local_net.id
                 )
+                labels_by_sheet.setdefault(sheet.id, []).append((label_name, local_net.id))
             for member in local_net.harness_members:
                 port_name = _clean_name(member.port_name)
                 member_name = _clean_name(member.name)
@@ -460,14 +538,7 @@ def _merge_harness_members(
             entry_name = _clean_name(entry.name)
             if not entry_name:
                 continue
-            sheet_symbol = next(
-                (
-                    symbol
-                    for symbol in ref.sheet.sheet_symbols
-                    if symbol.id == entry.sheet_symbol_id
-                ),
-                None,
-            )
+            sheet_symbol = symbol_by_id.get(entry.sheet_symbol_id)
             if sheet_symbol is None:
                 continue
             child_sheets = _child_sheets_for_symbol(
@@ -485,17 +556,8 @@ def _merge_harness_members(
         for interface in interfaces[1:]:
             interface_union.union(interfaces[0], interface)
 
-    bundles: dict[tuple[str, str], list[tuple[str, str]]] = {}
-    # Sorted so bundle (and therefore union-root) order is stable across
-    # processes — set iteration order varies with PYTHONHASHSEED.
-    for interface in sorted(seen_interfaces):
-        bundles.setdefault(interface_union.find(interface), []).append(interface)
-
-    for bundle in bundles.values():
-        nets_by_member: dict[str, list[str]] = {}
-        for interface in bundle:
-            for member_name, net_ids in members_by_interface.get(interface, {}).items():
-                nets_by_member.setdefault(member_name, []).extend(net_ids)
+    for bundle in _bundle_interfaces(seen_interfaces, interface_union):
+        nets_by_member = _seed_harness_member_groups(bundle, members_by_interface, labels_by_sheet)
         for interface in bundle:
             sheet_id, _port_name = interface
             for member_name in tuple(nets_by_member):
@@ -503,8 +565,42 @@ def _merge_harness_members(
                     label_ids_by_sheet_and_name.get((sheet_id, member_name), [])
                 )
         for net_ids in nets_by_member.values():
-            for net_id in net_ids[1:]:
-                _ = net_union.union(net_ids[0], net_id)
+            _union_all(net_union, net_ids)
+
+
+def _seed_harness_member_groups(
+    bundle: list[tuple[str, str]],
+    members_by_interface: dict[tuple[str, str], dict[str, list[str]]],
+    labels_by_sheet: dict[str, list[tuple[str, str]]],
+) -> dict[str, list[str]]:
+    """Seed per-member net-id groups for one harness bundle, keyed by member name.
+
+    A member may be labelled bare (``RXD0``, matching the connector entry name)
+    or qualified as Altium's ``Harness.Signal`` form (``RMII.RXD0``), so each
+    connector member is keyed under both spellings. A bus-range member
+    (``RXD[1..0]``) carries several bits; its single pin-less conduit stub must
+    not union into every bit (that would short them), so only per-bit qualified
+    keys — ``<port>.<bit>`` and ``<port>_<bit>`` (both spellings occur) — are
+    created for the per-bit labels to fill, and the stub net is never mapped.
+    Qualified ``Port.Signal`` labels are seeded directly so members identified
+    only by such a label (no connector entry) still unify.
+    """
+    nets_by_member: dict[str, list[str]] = {}
+    for sheet_id, port_name in bundle:
+        for member_name, net_ids in members_by_interface.get((sheet_id, port_name), {}).items():
+            member_bits = _mergeable_bus_member_names(member_name)
+            if member_bits:
+                for bit in member_bits:
+                    nets_by_member.setdefault(f"{port_name}.{bit}", [])
+                    nets_by_member.setdefault(f"{port_name}_{bit}", [])
+                continue
+            nets_by_member.setdefault(member_name, []).extend(net_ids)
+            nets_by_member.setdefault(f"{port_name}.{member_name}", []).extend(net_ids)
+        qualified_prefix = f"{port_name}."
+        for label_name, net_id in labels_by_sheet.get(sheet_id, ()):
+            if label_name.startswith(qualified_prefix):
+                nets_by_member.setdefault(label_name, []).append(net_id)
+    return nets_by_member
 
 
 def _known_source_files(source: AltiumSourceDesign) -> list[str]:
@@ -612,13 +708,11 @@ def _child_port_net_ids(source: AltiumSourceDesign) -> dict[tuple[str, str], lis
     return result
 
 
-def _child_interface_net_ids(
+def _fold_child_label_net_ids(
     source: AltiumSourceDesign,
-    project: AltiumProject,
+    result: dict[tuple[str, str], list[str]],
 ) -> dict[tuple[str, str], list[str]]:
-    result = _child_port_net_ids(source)
-    if not project.allow_sheet_entry_net_names:
-        return result
+    """Add each child sheet's net-label names to a ``(sheet_id, name)`` index."""
     for sheet in source.sheets.values():
         for local_net in sheet.local_nets:
             for name in _label_names(local_net):
@@ -626,13 +720,58 @@ def _child_interface_net_ids(
     return result
 
 
+def _child_interface_net_ids(
+    source: AltiumSourceDesign,
+    project: AltiumProject,
+) -> dict[tuple[str, str], list[str]]:
+    result = _child_port_net_ids(source)
+    if not project.allow_sheet_entry_net_names:
+        return result
+    return _fold_child_label_net_ids(source, result)
+
+
+def _child_bus_member_net_ids(source: AltiumSourceDesign) -> dict[tuple[str, str], list[str]]:
+    """Child-sheet nets that expose a bus member by name.
+
+    A bus carries its members across a hierarchical bus port/entry regardless of
+    ``AllowSheetEntryNetNames`` — that option governs whether a scalar sheet
+    entry's name acts as a net name, not bus membership. So labels are folded in
+    unconditionally here (unlike ``_child_interface_net_ids``), matching a bus
+    member by its bit label (e.g. ``DIG_OUT1``) plus any same-named port.
+    """
+    return _fold_child_label_net_ids(source, _child_port_net_ids(source))
+
+
+def _union_all(net_union: NetUnion, net_ids: Iterable[str]) -> None:
+    """Union every id (deduped, order-preserving) into the first."""
+    deduped = list(dict.fromkeys(net_ids))
+    for net_id in deduped[1:]:
+        _ = net_union.union(deduped[0], net_id)
+
+
 def _merge_by_source_name(net_union: NetUnion, ids_by_name: dict[str, list[str]]) -> None:
     for ids in ids_by_name.values():
-        if len(ids) < 2:
-            continue
-        first_id = ids[0]
-        for other_id in ids[1:]:
-            _ = net_union.union(first_id, other_id)
+        _union_all(net_union, ids)
+
+
+def _sheet_symbols_by_id(source: AltiumSourceDesign) -> dict[str, AltiumSheetSymbol]:
+    """Index every sheet symbol by its (globally unique) id for O(1) lookup."""
+    return {symbol.id: symbol for sheet in source.sheets.values() for symbol in sheet.sheet_symbols}
+
+
+def _bundle_interfaces(
+    seen_interfaces: set[tuple[str, str]],
+    interface_union: UnionFind[tuple[str, str]],
+) -> list[list[tuple[str, str]]]:
+    """Group connected interfaces into bundles by union-find root.
+
+    Sorted so bundle (and therefore union-root) order is stable across
+    processes — set iteration order varies with ``PYTHONHASHSEED``.
+    """
+    bundles: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    for interface in sorted(seen_interfaces):
+        bundles.setdefault(interface_union.find(interface), []).append(interface)
+    return list(bundles.values())
 
 
 def _label_name_ids(local_refs: Iterable[_LocalNetRef]) -> dict[str, list[str]]:
@@ -913,14 +1052,34 @@ def _autoname_candidate(
 
 def _net_members_by_local_net(
     pin_occurrences: Iterable[AltiumPinOccurrence],
+    physical_designators: dict[str, AnnotationDesignator],
+    symbol_uid_by_id: dict[str, str],
+    scope_root_ancestor_uids: dict[str, tuple[str, ...]],
 ) -> dict[str, list[tuple[str, str]]]:
-    """Map local net id to its member ``(designator, pin)`` pairs."""
+    """Map local net id to its member ``(designator, pin)`` pairs.
+
+    The per-instance **physical** designator is used when the ``.Annotation``
+    file resolves one (falling back to the logical reference), so auto-net names
+    reflect the physical board. Without this, two instances of a repeated sheet
+    both name a net after the shared logical designator (e.g. both ``NetU1_4``);
+    the physical designators (``U1.1``, ``U1.2``, …) keep them distinct, as
+    Altium's own compiled auto-net names do.
+    """
     result: dict[str, list[tuple[str, str]]] = {}
     for pin_occurrence in pin_occurrences:
         if not pin_occurrence.local_net_id:
             continue
+        designator = (
+            _physical_designator(
+                pin_occurrence,
+                physical_designators,
+                symbol_uid_by_id,
+                scope_root_ancestor_uids,
+            )
+            or pin_occurrence.component_reference
+        )
         result.setdefault(pin_occurrence.local_net_id, []).append(
-            (pin_occurrence.component_reference, pin_occurrence.pin_designator)
+            (designator, pin_occurrence.pin_designator)
         )
     return result
 
@@ -959,6 +1118,7 @@ def _pin_inputs(
     component_source_ids_by_component_id: dict[str, list[str]],
     physical_designators: dict[str, AnnotationDesignator],
     symbol_uid_by_id: dict[str, str],
+    scope_root_ancestor_uids: dict[str, tuple[str, ...]],
 ) -> list[ResolvedPinInput]:
     pin_occurrences_tuple = tuple(pin_occurrences)
     duplicate_pin_keys = _duplicate_visible_pin_keys(pin_occurrences_tuple)
@@ -994,6 +1154,7 @@ def _pin_inputs(
                         pin_occurrence,
                         physical_designators,
                         symbol_uid_by_id,
+                        scope_root_ancestor_uids,
                     ),
                     metadata=_component_occurrence_metadata(pin_occurrence),
                 ),
@@ -1053,10 +1214,57 @@ def _logical_pin_id(
     return f"{base_id}:{suffix}" if suffix else base_id
 
 
+def _scope_root_ancestor_uids(
+    source: AltiumSourceDesign,
+    ctx: ParseContext | None,
+) -> dict[str, tuple[str, ...]]:
+    """Ancestor sheet-symbol UIDs above each base sheet (its scope root).
+
+    A single-instance nested sheet is kept as a *base* sheet whose scope restarts
+    at its own name, so components inside it lose the sheet-symbol UIDs that
+    instantiate that base sheet from the true root. The ``.Annotation`` file keys
+    designators by the *full* root-to-component UID path, so those missing
+    ancestor UIDs must be prepended to match. Maps a base sheet's name (its scope
+    root) to that ancestor chain, root-first; a root sheet maps to ``()``.
+    """
+    known_source_files = _known_source_files(source)
+    instantiators: dict[str, list[tuple[AltiumSheetSource, AltiumSheetSymbol]]] = {}
+    for parent in source.sheets.values():
+        referencing_dir = _parent_dir(_source_file_key(parent.source_file))
+        for symbol in parent.sheet_symbols:
+            if not symbol.child_source_file:
+                continue
+            child_key = _canonical_child_key(symbol, known_source_files, referencing_dir, ctx)
+            instantiators.setdefault(child_key, []).append((parent, symbol))
+
+    cache: dict[str, tuple[str, ...]] = {}
+
+    def _ancestors(sheet: AltiumSheetSource) -> tuple[str, ...]:
+        key = _source_file_key(sheet.source_file)
+        if key in cache:
+            return cache[key]
+        cache[key] = ()  # break cycles before recursing
+        refs = instantiators.get(key, [])
+        # A base sheet has at most one instantiator; two or more would make it a
+        # repeated sheet, expanded per-instance rather than kept as a base sheet.
+        if len(refs) == 1:
+            parent, symbol = refs[0]
+            if symbol.unique_id and len(parent.scope_id.path) == 1:
+                cache[key] = (*_ancestors(parent), symbol.unique_id)
+        return cache[key]
+
+    return {
+        sheet.name: _ancestors(sheet)
+        for sheet in source.sheets.values()
+        if len(sheet.scope_id.path) == 1
+    }
+
+
 def _physical_designator(
     pin_occurrence: AltiumPinOccurrence,
     physical_designators: dict[str, AnnotationDesignator],
     symbol_uid_by_id: dict[str, str],
+    scope_root_ancestor_uids: dict[str, tuple[str, ...]],
 ) -> str:
     """Resolve a pin occurrence's per-instance physical designator, or ``""``.
 
@@ -1066,18 +1274,22 @@ def _physical_designator(
     path ``\\<sheet-symbol-uid>...\\<component-uid>``. The logical reference is
     never substituted — the physical designator is occurrence-level metadata.
     Empty when no entry resolves (single-instance / un-annotated components).
+
+    The path is reconstructed to match Altium's full root-to-component chain: the
+    scope root's ancestor sheet-symbol UIDs (dropped when a single-instance sheet
+    is kept as a base sheet) are prepended to the scope's own symbol UIDs.
     """
     if not physical_designators:
         return ""
     component_uid = pin_occurrence.component_metadata.get("altium_component_unique_id")
     if not component_uid:
         return ""
+    scope_path = pin_occurrence.scope_id.path
+    ancestor_uids = scope_root_ancestor_uids.get(scope_path[0], ()) if scope_path else ()
     symbol_uids = [
-        symbol_uid_by_id[element]
-        for element in pin_occurrence.scope_id.path
-        if element in symbol_uid_by_id
+        symbol_uid_by_id[element] for element in scope_path if element in symbol_uid_by_id
     ]
-    unique_id_path = "\\" + "\\".join([*symbol_uids, component_uid])
+    unique_id_path = "\\" + "\\".join([*ancestor_uids, *symbol_uids, component_uid])
     entry = physical_designators.get(unique_id_path)
     return entry.physical_designator if entry is not None else ""
 

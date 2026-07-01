@@ -7,6 +7,7 @@ from phosphor_eda.formats.altium.annotation import AnnotationDesignator
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode, AltiumProject
 from phosphor_eda.formats.altium.resolver import resolve_altium_source
 from phosphor_eda.formats.altium.source import (
+    AltiumHarnessMember,
     AltiumLocalNet,
     AltiumNetLabel,
     AltiumPinOccurrence,
@@ -1046,3 +1047,361 @@ def test_unannotated_occurrence_has_empty_physical_designator():
     for component in design.components:
         for occurrence in component.occurrences:
             assert occurrence.physical_designator == ""
+
+
+def _harness_entry(
+    sheet: str,
+    name: str,
+    sheet_symbol_id: str,
+    index: int = 1,
+) -> AltiumSheetEntry:
+    return AltiumSheetEntry(
+        id=f"{sheet}:hentry:{index}",
+        scope_id=_scope(sheet),
+        source_index=index,
+        sheet_symbol_id=sheet_symbol_id,
+        name=name,
+        coord=(index, 40),
+        side=0,
+        distance_from_top=0,
+        harness_type=name,
+        io_type=0,
+    )
+
+
+def _harness_member(sheet: str, port: str, name: str, index: int = 1) -> AltiumHarnessMember:
+    return AltiumHarnessMember(
+        id=f"{sheet}:hmember:{index}",
+        scope_id=_scope(sheet),
+        source_index=index,
+        connector_id=f"{sheet}:hconnector:1",
+        port_name=port,
+        name=name,
+        coord=(index, 70),
+        side=0,
+        distance_from_top=0,
+    )
+
+
+def test_qualified_harness_member_labels_unify_across_hierarchy():
+    """``Port.Signal`` member labels unify across a signal harness.
+
+    Regression: the harness merge keyed only off bare connector-entry names, so
+    a member labelled in Altium's qualified ``Harness.Signal`` form (e.g.
+    ``RMII.RXD0``) never matched its peer on the far side of the harness and
+    split into two identically-named nets. Two conventions must both resolve:
+
+    - ``RMII.RXD0`` — a qualified label on *both* child sheets, with no
+      scalar connector entry tying them together.
+    - ``RMII.CLK_50MHZ`` — a bare connector member (``CLK_50MHZ``) on one child
+      and a qualified label on the other.
+    """
+    symbol_mcu = _symbol("Top", "Mcu.SchDoc", index=1)
+    symbol_phy = _symbol("Top", "Phy.SchDoc", index=2)
+    entry_mcu = _harness_entry("Top", "RMII", symbol_mcu.id, index=1)
+    entry_phy = _harness_entry("Top", "RMII", symbol_phy.id, index=2)
+    # Signal-harness wire on the parent joining both sheet symbols' RMII entries.
+    conduit = AltiumLocalNet(
+        id="Top:local:conduit",
+        scope_id=_scope("Top"),
+        wire_points=set(),
+        pin_ids=[],
+        net_labels=[],
+        power_ports=[],
+        ports=[],
+        sheet_entries=[entry_mcu, entry_phy],
+        harness_members=[],
+        generated_name="__auto_Top_conduit",
+    )
+    top = _sheet(
+        "Top",
+        [conduit],
+        [],
+        sheet_symbols=[symbol_mcu, symbol_phy],
+        sheet_entries=[entry_mcu, entry_phy],
+    )
+
+    mcu_rxd0, mcu_rxd0_pins = _local_net(
+        "Mcu",
+        "rxd0",
+        labels=[_label("Mcu", "RMII.RXD0")],
+        references=["U_MCU"],
+        pin_designators=["1"],
+    )
+    mcu_clk, mcu_clk_pins = _local_net(
+        "Mcu",
+        "clk",
+        references=["U_MCU"],
+        pin_designators=["2"],
+    )
+    mcu_clk.harness_members = [_harness_member("Mcu", "RMII", "CLK_50MHZ")]
+    mcu = _sheet(
+        "Mcu",
+        [mcu_rxd0, mcu_clk],
+        [*mcu_rxd0_pins, *mcu_clk_pins],
+        source_file="Mcu.SchDoc",
+    )
+
+    phy_rxd0, phy_rxd0_pins = _local_net(
+        "Phy",
+        "rxd0",
+        labels=[_label("Phy", "RMII.RXD0")],
+        references=["U_PHY"],
+        pin_designators=["30"],
+    )
+    phy_clk, phy_clk_pins = _local_net(
+        "Phy",
+        "clk",
+        labels=[_label("Phy", "RMII.CLK_50MHZ")],
+        references=["U_PHY"],
+        pin_designators=["23"],
+    )
+    phy = _sheet(
+        "Phy",
+        [phy_rxd0, phy_clk],
+        [*phy_rxd0_pins, *phy_clk_pins],
+        source_file="Phy.SchDoc",
+    )
+
+    design = resolve_altium_source(
+        _source(
+            [top, mcu, phy],
+            mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
+            allow_sheet_entry_net_names=False,
+            root_sheet_name="Top",
+        ),
+    )
+
+    rxd0 = [net for net in design.nets if net.name == "RMII.RXD0"]
+    assert len(rxd0) == 1, f"RMII.RXD0 should be one net, got {len(rxd0)}"
+    assert _refs(rxd0[0]) == {"U_MCU", "U_PHY"}
+
+    clk = [net for net in design.nets if net.name == "RMII.CLK_50MHZ"]
+    assert len(clk) == 1, f"RMII.CLK_50MHZ should be one net, got {len(clk)}"
+    assert _refs(clk[0]) == {"U_MCU", "U_PHY"}
+
+
+def test_vector_bus_members_unify_across_multi_level_hierarchy():
+    """Vector-bus members follow the bus port across a multi-level hierarchy.
+
+    Regression: a ``BUS[0..1]`` port crossing the hierarchy dropped out of the
+    interface lookup (``_mergeable_name`` rejects bus notation), so its members
+    (``BUS0``/``BUS1``) split per sheet. Here ``LeafA`` and ``LeafB`` connect
+    only through ``Mid`` (LeafA ↔ Top ↔ Mid ↔ LeafB), and each bit must unify
+    while staying distinct from the other bit.
+    """
+    sym_mid = _symbol("Top", "Mid.SchDoc", index=1)
+    sym_leafa = _symbol("Top", "LeafA.SchDoc", index=2)
+    entry_mid = _entry("Top", "BUS[0..1]", sym_mid.id, index=1)
+    entry_leafa = _entry("Top", "BUS[0..1]", sym_leafa.id, index=2)
+    top_a, _ = _local_net("Top", "to_mid", entries=[entry_mid])
+    top_b, _ = _local_net("Top", "to_leafa", entries=[entry_leafa])
+    top = _sheet(
+        "Top",
+        [top_a, top_b],
+        [],
+        sheet_symbols=[sym_mid, sym_leafa],
+        sheet_entries=[entry_mid, entry_leafa],
+    )
+
+    sym_leafb = _symbol("Mid", "LeafB.SchDoc", index=1)
+    entry_leafb = _entry("Mid", "BUS[0..1]", sym_leafb.id, index=1)
+    mid_port, _ = _local_net("Mid", "up", ports=[_port("Mid", "BUS[0..1]")])
+    mid_down, _ = _local_net("Mid", "down", entries=[entry_leafb])
+    mid = _sheet(
+        "Mid",
+        [mid_port, mid_down],
+        [],
+        sheet_symbols=[sym_leafb],
+        sheet_entries=[entry_leafb],
+        source_file="Mid.SchDoc",
+    )
+
+    def _leaf(name: str, reference: str) -> tuple[AltiumSheetSource, list[AltiumPinOccurrence]]:
+        b0, b0p = _local_net(
+            name, "b0", labels=[_label(name, "BUS0")], references=[reference], pin_designators=["1"]
+        )
+        b1, b1p = _local_net(
+            name, "b1", labels=[_label(name, "BUS1")], references=[reference], pin_designators=["2"]
+        )
+        port, _ = _local_net(name, "port", ports=[_port(name, "BUS[0..1]")])
+        return (
+            _sheet(name, [b0, b1, port], [*b0p, *b1p], source_file=f"{name}.SchDoc"),
+            [*b0p, *b1p],
+        )
+
+    leafa, _ = _leaf("LeafA", "UA")
+    leafb, _ = _leaf("LeafB", "UB")
+
+    design = resolve_altium_source(
+        _source(
+            [top, mid, leafa, leafb],
+            mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
+            allow_sheet_entry_net_names=False,
+            root_sheet_name="Top",
+        ),
+    )
+
+    bus0 = [net for net in design.nets if net.name == "BUS0"]
+    bus1 = [net for net in design.nets if net.name == "BUS1"]
+    assert len(bus0) == 1, f"BUS0 should be one net, got {len(bus0)}"
+    assert _refs(bus0[0]) == {"UA", "UB"}
+    assert len(bus1) == 1, f"BUS1 should be one net, got {len(bus1)}"
+    assert _refs(bus1[0]) == {"UA", "UB"}
+
+
+def test_bus_range_harness_members_unify_with_underscore_labels():
+    """Bus-range harness members unify when bits use ``Port_Bit`` labels.
+
+    Regression: a harness carrying a bus-range member (``RXD[1..0]``) whose
+    bits are labelled ``RMII_RXD0``/``RMII_RXD1`` (underscore) never unified,
+    because the range stub is (correctly) not mapped and the underscore labels
+    were not recognised as harness members. Each bit must unify across the
+    harness while staying distinct.
+    """
+    sym_a = _symbol("Top", "A.SchDoc", index=1)
+    sym_b = _symbol("Top", "B.SchDoc", index=2)
+    entry_a = _harness_entry("Top", "RMII", sym_a.id, index=1)
+    entry_b = _harness_entry("Top", "RMII", sym_b.id, index=2)
+    conduit = AltiumLocalNet(
+        id="Top:local:conduit",
+        scope_id=_scope("Top"),
+        wire_points=set(),
+        pin_ids=[],
+        net_labels=[],
+        power_ports=[],
+        ports=[],
+        sheet_entries=[entry_a, entry_b],
+        harness_members=[],
+        generated_name="__auto_Top_conduit",
+    )
+    top = _sheet(
+        "Top",
+        [conduit],
+        [],
+        sheet_symbols=[sym_a, sym_b],
+        sheet_entries=[entry_a, entry_b],
+    )
+
+    # A: the harness connector's bus-range member, plus per-bit labels + pins.
+    a_stub, _ = _local_net("A", "stub")
+    a_stub.harness_members = [_harness_member("A", "RMII", "RXD[1..0]")]
+    a0, a0p = _local_net(
+        "A", "rxd0", labels=[_label("A", "RMII_RXD0")], references=["UA"], pin_designators=["1"]
+    )
+    a1, a1p = _local_net(
+        "A", "rxd1", labels=[_label("A", "RMII_RXD1")], references=["UA"], pin_designators=["2"]
+    )
+    a = _sheet("A", [a_stub, a0, a1], [*a0p, *a1p], source_file="A.SchDoc")
+
+    # B: same members via per-bit labels only.
+    b0, b0p = _local_net(
+        "B", "rxd0", labels=[_label("B", "RMII_RXD0")], references=["UB"], pin_designators=["1"]
+    )
+    b1, b1p = _local_net(
+        "B", "rxd1", labels=[_label("B", "RMII_RXD1")], references=["UB"], pin_designators=["2"]
+    )
+    b = _sheet("B", [b0, b1], [*b0p, *b1p], source_file="B.SchDoc")
+
+    design = resolve_altium_source(
+        _source(
+            [top, a, b],
+            mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
+            allow_sheet_entry_net_names=False,
+            root_sheet_name="Top",
+        ),
+    )
+
+    rxd0 = [net for net in design.nets if net.name == "RMII_RXD0"]
+    rxd1 = [net for net in design.nets if net.name == "RMII_RXD1"]
+    assert len(rxd0) == 1, f"RMII_RXD0 should be one net, got {len(rxd0)}"
+    assert _refs(rxd0[0]) == {"UA", "UB"}
+    assert len(rxd1) == 1, f"RMII_RXD1 should be one net, got {len(rxd1)}"
+    assert _refs(rxd1[0]) == {"UA", "UB"}
+
+
+def test_autoname_uses_physical_designator_to_disambiguate_instances():
+    """Auto-net names use per-instance physical designators, not logical ones.
+
+    Regression: two instances of a repeated sheet share the logical designator
+    (``U1``), so their unnamed nets both auto-named to ``NetU1_4``. The
+    ``.Annotation`` physical designators (``U1.1``, ``U1.2``) keep them distinct;
+    without annotation the logical fallback still applies.
+    """
+    from phosphor_eda.formats.altium.resolver import (
+        _autoname_candidate,
+        _net_members_by_local_net,
+    )
+
+    def _occurrence(local_net_id: str, symbol: str, index: int) -> AltiumPinOccurrence:
+        return AltiumPinOccurrence(
+            id=f"pin:{index}",
+            scope_id=ScopeId(path=(symbol,)),
+            source_index=index,
+            local_net_id=local_net_id,
+            component_source_id="component",
+            component_reference="U1",
+            pin_designator="4",
+            pin_name="U1-4",
+            location=(0, 0),
+            tip=(0, 1),
+            component_metadata={"altium_component_unique_id": "CUID"},
+        )
+
+    occurrences = [_occurrence("A", "SYM1", 1), _occurrence("B", "SYM2", 2)]
+    symbol_uid_by_id = {"SYM1": "SUID1", "SYM2": "SUID2"}
+    physical = {
+        "\\SUID1\\CUID": AnnotationDesignator(physical_designator="U1.1", logical_designator="U1"),
+        "\\SUID2\\CUID": AnnotationDesignator(physical_designator="U1.2", logical_designator="U1"),
+    }
+
+    members = _net_members_by_local_net(occurrences, physical, symbol_uid_by_id, {})
+    name_a = _autoname_candidate(members["A"], 1).name
+    name_b = _autoname_candidate(members["B"], 2).name
+    assert name_a == "NetU1.1_4"
+    assert name_b == "NetU1.2_4"
+
+    # No annotation → both fall back to the logical designator and collide.
+    bare = _net_members_by_local_net(occurrences, {}, {}, {})
+    assert (
+        _autoname_candidate(bare["A"], 1).name
+        == _autoname_candidate(bare["B"], 2).name
+        == "NetU1_4"
+    )
+
+
+def test_physical_designator_prepends_scope_root_ancestor_uids():
+    """A base sheet's ancestor UIDs are prepended to match Altium's full path.
+
+    A single-instance nested sheet is kept as a base sheet whose scope restarts
+    at its own name, dropping the sheet-symbol UID(s) that instantiate it. The
+    ``.Annotation`` keys the full root-to-component chain, so those ancestors
+    must be prepended or the lookup misses and repeated-instance nets collide.
+    """
+    from phosphor_eda.formats.altium.resolver import _physical_designator
+
+    occurrence = AltiumPinOccurrence(
+        id="pin:1",
+        scope_id=ScopeId(path=("Pulse Control", "sym454", "biasgen")),
+        source_index=1,
+        local_net_id="A",
+        component_source_id="component",
+        component_reference="C57",
+        pin_designator="1",
+        pin_name="C57-1",
+        location=(0, 0),
+        tip=(0, 1),
+        component_metadata={"altium_component_unique_id": "RKHPCWLR"},
+    )
+    symbol_uid_by_id = {"sym454": "BWSRSQSP"}
+    physical = {
+        "\\TQZTYPUP\\BWSRSQSP\\RKHPCWLR": AnnotationDesignator(
+            physical_designator="C57.1", logical_designator="C57"
+        )
+    }
+
+    # Without the ancestor prefix the short path misses the annotation entry.
+    assert _physical_designator(occurrence, physical, symbol_uid_by_id, {}) == ""
+    # Prepending the base sheet's ancestor chain reconstructs the full path.
+    ancestors = {"Pulse Control": ("TQZTYPUP",)}
+    assert _physical_designator(occurrence, physical, symbol_uid_by_id, ancestors) == "C57.1"
