@@ -347,6 +347,7 @@ def _merge_hierarchy(
     known_source_files = _known_source_files(source)
     child_sheets_by_file = _child_sheets_by_source_file(source)
     repeated_child_files = _repeated_child_source_files(source, known_source_files, ctx)
+    symbol_by_id = _sheet_symbols_by_id(source)
     child_interface_nets = _child_interface_net_ids(source, source.project)
     for ref in local_refs:
         referencing_dir = _parent_dir(_source_file_key(ref.sheet.source_file))
@@ -356,14 +357,7 @@ def _merge_hierarchy(
             entry_name = _mergeable_name(entry.name)
             if entry_name is None:
                 continue
-            sheet_symbol = next(
-                (
-                    symbol
-                    for symbol in ref.sheet.sheet_symbols
-                    if symbol.id == entry.sheet_symbol_id
-                ),
-                None,
-            )
+            sheet_symbol = symbol_by_id.get(entry.sheet_symbol_id)
             if sheet_symbol is None:
                 continue
             child_sheets = _child_sheets_for_symbol(
@@ -385,6 +379,7 @@ def _merge_hierarchy(
         known_source_files,
         child_sheets_by_file,
         repeated_child_files,
+        symbol_by_id,
         ctx,
     )
     _merge_harness_members(
@@ -394,6 +389,7 @@ def _merge_hierarchy(
         known_source_files,
         child_sheets_by_file,
         repeated_child_files,
+        symbol_by_id,
         ctx,
     )
 
@@ -404,6 +400,7 @@ def _merge_bus_members(
     known_source_files: list[str],
     child_sheets_by_file: dict[str, list[AltiumSheetSource]],
     repeated_child_files: set[str],
+    symbol_by_id: dict[str, AltiumSheetSymbol],
     ctx: ParseContext | None,
 ) -> None:
     """Merge vector-bus member nets across the sheet hierarchy.
@@ -451,10 +448,7 @@ def _merge_bus_members(
                     continue
                 bus_name = _clean_name(entry.name)
                 parent_interface = _note(sheet.id, bus_name, tuple(members))
-                sheet_symbol = next(
-                    (s for s in sheet.sheet_symbols if s.id == entry.sheet_symbol_id),
-                    None,
-                )
+                sheet_symbol = symbol_by_id.get(entry.sheet_symbol_id)
                 if sheet_symbol is None:
                     continue
                 for child_sheet in _child_sheets_for_symbol(
@@ -468,11 +462,7 @@ def _merge_bus_members(
                     child_interface = _note(child_sheet.id, bus_name, tuple(members))
                     interface_union.union(parent_interface, child_interface)
 
-    bundles: dict[tuple[str, str], list[tuple[str, str]]] = {}
-    for interface in sorted(seen_interfaces):
-        bundles.setdefault(interface_union.find(interface), []).append(interface)
-
-    for bundle in bundles.values():
+    for bundle in _bundle_interfaces(seen_interfaces, interface_union):
         member_names: set[str] = set()
         for interface in bundle:
             member_names.update(interface_members.get(interface, ()))
@@ -480,9 +470,7 @@ def _merge_bus_members(
             net_ids: list[str] = []
             for sheet_id, _bus_name in bundle:
                 net_ids.extend(member_nets.get((sheet_id, member_name), []))
-            deduped = list(dict.fromkeys(net_ids))
-            for net_id in deduped[1:]:
-                _ = net_union.union(deduped[0], net_id)
+            _union_all(net_union, net_ids)
 
 
 def _merge_harness_members(
@@ -492,6 +480,7 @@ def _merge_harness_members(
     known_source_files: list[str],
     child_sheets_by_file: dict[str, list[AltiumSheetSource]],
     repeated_child_files: set[str],
+    symbol_by_id: dict[str, AltiumSheetSymbol],
     ctx: ParseContext | None,
 ) -> None:
     """Merge harness member nets across the sheet hierarchy.
@@ -546,14 +535,7 @@ def _merge_harness_members(
             entry_name = _clean_name(entry.name)
             if not entry_name:
                 continue
-            sheet_symbol = next(
-                (
-                    symbol
-                    for symbol in ref.sheet.sheet_symbols
-                    if symbol.id == entry.sheet_symbol_id
-                ),
-                None,
-            )
+            sheet_symbol = symbol_by_id.get(entry.sheet_symbol_id)
             if sheet_symbol is None:
                 continue
             child_sheets = _child_sheets_for_symbol(
@@ -571,41 +553,8 @@ def _merge_harness_members(
         for interface in interfaces[1:]:
             interface_union.union(interfaces[0], interface)
 
-    bundles: dict[tuple[str, str], list[tuple[str, str]]] = {}
-    # Sorted so bundle (and therefore union-root) order is stable across
-    # processes — set iteration order varies with PYTHONHASHSEED.
-    for interface in sorted(seen_interfaces):
-        bundles.setdefault(interface_union.find(interface), []).append(interface)
-
-    for bundle in bundles.values():
-        nets_by_member: dict[str, list[str]] = {}
-        for interface in bundle:
-            _sheet_id, port_name = interface
-            # A member may be labelled either bare (``RXD0``, matched by the
-            # connector entry name) or qualified as Altium's ``Harness.Signal``
-            # form (``RMII.RXD0``). Key connector members under both spellings
-            # so each finds its same-convention peer labels below.
-            for member_name, net_ids in members_by_interface.get(interface, {}).items():
-                member_bits = _mergeable_bus_member_names(member_name)
-                if member_bits:
-                    # A bus-range member (``RXD[1..0]``) carries several bits.
-                    # Its single pin-less conduit stub must not union into every
-                    # bit (that would short them), so create a qualified key per
-                    # bit — ``<port>.<bit>`` and ``<port>_<bit>`` (both spellings
-                    # occur) — for the per-bit labels to fill below, and do not
-                    # map the stub net itself.
-                    for bit in member_bits:
-                        nets_by_member.setdefault(f"{port_name}.{bit}", [])
-                        nets_by_member.setdefault(f"{port_name}_{bit}", [])
-                    continue
-                nets_by_member.setdefault(member_name, []).extend(net_ids)
-                nets_by_member.setdefault(f"{port_name}.{member_name}", []).extend(net_ids)
-            # Seed groups from qualified member labels so member nets identified
-            # only by a ``Port.Signal`` label (no connector entry) still unify.
-            qualified_prefix = f"{port_name}."
-            for label_name, net_id in labels_by_sheet.get(_sheet_id, ()):
-                if label_name.startswith(qualified_prefix):
-                    nets_by_member.setdefault(label_name, []).append(net_id)
+    for bundle in _bundle_interfaces(seen_interfaces, interface_union):
+        nets_by_member = _seed_harness_member_groups(bundle, members_by_interface, labels_by_sheet)
         for interface in bundle:
             sheet_id, _port_name = interface
             for member_name in tuple(nets_by_member):
@@ -613,9 +562,42 @@ def _merge_harness_members(
                     label_ids_by_sheet_and_name.get((sheet_id, member_name), [])
                 )
         for net_ids in nets_by_member.values():
-            deduped = list(dict.fromkeys(net_ids))
-            for net_id in deduped[1:]:
-                _ = net_union.union(deduped[0], net_id)
+            _union_all(net_union, net_ids)
+
+
+def _seed_harness_member_groups(
+    bundle: list[tuple[str, str]],
+    members_by_interface: dict[tuple[str, str], dict[str, list[str]]],
+    labels_by_sheet: dict[str, list[tuple[str, str]]],
+) -> dict[str, list[str]]:
+    """Seed per-member net-id groups for one harness bundle, keyed by member name.
+
+    A member may be labelled bare (``RXD0``, matching the connector entry name)
+    or qualified as Altium's ``Harness.Signal`` form (``RMII.RXD0``), so each
+    connector member is keyed under both spellings. A bus-range member
+    (``RXD[1..0]``) carries several bits; its single pin-less conduit stub must
+    not union into every bit (that would short them), so only per-bit qualified
+    keys — ``<port>.<bit>`` and ``<port>_<bit>`` (both spellings occur) — are
+    created for the per-bit labels to fill, and the stub net is never mapped.
+    Qualified ``Port.Signal`` labels are seeded directly so members identified
+    only by such a label (no connector entry) still unify.
+    """
+    nets_by_member: dict[str, list[str]] = {}
+    for sheet_id, port_name in bundle:
+        for member_name, net_ids in members_by_interface.get((sheet_id, port_name), {}).items():
+            member_bits = _mergeable_bus_member_names(member_name)
+            if member_bits:
+                for bit in member_bits:
+                    nets_by_member.setdefault(f"{port_name}.{bit}", [])
+                    nets_by_member.setdefault(f"{port_name}_{bit}", [])
+                continue
+            nets_by_member.setdefault(member_name, []).extend(net_ids)
+            nets_by_member.setdefault(f"{port_name}.{member_name}", []).extend(net_ids)
+        qualified_prefix = f"{port_name}."
+        for label_name, net_id in labels_by_sheet.get(sheet_id, ()):
+            if label_name.startswith(qualified_prefix):
+                nets_by_member.setdefault(label_name, []).append(net_id)
+    return nets_by_member
 
 
 def _known_source_files(source: AltiumSourceDesign) -> list[str]:
@@ -723,6 +705,18 @@ def _child_port_net_ids(source: AltiumSourceDesign) -> dict[tuple[str, str], lis
     return result
 
 
+def _fold_child_label_net_ids(
+    source: AltiumSourceDesign,
+    result: dict[tuple[str, str], list[str]],
+) -> dict[tuple[str, str], list[str]]:
+    """Add each child sheet's net-label names to a ``(sheet_id, name)`` index."""
+    for sheet in source.sheets.values():
+        for local_net in sheet.local_nets:
+            for name in _label_names(local_net):
+                result.setdefault((sheet.id, name), []).append(local_net.id)
+    return result
+
+
 def _child_interface_net_ids(
     source: AltiumSourceDesign,
     project: AltiumProject,
@@ -730,11 +724,7 @@ def _child_interface_net_ids(
     result = _child_port_net_ids(source)
     if not project.allow_sheet_entry_net_names:
         return result
-    for sheet in source.sheets.values():
-        for local_net in sheet.local_nets:
-            for name in _label_names(local_net):
-                result.setdefault((sheet.id, name), []).append(local_net.id)
-    return result
+    return _fold_child_label_net_ids(source, result)
 
 
 def _child_bus_member_net_ids(source: AltiumSourceDesign) -> dict[tuple[str, str], list[str]]:
@@ -742,27 +732,43 @@ def _child_bus_member_net_ids(source: AltiumSourceDesign) -> dict[tuple[str, str
 
     A bus carries its members across a hierarchical bus port/entry regardless of
     ``AllowSheetEntryNetNames`` — that option governs whether a scalar sheet
-    entry's name acts as a net name, not bus membership. So bus members are
-    matched by their net LABEL (the bit's identifier, e.g. ``DIG_OUT1``), plus
-    any same-named port, independent of the project option.
+    entry's name acts as a net name, not bus membership. So labels are folded in
+    unconditionally here (unlike ``_child_interface_net_ids``), matching a bus
+    member by its bit label (e.g. ``DIG_OUT1``) plus any same-named port.
     """
-    result: dict[tuple[str, str], list[str]] = {}
-    for sheet in source.sheets.values():
-        for local_net in sheet.local_nets:
-            for name in _label_names(local_net):
-                result.setdefault((sheet.id, name), []).append(local_net.id)
-            for name in _port_names(local_net):
-                result.setdefault((sheet.id, name), []).append(local_net.id)
-    return result
+    return _fold_child_label_net_ids(source, _child_port_net_ids(source))
+
+
+def _union_all(net_union: NetUnion, net_ids: Iterable[str]) -> None:
+    """Union every id (deduped, order-preserving) into the first."""
+    deduped = list(dict.fromkeys(net_ids))
+    for net_id in deduped[1:]:
+        _ = net_union.union(deduped[0], net_id)
 
 
 def _merge_by_source_name(net_union: NetUnion, ids_by_name: dict[str, list[str]]) -> None:
     for ids in ids_by_name.values():
-        if len(ids) < 2:
-            continue
-        first_id = ids[0]
-        for other_id in ids[1:]:
-            _ = net_union.union(first_id, other_id)
+        _union_all(net_union, ids)
+
+
+def _sheet_symbols_by_id(source: AltiumSourceDesign) -> dict[str, AltiumSheetSymbol]:
+    """Index every sheet symbol by its (globally unique) id for O(1) lookup."""
+    return {symbol.id: symbol for sheet in source.sheets.values() for symbol in sheet.sheet_symbols}
+
+
+def _bundle_interfaces(
+    seen_interfaces: set[tuple[str, str]],
+    interface_union: UnionFind[tuple[str, str]],
+) -> list[list[tuple[str, str]]]:
+    """Group connected interfaces into bundles by union-find root.
+
+    Sorted so bundle (and therefore union-root) order is stable across
+    processes — set iteration order varies with ``PYTHONHASHSEED``.
+    """
+    bundles: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    for interface in sorted(seen_interfaces):
+        bundles.setdefault(interface_union.find(interface), []).append(interface)
+    return list(bundles.values())
 
 
 def _label_name_ids(local_refs: Iterable[_LocalNetRef]) -> dict[str, list[str]]:

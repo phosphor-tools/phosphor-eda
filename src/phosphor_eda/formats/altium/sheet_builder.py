@@ -562,40 +562,40 @@ def parse_harness_groups(sheet: SheetRecords) -> list[HarnessGroup]:
     harness type string.  This handles the case where multiple ports
     share the same harness type (e.g. two I2C ports on one page).
     """
-    # Index harness connectors by their record index (for OwnerIndex lookup)
+    # Connectors and their owned entry/type records, keyed by the connector's
+    # position among the harness records below.
     connectors: dict[int, HarnessConnectorRec] = {}
     entries_by_owner: dict[int, list[HarnessEntryRec]] = {}
     types_by_owner: dict[int, str] = {}
 
-    # Additional stream records use their position among Additional records
-    # for OwnerIndex, not their position in the full record list. We need
-    # to re-index them relative to the Additional stream.
-    additional_records: list[AltiumRecord] = []
-    for rec in sheet.records:
-        if isinstance(
-            rec,
-            (HarnessConnectorRec, HarnessEntryRec, HarnessTypeRec, SignalHarnessRec),
-        ):
-            additional_records.append(rec)
-
-    # Group entries/type to their connector by document-order contiguity: a
-    # connector owns the harness entry/type records that follow it until the
-    # next connector. OwnerIndex in the Additional stream counts records the
-    # filtered harness subset omits (a stream header, blankets), so mapping by
-    # position among harness records only aligns when nothing else is
+    # Entries/types are grouped to their connector by document-order contiguity:
+    # a connector owns the harness entry/type records that follow it until the
+    # next connector, matching Altium's serialization (connector, then its
+    # entries, then its type). This is used in preference to the records'
+    # OwnerIndex, which counts Additional-stream records the harness subset omits
+    # (a stream header, blankets) and so only aligns when nothing else is
     # interspersed — a connector preceded by a blanket would otherwise lose all
-    # its entries.
+    # its entries. Signal-harness *wires* are read separately (by_type) for port
+    # matching below, so they are not collected here.
+    harness_records = [
+        rec
+        for rec in sheet.records
+        if isinstance(rec, (HarnessConnectorRec, HarnessEntryRec, HarnessTypeRec))
+    ]
     current_ai: int | None = None
-    for ai, rec in enumerate(additional_records):
+    for ai, rec in enumerate(harness_records):
         if isinstance(rec, HarnessConnectorRec):
             connectors[ai] = rec
             current_ai = ai
+        elif current_ai is None:
+            # A well-formed stream never places an entry/type before its
+            # connector; any that appear are from a malformed/reordered stream
+            # and are skipped rather than misattributed.
+            continue
         elif isinstance(rec, HarnessEntryRec):
-            if current_ai is not None:
-                entries_by_owner.setdefault(current_ai, []).append(rec)
-        elif isinstance(rec, HarnessTypeRec):
-            if current_ai is not None:
-                types_by_owner[current_ai] = rec.text
+            entries_by_owner.setdefault(current_ai, []).append(rec)
+        else:  # HarnessTypeRec — the only remaining harness record type
+            types_by_owner[current_ai] = rec.text
 
     # --- Match each connector to its port via signal harness wires ---
     # Build union-find over signal harness wire endpoints so we can trace
