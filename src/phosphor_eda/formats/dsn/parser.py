@@ -559,6 +559,27 @@ def parse_page(
 ) -> DsnSchematicPage:
     """Parse a Page stream into a SchematicPage.
 
+    The per-section loops (wires, instances, ports, globals, off-page
+    connectors) trap their own read errors and diagnose them, but the early
+    structural reads — header, page name/size, title blocks, T0x34 records,
+    and the net list — run outside those guards. A truncated or corrupt stream
+    there raises a raw ``struct.error``/``IndexError`` that the loader path only
+    catches as ``DsnFormatError``; convert it so a bad page is reported as a
+    malformed file rather than crashing the whole project load (matches the
+    Library-stream hardening).
+    """
+    try:
+        return _parse_page(data, string_list, ctx)
+    except (struct.error, IndexError) as exc:
+        msg = f"Page stream is truncated or uses an unsupported layout: {exc}"
+        raise DsnFormatError(msg, offset=0, type_id=0) from exc
+
+
+def _parse_page(
+    data: bytes, string_list: list[str], ctx: ParseContext | None = None
+) -> DsnSchematicPage:
+    """Parse a Page stream into a SchematicPage.
+
     Uses skip-based approach: read the header and net list precisely,
     then skip structures we don't need using prefix chain end_offsets.
     For placed instances and globals, we use end_offsets to bound our parsing
