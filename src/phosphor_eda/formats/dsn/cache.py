@@ -15,6 +15,7 @@ from phosphor_eda.formats.dsn.binary_reader import (
     STRUCT_SYMBOL_PIN_BUS,
     STRUCT_SYMBOL_PIN_SCALAR,
     BinaryReader,
+    decode_orcad_text,
 )
 from phosphor_eda.formats.dsn.pins import ORCAD_PORT_TYPES
 from phosphor_eda.formats.dsn.raw_models import DsnCacheSymbols, DsnSymbolPin
@@ -28,13 +29,15 @@ _MAX_SYMBOL_PIN_DISPLAY_PROPS = 64
 _SYMBOL_PIN_TYPES = (STRUCT_SYMBOL_PIN_SCALAR, STRUCT_SYMBOL_PIN_BUS)
 
 
-def _can_read_string_len_zero(data: bytes, pos: int) -> bool:
+def _can_read_string_len_zero(data: bytes, pos: int, limit: int | None = None) -> bool:
     """Check if readStringLenZeroTerm would succeed at `pos`.
 
     Matches C++ semantics: reads uint16 length, then scans for null terminator,
-    and verifies the distance to null equals the length prefix.
+    and verifies the distance to null equals the length prefix. ``limit`` bounds
+    the terminator scan so the probe cannot accept a string (and terminator)
+    that runs past the end of the structure being decoded.
     """
-    size = len(data)
+    size = len(data) if limit is None else min(limit, len(data))
     if pos + 2 > size:
         return False
     length = struct.unpack_from("<H", data, pos)[0]
@@ -42,7 +45,7 @@ def _can_read_string_len_zero(data: bytes, pos: int) -> bool:
         return pos + 2 < size and data[pos + 2] == 0
     start = pos + 2
     try:
-        null_pos = data.index(b"\x00", start)
+        null_pos = data.index(b"\x00", start, size)
     except ValueError:
         return False
     return (null_pos - start) == length
@@ -97,6 +100,8 @@ def parse_cache_symbols(data: bytes, ctx: ParseContext | None = None) -> DsnCach
         if id0 != id1:
             # Package reference do-while loop
             while True:
+                if r.pos + 2 > size:
+                    break
                 some_val = r.read_uint16()
                 if r.pos >= size:
                     break
@@ -104,11 +109,13 @@ def parse_cache_symbols(data: bytes, ctx: ParseContext | None = None) -> DsnCach
                     r.skip(1)
                     break
                 # hasMysterious2Byte = !can_read_string
-                if _can_read_string_len_zero(data, r.pos):
+                if _can_read_string_len_zero(data, r.pos, size):
                     r.read_string_len_zero()
-                else:
+                elif _can_read_string_len_zero(data, r.pos + 2, size):
                     r.skip(2)  # mysterious 2 bytes
                     r.read_string_len_zero()
+                else:
+                    break
                 if some_val != 0:
                     break
 
@@ -172,10 +179,10 @@ def _scan_preamble_names(data: bytes, start: int, end: int) -> Iterator[tuple[in
         if p >= end:
             break
         # Try reading a name after the preamble
-        if _can_read_string_len_zero(data, p):
+        if _can_read_string_len_zero(data, p, end):
             length = struct.unpack_from("<H", data, p)[0]
             if length > 0:
-                name = data[p + 2 : p + 2 + length].decode("ascii", errors="replace")
+                name = decode_orcad_text(data[p + 2 : p + 2 + length])
                 yield (idx, name)
         pos = idx + 1  # advance past this preamble
 

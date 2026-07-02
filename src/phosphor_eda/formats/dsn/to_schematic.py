@@ -338,14 +338,16 @@ def _graphic_sources(
             if ordinal > 0:
                 object_id = f"{object_id}:{ordinal}"
             if kind == "port":
+                net_name = _graphic_net_name(graphic, ctx, kind)
                 port = DsnPort(
                     id=object_id,
                     scope_id=scope_id,
                     local_net_id=local_net_id,
                     source_net_id=net_id,
-                    name=graphic.name,
-                    name_key=dsn_name_key(graphic.name),
+                    name=net_name,
+                    name_key=dsn_name_key(net_name),
                     location=location,
+                    symbol=graphic.name,
                     props=_source_props(graphic.props),
                 )
                 page_source.ports.append(port)
@@ -578,6 +580,7 @@ def _source_page(
         page_id=page_id,
         scope_id=scope_id,
         kind="port",
+        ctx=ctx,
     )
     _graphic_sources(
         raw_page=raw_page,

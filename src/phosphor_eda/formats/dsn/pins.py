@@ -43,12 +43,11 @@ ORCAD_PORT_TYPES = {
 
 
 def _pin_index_from_int(pn: int, pin_count: int) -> int | None:
+    # ``pin_number`` is the decoded 1-based display order; the old int16 sign
+    # sentinel (``0xFF00`` marked pins) is stripped at parse time into
+    # ``PinConnection.pin_order``, so a plain range check is all that remains.
     if 1 <= pn <= pin_count:
         return pn - 1
-    if pn >= 0xFF00:
-        sentinel_index = 0x10000 - pn
-        if 1 <= sentinel_index <= pin_count:
-            return sentinel_index - 1
     return None
 
 

@@ -51,15 +51,30 @@ class Wire:
 
 @dataclass
 class PinConnection:
-    """A component pin's net assignment."""
+    """A component pin's net assignment.
+
+    ``pin_order`` is the 1-based display pin order decoded from the T0x10 int16
+    field; ``has_no_connect_marker`` is that field's sign bit — a user-placed
+    no-connect X. ``pin_number`` is the public designator string derived from
+    ``pin_order``.
+    """
 
     pin_number: str = ""
+    pin_order: int = 0
+    has_no_connect_marker: bool = False
     package_pin_number: str = ""
     pin_x: int = 0
     pin_y: int = 0
     net_id: int = 0  # matches page net list IDs
     no_connect: bool = False
     no_connect_metadata: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # The parser sets pin_order explicitly; callers that construct a pin
+        # from only a designator get the order derived for free so package
+        # evidence keeps working.
+        if not self.pin_order and self.pin_number.isdigit():
+            self.pin_order = int(self.pin_number)
 
 
 @dataclass
@@ -98,6 +113,49 @@ class GraphicInst:
     display_props: list[SymbolDisplayProp] = field(default_factory=list)
     # Arbitrary name-value properties from parsed binary data.
     props: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class DsnBlockSheetPin:
+    """A sheet pin on a hierarchical block instance (0x0c DrawnInst).
+
+    Decoded from the block's embedded LibraryPart-shaped struct; ``port_type``
+    gives the pin direction (see ``ORCAD_PORT_TYPES``).
+    """
+
+    name: str = ""
+    x: int = 0
+    y: int = 0
+    port_type: int = 0
+    port_type_name: str = ""
+
+
+@dataclass
+class DsnBlockPinBinding:
+    """A T0x10 record binding a block sheet pin to a parent-page net."""
+
+    pin_order: int = 0
+    pin_x: int = 0
+    pin_y: int = 0
+    net_id: int = 0
+
+
+@dataclass
+class DsnBlockInstance:
+    """A hierarchical block placement (0x0c DrawnInst) on a schematic page.
+
+    ``db_id`` joins the Hierarchy stream's child-schematic edge; ``reference``
+    is the block instance label (CONTROLS, CH1, …); ``sheet_pins`` are the
+    block's ports and ``net_bindings`` bind each sheet pin (by pin order) to a
+    parent-page net id.
+    """
+
+    db_id: int = 0
+    reference: str = ""
+    loc_x: int = 0
+    loc_y: int = 0
+    sheet_pins: list[DsnBlockSheetPin] = field(default_factory=list)
+    net_bindings: list[DsnBlockPinBinding] = field(default_factory=list)
 
 
 @dataclass
@@ -449,6 +507,7 @@ class SchematicPage:
     nets: list[PageNetEntry] = field(default_factory=list)
     wires: list[Wire] = field(default_factory=list)
     instances: list[PlacedInstance] = field(default_factory=list)
+    block_instances: list[DsnBlockInstance] = field(default_factory=list)
     ports: list[GraphicInst] = field(default_factory=list)
     globals: list[GraphicInst] = field(default_factory=list)
     off_page_connectors: list[GraphicInst] = field(default_factory=list)
