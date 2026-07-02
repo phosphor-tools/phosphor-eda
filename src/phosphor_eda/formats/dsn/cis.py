@@ -89,8 +89,21 @@ def _parse_groups(
     group_fields = _parse_groups_data_stream(data, groups_stream_path, store, ctx)
     for row_order, fields in enumerate(group_fields):
         if len(fields) < 2:
+            _warn(
+                store,
+                ctx,
+                f"{groups_stream_path}: group row {row_order} has {len(fields)} field(s), "
+                f"expected a name/value pair; skipping",
+            )
             continue
         name = fields[0]
+        if not name:
+            _warn(
+                store,
+                ctx,
+                f"{groups_stream_path}: group row {row_order} has an empty name; skipping",
+            )
+            continue
         group = DsnCisGroup(
             name=name,
             stream_path=groups_stream_path,
@@ -130,13 +143,16 @@ def _parse_groups_data_stream(
     ctx: ParseContext | None,
 ) -> list[list[str]]:
     payload = _payload_after_optional_size(data, stream_path, store, ctx)
-    fields = [_decode_cis_text(field) for field in payload.split(b"\xb0")]
-    fields = [field for field in fields if field]
+    # Records are delimited by the ``\xb0\xb0`` separator; within a record the
+    # name and value are split on a single ``\xb0``. Splitting on records BEFORE
+    # fields keeps an empty name or value in its own slot — the old
+    # "drop every empty field, then pair by twos" pass silently shifted every
+    # later name/value pair whenever a record carried an empty field.
     rows: list[list[str]] = []
-    for index in range(0, len(fields), 2):
-        row = fields[index : index + 2]
-        if row:
-            rows.append(row)
+    for record in payload.split(b"\xb0\xb0"):
+        if not record:
+            continue
+        rows.append([_decode_cis_text(field) for field in record.split(b"\xb0")])
     return rows
 
 
@@ -336,6 +352,7 @@ def _parse_boms(
                     store,
                     ctx,
                 )
+                _mark_bom_part_data_stale(bom, path, store, ctx)
             else:
                 store.unknown_streams.append(
                     DsnCisRawStream(
@@ -399,12 +416,48 @@ def _parse_bom_part_data(
     return entries
 
 
+def _mark_bom_part_data_stale(
+    bom: DsnCisBom,
+    stream_path: str,
+    store: DsnCisVariantStore,
+    ctx: ParseContext | None,
+) -> None:
+    """Record the BOMPartData id-namespace verdict; it is never live membership.
+
+    BOMPartData is a frozen CIS snapshot: even when its ids share the hierarchy
+    occurrence namespace (CP family) they omit current members and can include
+    dead ids, and other families (Maxome) use ids that join nothing. Membership
+    always comes from the live group members, never from this list. The verdict
+    is recorded as typed metadata rather than a ``ctx`` warning because a stale
+    snapshot is the normal, expected shape of this stream, not an anomaly.
+    """
+    if not bom.entries:
+        return
+    resolved = sum(entry.resolved_instance_db_id is not None for entry in bom.entries)
+    bom.part_data_stale_snapshot = True
+    bom.part_data_namespace = "hierarchy_occurrence" if resolved else "unknown_namespace"
+    store.diagnostics.append(
+        f"{stream_path}: BOMPartData is a stale membership snapshot "
+        f"({resolved}/{len(bom.entries)} ids join hierarchy occurrences, "
+        f"namespace {bom.part_data_namespace}); not used to derive membership"
+    )
+
+
 def _parse_variant_names(
     data: bytes,
     stream_path: str,
     store: DsnCisVariantStore,
     ctx: ParseContext | None,
 ) -> list[DsnCisVariantName]:
+    """Parse ``version, count, count x names, one trailing string``.
+
+    The trailing string is the last Part Manager group selected in Capture,
+    not an extra variant name (finding V4). Reading it as a name is what made
+    every real store emit a spurious count-mismatch warning; here it is parsed
+    into ``store.last_selected_group`` instead. A zero-count store with only a
+    trailing string (the mesh BDC shape) is therefore an empty store, not a
+    bogus one-variant store.
+    """
     if len(data) < 8:
         _warn(store, ctx, f"{stream_path}: VariantNames stream is too short")
         return []
@@ -414,38 +467,48 @@ def _parse_variant_names(
     declared_count = r.read_uint32()
     names: list[DsnCisVariantName] = []
     seen: Counter[str] = Counter()
-    while r.pos < len(data):
-        if r.pos + 2 > len(data):
-            _warn(store, ctx, f"{stream_path}: truncated VariantNames length at byte {r.pos}")
-            break
-        string_len = struct.unpack_from("<H", data, r.pos)[0]
-        value_end = r.pos + 2 + string_len
-        if value_end > len(data):
-            _warn(store, ctx, f"{stream_path}: truncated VariantNames value at byte {r.pos + 2}")
-            break
-        name = r.read_string_len_zero(encoding="latin1", allow_missing_terminator=True)
-        # read_string_len_zero consumes the null terminator when present; if it
-        # did not advance past value_end there was no terminator to consume.
-        if r.pos == value_end and r.pos < len(data):
-            _warn(store, ctx, f"{stream_path}: missing null terminator after {name!r}")
-        duplicate_index = seen[name]
-        seen[name] += 1
+    for _ in range(declared_count):
+        value = _read_variant_names_string(data, r, stream_path, store, ctx)
+        if value is None:
+            return names
+        duplicate_index = seen[value]
+        seen[value] += 1
         names.append(
             DsnCisVariantName(
                 stream_path=stream_path,
                 order=len(names),
                 duplicate_index=duplicate_index,
-                name=name,
+                name=value,
             )
         )
 
-    if declared_count != len(names):
-        _warn(
-            store,
-            ctx,
-            f"{stream_path}: declared {declared_count} variant names but parsed {len(names)}",
-        )
+    trailing = _read_variant_names_string(data, r, stream_path, store, ctx)
+    if trailing is not None:
+        store.last_selected_group = trailing
     return names
+
+
+def _read_variant_names_string(
+    data: bytes,
+    r: BinaryReader,
+    stream_path: str,
+    store: DsnCisVariantStore,
+    ctx: ParseContext | None,
+) -> str | None:
+    if r.pos >= len(data):
+        return None
+    if r.pos + 2 > len(data):
+        _warn(store, ctx, f"{stream_path}: truncated VariantNames length at byte {r.pos}")
+        return None
+    string_len = struct.unpack_from("<H", data, r.pos)[0]
+    value_end = r.pos + 2 + string_len
+    if value_end > len(data):
+        _warn(store, ctx, f"{stream_path}: truncated VariantNames value at byte {r.pos + 2}")
+        return None
+    value = r.read_string_len_zero(encoding="latin1", allow_missing_terminator=True)
+    if r.pos == value_end and r.pos < len(data):
+        _warn(store, ctx, f"{stream_path}: missing null terminator after {value!r}")
+    return value
 
 
 def _parse_cis_string_list(

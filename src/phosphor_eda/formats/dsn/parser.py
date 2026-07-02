@@ -153,6 +153,12 @@ def _parse_wire_aliases(
     as diagnostics; the wire itself stays (the caller re-anchors at the
     wire's end offset).
     """
+    # Pre-check the 1 unknown byte + uint16 count against the wire body before
+    # reading them, so a truncated/foreign wire layout fails here instead of
+    # reading a bogus count out of the following structure.
+    if wire_end_offset > 0 and r.pos + 3 > wire_end_offset:
+        msg = "wire body ends before its alias count"
+        raise ValueError(msg)
     r.skip(1)
     num_aliases = r.read_uint16()
     if num_aliases == 0:
@@ -162,6 +168,9 @@ def _parse_wire_aliases(
         raise ValueError(msg)
     aliases: list[WireAlias] = []
     for _ in range(num_aliases):
+        if wire_end_offset > 0 and r.pos >= wire_end_offset:
+            msg = "wire alias record starts past the wire body"
+            raise ValueError(msg)
         _tid, alias_end, _pairs = r.read_prefix_chain()
         r.try_read_preamble()
         alias = WireAlias()
@@ -1106,7 +1115,7 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
     try:
         # 1. Parse Library stream first (needed for string list)
         lib_data = ole.openstream("Library").read()
-        library_header, string_list, part_fields = parse_library(lib_data)
+        library_header, string_list, part_fields = parse_library(lib_data, ctx)
 
         design = ParsedDesign()
         design.library_header = library_header

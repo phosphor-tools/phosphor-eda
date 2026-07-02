@@ -397,6 +397,14 @@ class DsnCisBom:
     stream_path: str = ""
     child_string_lists: list[DsnCisStringList] = field(default_factory=list)
     entries: list[DsnCisBomEntry] = field(default_factory=list)
+    # BOMPartData is a frozen CIS snapshot of Part Manager membership, never a
+    # live source: current group membership is authoritative. These record how
+    # the BOMPartData id namespace joined hierarchy occurrences at parse time so
+    # no consumer mistakes the list for current membership.
+    part_data_stale_snapshot: bool = False
+    # "hierarchy_occurrence" when any id resolved (stale but same namespace),
+    # "unknown_namespace" when none joined, "" when no BOMPartData stream.
+    part_data_namespace: str = ""
 
 
 @dataclass
@@ -454,6 +462,9 @@ class DsnCisVariantStore:
     present: bool = False
     placeholder: bool = False
     variant_names: list[DsnCisVariantName] = field(default_factory=list)
+    # Trailing string after the declared VariantNames entries: the last
+    # Part Manager group selected in Capture. Empty when absent.
+    last_selected_group: str = ""
     # BOMDataStream field list (declared count + BOM names): stream-level
     # evidence recorded once, not duplicated onto every DsnCisBom.
     bom_raw_fields: list[str] = field(default_factory=list)

@@ -683,6 +683,12 @@ def _source_page(
                 pin_metadata["dsn_sidecar_package_pin"] = raw_pin.package_pin_number
             pin_occurrence_metadata: dict[str, str] = {}
             component_metadata: dict[str, str] = {}
+            # Typed instance identity for CIS variant targeting. Only set for a
+            # real persistent db_id (>0): a 0 db_id falls back to the instance
+            # index in the source id, which would collide with a real db_id ==
+            # that index, so it must never key variant resolution (A7).
+            if raw_inst.db_id > 0:
+                component_metadata["dsn_component_db_id"] = str(raw_inst.db_id)
             if package is not None and package_device is not None:
                 component_metadata.update(_package_component_metadata(package))
                 pin_occurrence_metadata.update(_package_occurrence_metadata(package_device))

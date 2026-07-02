@@ -17,7 +17,7 @@ from phosphor_eda.formats.dsn.binary_reader import (
     BinaryReader,
     decode_orcad_text,
 )
-from phosphor_eda.formats.dsn.pins import ORCAD_PORT_TYPES
+from phosphor_eda.formats.dsn.pins import ORCAD_PORT_TYPES, symbol_pins_align
 from phosphor_eda.formats.dsn.raw_models import DsnCacheSymbols, DsnSymbolPin
 
 if TYPE_CHECKING:
@@ -73,87 +73,97 @@ def parse_cache_symbols(data: bytes, ctx: ParseContext | None = None) -> DsnCach
     # 4-byte header: 0x00 0x00 (assumed) + 2 unknown bytes
     r.skip(4)
 
-    while r.pos < size - 4:
-        # Probe: hasStrAfter0Byte (non-consuming check)
-        if not _can_read_string_len_zero(data, r.pos):
-            # !hasStrAfter0Byte path
-            if _can_read_string_len_zero(data, r.pos + 8):
-                # hasStrAfter8Byte: consume 8 bytes + lib path + 2 unknown + refdes
-                r.skip(8)
-                r.read_string_len_zero()  # library path
-                r.skip(2)  # unknown bytes
-                r.read_string_len_zero()  # someRefDes
-            # Always: 2 unknown bytes (outside hasStrAfter8Byte)
-            r.skip(2)
+    # A malformed Cache stream must warn and return what was decoded, matching
+    # every other stream's containment — never abort the whole parse_dsn via an
+    # uncaught struct.error/IndexError from a length-prefixed string or unpack.
+    try:
+        while r.pos < size - 4:
+            # Probe: hasStrAfter0Byte (non-consuming check)
+            if not _can_read_string_len_zero(data, r.pos):
+                # !hasStrAfter0Byte path
+                if _can_read_string_len_zero(data, r.pos + 8):
+                    # hasStrAfter8Byte: consume 8 bytes + lib path + 2 unknown + refdes
+                    r.skip(8)
+                    r.read_string_len_zero()  # library path
+                    r.skip(2)  # unknown bytes
+                    r.read_string_len_zero()  # someRefDes
+                # Always: 2 unknown bytes (outside hasStrAfter8Byte)
+                r.skip(2)
 
-        # Symbol name
-        if r.pos >= size - 2:
-            break
-        name = r.read_string_len_zero()
+            # Symbol name
+            if r.pos >= size - 2:
+                break
+            name = r.read_string_len_zero()
 
-        # Peek id0, id1 to check for package reference loop
-        if r.pos + 8 > size:
-            break
-        id0 = struct.unpack_from("<I", data, r.pos)[0]
-        id1 = struct.unpack_from("<I", data, r.pos + 4)[0]
+            # Peek id0, id1 to check for package reference loop
+            if r.pos + 8 > size:
+                break
+            id0 = struct.unpack_from("<I", data, r.pos)[0]
+            id1 = struct.unpack_from("<I", data, r.pos + 4)[0]
 
-        if id0 != id1:
-            # Package reference do-while loop
-            while True:
-                if r.pos + 2 > size:
-                    break
-                some_val = r.read_uint16()
-                if r.pos >= size:
-                    break
-                if r.pos + 1 >= size:
-                    r.skip(1)
-                    break
-                # hasMysterious2Byte = !can_read_string
-                if _can_read_string_len_zero(data, r.pos, size):
-                    r.read_string_len_zero()
-                elif _can_read_string_len_zero(data, r.pos + 2, size):
-                    r.skip(2)  # mysterious 2 bytes
-                    r.read_string_len_zero()
+            if id0 != id1:
+                # Package reference do-while loop
+                while True:
+                    if r.pos + 2 > size:
+                        break
+                    some_val = r.read_uint16()
+                    if r.pos >= size:
+                        break
+                    if r.pos + 1 >= size:
+                        r.skip(1)
+                        break
+                    # hasMysterious2Byte = !can_read_string
+                    if _can_read_string_len_zero(data, r.pos, size):
+                        r.read_string_len_zero()
+                    elif _can_read_string_len_zero(data, r.pos + 2, size):
+                        r.skip(2)  # mysterious 2 bytes
+                        r.read_string_len_zero()
+                    else:
+                        break
+                    if some_val != 0:
+                        break
+
+            # Read some_id0, some_id1, struct_type
+            if r.pos + 10 > size:
+                break
+            r.skip(8)  # some_id0 + some_id1
+            struct_type = r.read_uint16()
+
+            # Skip the structure via prefix chain
+            struct_start = r.pos
+            try:
+                _type_id, end_offset, _pairs = r.read_prefix_chain()
+                if end_offset > 0:
+                    struct_end = end_offset
+                    r.pos = end_offset
                 else:
-                    break
-                if some_val != 0:
-                    break
+                    struct_end = r.pos
+            except ValueError:
+                break
 
-        # Read some_id0, some_id1, struct_type
-        if r.pos + 10 > size:
-            break
-        r.skip(8)  # some_id0 + some_id1
-        struct_type = r.read_uint16()
-
-        # Skip the structure via prefix chain
-        struct_start = r.pos
-        try:
-            _type_id, end_offset, _pairs = r.read_prefix_chain()
-            if end_offset > 0:
-                struct_end = end_offset
-                r.pos = end_offset
-            else:
-                struct_end = r.pos
-        except ValueError:
-            break
-
-        # Extract pin names from symbol entries (struct_type 0x18 = LibraryPart)
-        if struct_type == STRUCT_LIBRARY_PART and name:
-            sub_symbols = _extract_pin_names(data, struct_start, struct_end, name)
-            for sym_key, pins in sub_symbols.items():
-                if pins:
-                    pin_map[sym_key] = pins
-            symbol_pins = _extract_structured_symbol_pins(
-                data,
-                struct_start,
-                struct_end,
-                name,
+            # Extract pin names from symbol entries (struct_type 0x18 = LibraryPart)
+            if struct_type == STRUCT_LIBRARY_PART and name:
+                sub_symbols = _extract_pin_names(data, struct_start, struct_end, name)
+                for sym_key, pins in sub_symbols.items():
+                    if pins:
+                        pin_map[sym_key] = pins
+                symbol_pins = _extract_structured_symbol_pins(
+                    data,
+                    struct_start,
+                    struct_end,
+                    name,
+                )
+                for sym_key, pins in symbol_pins.items():
+                    if pins:
+                        structured_pins[sym_key] = pins
+    except (struct.error, IndexError) as exc:
+        if ctx is not None:
+            ctx.warn(
+                "dsn_cache",
+                f"Cache stream parse error at byte {r.pos}: {exc}; keeping symbols decoded so far",
             )
-            for sym_key, pins in symbol_pins.items():
-                if pins:
-                    structured_pins[sym_key] = pins
 
-    _warn_for_unstructured_cache_symbols(pin_map, structured_pins, ctx)
+    _warn_for_cache_pin_issues(pin_map, structured_pins, ctx)
     return DsnCacheSymbols(pin_names=pin_map, pins=structured_pins)
 
 
@@ -213,7 +223,14 @@ def _extract_pin_names(
             current_sym = name.replace(".Normal", "")
             if current_sym not in result:
                 result[current_sym] = []
-        elif name != sym_name and len(name) < 30:
+        elif ".Convert" in name:
+            # A ``<base>.Convert`` view name is the current symbol's de Morgan
+            # alternate view, not a pin and not a new sub-symbol. The structured
+            # parser ignores it (pins stay under the current symbol); skipping it
+            # here keeps the legacy scan aligned instead of appending it as a
+            # phantom pin that shifts every later index (finding R4).
+            continue
+        elif name != sym_name:
             result[current_sym].append(name)
 
     return result
@@ -330,7 +347,7 @@ def _try_read_structured_symbol_pin(
     )
 
 
-def _warn_for_unstructured_cache_symbols(
+def _warn_for_cache_pin_issues(
     pin_map: dict[str, list[str]],
     structured_pins: dict[str, list[DsnSymbolPin]],
     ctx: ParseContext | None,
@@ -343,3 +360,14 @@ def _warn_for_unstructured_cache_symbols(
             f"{symbol_name}: Cache pin names used legacy heuristic; structured symbol-pin "
             "layout was not recognized",
         )
+    # Both scans decoded the symbol but disagree on pin count/order. The
+    # structured layout is authoritative (resolve_symbol_pin discards the
+    # mismatch), so surface it rather than dropping the evidence silently (R4).
+    for symbol_name in sorted(pin_map.keys() & structured_pins.keys()):
+        if not symbol_pins_align(pin_map[symbol_name], structured_pins[symbol_name]):
+            ctx.warn(
+                "dsn_cache_pin_misalignment",
+                f"{symbol_name}: legacy Cache pin names "
+                f"{pin_map[symbol_name]} disagree with the structured symbol-pin layout "
+                f"{[pin.name for pin in structured_pins[symbol_name]]}; structured pins win",
+            )
