@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -98,6 +99,7 @@ def resolve_dsn_source(source: DsnSourceDesign, ctx: ParseContext | None = None)
 
     name_evidence = _collect_name_evidence(source.pages)
     name_decisions = _resolve_net_names(source, local_refs, net_union, name_evidence, ctx)
+    net_properties_by_root = _collect_net_properties(source.pages, net_union)
     metadata = dict(source.metadata)
     # The resolver owns parse_issue_count; drop any value carried in from
     # source metadata so it cannot spoof the count set below from ctx.
@@ -115,6 +117,7 @@ def resolve_dsn_source(source: DsnSourceDesign, ctx: ParseContext | None = None)
             name_decisions,
             net_index,
             root_id,
+            net_properties_by_root,
         ),
         include_net=_include_dsn_net,
         net_ordering=_order_dsn_nets,
@@ -477,6 +480,7 @@ def _page_inputs(source_pages: Iterable[DsnPageSource]) -> list[ResolvedPageInpu
             name=source_page.name,
             scope_id=source_page.scope_id,
             title_block=source_page.title_block,
+            annotations=tuple(source_page.annotations),
         )
         for source_page in source_pages
     ]
@@ -528,14 +532,50 @@ def _local_net_inputs(
     ]
 
 
+def _collect_net_properties(
+    pages: Iterable[DsnPageSource],
+    net_union: NetUnion,
+) -> dict[str, list[dict[str, str | int]]]:
+    """Aggregate wire net-property evidence per resolved net (keyed by root id).
+
+    Each record keeps its provenance — page name, wire dbid, runtime net id,
+    property name and value — so the raw evidence stays traceable. Constraint
+    interpretation is intentionally left out.
+    """
+    by_root: dict[str, list[dict[str, str | int]]] = {}
+    for page in pages:
+        for wire in page.wires:
+            if not wire.net_properties:
+                continue
+            root_id = net_union.find(wire.local_net_id)
+            records = by_root.setdefault(root_id, [])
+            for name, value in wire.net_properties:
+                records.append(
+                    {
+                        "name": name,
+                        "value": value,
+                        "page": page.name,
+                        "wire_db_id": wire.db_id,
+                        "net_id": wire.source_net_id,
+                    }
+                )
+    return by_root
+
+
 def _dsn_net_input_for_group(
     name_decisions: dict[str, _NetNameDecision],
     net_index: int,
     root_id: str,
+    net_properties_by_root: dict[str, list[dict[str, str | int]]],
 ) -> ResolvedNetInput:
     decision = name_decisions[root_id]
     metadata = {"dsn_root_local_net_id": root_id}
     metadata.update(decision.metadata)
+    net_properties = net_properties_by_root.get(root_id)
+    if net_properties:
+        # Raw net-property evidence with provenance; queryable via net_metadata.
+        metadata["dsn_net_property_count"] = str(len(net_properties))
+        metadata["dsn_net_properties"] = json.dumps(net_properties, separators=(",", ":"))
     return ResolvedNetInput(
         id=f"dsn:net:{net_index:04d}",
         name=decision.name,

@@ -64,6 +64,9 @@ class DsnWire:
     # Persistent wire dbid; min over a net cluster yields the stored
     # N##### autoname. 0 means the dbid was not parsed.
     db_id: int = 0
+    # Raw net-property evidence from the wire's prefix-chain pairs
+    # (CDS_PHYS_NET_NAME, DIFFERENTIAL_PAIR, VOLTAGE).
+    net_properties: tuple[tuple[str, str], ...] = ()
     kind: str = field(default="wire", init=False)
 
 
@@ -208,6 +211,9 @@ class DsnPageSource:
     globals: list[DsnGlobal]
     off_page_connectors: list[DsnOffPageConnector]
     bus_entries: list[DsnBusEntry] = field(default_factory=list)
+    # Free-text schematic notes (CommentText) placed on the page, in stream
+    # order — surfaced publicly as page annotations.
+    annotations: list[str] = field(default_factory=list)
     title_block: TitleBlock | None = None
     # Cross-page net-name merge partition. Root and singly-instantiated pages
     # share ``"root"`` (global name merge, as before); each repeated-sheet
