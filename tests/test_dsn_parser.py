@@ -845,6 +845,20 @@ def test_truncated_library_stream_raises_typed_dsn_format_error() -> None:
         parse_library(b"\x00" * 40)
 
 
+def test_truncated_page_stream_raises_typed_dsn_format_error() -> None:
+    from phosphor_eda.formats.dsn.errors import DsnFormatError
+    from phosphor_eda.formats.dsn.parser import parse_page
+
+    # The header parses but the net list is cut short: the early structural
+    # reads run outside the per-section guards, so a raw struct.error would
+    # otherwise escape parse_page. It must be converted to a typed
+    # DsnFormatError so load_orcad_project records a parse_error instead of
+    # aborting the whole project load.
+    data = _page_prologue() + struct.pack("<H", 3)  # 3 nets declared, none present
+    with pytest.raises(DsnFormatError, match="Page stream is truncated"):
+        parse_page(data, [], ParseContext())
+
+
 def test_library_string_count_uint16_fallback_emits_version_crosscheck() -> None:
     from phosphor_eda.formats.dsn.library import parse_library
 

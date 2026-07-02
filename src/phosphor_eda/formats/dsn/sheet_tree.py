@@ -158,7 +158,13 @@ def build_sheet_tree(raw: ParsedDesign, ctx: ParseContext | None = None) -> Shee
         parent_scope_id: ScopeId | None,
         refdes_by_db_id: dict[int, str],
         ancestor_views: frozenset[str],
-    ) -> None:
+    ) -> bool:
+        """Emit a ScopePlan for this page occurrence and recurse into its blocks.
+
+        Returns ``True`` when a new scope was added; ``False`` when the scope
+        was rejected as a duplicate so the caller records only accepted child
+        scopes.
+        """
         if scope_id.path in seen_scopes:
             reason = (
                 "block reference is not unique on its page"
@@ -166,8 +172,9 @@ def build_sheet_tree(raw: ParsedDesign, ctx: ParseContext | None = None) -> Shee
                 else "duplicate top-level page name"
             )
             warn_optional(ctx, "dsn_scope_collision", f"duplicate sheet scope {scope_id}; {reason}")
-            return
+            return False
         seen_scopes.add(scope_id.path)
+        current_ancestors = ancestor_views | {raw_page.view_name}
 
         repeated = view_multiplicity.get(raw_page.view_name, 0) > 1
         if repeated:
@@ -199,7 +206,7 @@ def build_sheet_tree(raw: ParsedDesign, ctx: ParseContext | None = None) -> Shee
                 )
                 continue
             child_view = info.child_schematic
-            if child_view in ancestor_views:
+            if child_view in current_ancestors:
                 warn_optional(
                     ctx,
                     "dsn_block_cycle",
@@ -219,14 +226,14 @@ def build_sheet_tree(raw: ParsedDesign, ctx: ParseContext | None = None) -> Shee
             child_scope_ids: list[ScopeId] = []
             for child_page in child_pages:
                 child_scope = ScopeId(path=(*occ_prefix, child_page.name or "unnamed"))
-                child_scope_ids.append(child_scope)
-                process_page(
+                if process_page(
                     child_page,
                     child_scope,
                     scope_id,
                     info.refdes_by_db_id,
-                    ancestor_views | {raw_page.view_name},
-                )
+                    current_ancestors,
+                ):
+                    child_scope_ids.append(child_scope)
             wire_net_by_db_id = {wire.db_id: wire.wire_id for wire in raw_page.wires if wire.db_id}
             block_links.append(
                 BlockLinkPlan(
@@ -238,6 +245,8 @@ def build_sheet_tree(raw: ParsedDesign, ctx: ParseContext | None = None) -> Shee
                     bindings=_block_bindings(block, wire_net_by_db_id),
                 )
             )
+
+        return True
 
     for root_page in root_pages:
         root_scope = ScopeId(path=(root_page.name or "unnamed",))
