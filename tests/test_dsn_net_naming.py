@@ -311,20 +311,24 @@ def test_packaged_netlist_diagnoses_native_package_pin_mismatch(tmp_path: Path) 
 
 
 @pytest.mark.parametrize(
-    ("dsn_path", "netlist_dir"),
+    ("dsn_path", "netlist_dir", "pstchip_evidence_count", "applied_override_count"),
     [
-        (SYNC_DSN, SYNC_NETLIST_DIR),
-        (CP_SMARTGARDEN_DSN, CP_SMARTGARDEN_NETLIST_DIR),
+        (SYNC_DSN, SYNC_NETLIST_DIR, 70, 255),
+        (CP_SMARTGARDEN_DSN, CP_SMARTGARDEN_NETLIST_DIR, 66, 141),
     ],
 )
 def test_packaged_netlist_oracle_matches_native_package_evidence(
-    dsn_path: Path, netlist_dir: Path
+    dsn_path: Path,
+    netlist_dir: Path,
+    pstchip_evidence_count: int,
+    applied_override_count: int,
 ) -> None:
     pstxprt = netlist_dir / "pstxprt.dat"
     pstchip = netlist_dir / "pstchip.dat"
     assert pstxprt.is_file()
     assert pstchip.is_file()
-    assert parse_pstchip_pin_evidence(pstchip)
+    # H6/T6: lock the exact evidence/override counts instead of bare truthiness.
+    assert len(parse_pstchip_pin_evidence(pstchip)) == pstchip_evidence_count
 
     ctx = ParseContext()
     raw = parse_dsn(dsn_path, ctx)
@@ -338,7 +342,7 @@ def test_packaged_netlist_oracle_matches_native_package_evidence(
         for instance in page.instances
         if instance.pin_name_overrides
     ]
-    assert applied_overrides
+    assert len(applied_overrides) == applied_override_count
     mismatch_messages = [
         issue.message
         for issue in ctx.issues[before:]
