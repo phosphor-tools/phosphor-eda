@@ -18,9 +18,11 @@ from phosphor_eda.formats.common.diagnostics import ParseContext, warn_optional
 from phosphor_eda.formats.dsn.binary_reader import (
     PAGE_SETTINGS_SIZE,
     STRUCT_BUS_ENTRY,
+    STRUCT_DRAWN_INST,
     STRUCT_GLOBAL,
     STRUCT_NET_GROUP,
     STRUCT_OFF_PAGE_CONNECTOR,
+    STRUCT_PART_INST,
     STRUCT_PORT,
     STRUCT_WIRE_BUS,
     STRUCT_WIRE_SCALAR,
@@ -46,7 +48,11 @@ from phosphor_eda.formats.dsn.library import (
     parse_library,
     parse_packages_from_ole,
 )
+from phosphor_eda.formats.dsn.pins import ORCAD_PORT_TYPES
 from phosphor_eda.formats.dsn.raw_models import (
+    DsnBlockInstance,
+    DsnBlockPinBinding,
+    DsnBlockSheetPin,
     DsnBusEntry,
     DsnNetBundleMap,
     DsnNetBundleMember,
@@ -221,6 +227,103 @@ def _parse_title_blocks(
     return title_blocks
 
 
+def _warn_unknown_structure(
+    ctx: ParseContext | None, section: str, type_id: int, offset: int
+) -> None:
+    warn_optional(
+        ctx,
+        "dsn_unknown_structure",
+        f"page {section} section: unsupported structure type 0x{type_id:02x} at offset {offset}",
+    )
+
+
+def _parse_block_sheet_pin(r: BinaryReader) -> DsnBlockSheetPin:
+    """Read one StructSymbolPin from a block instance's embedded symbol body."""
+    _type_id, pin_end, _pairs = r.read_prefix_chain()
+    r.try_read_preamble()
+    name = r.read_string_len_zero()
+    start_x = r.read_int32()
+    start_y = r.read_int32()
+    r.skip(8)  # hotpoint x/y
+    r.read_uint16()  # pin shape
+    r.skip(2)  # StructSymbolPin unknown field after pinShape
+    port_type = r.read_uint32()
+    r.skip(4)  # StructSymbolPin unknown field before display properties
+    display_prop_count = r.read_uint16()
+    for _ in range(display_prop_count):
+        skip_structure(r)
+    port_type_info = ORCAD_PORT_TYPES.get(port_type)
+    pin = DsnBlockSheetPin(
+        name=name,
+        x=start_x,
+        y=start_y,
+        port_type=port_type,
+        port_type_name=port_type_info.name if port_type_info is not None else "",
+    )
+    if pin_end > 0:
+        r.pos = pin_end
+    return pin
+
+
+def _parse_block_instance(r: BinaryReader) -> DsnBlockInstance:
+    """Parse a 0x0c DrawnInst (hierarchical block placement).
+
+    Layout (fixture-proven; OOCP names ``DrawnInst`` but ships no parser):
+    preamble, 8 unknown bytes, an empty package name, the block db_id (joins
+    the Hierarchy stream's child-schematic edge), a 4x int16 bounding box,
+    loc x/y, 4 unknown bytes, the SymbolDisplayProp list, one separator byte,
+    then an embedded LibraryPart-shaped struct holding the block's sheet pins
+    (StructSymbolPin: name, coordinates, port-type direction). After the
+    embedded struct comes the block instance label, 14 bytes, and the T0x10
+    records binding each sheet pin (by 1-based order) to a parent-page net id.
+    """
+    block = DsnBlockInstance()
+    r.try_read_preamble()
+    r.skip(8)  # unknown
+    r.read_string_len_zero()  # empty package name
+    block.db_id = r.read_uint32()
+    r.skip(8)  # bounding box (4x int16)
+    block.loc_x = r.read_int16()
+    block.loc_y = r.read_int16()
+    r.skip(4)  # unknown
+
+    num_display_props = r.read_uint16()
+    for _ in range(num_display_props):
+        skip_structure(r)
+    r.skip(1)  # separator before the embedded symbol struct
+
+    # Embedded LibraryPart-shaped struct carrying the block's sheet pins.
+    _emb_type, emb_end, _emb_pairs = r.read_prefix_chain()
+    r.try_read_preamble()
+    r.read_string_len_zero()  # empty symbol name
+    r.read_string_len_zero()  # empty source library
+    r.skip(4)  # unknown
+    r.read_uint16()  # nPrimitives
+    r.skip(8)  # unknown
+    num_pins = r.read_uint16()
+    for _ in range(num_pins):
+        block.sheet_pins.append(_parse_block_sheet_pin(r))
+    if emb_end > 0:
+        r.pos = emb_end
+
+    block.reference = r.read_string_len_zero()
+    r.skip(14)  # unknown
+    num_bindings = r.read_uint16()
+    for _ in range(num_bindings):
+        _t_type, t_end, _t_pairs = r.read_prefix_chain()
+        r.try_read_preamble()
+        binding = DsnBlockPinBinding(
+            pin_order=r.read_uint16(),
+            pin_x=r.read_int16(),
+            pin_y=r.read_int16(),
+            net_id=r.read_uint32(),
+        )
+        block.net_bindings.append(binding)
+        if t_end > 0:
+            r.pos = t_end
+    return block
+
+
 def parse_page(
     data: bytes, string_list: list[str], ctx: ParseContext | None = None
 ) -> DsnSchematicPage:
@@ -267,10 +370,13 @@ def parse_page(
     # Map: coordinate (x,y) -> set of net_ids
     wire_net_map: dict[tuple[int, int], set[int]] = {}
     for _ in range(num_wires):
+        wire_offset = r.pos
         type_id, end_offset, _pairs = r.read_prefix_chain()
         r.try_read_preamble()
         wire = Wire(type_id=type_id)
         parsed_wire = False
+        if type_id not in {STRUCT_WIRE_SCALAR, STRUCT_WIRE_BUS}:
+            _warn_unknown_structure(ctx, "wire", type_id, wire_offset)
 
         try:
             # OpenOrCadParser's StructWire marks these 8 bytes "might be
@@ -301,74 +407,90 @@ def parse_page(
             page.wires.append(wire)
     page.wire_net_map = wire_net_map
 
-    # Placed instances — parse body to extract reference designator
+    # Placed instances and hierarchical block instances. The section mixes two
+    # structure types: 0x0d part instances and 0x0c block placements, each with
+    # its own body layout. Type-gate so a block record never desyncs the 0x0d
+    # decode, and diagnose anything else instead of guessing.
     num_instances = r.read_uint16()
     for _ in range(num_instances):
-        _type_id, end_offset, pairs = r.read_prefix_chain()
-        r.try_read_preamble()
+        inst_offset = r.pos
+        type_id, end_offset, pairs = r.read_prefix_chain()
 
-        inst = PlacedInstance()
-
-        inst.props_list = _prop_entries_from_pairs(pairs, string_list)
-        inst.props = dict(inst.props_list)
-
-        # Parse body to get package name, dbId, reference, and pin connections
-        try:
-            r.skip(8)  # instance_id_idx + source_library_idx
-            inst.package_name = r.read_string_len_zero()
-            inst.db_id = r.read_uint32()
-            r.skip(8)  # unknown_1
-            inst.loc_x = r.read_int16()
-            inst.loc_y = r.read_int16()
-            r.skip(4)  # unknown_2
-
-            # Skip SymbolDisplayProp structures
-            num_display_props = r.read_uint16()
-            for _ in range(num_display_props):
-                skip_structure(r)
-
-            r.skip(1)  # unknown_3
-
-            # Checkpoint boundary — may have preamble
+        if type_id == STRUCT_PART_INST:
             r.try_read_preamble()
+            inst = PlacedInstance()
+            inst.props_list = _prop_entries_from_pairs(pairs, string_list)
+            inst.props = dict(inst.props_list)
+            try:
+                r.skip(8)  # instance_id_idx + source_library_idx
+                inst.package_name = r.read_string_len_zero()
+                inst.db_id = r.read_uint32()
+                r.skip(8)  # unknown_1
+                inst.loc_x = r.read_int16()
+                inst.loc_y = r.read_int16()
+                r.skip(4)  # unknown_2
 
-            # Reference designator
-            inst.reference = r.read_string_len_zero()
+                # Skip SymbolDisplayProp structures
+                num_display_props = r.read_uint16()
+                for _ in range(num_display_props):
+                    skip_structure(r)
 
-            # 14 unknown bytes after reference
-            r.skip(14)
+                r.skip(1)  # unknown_3
 
-            # T0x10 structures = pin instances with net assignments
-            num_t0x10 = r.read_uint16()
-            for _ in range(num_t0x10):
-                _t_type, t_end, _t_pairs = r.read_prefix_chain()
+                # Checkpoint boundary — may have preamble
                 r.try_read_preamble()
 
-                pin = PinConnection()
-                pin.pin_number = str(r.read_uint16())
-                pin.pin_x = r.read_int16()
-                pin.pin_y = r.read_int16()
-                pin.net_id = r.read_uint32()
-                inst.pin_connections.append(pin)
+                # Reference designator
+                inst.reference = r.read_string_len_zero()
 
-                if t_end > 0:
-                    r.pos = t_end
+                # 14 unknown bytes after reference
+                r.skip(14)
 
-            # Checkpoint: source_package string
-            r.try_read_preamble()
-            inst.source_package = r.read_string_len_zero()
-            page.instances.append(inst)
-        except (struct.error, IndexError, ValueError) as e:
-            if ctx is not None:
-                ctx.warn("dsn_instance", f"PlacedInstance parse error: {e}")
+                # T0x10 structures = pin instances with net assignments. The
+                # pin-order field is int16: |v| is the 1-based display order and
+                # a negative sign is a user-placed no-connect marker.
+                num_t0x10 = r.read_uint16()
+                for _ in range(num_t0x10):
+                    _t_type, t_end, _t_pairs = r.read_prefix_chain()
+                    r.try_read_preamble()
+
+                    pin = PinConnection()
+                    order = r.read_int16()
+                    pin.pin_order = abs(order)
+                    pin.has_no_connect_marker = order < 0
+                    pin.pin_number = str(pin.pin_order)
+                    pin.pin_x = r.read_int16()
+                    pin.pin_y = r.read_int16()
+                    pin.net_id = r.read_uint32()
+                    inst.pin_connections.append(pin)
+
+                    if t_end > 0:
+                        r.pos = t_end
+
+                # Checkpoint: source_package string
+                r.try_read_preamble()
+                inst.source_package = r.read_string_len_zero()
+                page.instances.append(inst)
+            except (struct.error, IndexError, ValueError) as e:
+                if ctx is not None:
+                    ctx.warn("dsn_instance", f"PlacedInstance parse error: {e}")
+        elif type_id == STRUCT_DRAWN_INST:
+            try:
+                page.block_instances.append(_parse_block_instance(r))
+            except (struct.error, IndexError, ValueError) as e:
+                warn_optional(ctx, "dsn_block_instance", f"Block instance parse error: {e}")
+        else:
+            _warn_unknown_structure(ctx, "instance", type_id, inst_offset)
 
         # Jump to end_offset for safety
         if end_offset > 0:
             r.pos = end_offset
 
-    # Ports
+    # Ports. Like globals, the port body opens with an 8-byte string-index
+    # prefix (net-name index + source-library index) ahead of the symbol name.
     num_ports = r.read_uint16()
     for _ in range(num_ports):
+        port_offset = r.pos
         type_id, end_offset, pairs = r.read_prefix_chain()
         r.try_read_preamble()
         port: GraphicInst | None = None
@@ -379,11 +501,13 @@ def parse_page(
                     string_list,
                     pairs,
                     type_id,
-                    has_name_indices=False,
+                    has_name_indices=True,
                 )
             except (struct.error, IndexError, ValueError) as e:
                 if ctx is not None:
                     ctx.warn("dsn_port", f"Port parse error: {e}")
+        else:
+            _warn_unknown_structure(ctx, "port", type_id, port_offset)
         if end_offset > 0:
             r.pos = end_offset
         if port is not None:
@@ -392,6 +516,7 @@ def parse_page(
     # Globals (power symbols) — extract name, properties, and display props
     num_globals = r.read_uint16()
     for _ in range(num_globals):
+        global_offset = r.pos
         type_id, end_offset, pairs = r.read_prefix_chain()
         r.try_read_preamble()
 
@@ -406,6 +531,8 @@ def parse_page(
                     type_id,
                     has_name_indices=True,
                 )
+            else:
+                _warn_unknown_structure(ctx, "global", type_id, global_offset)
             r.skip(1)  # unknownFlag (0x21 for Global)
         except (struct.error, IndexError, ValueError) as e:
             if ctx is not None:
@@ -420,6 +547,7 @@ def parse_page(
     # Off-page connectors
     num_opc = r.read_uint16()
     for _ in range(num_opc):
+        opc_offset = r.pos
         type_id, end_offset, pairs = r.read_prefix_chain()
         r.try_read_preamble()
         connector: GraphicInst | None = None
@@ -436,6 +564,8 @@ def parse_page(
             except (struct.error, IndexError, ValueError) as e:
                 if ctx is not None:
                     ctx.warn("dsn_off_page_connector", f"Off-page connector parse error: {e}")
+        else:
+            _warn_unknown_structure(ctx, "off-page connector", type_id, opc_offset)
         if end_offset > 0:
             r.pos = end_offset
         if connector is not None:
@@ -476,6 +606,7 @@ def parse_page_tail_objects(
     try:
         num_bus_entries = r.read_uint16()
         for _ in range(num_bus_entries):
+            bus_entry_offset = r.pos
             type_id, end_offset, _pairs = r.read_prefix_chain()
             r.try_read_preamble()
             entry: DsnBusEntry | None = None
@@ -488,6 +619,8 @@ def parse_page_tail_objects(
                     end_y=r.read_int32(),
                 )
                 r.skip(8)
+            else:
+                _warn_unknown_structure(ctx, "bus entry", type_id, bus_entry_offset)
             if end_offset > 0:
                 r.pos = end_offset
             if entry is not None:

@@ -122,6 +122,13 @@ class DsnPinOccurrence:
 
 @dataclass(slots=True)
 class DsnPort:
+    """A hierarchical port occurrence.
+
+    ``name`` is the net name the port carries (its net-name property), not the
+    graphic symbol name (``PORTLEFT-L``, ``PORTRIGHT-R``); the symbol name
+    lives in ``symbol``.
+    """
+
     id: str
     scope_id: ScopeId
     local_net_id: str
@@ -129,6 +136,7 @@ class DsnPort:
     name: str
     name_key: str
     location: DsnPoint
+    symbol: str = ""
     props: dict[str, str] = field(default_factory=dict)
     kind: str = field(default="port", init=False)
 

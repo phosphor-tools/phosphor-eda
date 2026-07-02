@@ -423,7 +423,7 @@ def _parse_variant_names(
         if value_end > len(data):
             _warn(store, ctx, f"{stream_path}: truncated VariantNames value at byte {r.pos + 2}")
             break
-        name = r.read_string_len_zero(encoding="latin1")
+        name = r.read_string_len_zero(encoding="latin1", allow_missing_terminator=True)
         # read_string_len_zero consumes the null terminator when present; if it
         # did not advance past value_end there was no terminator to consume.
         if r.pos == value_end and r.pos < len(data):

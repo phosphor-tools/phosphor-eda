@@ -12,6 +12,8 @@ PREAMBLE = b"\xff\xe4\x5c\x39"
 
 # Structure type IDs consumed by the parser (from OpenOrCadParser Enums/Structure.hpp).
 STRUCT_PART_CELL = 6
+STRUCT_DRAWN_INST = 12  # DrawnInst — hierarchical block placement (0x0c)
+STRUCT_PART_INST = 13  # PartInst — placed part instance (0x0d)
 STRUCT_WIRE_SCALAR = 20
 STRUCT_WIRE_BUS = 21
 STRUCT_PORT = 23
@@ -28,6 +30,20 @@ STRUCT_ERC_SYMBOL = 75
 STRUCT_ERC_OBJECT = 77
 
 PAGE_SETTINGS_SIZE = 156  # Fixed-size block
+
+# Windows-1252 leaves five byte values undefined; OrCAD text uses this codepage
+# (µ, ±, °, smart quotes) so decode as cp1252 and fall back to latin-1 for those
+# five bytes rather than emitting U+FFFD replacement characters.
+_CP1252_UNDEFINED = frozenset({0x81, 0x8D, 0x8F, 0x90, 0x9D})
+
+
+def decode_orcad_text(raw: bytes) -> str:
+    """Decode OrCAD binary text as cp1252, with latin-1 for undefined bytes."""
+    if _CP1252_UNDEFINED.isdisjoint(raw):
+        return raw.decode("cp1252")
+    return "".join(
+        chr(byte) if byte in _CP1252_UNDEFINED else bytes((byte,)).decode("cp1252") for byte in raw
+    )
 
 
 class BinaryReader:
@@ -71,27 +87,57 @@ class BinaryReader:
 
     def read_string_zero(self) -> str:
         end = self.data.index(b"\x00", self.pos)
-        s = self.data[self.pos : end].decode("ascii", errors="replace")
+        s = decode_orcad_text(self.data[self.pos : end])
         self.pos = end + 1
         return s
 
-    def read_string_len_zero(self, encoding: str = "ascii") -> str:
+    def read_string_len_zero(
+        self, encoding: str | None = None, *, allow_missing_terminator: bool = False
+    ) -> str:
         """Read a length-prefixed null-terminated string.
 
         Format: [uint16 length] [length bytes of string] [0x00 null terminator]
         The length does NOT include the null terminator.
+
+        For a non-empty string the null terminator is verified: a length that
+        overshoots EOF or is not followed by ``0x00`` raises ``struct.error``
+        instead of silently returning truncated or mis-synced data. Callers
+        that legitimately probe an uncertain position must gate the read with
+        their own bounds check first. Formats whose terminator is genuinely
+        optional (the CIS VariantNames stream) pass
+        ``allow_missing_terminator=True`` after their own bounds check.
+
+        When *encoding* is ``None`` the bytes are decoded as OrCAD's cp1252
+        text; an explicit codec (e.g. ``"latin1"``) is used verbatim.
         """
         length = self.read_uint16()
         if length == 0:
-            # Still consume the null terminator
+            # Empty strings may or may not carry the trailing null; consume it
+            # when present without demanding it.
             if self.pos < len(self.data) and self.data[self.pos] == 0:
                 self.pos += 1
             return ""
-        raw = self.data[self.pos : self.pos + length]
-        self.pos += length
-        # Skip the null terminator
+        end = self.pos + length
+        if not allow_missing_terminator:
+            if end >= len(self.data):
+                msg = (
+                    f"length-prefixed string of {length} bytes at offset {self.pos} "
+                    f"overshoots stream end {len(self.data)}"
+                )
+                raise struct.error(msg)
+            if self.data[end] != 0:
+                msg = (
+                    f"length-prefixed string of {length} bytes at offset {self.pos} "
+                    f"is not null-terminated (found 0x{self.data[end]:02x})"
+                )
+                raise struct.error(msg)
+        raw = self.data[self.pos : end]
+        self.pos = end
+        # Consume the null terminator when present.
         if self.pos < len(self.data) and self.data[self.pos] == 0:
             self.pos += 1
+        if encoding is None:
+            return decode_orcad_text(raw)
         return raw.decode(encoding, errors="replace")
 
     def at_preamble(self) -> bool:

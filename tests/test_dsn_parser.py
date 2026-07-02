@@ -516,3 +516,131 @@ def test_page_tail_erc_object_decodes_raw_fields() -> None:
     assert erc_object.subject == "NET_A "
     assert erc_object.detail == "SCHEMATIC1, PAGE1  (30.48, 78.74) "
     assert not ctx.issues
+
+
+# --- A3: binary reader hardening ---
+
+
+def test_read_string_len_zero_raises_on_missing_terminator() -> None:
+    # Length says 4 bytes but the byte after them is not the 0x00 terminator.
+    reader = BinaryReader(struct.pack("<H", 4) + b"ABCD" + b"X", "s")
+
+    with pytest.raises(struct.error, match="not null-terminated"):
+        reader.read_string_len_zero()
+
+
+def test_read_string_len_zero_raises_on_eof_overshoot() -> None:
+    # Length claims 8 bytes but only 4 remain — the old reader sliced silently.
+    reader = BinaryReader(struct.pack("<H", 8) + b"ABCD", "s")
+
+    with pytest.raises(struct.error, match="overshoots stream end"):
+        reader.read_string_len_zero()
+
+
+def test_read_string_len_zero_allow_missing_terminator_returns_string() -> None:
+    reader = BinaryReader(struct.pack("<H", 3) + b"DNI" + b"\x03", "s")
+
+    assert reader.read_string_len_zero(allow_missing_terminator=True) == "DNI"
+    # A non-null trailing byte is left unconsumed for the caller to interpret.
+    assert reader.pos == 5
+
+
+def test_read_string_len_zero_decodes_cp1252() -> None:
+    reader = BinaryReader(struct.pack("<H", 5) + b"0.1\xb5F" + b"\x00", "s")
+
+    assert reader.read_string_len_zero() == "0.1µF"
+
+
+def test_can_read_string_len_zero_respects_scan_limit() -> None:
+    from phosphor_eda.formats.dsn.cache import _can_read_string_len_zero
+
+    data = struct.pack("<H", 4) + b"ABCD" + b"\x00"
+
+    # The terminator sits at offset 6; a limit that stops before it must reject.
+    assert _can_read_string_len_zero(data, 0) is True
+    assert _can_read_string_len_zero(data, 0, limit=6) is False
+
+
+# --- B1: unknown-structure diagnostics per page section ---
+
+
+def _page_prologue() -> bytes:
+    return (
+        _short_prefix(0, 0)
+        + _dsn_string("PAGE")
+        + _dsn_string("A4")
+        + (b"\x00" * 156)
+        + struct.pack("<H", 0)  # title blocks
+        + struct.pack("<H", 0)  # T0x34
+        + struct.pack("<H", 0)  # T0x35
+    )
+
+
+def _unknown_structure(type_id: int = 0x99) -> bytes:
+    body = b"\x00" * 40
+    return _structure_with_end_offset(type_id, body, byte_offset=3 + len(body))
+
+
+_PAGE_SECTIONS = ("wire", "instance", "port", "global", "off-page connector")
+
+
+def _page_with_unknown(section: str) -> bytes:
+    unknown = _unknown_structure()
+
+    def count(name: str) -> bytes:
+        return struct.pack("<H", 1 if section == name else 0)
+
+    def record(name: str, trailing: bytes = b"") -> bytes:
+        return unknown + trailing if section == name else b""
+
+    return (
+        _page_prologue()
+        + struct.pack("<H", 0)  # nets
+        + count("wire")
+        + record("wire")
+        + count("instance")
+        + record("instance")
+        + count("port")
+        + record("port")
+        + count("global")
+        + record("global", b"\x00" * 5)
+        + count("off-page connector")
+        + record("off-page connector", b"\x00" * 5)
+    )
+
+
+@pytest.mark.parametrize("section", _PAGE_SECTIONS)
+def test_unknown_structure_in_page_section_warns_without_crashing(section: str) -> None:
+    from phosphor_eda.formats.dsn.parser import parse_page
+
+    ctx = ParseContext()
+
+    page = parse_page(_page_with_unknown(section), [], ctx)
+
+    unknown_issues = [issue for issue in ctx.issues if issue.category == "dsn_unknown_structure"]
+    assert len(unknown_issues) == 1
+    assert f"page {section} section" in unknown_issues[0].message
+    assert "0x99" in unknown_issues[0].message
+    # Offset-anchored recovery leaves the section's parsed list empty, not
+    # populated with garbage.
+    assert page.wires == []
+    assert page.instances == []
+    assert page.ports == []
+    assert page.globals == []
+    assert page.off_page_connectors == []
+
+
+def test_unknown_bus_entry_structure_warns() -> None:
+    ctx = ParseContext()
+    page = DsnSchematicPage(name="PAGE1")
+    data = (
+        struct.pack("<H", 0)  # ERC object count
+        + struct.pack("<H", 1)  # bus entry count
+        + _unknown_structure()
+    )
+
+    parse_page_tail_objects(BinaryReader(data, "page-tail"), page, ctx)
+
+    assert page.bus_entries == []
+    assert [issue.category for issue in ctx.issues] == ["dsn_unknown_structure"]
+    assert "page bus entry section" in ctx.issues[0].message

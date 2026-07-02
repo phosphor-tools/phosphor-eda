@@ -118,22 +118,16 @@ def native_package_pin(
     instance: PlacedInstance,
     ctx: ParseContext | None = None,
 ) -> DsnPackageDevicePin | None:
-    try:
-        order = int(pin.pin_number) - 1
-    except ValueError:
-        if ctx is not None:
-            ctx.warn(
-                "dsn_package_evidence",
-                f"{instance.reference}: cannot map non-numeric symbol pin order "
-                f"{pin.pin_number!r} to native package {device.refdes_suffix!r}",
-            )
-        return None
+    # ``pin_order`` is the decoded 1-based display order (sign bit stripped),
+    # so no-connect-marked pins map to their device pin instead of leaking the
+    # raw u16 sentinel.
+    order = pin.pin_order - 1
     if 0 <= order < len(device.pins):
         return device.pins[order]
     if ctx is not None:
         ctx.warn(
             "dsn_package_evidence",
-            f"{instance.reference}: symbol pin order {pin.pin_number!r} is outside "
+            f"{instance.reference}: symbol pin order {pin.pin_order} is outside "
             f"native package device {device.refdes_suffix!r}",
         )
     return None
