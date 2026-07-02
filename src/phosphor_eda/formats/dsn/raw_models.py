@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
+
+DsnResolutionKind = Literal["unresolved", "hierarchy_occurrence"]
+DsnMarkerCategory = Literal["erc", "erc_physical"]
 
 
 @dataclass
@@ -175,6 +179,33 @@ class DsnPackage:
 
 
 @dataclass
+class DsnLibraryPackageInventory:
+    """Summary of a raw OrCAD library package stream."""
+
+    stream_path: str = ""
+    name: str = ""
+    source_package_names: list[str] = field(default_factory=list)
+    source_library_references: list[str] = field(default_factory=list)
+    pcb_footprint: str = ""
+    device_count: int = 0
+    pin_count: int = 0
+
+
+@dataclass
+class DsnLibraryInventory:
+    """Raw OrCAD DSN/OLB library and design-cache inventory."""
+
+    path: str = ""
+    library_header: DsnLibraryHeader | None = None
+    string_list: list[str] = field(default_factory=list)
+    part_fields: list[str] = field(default_factory=list)
+    packages: dict[str, DsnPackage] = field(default_factory=dict)
+    package_inventory: list[DsnLibraryPackageInventory] = field(default_factory=list)
+    cache_part_names: list[str] = field(default_factory=list)
+    cache_pin_counts: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
 class DsnView:
     """Raw OrCAD Capture schematic view metadata."""
 
@@ -210,7 +241,7 @@ class DsnCisBomEntry:
     row_order: int = 0
     raw_id: int = 0
     resolved_instance_db_id: int | None = None
-    resolution_kind: str = "unresolved"
+    resolution_kind: DsnResolutionKind = "unresolved"
     diagnostics: list[str] = field(default_factory=list)
 
 
@@ -220,7 +251,6 @@ class DsnCisBom:
 
     name: str = ""
     stream_path: str = ""
-    raw_fields: list[str] = field(default_factory=list)
     child_string_lists: list[DsnCisStringList] = field(default_factory=list)
     entries: list[DsnCisBomEntry] = field(default_factory=list)
 
@@ -232,9 +262,9 @@ class DsnCisGroupMember:
     stream_path: str = ""
     row_order: int = 0
     state: str = ""
-    occurrence_id: int = 0
+    occurrence_id: int | None = None
     resolved_instance_db_id: int | None = None
-    resolution_kind: str = "unresolved"
+    resolution_kind: DsnResolutionKind = "unresolved"
     diagnostics: list[str] = field(default_factory=list)
 
 
@@ -244,9 +274,9 @@ class DsnCisUpdateStorageRow:
 
     stream_path: str = ""
     row_order: int = 0
-    occurrence_id: int = 0
+    occurrence_id: int | None = None
     resolved_instance_db_id: int | None = None
-    resolution_kind: str = "unresolved"
+    resolution_kind: DsnResolutionKind = "unresolved"
     columns: list[str] = field(default_factory=list)
     values: list[str] = field(default_factory=list)
     diagnostics: list[str] = field(default_factory=list)
@@ -280,36 +310,13 @@ class DsnCisVariantStore:
     present: bool = False
     placeholder: bool = False
     variant_names: list[DsnCisVariantName] = field(default_factory=list)
+    # BOMDataStream field list (declared count + BOM names): stream-level
+    # evidence recorded once, not duplicated onto every DsnCisBom.
+    bom_raw_fields: list[str] = field(default_factory=list)
     boms: list[DsnCisBom] = field(default_factory=list)
     groups: list[DsnCisGroup] = field(default_factory=list)
     unknown_streams: list[DsnCisRawStream] = field(default_factory=list)
     diagnostics: list[str] = field(default_factory=list)
-
-
-@dataclass
-class DsnLibraryPackageInventory:
-    """Summary of a raw OrCAD library package stream."""
-
-    stream_path: str = ""
-    name: str = ""
-    source_package_names: list[str] = field(default_factory=list)
-    source_library_references: list[str] = field(default_factory=list)
-    pcb_footprint: str = ""
-    device_count: int = 0
-    pin_count: int = 0
-
-
-@dataclass
-class DsnLibraryInventory:
-    """Raw OrCAD DSN/OLB library and design-cache inventory."""
-
-    path: str = ""
-    string_list: list[str] = field(default_factory=list)
-    part_fields: list[str] = field(default_factory=list)
-    packages: dict[str, DsnPackage] = field(default_factory=dict)
-    package_inventory: list[DsnLibraryPackageInventory] = field(default_factory=list)
-    cache_part_names: list[str] = field(default_factory=list)
-    cache_pin_counts: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -360,6 +367,14 @@ class DsnSymbolPin:
         return (self.hotpt_x, self.hotpt_y)
 
 
+@dataclass(frozen=True)
+class DsnCacheSymbols:
+    """Parsed design-cache symbol pin names plus structured pin records."""
+
+    pin_names: dict[str, list[str]]
+    pins: dict[str, list[DsnSymbolPin]]
+
+
 @dataclass
 class DsnBusEntry:
     """A page-level OrCAD bus-entry graphic."""
@@ -379,7 +394,7 @@ class DsnErcSymbol:
     type_id: int = 0
     name: str = ""
     source_library: str = ""
-    marker_category: str = ""
+    marker_category: DsnMarkerCategory = "erc"
     color: int = 0
     primitive_count: int = 0
     raw_payload: bytes = b""
@@ -387,7 +402,12 @@ class DsnErcSymbol:
 
 @dataclass
 class DsnErcObject:
-    """Raw OrCAD page-tail ERC object instance."""
+    """Raw OrCAD page-tail ERC object instance.
+
+    ``message``/``subject``/``detail`` are the three diagnostic strings the
+    record stores (OOCP ``s0``/``s1``/``s2``): the ERC rule message, the net
+    it fired on, and the ``"SCHEMATIC1, <page> (x_mm, y_mm)"`` anchor.
+    """
 
     page_name: str = ""
     type_id: int = 0
@@ -401,21 +421,9 @@ class DsnErcObject:
     bbox_y2: int = 0
     color: int = 0
     unknown_flag: int = 0
-    s0: str = ""
-    s1: str = ""
-    s2: str = ""
-
-    @property
-    def message(self) -> str:
-        return self.s0
-
-    @property
-    def subject(self) -> str:
-        return self.s1
-
-    @property
-    def detail(self) -> str:
-        return self.s2
+    message: str = ""
+    subject: str = ""
+    detail: str = ""
 
 
 @dataclass

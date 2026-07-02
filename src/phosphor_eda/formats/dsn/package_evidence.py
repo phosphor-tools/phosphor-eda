@@ -9,7 +9,7 @@ from phosphor_eda.formats.dsn.pins import normalize_package_name
 
 if TYPE_CHECKING:
     from phosphor_eda.formats.common.diagnostics import ParseContext
-    from phosphor_eda.formats.common.raw_models import (
+    from phosphor_eda.formats.dsn.raw_models import (
         DsnPackage,
         DsnPackageDevice,
         DsnPackageDevicePin,

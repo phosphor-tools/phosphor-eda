@@ -6,6 +6,8 @@ https://github.com/Werni2A/OpenOrCadParser
 
 import struct
 
+from phosphor_eda.formats.dsn.errors import DsnFormatError
+
 PREAMBLE = b"\xff\xe4\x5c\x39"
 
 # Structure type IDs consumed by the parser (from OpenOrCadParser Enums/Structure.hpp).
@@ -14,6 +16,8 @@ STRUCT_WIRE_SCALAR = 20
 STRUCT_WIRE_BUS = 21
 STRUCT_PORT = 23
 STRUCT_LIBRARY_PART = 24
+STRUCT_SYMBOL_PIN_SCALAR = 26
+STRUCT_SYMBOL_PIN_BUS = 27
 STRUCT_BUS_ENTRY = 29
 STRUCT_PACKAGE = 31
 STRUCT_DEVICE = 32
@@ -71,7 +75,7 @@ class BinaryReader:
         self.pos = end + 1
         return s
 
-    def read_string_len_zero(self) -> str:
+    def read_string_len_zero(self, encoding: str = "ascii") -> str:
         """Read a length-prefixed null-terminated string.
 
         Format: [uint16 length] [length bytes of string] [0x00 null terminator]
@@ -88,7 +92,7 @@ class BinaryReader:
         # Skip the null terminator
         if self.pos < len(self.data) and self.data[self.pos] == 0:
             self.pos += 1
-        return raw.decode("ascii", errors="replace")
+        return raw.decode(encoding, errors="replace")
 
     def at_preamble(self) -> bool:
         return self.data[self.pos : self.pos + 4] == PREAMBLE
@@ -180,3 +184,53 @@ class BinaryReader:
 
     def eof(self) -> bool:
         return self.pos >= len(self.data)
+
+
+# --- Generic structure skippers ---
+
+
+def skip_structure(r: BinaryReader) -> int:
+    """Skip a structure using prefix chain end_offset.
+
+    Returns the type_id of the skipped structure.
+    """
+    type_id, end_offset, _ = r.read_prefix_chain()
+    if end_offset > 0:
+        r.pos = end_offset
+    else:
+        r.try_read_preamble()
+    return type_id
+
+
+def skip_self_describing(r: BinaryReader) -> int:
+    """Skip a self-describing structure: [type:1][body_len:4][zero:4][body].
+
+    T0x34, T0x35, and similar structures use this format.
+    body_len is the byte count of the body AFTER the 9-byte header.
+
+    The declared length comes straight from the stream; older (PSD-era)
+    files carry layouts this parser misreads, producing absurd lengths.
+    Validate against the bytes that actually remain so those files fail
+    with a typed, located error instead of an IndexError far away.
+    """
+    offset = r.pos
+    type_id = r.read_uint8()
+    body_len = r.read_uint32()
+    r.skip(4)  # zero padding
+    remaining = len(r.data) - r.pos
+    if body_len > remaining:
+        msg = (
+            f"self-describing structure 0x{type_id:02x} at offset {offset} declares a "
+            f"{body_len}-byte body but only {remaining} bytes remain in the stream"
+        )
+        raise DsnFormatError(msg, offset=offset, type_id=type_id)
+    r.skip(body_len)  # skip the body
+    return type_id
+
+
+def skip_counted_self_describing(r: BinaryReader) -> int:
+    """Read a uint16 count, then skip that many self-describing structures."""
+    count = r.read_uint16()
+    for _ in range(count):
+        skip_self_describing(r)
+    return count

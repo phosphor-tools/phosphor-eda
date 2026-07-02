@@ -4,7 +4,8 @@ import pytest
 
 from phosphor_eda.domain.schematic import BusKind, Net, ScopeId
 from phosphor_eda.formats.common.diagnostics import ParseContext
-from phosphor_eda.formats.common.raw_models import (
+from phosphor_eda.formats.common.resolved_graph import ResolutionInputError
+from phosphor_eda.formats.dsn.raw_models import (
     DsnNetBundleMap,
     DsnNetBundleMember,
     DsnPackage,
@@ -17,7 +18,6 @@ from phosphor_eda.formats.common.raw_models import (
     PlacedInstance,
     SchematicPage,
 )
-from phosphor_eda.formats.common.resolved_graph import ResolutionInputError
 from phosphor_eda.formats.dsn.resolver import resolve_dsn_source
 from phosphor_eda.formats.dsn.source import (
     DsnBundleMember,

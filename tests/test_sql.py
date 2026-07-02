@@ -58,7 +58,7 @@ from phosphor_eda.domain.variants import (
     VariantTarget,
     VariantTargetKind,
 )
-from phosphor_eda.formats.common.raw_models import (
+from phosphor_eda.formats.dsn.raw_models import (
     DsnPackage,
     DsnPackageDevice,
     DsnPackageDevicePin,

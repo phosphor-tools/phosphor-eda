@@ -14,7 +14,13 @@ from dsn_oracle_helpers import compare_net_names, compare_schematic_net_names
 
 from phosphor_eda.domain.schematic import Net, NetNameKind, ScopeId
 from phosphor_eda.formats.common.diagnostics import ParseContext
-from phosphor_eda.formats.common.raw_models import (
+from phosphor_eda.formats.dsn.package_netlist import (
+    apply_packaged_pin_names,
+    parse_pstchip_pin_evidence,
+    parse_pstchip_pin_number_maps,
+)
+from phosphor_eda.formats.dsn.parser import parse_dsn
+from phosphor_eda.formats.dsn.raw_models import (
     DsnPackage,
     DsnPackageDevice,
     DsnPackageDevicePin,
@@ -25,12 +31,6 @@ from phosphor_eda.formats.common.raw_models import (
     SchematicPage,
     Wire,
 )
-from phosphor_eda.formats.dsn.package_netlist import (
-    apply_packaged_pin_names,
-    parse_pstchip_pin_evidence,
-    parse_pstchip_pin_number_maps,
-)
-from phosphor_eda.formats.dsn.parser import parse_dsn
 from phosphor_eda.formats.dsn.resolver import resolve_dsn_source
 from phosphor_eda.formats.dsn.source import (
     DsnGlobal,

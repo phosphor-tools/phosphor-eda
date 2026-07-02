@@ -1,6 +1,6 @@
 """Tests for OrCAD DSN source connectivity extraction."""
 
-from phosphor_eda.formats.common.raw_models import (
+from phosphor_eda.formats.dsn.raw_models import (
     GraphicInst,
     NetIdMapping,
     PageNetEntry,

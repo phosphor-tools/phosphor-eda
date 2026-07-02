@@ -7,14 +7,14 @@ ParseContext instead of printing to stdout or swallowing them.
 from pathlib import Path
 
 from phosphor_eda.formats.common.diagnostics import ParseContext
-from phosphor_eda.formats.common.raw_models import (
+from phosphor_eda.formats.dsn.netlist import build_netlist
+from phosphor_eda.formats.dsn.parser import parse_dsn
+from phosphor_eda.formats.dsn.raw_models import (
     ParsedDesign,
     PinConnection,
     PlacedInstance,
     SchematicPage,
 )
-from phosphor_eda.formats.dsn.netlist import build_netlist
-from phosphor_eda.formats.dsn.parser import parse_dsn
 from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"

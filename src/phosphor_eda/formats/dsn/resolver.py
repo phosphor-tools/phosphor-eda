@@ -31,7 +31,11 @@ from phosphor_eda.formats.common.resolved_graph import (
     ResolvedPinInput,
     build_resolved_schematic,
 )
-from phosphor_eda.formats.dsn.source import dsn_name_key
+from phosphor_eda.formats.dsn.source import (
+    dsn_component_public_id,
+    dsn_name_key,
+    dsn_pin_public_id,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
@@ -94,6 +98,8 @@ def resolve_dsn_source(source: DsnSourceDesign, ctx: ParseContext | None = None)
     name_evidence = _collect_name_evidence(source.pages)
     name_decisions = _resolve_net_names(source, local_refs, net_union, name_evidence, ctx)
     metadata = dict(source.metadata)
+    # The resolver owns parse_issue_count; drop any value carried in from
+    # source metadata so it cannot spoof the count set below from ctx.
     metadata.pop("parse_issue_count", None)
     metadata["dsn_resolver"] = "source"
     if ctx is not None and ctx.issues:
@@ -737,7 +743,8 @@ def _pin_inputs(pin_occurrences: Iterable[DsnPinOccurrence]) -> list[ResolvedPin
     # the component info once per component identity.
     info_by_component: dict[str, ResolvedComponentInfo] = {}
     for pin_occurrence in pin_occurrences:
-        component_id = _component_identity(pin_occurrence)
+        component_source_key = _component_source_key(pin_occurrence)
+        component_id = dsn_component_public_id(component_source_key)
         component_info = info_by_component.get(component_id)
         if component_info is None:
             component_info = _component_info(pin_occurrence)
@@ -751,7 +758,7 @@ def _pin_inputs(pin_occurrences: Iterable[DsnPinOccurrence]) -> list[ResolvedPin
                 component_reference=pin_occurrence.component_reference,
                 component_part=pin_occurrence.component_part,
                 component_description="",
-                pin_id=f"{component_id}:pin:{pin_occurrence.pin_designator}",
+                pin_id=dsn_pin_public_id(component_source_key, pin_occurrence.pin_designator),
                 pin_designator=pin_occurrence.pin_designator,
                 pin_name=pin_occurrence.pin_name,
                 no_connect=pin_occurrence.no_connect,
@@ -787,11 +794,16 @@ def _source_names(evidence: _NameEvidence) -> set[str]:
     return names
 
 
-def _component_identity(pin_occurrence: DsnPinOccurrence) -> str:
+def _component_source_key(pin_occurrence: DsnPinOccurrence) -> str:
+    """The source-level identity a component's public IDs are built from."""
     if pin_occurrence.component_source_id:
-        return f"dsn:component:{pin_occurrence.component_source_id}"
+        return pin_occurrence.component_source_id
     scope_key = _scope_key(pin_occurrence.scope_id)
-    return f"dsn:component:{scope_key}:{pin_occurrence.component_reference}"
+    return f"{scope_key}:{pin_occurrence.component_reference}"
+
+
+def _component_identity(pin_occurrence: DsnPinOccurrence) -> str:
+    return dsn_component_public_id(_component_source_key(pin_occurrence))
 
 
 def _order_dsn_nets(nets: list[Net]) -> list[Net]:

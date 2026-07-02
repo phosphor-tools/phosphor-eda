@@ -16,7 +16,7 @@ from phosphor_eda.formats.common.text import strip_overline
 
 if TYPE_CHECKING:
     from phosphor_eda.formats.common.diagnostics import ParseContext
-    from phosphor_eda.formats.common.raw_models import DsnSymbolPin
+    from phosphor_eda.formats.dsn.raw_models import DsnSymbolPin
 
 
 def normalize_package_name(package_name: str) -> str:
