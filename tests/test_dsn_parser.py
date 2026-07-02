@@ -644,3 +644,67 @@ def test_unknown_bus_entry_structure_warns() -> None:
     assert page.bus_entries == []
     assert [issue.category for issue in ctx.issues] == ["dsn_unknown_structure"]
     assert "page bus entry section" in ctx.issues[0].message
+
+
+# --- A9/A10: boundary sweep and old-format robustness ---
+
+
+def test_truncated_library_stream_raises_typed_dsn_format_error() -> None:
+    from phosphor_eda.formats.dsn.errors import DsnFormatError
+    from phosphor_eda.formats.dsn.library import parse_library
+
+    # An old-format Library header cut short (unpack past buffer) must surface as
+    # a typed DsnFormatError instead of an unhandled struct.error crash (A10).
+    with pytest.raises(DsnFormatError, match="Library stream is truncated"):
+        parse_library(b"\x00" * 40)
+
+
+def test_library_string_count_uint16_fallback_emits_version_crosscheck() -> None:
+    from phosphor_eda.formats.dsn.library import parse_library
+
+    header = (
+        b"\x00" * 32  # intro pad
+        + struct.pack("<HH", 3, 2)  # version major/minor
+        + b"\x00" * 8  # timestamps
+        + b"\x00" * 4  # zero padding
+        + struct.pack("<H", 1)  # text_font_len -> no LOGFONTA entries
+        + struct.pack("<H", 0)  # some_len
+        + b"\x00" * 8  # unknown_2_0/1
+    )
+    header += b"".join(_dsn_string("f") for _ in range(8))  # 8 part fields
+    header += b"\x00" * 156  # page settings
+    header += struct.pack("<I", 131072)  # str_lst_len > 100000 -> uint16 fallback
+    ctx = ParseContext()
+
+    _header, string_list, _fields = parse_library(header, ctx)
+
+    assert string_list == []
+    assert any(
+        issue.category == "dsn_library_string_width" and "version_major=3" in issue.message
+        for issue in ctx.issues
+    )
+
+
+def test_malformed_cache_stream_warns_and_continues() -> None:
+    from phosphor_eda.formats.dsn.cache import parse_cache_symbols
+
+    # Header + a symbol-name length prefix that overshoots the stream. The read
+    # raises struct.error; containment keeps parse_dsn alive (A9b).
+    data = b"\x00" * 4 + b"\x05\x00" + b"\xff\x7f" + b"\x00\x00\x00\x00"
+    ctx = ParseContext()
+
+    result = parse_cache_symbols(data, ctx)
+
+    assert result.pin_names == {}
+    assert any(issue.category == "dsn_cache" for issue in ctx.issues)
+
+
+def test_wire_alias_count_pre_check_rejects_truncated_wire_body() -> None:
+    # The 1 unknown byte + uint16 count must fit inside the wire body before it
+    # is read; a body that ends first fails the pre-check instead of reading a
+    # bogus count out of the next structure (A9c).
+    reader = BinaryReader(b"\x00\x00\x00\x00", "wire")
+    reader.pos = 2
+
+    with pytest.raises(ValueError, match="wire body ends before its alias count"):
+        dsn_parser._parse_wire_aliases(reader, wire_end_offset=3, ctx=None)

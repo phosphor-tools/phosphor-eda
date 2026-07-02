@@ -82,8 +82,16 @@ def parse_erc_object(
         erc_object.message = r.read_string_len_zero()
         erc_object.subject = r.read_string_len_zero()
         erc_object.detail = r.read_string_len_zero()
-        if end_offset > 0 and r.pos > end_offset:
-            msg = f"ERC object parsed to byte {r.pos}, expected end offset {end_offset}"
+        if end_offset > 0:
+            if r.pos > end_offset:
+                msg = f"ERC object parsed to byte {r.pos}, expected end offset {end_offset}"
+                raise ValueError(msg)
+        # A short-form record carries no declared end offset, so the long-form
+        # overrun guard and cursor restore below never run. Bound it against the
+        # stream end instead: a desync that slices past EOF must fail into the
+        # caller's warn-and-drop path, not silently return truncated fields.
+        elif r.pos > len(r.data):
+            msg = f"short-form ERC object parsed to byte {r.pos} past stream end {len(r.data)}"
             raise ValueError(msg)
         return erc_object
     finally:

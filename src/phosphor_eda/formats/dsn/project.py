@@ -38,6 +38,7 @@ class OrCadProject:
     parameters: dict[str, str] = field(default_factory=dict)
     documents: list[ProjectDocument] = field(default_factory=list)
     hierarchy_documents: list[OrCadHierarchyDocument] = field(default_factory=list)
+    diagnostics: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -103,7 +104,7 @@ def load_orcad_project(opj_path: Path) -> Project:
                 apply_packaged_pin_names(raw, netlist_dir, ctx)
                 apply_packaged_no_connects(raw, netlist_dir, ctx)
             schematic = dsn_to_design(raw, name=project_info.name or opj_path.stem, ctx=ctx)
-            variants = map_orcad_cis_not_fitted_variants(raw, schematic)
+            variants = map_orcad_cis_not_fitted_variants(raw, schematic, ctx)
             schematic_docs[0].parsed = True
         except (DsnFormatError, OSError, ValueError) as exc:
             schematic_docs[0].metadata["parse_error"] = str(exc)
@@ -303,17 +304,24 @@ def _attach_hierarchy_view_metadata(project: OrCadProject) -> None:
             if name:
                 schematic_docs_by_basename.setdefault(name, []).append(doc)
 
-    hierarchy_by_doc_id: dict[int, list[OrCadHierarchyDocument]] = {}
+    # Key by the document's index in project.documents rather than id(doc): the
+    # id of a short-lived object can be reused, and ProjectDocument is unhashable.
+    hierarchy_by_index: dict[int, list[OrCadHierarchyDocument]] = {}
     for hierarchy_doc in project.hierarchy_documents:
         matches = schematic_docs_by_basename.get(_path_basename(hierarchy_doc.path), [])
         if not matches and len(schematic_docs) == 1:
             matches = schematic_docs
         if len(matches) != 1:
+            project.diagnostics.append(
+                f"hierarchy view {hierarchy_doc.path!r} matched {len(matches)} schematic "
+                "documents; view metadata not attached"
+            )
             continue
-        hierarchy_by_doc_id.setdefault(id(matches[0]), []).append(hierarchy_doc)
+        index = next(i for i, doc in enumerate(project.documents) if doc is matches[0])
+        hierarchy_by_index.setdefault(index, []).append(hierarchy_doc)
 
-    for doc in project.documents:
-        hierarchy_docs = hierarchy_by_doc_id.get(id(doc), [])
+    for index, doc in enumerate(project.documents):
+        hierarchy_docs = hierarchy_by_index.get(index, [])
         if not hierarchy_docs:
             continue
         doc.metadata["hierarchy_view_document_count"] = str(len(hierarchy_docs))

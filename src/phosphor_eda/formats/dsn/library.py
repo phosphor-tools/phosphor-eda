@@ -6,13 +6,15 @@ https://github.com/Werni2A/OpenOrCadParser
 
 from __future__ import annotations
 
+import struct
 from typing import TYPE_CHECKING
 
 import olefile
 
-from phosphor_eda.formats.common.diagnostics import ParseContext
+from phosphor_eda.formats.common.diagnostics import ParseContext, warn_optional
 from phosphor_eda.formats.dsn.binary_reader import PAGE_SETTINGS_SIZE, BinaryReader
 from phosphor_eda.formats.dsn.cache import parse_cache_symbols
+from phosphor_eda.formats.dsn.errors import DsnFormatError
 from phosphor_eda.formats.dsn.packages import parse_package_stream
 from phosphor_eda.formats.dsn.raw_models import (
     DsnCacheSymbols,
@@ -26,8 +28,26 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def parse_library(data: bytes) -> tuple[DsnLibraryHeader, list[str], list[str]]:
-    """Parse the Library stream. Returns (header, string_list, part_fields)."""
+def parse_library(
+    data: bytes, ctx: ParseContext | None = None
+) -> tuple[DsnLibraryHeader, list[str], list[str]]:
+    """Parse the Library stream. Returns (header, string_list, part_fields).
+
+    The Library header and string-list region is the first thing ``parse_dsn``
+    reads. Old (OrCAD 9.2-era) files carry a layout this parser misreads and
+    unpack past the buffer; convert that into a typed ``DsnFormatError`` so the
+    caller reports a bad file rather than crashing with a raw struct error.
+    """
+    try:
+        return _parse_library_stream(data, ctx)
+    except (struct.error, IndexError) as exc:
+        msg = f"Library stream is truncated or uses an unsupported layout: {exc}"
+        raise DsnFormatError(msg, offset=0, type_id=0) from exc
+
+
+def _parse_library_stream(
+    data: bytes, ctx: ParseContext | None
+) -> tuple[DsnLibraryHeader, list[str], list[str]]:
     r = BinaryReader(data, "Library")
 
     # Introduction (32-byte padded string)
@@ -74,13 +94,23 @@ def parse_library(data: bytes) -> tuple[DsnLibraryHeader, list[str], list[str]]:
     # Page settings (fixed 156 bytes)
     r.skip(PAGE_SETTINGS_SIZE)
 
-    # String list - determine length based on version
-    # Version A uses uint16, others use uint32
+    # String list — the count is uint16 in some layouts and uint32 in others.
+    # Every committed fixture (DSN + OLB) reports the same version_major (3) and
+    # a count that fits in uint16 with the u32 high bytes zero, so version does
+    # not discriminate the width here; keep the ">100000 ⇒ uint16" heuristic and
+    # emit a cross-check diagnostic recording the version whenever it fires, so a
+    # future differently-versioned file that needs the other width is visible.
     str_lst_len = r.read_uint32()
     if str_lst_len > 100000:
         # Probably was uint16, rewind and read as uint16
         r.pos -= 4
         str_lst_len = r.read_uint16()
+        warn_optional(
+            ctx,
+            "dsn_library_string_width",
+            f"Library string-count {str_lst_len} needed the uint16 fallback "
+            f"(version_major={version_major}); verify the width heuristic for this version",
+        )
 
     string_list: list[str] = []
     for _ in range(str_lst_len):
@@ -168,7 +198,7 @@ def parse_library_inventory(
     with olefile.OleFileIO(str(library_path)) as ole:
         entries = ole_stream_entries(ole)
         lib_data = ole.openstream("Library").read()
-        library_header, string_list, part_fields = parse_library(lib_data)
+        library_header, string_list, part_fields = parse_library(lib_data, ctx)
         packages = parse_packages_from_ole(ole, ctx, entries)
         symbol_pin_names = parse_cache_from_ole(ole, entries, ctx).pin_names
 

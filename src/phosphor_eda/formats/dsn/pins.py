@@ -64,7 +64,7 @@ def _normalized_pin_name(name: str) -> str:
     return pin_name
 
 
-def _symbol_pins_align(
+def symbol_pins_align(
     legacy_pin_names: list[str],
     structured_pins: list[DsnSymbolPin],
 ) -> bool:
@@ -107,6 +107,16 @@ def resolve_pin_name(
         return ""
     pin_index = _pin_index_from_int(pn, len(sym_pins))
     if pin_index is None:
+        # Only a genuine overrun of a known symbol's pin list is a misalignment
+        # worth surfacing; a symbol with no cache pins at all is a separate,
+        # already-visible gap and would drown the log if warned per pin.
+        if ctx is not None and sym_pins:
+            ctx.warn(
+                "dsn_pin_number",
+                f"{reference}: pin number {pn} is out of range for symbol "
+                f"{normalize_package_name(package_name)!r} ({len(sym_pins)} pins); "
+                "pin name left blank",
+            )
         return ""
     pin_name, _overline = strip_overline(sym_pins[pin_index])
     return pin_name
@@ -122,7 +132,7 @@ def resolve_symbol_pin(
     """Resolve a structured Cache symbol pin using OrCAD's display pin number."""
     symbol_name = normalize_package_name(package_name)
     pins = symbol_pins.get(symbol_name, [])
-    if symbol_pin_names is not None and not _symbol_pins_align(
+    if symbol_pin_names is not None and not symbol_pins_align(
         symbol_pin_names.get(symbol_name, []),
         pins,
     ):
