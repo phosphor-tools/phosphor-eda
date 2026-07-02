@@ -173,6 +173,88 @@ class DsnHierarchyOccurrence:
 
 
 @dataclass
+class DsnHierarchyPinOccurrence:
+    """A pin-occurrence sub-entry (0x44, non-negative id) of a hierarchy entry.
+
+    ``occurrence_id`` is the pin's own occurrence id; ``pin_index`` is its
+    display order on the owning instance.
+    """
+
+    occurrence_id: int = 0
+    pin_index: int = 0
+
+
+@dataclass
+class DsnHierarchyNamedConnection:
+    """A named port/global sub-entry (0x44, negative id) of a hierarchy entry."""
+
+    connection_id: int = 0
+    name: str = ""
+
+
+@dataclass
+class DsnHierarchyNet:
+    """An occurrence-scoped net (0x43) recorded on a block hierarchy entry."""
+
+    net_id: int = 0
+    name: str = ""
+
+
+@dataclass
+class DsnHierarchyGlobalNet:
+    """A design-global net occurrence from the Hierarchy stream top list (0x44).
+
+    ``net_id`` is the stream's negative design-global id.
+    """
+
+    net_id: int = 0
+    name: str = ""
+
+
+@dataclass
+class DsnHierarchyEntry:
+    """A single ``SthInHierarchy1`` (0x42) occurrence entry.
+
+    ``child_schematic`` is non-empty only for block occurrences (the explicit
+    block -> child-view edge); ``refdes`` is the per-occurrence reference
+    designator (empty on designs that do not store it). ``parent_index`` links
+    a nested entry to the index of its enclosing entry in the same stream.
+    """
+
+    occurrence_id: int = 0
+    instance_db_id: int = 0
+    child_schematic: str = ""
+    refdes: str = ""
+    depth: int = 0
+    parent_index: int | None = None
+    pin_occurrences: list[DsnHierarchyPinOccurrence] = field(default_factory=list)
+    named_connections: list[DsnHierarchyNamedConnection] = field(default_factory=list)
+    occurrence_nets: list[DsnHierarchyNet] = field(default_factory=list)
+    # Raw (id, value) pairs from the entry-scoped 0x52 trailer; no semantics.
+    trailer_ids: list[tuple[int, int]] = field(default_factory=list)
+
+
+@dataclass
+class DsnHierarchy:
+    """Structured parse of one OrCAD Capture ``Hierarchy`` stream.
+
+    ``fallback_used`` marks streams whose structured layout could not be
+    parsed (old/variant files); their ``entries`` carry only the byte-scan
+    ``(occurrence_id, instance_db_id)`` links.
+    """
+
+    stream_path: str = ""
+    schematic_name: str = ""
+    declared_entry_count: int = 0
+    fallback_used: bool = False
+    global_nets: list[DsnHierarchyGlobalNet] = field(default_factory=list)
+    entries: list[DsnHierarchyEntry] = field(default_factory=list)
+    # Raw top-level 0x52 / 0x5b trailer (type_id, a, b) records; no semantics.
+    trailer_h3: list[tuple[int, int, int]] = field(default_factory=list)
+    trailer_t5b: list[tuple[int, int, int]] = field(default_factory=list)
+
+
+@dataclass
 class DsnLibraryHeader:
     """Header fields from OrCAD Capture's Library stream."""
 
@@ -531,6 +613,9 @@ class ParsedDesign:
     # Hierarchy data
     net_id_mappings: list[NetIdMapping] = field(default_factory=list)
     hierarchy_occurrences: list[DsnHierarchyOccurrence] = field(default_factory=list)
+    # Structured Hierarchy-stream parse (occurrence tree, child edges, refdes,
+    # occurrence nets). Additive raw evidence; resolution lands in a later step.
+    hierarchies: list[DsnHierarchy] = field(default_factory=list)
 
     # Raw OrCAD Capture Packages/* streams, keyed by OLE stream path.
     packages: dict[str, DsnPackage] = field(default_factory=dict)

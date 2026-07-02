@@ -6,6 +6,7 @@ import json
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.schematic import Schematic, ScopeId, TitleBlock
+from phosphor_eda.formats.common.diagnostics import warn_optional
 from phosphor_eda.formats.common.electrical import set_pin_electrical
 from phosphor_eda.formats.dsn.binary_reader import STRUCT_SYMBOL_PIN_BUS
 from phosphor_eda.formats.dsn.package_evidence import (
@@ -22,7 +23,10 @@ from phosphor_eda.formats.dsn.pins import (
     resolve_symbol_pin,
 )
 from phosphor_eda.formats.dsn.resolver import resolve_dsn_source
+from phosphor_eda.formats.dsn.sheet_tree import BlockLinkPlan, ScopePlan, build_sheet_tree
 from phosphor_eda.formats.dsn.source import (
+    DsnBlockBinding,
+    DsnBlockOccurrence,
     DsnBundleMember,
     DsnBusEntry,
     DsnGlobal,
@@ -38,7 +42,6 @@ from phosphor_eda.formats.dsn.source import (
     DsnWireAlias,
     dsn_component_source_id,
     dsn_name_key,
-    dsn_page_id,
 )
 
 if TYPE_CHECKING:
@@ -53,14 +56,6 @@ if TYPE_CHECKING:
     )
     from phosphor_eda.formats.dsn.raw_models import ParsedDesign as RawDesign
     from phosphor_eda.formats.dsn.raw_models import SchematicPage as RawPage
-
-
-def _page_id(raw_page: RawPage) -> str:
-    return dsn_page_id(_page_scope_name(raw_page))
-
-
-def _page_scope_name(raw_page: RawPage) -> str:
-    return raw_page.name or "unnamed"
 
 
 def _local_net_id(page_id: str, net_id: int) -> str:
@@ -490,13 +485,15 @@ def _graphic_sources(
 
 
 def _source_page(
-    raw_page: RawPage,
+    scope_plan: ScopePlan,
     raw: RawDesign,
     packages_by_key: PackageLookup,
     ctx: ParseContext | None = None,
 ) -> DsnPageSource:
-    page_id = _page_id(raw_page)
-    scope_id = ScopeId(path=(_page_scope_name(raw_page),))
+    raw_page = scope_plan.raw_page
+    page_id = scope_plan.page_id
+    scope_id = scope_plan.scope_id
+    refdes_by_db_id = scope_plan.refdes_by_db_id
     page_source = DsnPageSource(
         id=page_id,
         name=raw_page.name,
@@ -509,6 +506,8 @@ def _source_page(
         off_page_connectors=[],
         bus_entries=[],
         title_block=_page_title_block(raw_page, ctx),
+        merge_domain=scope_plan.merge_domain,
+        repeated=scope_plan.repeated,
     )
     # Names a port/power/off-page graphic can hierarchy-connect to when no wire
     # sits at its location: page net names plus block sheet-pin names.
@@ -586,6 +585,16 @@ def _source_page(
             raw_inst.db_id,
             instance_index,
         )
+        # Per-occurrence refdes for a repeated sheet (RFSoC DAC_ADC_CHANNEL);
+        # empty on singly-instantiated/flat pages, which keep the raw reference.
+        reference = refdes_by_db_id.get(raw_inst.db_id, raw_inst.reference)
+        if scope_plan.repeated and raw_inst.db_id and raw_inst.db_id not in refdes_by_db_id:
+            warn_optional(
+                ctx,
+                "dsn_occurrence_refdes_missing",
+                f"{scope_id}: instance db {raw_inst.db_id} ({raw_inst.reference!r}) has no "
+                "per-occurrence refdes in the Hierarchy stream; keeping the raw reference",
+            )
         package = native_package_for_instance(raw_inst, packages_by_key, ctx)
         package_device = (
             native_package_device(raw_inst, package, ctx) if package is not None else None
@@ -691,7 +700,7 @@ def _source_page(
                 local_net_id=page_net.id if page_net is not None else None,
                 source_net_id=source_net_id if source_net_id is not None else raw_pin.net_id,
                 component_source_id=component_source_id,
-                component_reference=raw_inst.reference,
+                component_reference=reference,
                 component_part=pkg,
                 pin_designator=raw_pin.pin_number,
                 pin_name=pin_name,
@@ -762,6 +771,49 @@ def _library_header_metadata(raw: RawDesign) -> dict[str, str]:
     return metadata
 
 
+def _block_occurrences(
+    block_links: list[BlockLinkPlan],
+    local_net_ids: set[str],
+) -> list[DsnBlockOccurrence]:
+    """Public block-occurrence source objects driving E3 sheet-pin merging.
+
+    Each binding's ``parent_local_net_id`` is resolved against the parent page's
+    local nets (pre-created in ``_source_page``); bindings whose parent net is a
+    sentinel or otherwise absent are dropped so the resolver only unions real
+    nets.
+    """
+    occurrences: list[DsnBlockOccurrence] = []
+    for index, link in enumerate(block_links):
+        bindings: list[DsnBlockBinding] = []
+        for binding in link.bindings:
+            parent_local_net_id = _local_net_id(link.parent_page_id, binding.parent_net_id)
+            if binding.parent_net_id in _SENTINEL_NET_IDS:
+                continue
+            if parent_local_net_id not in local_net_ids:
+                continue
+            bindings.append(
+                DsnBlockBinding(
+                    sheet_pin_name=binding.sheet_pin_name,
+                    sheet_pin_name_key=dsn_name_key(binding.sheet_pin_name),
+                    port_type_name=binding.port_type_name,
+                    parent_net_id=binding.parent_net_id,
+                    parent_local_net_id=parent_local_net_id,
+                )
+            )
+        occurrences.append(
+            DsnBlockOccurrence(
+                id=f"block_occurrence:{index}",
+                parent_scope_id=link.parent_scope_id,
+                parent_page_id=link.parent_page_id,
+                block_reference=link.block_reference,
+                child_schematic=link.child_schematic,
+                child_scope_ids=link.child_scope_ids,
+                bindings=tuple(bindings),
+            )
+        )
+    return occurrences
+
+
 def dsn_to_source(
     raw: RawDesign, name: str = "", ctx: ParseContext | None = None
 ) -> DsnSourceDesign:
@@ -774,9 +826,16 @@ def dsn_to_source(
         # not a suppression model — just what Capture stored on the page tail.
         metadata["dsn_drc_violation_count"] = str(len(drc_violations))
         metadata["dsn_drc_violations"] = json.dumps(drc_violations, separators=(",", ":"))
+    sheet_tree = build_sheet_tree(raw, ctx)
+    pages = [
+        _source_page(scope_plan, raw, packages_by_key, ctx) for scope_plan in sheet_tree.scopes
+    ]
+    local_net_ids = {net.id for page in pages for net in page.nets}
+    block_occurrences = _block_occurrences(sheet_tree.block_links, local_net_ids)
     return DsnSourceDesign(
         name=name,
-        pages=[_source_page(raw_page, raw, packages_by_key, ctx) for raw_page in raw.pages],
+        pages=pages,
+        block_occurrences=block_occurrences,
         hierarchy_mappings=[
             DsnHierarchyMapping(
                 id=f"hierarchy:net:{index}",
