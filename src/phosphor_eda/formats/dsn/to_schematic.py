@@ -505,6 +505,7 @@ def _source_page(
         globals=[],
         off_page_connectors=[],
         bus_entries=[],
+        annotations=[note.text for note in raw_page.comment_texts if note.text],
         title_block=_page_title_block(raw_page, ctx),
         merge_domain=scope_plan.merge_domain,
         repeated=scope_plan.repeated,
@@ -563,6 +564,7 @@ def _source_page(
             is_bus=raw_wire.is_bus,
             color=raw_wire.color,
             db_id=raw_wire.db_id,
+            net_properties=raw_wire.net_properties,
         )
         page_source.wires.append(wire)
         page_net.wire_ids.append(wire.id)
@@ -757,6 +759,32 @@ def _source_page(
     return page_source
 
 
+# DsnStream 17.4-era JSON version fields mapped to stable metadata keys.
+_DESIGN_VERSION_KEYS = {
+    "InstalledVersionBase": "dsn_installed_version_base",
+    "InstalledVersionISR": "dsn_installed_version_isr",
+    "License": "dsn_license",
+    "InstallMode": "dsn_install_mode",
+}
+
+
+def _design_stream_metadata(raw: RawDesign) -> dict[str, str]:
+    """Design-level evidence from the typed DsnStream (GUID, time format, version)."""
+    stream = raw.dsn_stream
+    if stream is None:
+        return {}
+    metadata: dict[str, str] = {}
+    if stream.library_guid:
+        metadata["dsn_design_guid"] = stream.library_guid
+    if stream.time_format_index:
+        metadata["dsn_time_format_index"] = stream.time_format_index
+    for source_key, metadata_key in _DESIGN_VERSION_KEYS.items():
+        value = stream.version_info.get(source_key)
+        if value:
+            metadata[metadata_key] = value
+    return metadata
+
+
 def _library_header_metadata(raw: RawDesign) -> dict[str, str]:
     header = raw.library_header
     if header is None:
@@ -820,6 +848,7 @@ def dsn_to_source(
     """Extract OrCAD DSN-native source connectivity from already parsed records."""
     packages_by_key = build_package_lookup(raw)
     metadata = _library_header_metadata(raw)
+    metadata.update(_design_stream_metadata(raw))
     drc_violations = _drc_violations(raw)
     if drc_violations:
         # Persisted OrCAD ERC/DRC violations surfaced as raw queryable evidence;

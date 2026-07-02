@@ -47,6 +47,10 @@ class Wire:
     is_bus: bool = False
     # All vertex coordinates along the wire, used for net resolution
     points: list[tuple[int, int]] = field(default_factory=list)
+    # Net-property evidence from the wire's prefix-chain name/value pairs
+    # (CDS_PHYS_NET_NAME, DIFFERENTIAL_PAIR, VOLTAGE). Raw only — constraint
+    # interpretation lives in a separate track.
+    net_properties: tuple[tuple[str, str], ...] = field(default_factory=tuple)
 
 
 @dataclass
@@ -527,6 +531,114 @@ class DsnBusEntry:
 
 
 @dataclass
+class DsnCommentText:
+    """A free-text note placed on a schematic page (GraphicCommentTextInst).
+
+    ``text`` is the note body; ``loc_x``/``loc_y`` and the ``bbox_*`` corners
+    are the placement/extent in raw DSN units; ``font_idx`` indexes the Library
+    text-font table (1-based; 0 = default).
+    """
+
+    text: str = ""
+    loc_x: int = 0
+    loc_y: int = 0
+    bbox_x1: int = 0
+    bbox_y1: int = 0
+    bbox_x2: int = 0
+    bbox_y2: int = 0
+    font_idx: int = 0
+
+
+@dataclass
+class DsnPageGraphic:
+    """A page-tail graphic shape (line/box/ellipse) for rendering fidelity.
+
+    ``kind`` is ``"line"``/``"box"``/``"ellipse"``; the coordinates and
+    line style/width come from the primitive body. Raw layer only.
+    """
+
+    kind: str = ""
+    type_id: int = 0
+    x1: int = 0
+    y1: int = 0
+    x2: int = 0
+    y2: int = 0
+    line_style: int = 0
+    line_width: int = 0
+
+
+@dataclass
+class DsnPageImage:
+    """A page-tail image graphic (bitmap or OLE embed) — envelope only.
+
+    The (potentially multi-megabyte) payload is not decoded; only its byte
+    size and kind are retained.
+    """
+
+    kind: str = ""
+    type_id: int = 0
+    payload_size: int = 0
+
+
+@dataclass
+class DsnNetDisplayProp:
+    """A T0x34 per-net display record keyed by runtime page-net id.
+
+    One record per net group per page; all fixture values are Capture
+    defaults. Raw per-page evidence, no public mapping.
+    """
+
+    net_id: int = 0
+    color: int = 0
+    line_style: int = 0
+    line_width: int = 0
+
+
+@dataclass
+class DsnDesignStream:
+    """Typed parse of the top-level ``DsnStream`` design-settings stream.
+
+    ``properties`` holds every prefix-chain name/value pair (``Library guid``,
+    ``Time Format Index``); ``version_info`` holds the decoded fields of the
+    17.4-era embedded JSON payload when present.
+    """
+
+    library_guid: str = ""
+    time_format_index: str = ""
+    properties: dict[str, str] = field(default_factory=dict)
+    version_info: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class DsnSymbolType:
+    """A ``Symbols/$Types$`` name -> structure-type entry (e.g. ERC -> 0x4b)."""
+
+    name: str = ""
+    type_id: int = 0
+
+
+@dataclass
+class DsnStreamRef:
+    """A top-level OLE stream by path and byte size."""
+
+    path: str = ""
+    size: int = 0
+
+
+@dataclass
+class DsnStreamInventory:
+    """Top-level OLE stream inventory mirroring ``cis.py``'s unknown-children pattern.
+
+    ``unknown_streams`` are streams no known parser family claims;
+    ``known_unparsed_streams`` are intentionally-skipped catalogs (AdminData,
+    AnnotateCtrl, ``* Directory``, empty ``Graphics/$Types$`` …).
+    """
+
+    unknown_streams: list[DsnStreamRef] = field(default_factory=list)
+    known_unparsed_streams: list[DsnStreamRef] = field(default_factory=list)
+
+
+@dataclass
 class DsnErcSymbol:
     """Raw OrCAD ERC marker symbol catalog entry."""
 
@@ -595,6 +707,13 @@ class SchematicPage:
     off_page_connectors: list[GraphicInst] = field(default_factory=list)
     bus_entries: list[DsnBusEntry] = field(default_factory=list)
     erc_objects: list[DsnErcObject] = field(default_factory=list)
+    # Page-tail graphic section (after bus entries): free-text notes, shapes,
+    # and image envelopes.
+    comment_texts: list[DsnCommentText] = field(default_factory=list)
+    page_graphics: list[DsnPageGraphic] = field(default_factory=list)
+    page_images: list[DsnPageImage] = field(default_factory=list)
+    # T0x34 per-net display records (raw evidence, one per net group per page).
+    net_display_props: list[DsnNetDisplayProp] = field(default_factory=list)
     # Internal: coordinate -> set of net_ids, used by build_netlist
     wire_net_map: dict[tuple[int, int], set[int]] = field(default_factory=dict)
 
@@ -637,6 +756,15 @@ class ParsedDesign:
 
     # OrCAD packaged-netlist NC pseudo-net members from pstxnet.dat sidecars.
     no_connect_pins: list[DsnNoConnectPin] = field(default_factory=list)
+
+    # Typed DsnStream design settings (GUID, time format, 17.4-era version JSON).
+    dsn_stream: DsnDesignStream | None = None
+
+    # Symbols/$Types$ name -> structure-type catalog (raw layer).
+    symbol_types: list[DsnSymbolType] = field(default_factory=list)
+
+    # Top-level OLE stream inventory (unknown vs known-unparsed).
+    stream_inventory: DsnStreamInventory = field(default_factory=DsnStreamInventory)
 
 
 @dataclass

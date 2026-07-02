@@ -7,6 +7,7 @@ Based on the reverse-engineering work of the OpenOrCadParser C++ project:
 https://github.com/Werni2A/OpenOrCadParser
 """
 
+import json
 import struct
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -17,9 +18,20 @@ import olefile
 from phosphor_eda.formats.common.diagnostics import ParseContext, warn_optional
 from phosphor_eda.formats.dsn.binary_reader import (
     PAGE_SETTINGS_SIZE,
+    PRIM_COMMENT_TEXT,
+    PRIM_ELLIPSE,
+    PRIM_LINE,
+    PRIM_RECT,
     STRUCT_BUS_ENTRY,
     STRUCT_DRAWN_INST,
+    STRUCT_DSN_STREAM,
     STRUCT_GLOBAL,
+    STRUCT_GRAPHIC_BITMAP,
+    STRUCT_GRAPHIC_BOX,
+    STRUCT_GRAPHIC_COMMENT_TEXT,
+    STRUCT_GRAPHIC_ELLIPSE,
+    STRUCT_GRAPHIC_LINE,
+    STRUCT_GRAPHIC_OLE_EMBED,
     STRUCT_NET_GROUP,
     STRUCT_OFF_PAGE_CONNECTOR,
     STRUCT_PART_INST,
@@ -57,8 +69,16 @@ from phosphor_eda.formats.dsn.raw_models import (
     DsnBlockPinBinding,
     DsnBlockSheetPin,
     DsnBusEntry,
+    DsnCommentText,
+    DsnDesignStream,
     DsnNetBundleMap,
     DsnNetBundleMember,
+    DsnNetDisplayProp,
+    DsnPageGraphic,
+    DsnPageImage,
+    DsnStreamInventory,
+    DsnStreamRef,
+    DsnSymbolType,
     GraphicInst,
     NetIdMapping,
     PageNetEntry,
@@ -327,6 +347,204 @@ def _parse_block_instance(r: BinaryReader) -> DsnBlockInstance:
     return block
 
 
+# A page carries one T0x34 display record per net group; thousands would mean
+# the self-describing header layout differs from what we know.
+_MAX_T34_RECORDS = 100000
+
+
+def _parse_net_display_props(r: BinaryReader, ctx: ParseContext | None) -> list[DsnNetDisplayProp]:
+    """Parse the T0x34 section: per-net display records keyed by runtime net id.
+
+    Each record is a self-describing structure (``type:1``, ``body_len:4``,
+    ``zero:4``, then ``body_len`` body bytes). The body holds the runtime
+    page-net id, an empty string, a zero uint32, and color/lineStyle/lineWidth.
+    The declared body length keeps the section in sync even when a body fails
+    to decode.
+    """
+    count = r.read_uint16()
+    records: list[DsnNetDisplayProp] = []
+    for _ in range(count):
+        offset = r.pos
+        r.read_uint8()  # structure type (0x34)
+        body_len = r.read_uint32()
+        r.skip(4)  # zero padding
+        if body_len > r.remaining():
+            msg = (
+                f"T0x34 record at offset {offset} declares a {body_len}-byte body "
+                f"but only {r.remaining()} bytes remain"
+            )
+            raise ValueError(msg)
+        body = r.read_bytes(body_len)
+        try:
+            br = BinaryReader(body, "T0x34")
+            net_id = br.read_uint32()
+            br.read_string_len_zero()  # empty label
+            br.read_uint32()  # unknown zero
+            record = DsnNetDisplayProp(
+                net_id=net_id,
+                color=br.read_uint32(),
+                line_style=br.read_uint32(),
+                line_width=br.read_uint32(),
+            )
+            records.append(record)
+        except (struct.error, IndexError, ValueError) as e:
+            warn_optional(ctx, "dsn_t0x34", f"T0x34 record parse error: {e}")
+        if len(records) > _MAX_T34_RECORDS:
+            msg = f"implausible T0x34 record count {count}"
+            raise ValueError(msg)
+    return records
+
+
+def _skip_graphic_primitive(r: BinaryReader) -> tuple[int, DsnPageGraphic | None, int]:
+    """Read one StructSthInPages0 primitive; return (prim_type, shape, body_len).
+
+    A shape is returned for line/rect/ellipse primitives; the caller records
+    CommentText separately and treats every other primitive (bitmap/OLE
+    payloads) as an envelope to skip. All primitives share the ``u32 len`` + 4
+    zero-byte envelope; the body spans ``len`` bytes after the zeros.
+    """
+    prim_type = r.read_uint8()
+    prim_type2 = r.read_uint8()
+    if prim_type != prim_type2:
+        msg = f"primitive prefix mismatch {prim_type} != {prim_type2}"
+        raise ValueError(msg)
+    body_len = r.read_uint32()
+    body_end = r.pos + 4 + body_len
+    shape: DsnPageGraphic | None = None
+    if prim_type in {PRIM_LINE, PRIM_RECT, PRIM_ELLIPSE}:
+        r.skip(4)  # 4 zero bytes
+        x1 = r.read_int32()
+        y1 = r.read_int32()
+        x2 = r.read_int32()
+        y2 = r.read_int32()
+        line_style = 0
+        line_width = 0
+        if r.pos + 8 <= body_end:
+            line_style = r.read_uint32()
+            line_width = r.read_uint32()
+        kind = {PRIM_LINE: "line", PRIM_RECT: "box", PRIM_ELLIPSE: "ellipse"}[prim_type]
+        shape = DsnPageGraphic(
+            kind=kind,
+            type_id=prim_type,
+            x1=x1,
+            y1=y1,
+            x2=x2,
+            y2=y2,
+            line_style=line_style,
+            line_width=line_width,
+        )
+    r.pos = body_end
+    r.try_read_preamble()
+    return prim_type, shape, body_len
+
+
+def _parse_comment_text_primitive(r: BinaryReader) -> DsnCommentText:
+    """Parse a CommentText primitive (StructSthInPages0 body)."""
+    body_len = r.read_uint32()
+    body_end = r.pos + 4 + body_len
+    r.skip(4)  # 4 zero bytes
+    loc_x = r.read_int32()
+    loc_y = r.read_int32()
+    x2 = r.read_int32()
+    y2 = r.read_int32()
+    x1 = r.read_int32()
+    y1 = r.read_int32()
+    font_idx = r.read_uint16()
+    r.skip(2)  # unknown
+    text = r.read_string_len_zero()
+    r.pos = body_end
+    r.try_read_preamble()
+    return DsnCommentText(
+        text=text,
+        loc_x=loc_x,
+        loc_y=loc_y,
+        bbox_x1=x1,
+        bbox_y1=y1,
+        bbox_x2=x2,
+        bbox_y2=y2,
+        font_idx=font_idx,
+    )
+
+
+_IMAGE_GRAPHIC_KINDS = {STRUCT_GRAPHIC_BITMAP: "bitmap", STRUCT_GRAPHIC_OLE_EMBED: "ole_embed"}
+# Graphic-inst structure types validated on the corpus. Others (polygon,
+# polyline, arc, bezier — zero fixture instances) get a diagnostic and are
+# skipped via the record's prefix-chain end offset.
+_KNOWN_GRAPHIC_TYPES = frozenset(
+    {
+        STRUCT_GRAPHIC_BOX,
+        STRUCT_GRAPHIC_LINE,
+        STRUCT_GRAPHIC_ELLIPSE,
+        STRUCT_GRAPHIC_COMMENT_TEXT,
+        STRUCT_GRAPHIC_BITMAP,
+        STRUCT_GRAPHIC_OLE_EMBED,
+    }
+)
+
+
+def _parse_page_graphic_inst(
+    r: BinaryReader, page: DsnSchematicPage, ctx: ParseContext | None
+) -> None:
+    """Parse one page-tail StructGraphicInst and record it on *page*.
+
+    The record's own prefix-chain end offset bounds the whole decode (including
+    the SthInPages0 primitive wrapper), so a layout surprise never desyncs the
+    graphic section — the caller re-anchors at ``end_offset``.
+    """
+    graphic_offset = r.pos
+    type_id, end_offset, _pairs = r.read_prefix_chain()
+    if type_id not in _KNOWN_GRAPHIC_TYPES:
+        _warn_unknown_structure(ctx, "graphic", type_id, graphic_offset)
+    try:
+        r.try_read_preamble()
+        r.skip(8)  # unknown
+        r.read_string_len_zero()  # name (empty in the corpus)
+        r.read_uint32()  # db_id
+        r.skip(12)  # 6x int16 loc/bbox coordinates
+        r.skip(1)  # color
+        r.skip(3)  # unknown
+        num_display_props = r.read_uint16()
+        for _ in range(num_display_props):
+            skip_structure(r)
+        flag = r.read_uint8()
+        if flag == 0x02:
+            _read_sth_in_pages0(r, page, type_id, ctx)
+    except (struct.error, IndexError, ValueError) as e:
+        warn_optional(ctx, "dsn_graphic_inst", f"Graphic instance parse error: {e}")
+    if end_offset > 0:
+        r.pos = end_offset
+
+
+def _read_sth_in_pages0(
+    r: BinaryReader, page: DsnSchematicPage, type_id: int, ctx: ParseContext | None
+) -> None:
+    """Read the StructSthInPages0 wrapper and its primitives for a graphic inst."""
+    r.read_prefix_chain()
+    r.try_read_preamble()
+    r.read_string_len_zero()  # symbol name
+    r.read_string_len_zero()  # source library
+    r.read_uint32()  # color
+    num_prims = r.read_uint16()
+    payload_size = 0
+    for _ in range(num_prims):
+        if r.data[r.pos] == PRIM_COMMENT_TEXT and r.data[r.pos + 1] == PRIM_COMMENT_TEXT:
+            r.skip(2)  # matched primitive prefix
+            page.comment_texts.append(_parse_comment_text_primitive(r))
+        else:
+            _prim_type, shape, body_len = _skip_graphic_primitive(r)
+            if shape is not None:
+                page.page_graphics.append(shape)
+            payload_size = max(payload_size, body_len)
+    if type_id in _IMAGE_GRAPHIC_KINDS:
+        # Bitmap/OLE embeds carry a heavy payload; record kind and the envelope
+        # byte size only, never the (multi-megabyte) payload bytes themselves.
+        page.page_images.append(
+            DsnPageImage(
+                kind=_IMAGE_GRAPHIC_KINDS[type_id], type_id=type_id, payload_size=payload_size
+            )
+        )
+
+
 def parse_page(
     data: bytes, string_list: list[str], ctx: ParseContext | None = None
 ) -> DsnSchematicPage:
@@ -354,11 +572,15 @@ def parse_page(
     # Title blocks — field values ride in the record's prefix-chain pairs
     page.title_blocks = _parse_title_blocks(r, string_list, ctx)
 
-    # T0x34 - self-describing format, skip
-    skip_counted_self_describing(r)
+    # T0x34 - per-net display records (color/lineStyle/lineWidth) keyed by
+    # runtime page-net id; one per net group per page.
+    page.net_display_props = _parse_net_display_props(r, ctx)
 
-    # T0x35 - self-describing format, skip
-    skip_counted_self_describing(r)
+    # T0x35 - self-describing format; zero instances in the corpus. Keep the
+    # skip and diagnose if any ever appear so a new layout is not lost silently.
+    num_t35 = skip_counted_self_describing(r)
+    if num_t35:
+        warn_optional(ctx, "dsn_t0x35", f"page {page.name!r}: {num_t35} T0x35 record(s) skipped")
 
     # Net-to-ID list - parse this carefully, it's just strings + uint32
     num_nets = r.read_uint16()
@@ -374,9 +596,12 @@ def parse_page(
     wire_net_map: dict[tuple[int, int], set[int]] = {}
     for _ in range(num_wires):
         wire_offset = r.pos
-        type_id, end_offset, _pairs = r.read_prefix_chain()
+        type_id, end_offset, pairs = r.read_prefix_chain()
         r.try_read_preamble()
         wire = Wire(type_id=type_id)
+        # Wire prefix-pair net properties (CDS_PHYS_NET_NAME, DIFFERENTIAL_PAIR,
+        # VOLTAGE) resolve against the Library string list like instance props.
+        wire.net_properties = _prop_entries_from_pairs(pairs, string_list)
         parsed_wire = False
         if type_id not in {STRUCT_WIRE_SCALAR, STRUCT_WIRE_BUS}:
             _warn_unknown_structure(ctx, "wire", type_id, wire_offset)
@@ -630,6 +855,45 @@ def parse_page_tail_objects(
                 page.bus_entries.append(entry)
     except (struct.error, IndexError, ValueError) as e:
         warn_optional(ctx, "dsn_bus_entry", f"Bus entry parse error: {e}")
+        return
+
+    _parse_page_graphic_section(r, page, ctx)
+
+
+def _parse_page_graphic_section(
+    r: BinaryReader,
+    page: DsnSchematicPage,
+    ctx: ParseContext | None,
+) -> None:
+    """Parse the page-tail GraphicInst section plus the two trailing sub-lists.
+
+    After bus entries the page carries ``u16 lenGraphicInsts`` + StructGraphicInst
+    records (CommentText notes, Line/Box/Ellipse shapes, Bitmap/OLE image
+    envelopes), then two more counted structure lists (``len10``/``len11``),
+    both empty on every fixture. Each graphic's prefix-chain end offset keeps
+    the section byte-exact, so the page parses to residue 0.
+    """
+    if r.remaining() < 2:
+        return
+    try:
+        num_graphics = r.read_uint16()
+        for _ in range(num_graphics):
+            _parse_page_graphic_inst(r, page, ctx)
+
+        len10 = r.read_uint16() if r.remaining() >= 2 else 0
+        for _ in range(len10):
+            skip_structure(r)
+        len11 = r.read_uint16() if r.remaining() >= 2 else 0
+        for _ in range(len11):
+            skip_structure(r)
+        if len10 or len11:
+            warn_optional(
+                ctx,
+                "dsn_page_tail_structures",
+                f"page {page.name!r}: unexpected trailing structures len10={len10} len11={len11}",
+            )
+    except (struct.error, IndexError, ValueError) as e:
+        warn_optional(ctx, "dsn_graphic_section", f"Page graphic section parse error: {e}")
 
 
 def parse_net_bundle_map_data(
@@ -695,6 +959,136 @@ def parse_net_bundle_map_streams(
     for stream in streams:
         net_bundle_maps.extend(parse_net_bundle_map_data(stream, ctx))
     return net_bundle_maps
+
+
+def parse_dsn_stream(
+    data: bytes, string_list: list[str], ctx: ParseContext | None = None
+) -> DsnDesignStream | None:
+    """Parse the top-level ``DsnStream`` design-settings stream (F4).
+
+    Structure type 0x04 whose prefix-chain pairs index the Library string list
+    (``Library guid``, ``Time Format Index``), followed by a preamble whose
+    optional payload embeds an ``InstalledVersion*`` JSON blob on 17.4-era
+    files.
+    """
+    r = BinaryReader(data, "DsnStream")
+    try:
+        type_id, _end_offset, pairs = r.read_prefix_chain()
+        if type_id != STRUCT_DSN_STREAM:
+            warn_optional(
+                ctx, "dsn_dsn_stream", f"DsnStream root structure is 0x{type_id:02x}, not 0x04"
+            )
+            return None
+        props = _props_from_pairs(pairs, string_list)
+        stream = DsnDesignStream(
+            library_guid=props.get("Library guid", ""),
+            time_format_index=props.get("Time Format Index", ""),
+            properties=props,
+        )
+        if r.at_preamble():
+            r.skip(4)  # preamble magic
+            payload_len = r.read_uint32()
+            payload = r.read_bytes(payload_len)
+            stream.version_info = _extract_version_json(payload)
+        return stream
+    except (struct.error, IndexError, ValueError) as e:
+        warn_optional(ctx, "dsn_dsn_stream", f"DsnStream parse error: {e}")
+        return None
+
+
+def _extract_version_json(payload: bytes) -> dict[str, str]:
+    """Decode the embedded ``{...}`` JSON object from a DsnStream payload."""
+    start = payload.find(b"{")
+    end = payload.rfind(b"}")
+    if start < 0 or end < start:
+        return {}
+    # A ``{...}`` slice always decodes to a JSON object (dict); the annotation
+    # gives it a concrete type since json.loads returns Any.
+    try:
+        decoded: dict[str, object] = json.loads(payload[start : end + 1].decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return {}
+    return {key: str(value) for key, value in decoded.items()}
+
+
+def parse_symbol_types(data: bytes, ctx: ParseContext | None = None) -> list[DsnSymbolType]:
+    """Parse a ``Symbols/$Types$`` name -> structure-type catalog (F5).
+
+    Layout: a flat sequence of ``[len-zero name][uint16 type]`` entries until
+    end of stream (e.g. ``ERC`` -> 0x4b, ``ERC_PHYSICAL`` -> 0x4b). Empty on
+    most designs.
+    """
+    r = BinaryReader(data, "$Types$")
+    types: list[DsnSymbolType] = []
+    try:
+        while r.remaining() >= 3:
+            name = r.read_string_len_zero()
+            type_id = r.read_uint16()
+            types.append(DsnSymbolType(name=name, type_id=type_id))
+    except (struct.error, IndexError, ValueError) as e:
+        warn_optional(ctx, "dsn_symbol_types", f"Symbols/$Types$ parse error: {e}")
+    return types
+
+
+def _stream_is_parsed(path: str) -> bool:
+    """True when *path* is consumed by a known DSN stream parser."""
+    if path in {"Library", "Cache", "DsnStream", "NetBundleMapData"}:
+        return True
+    if path.endswith("/NetBundleMapData"):
+        return True
+    if path.startswith("Packages/"):
+        return True
+    if path.startswith("Views/") and (path.endswith("/Schematic") or "/Pages/" in path):
+        return True
+    if "Hierarchy/Hierarchy" in path:
+        return True
+    if path.startswith("CIS/VariantStore/"):
+        return True
+    if path.startswith("Symbols/ERC"):
+        return True
+    return path == "Symbols/$Types$"
+
+
+def _stream_is_known_unparsed(path: str) -> bool:
+    """True when *path* is an intentionally-skipped known stream."""
+    if path in {"AnnotateCtrl", "AdminData", "HSObjects"}:
+        return True
+    if path.endswith(" Directory"):
+        return True
+    if path == "Graphics/$Types$" or path.startswith("Graphics/"):
+        return True
+    if path.startswith("CIS/"):
+        return True
+    # Views-nested CIS schematic storage and the constraint track (DCF,
+    # Metadata, index storage) are recognised families handled elsewhere or
+    # deliberately deferred; they are not unknown.
+    return "/CISSchematic" in path or "/Constraint/" in path
+
+
+def _build_stream_inventory(
+    stream_entries: list[tuple[str, list[str]]],
+    ole: olefile.OleFileIO,
+    ctx: ParseContext | None,
+) -> DsnStreamInventory:
+    """Inventory every top-level OLE stream as parsed, known-unparsed, or unknown."""
+    inventory = DsnStreamInventory()
+    for path, _entry in stream_entries:
+        if _stream_is_parsed(path):
+            continue
+        size = ole.get_size(path)
+        ref = DsnStreamRef(path=path, size=size)
+        if _stream_is_known_unparsed(path):
+            inventory.known_unparsed_streams.append(ref)
+        else:
+            inventory.unknown_streams.append(ref)
+    if inventory.unknown_streams:
+        warn_optional(
+            ctx,
+            "dsn_unknown_stream",
+            f"{len(inventory.unknown_streams)} unrecognised OLE stream(s): "
+            + ", ".join(ref.path for ref in inventory.unknown_streams),
+        )
+    return inventory
 
 
 # --- Main entry point ---
@@ -815,6 +1209,21 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
             erc_symbol = parse_erc_symbol_stream(ole.openstream(entry).read(), path, ctx)
             if erc_symbol is not None:
                 design.erc_symbols.append(erc_symbol)
+
+        # 10. Parse the DsnStream design-settings stream (GUID, version JSON).
+        for path, entry in stream_entries:
+            if path == "DsnStream":
+                design.dsn_stream = parse_dsn_stream(ole.openstream(entry).read(), string_list, ctx)
+                break
+
+        # 11. Parse the Symbols/$Types$ name -> structure-type catalog.
+        for path, entry in stream_entries:
+            if path == "Symbols/$Types$":
+                design.symbol_types = parse_symbol_types(ole.openstream(entry).read(), ctx)
+                break
+
+        # 12. Inventory every top-level stream (unknown vs known-unparsed).
+        design.stream_inventory = _build_stream_inventory(stream_entries, ole, ctx)
 
         return design
     finally:
