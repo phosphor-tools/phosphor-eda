@@ -94,6 +94,7 @@ def resolve_dsn_source(source: DsnSourceDesign, ctx: ParseContext | None = None)
     _merge_stored_page_net_names(source.pages, net_union, local_net_ids)
     _merge_repeated_logical_pins(net_union, pin_occurrences, local_net_ids)
     _merge_known_scope_off_page_connectors(source.pages, net_union, local_net_ids)
+    _merge_block_sheet_pins(source, net_union, local_net_ids, ctx)
 
     name_evidence = _collect_name_evidence(source.pages)
     name_decisions = _resolve_net_names(source, local_refs, net_union, name_evidence, ctx)
@@ -264,17 +265,90 @@ def _merge_stored_page_net_names(
     net_union: NetUnion,
     local_net_ids: set[str],
 ) -> None:
-    ids_by_name: dict[str, list[str]] = {}
+    ids_by_name: dict[tuple[str, str], list[str]] = {}
     for page in pages:
+        # Repeated-sheet pages merge page-net names only within their own
+        # occurrence domain so identical child net names never collapse across
+        # occurrences (finding H2). Every other page shares the ``"global"``
+        # bucket, reproducing the pre-hierarchy global-by-name merge exactly.
+        local_bucket = f"dom:{page.merge_domain}" if page.repeated else "global"
         for local_net in page.nets:
             if local_net.id in local_net_ids and local_net.name_key:
-                ids_by_name.setdefault(local_net.name_key, []).append(local_net.id)
+                ids_by_name.setdefault((local_bucket, local_net.name_key), []).append(local_net.id)
         for global_ in page.globals:
+            # Power/global nets are design-global; always merge across domains.
             if global_.local_net_id in local_net_ids and global_.name_key:
-                ids_by_name.setdefault(global_.name_key, []).append(global_.local_net_id)
+                ids_by_name.setdefault(("global", global_.name_key), []).append(
+                    global_.local_net_id
+                )
 
     for net_ids in ids_by_name.values():
         _merge_ids(net_union, net_ids)
+
+
+def _merge_block_sheet_pins(
+    source: DsnSourceDesign,
+    net_union: NetUnion,
+    local_net_ids: set[str],
+    ctx: ParseContext | None,
+) -> None:
+    """Union each block sheet pin's parent net with the child sheet's net.
+
+    KiCad sheet-pin style (``_merge_hierarchical_sheet_pins``): a hierarchical
+    block binds each sheet pin to a parent-page net; the child sheet exposes the
+    same net name as a port and/or a page-net entry. Merging them per occurrence
+    establishes cross-sheet connectivity explicitly (via the T0x10 parent-wire
+    binding and the sheet-pin name), which is what lets occurrence-scoped
+    repeated sheets resolve without name-keyed flattening. Diagnostics fire for
+    an unmatched sheet pin and for a child port that no sheet pin drives.
+    """
+    child_nets_by_scope_name: dict[tuple[ScopeId, str], list[str]] = {}
+    port_name_keys_by_scope: dict[ScopeId, set[str]] = {}
+    for page in source.pages:
+        for local_net in page.nets:
+            if local_net.id in local_net_ids and local_net.name_key:
+                child_nets_by_scope_name.setdefault((page.scope_id, local_net.name_key), []).append(
+                    local_net.id
+                )
+        for port in page.ports:
+            if port.local_net_id in local_net_ids and port.name_key:
+                child_nets_by_scope_name.setdefault((page.scope_id, port.name_key), []).append(
+                    port.local_net_id
+                )
+                port_name_keys_by_scope.setdefault(page.scope_id, set()).add(port.name_key)
+
+    for occurrence in source.block_occurrences:
+        bound_name_keys = {binding.sheet_pin_name_key for binding in occurrence.bindings}
+        for binding in occurrence.bindings:
+            if binding.parent_local_net_id not in local_net_ids:
+                continue
+            matched = [
+                child_net_id
+                for child_scope in occurrence.child_scope_ids
+                for child_net_id in child_nets_by_scope_name.get(
+                    (child_scope, binding.sheet_pin_name_key), []
+                )
+            ]
+            if not matched:
+                if ctx is not None:
+                    ctx.warn(
+                        "dsn_block_sheet_pin_unmatched",
+                        f"block {occurrence.block_reference!r} sheet pin "
+                        f"{binding.sheet_pin_name!r} has no matching net in child sheet "
+                        f"{occurrence.child_schematic!r}",
+                    )
+                continue
+            for child_net_id in matched:
+                _ = net_union.union(binding.parent_local_net_id, child_net_id)
+        if ctx is not None:
+            for child_scope in occurrence.child_scope_ids:
+                for name_key in sorted(port_name_keys_by_scope.get(child_scope, set())):
+                    if name_key not in bound_name_keys:
+                        ctx.warn(
+                            "dsn_child_port_unmatched",
+                            f"{child_scope}: port {name_key!r} has no matching sheet pin on "
+                            f"block {occurrence.block_reference!r}",
+                        )
 
 
 def _merge_known_scope_off_page_connectors(

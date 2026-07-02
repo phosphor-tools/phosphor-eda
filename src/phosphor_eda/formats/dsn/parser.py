@@ -38,9 +38,12 @@ from phosphor_eda.formats.dsn.erc import (
 )
 from phosphor_eda.formats.dsn.errors import DsnFormatError
 from phosphor_eda.formats.dsn.hierarchy import (
+    build_occurrence_to_instance,
     merge_net_id_mappings,
     parse_hierarchy,
     parse_hierarchy_occurrences,
+    parse_hierarchy_stream,
+    warn_repeated_sheet_blocks,
 )
 from phosphor_eda.formats.dsn.library import (
     ole_stream_entries,
@@ -774,13 +777,14 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
             design.hierarchy_occurrences.extend(
                 parse_hierarchy_occurrences(hier_data, instance_db_id_set)
             )
+            design.hierarchies.append(
+                parse_hierarchy_stream(hier_data, instance_db_id_set, stream_path=path, ctx=ctx)
+            )
         design.net_id_mappings = merge_net_id_mappings(*mapping_groups)
+        warn_repeated_sheet_blocks(design.hierarchies, ctx)
 
         # 6. Parse raw CIS VariantStore evidence when present.
-        occurrence_to_instance = {
-            occurrence.occurrence_id: occurrence.instance_db_id
-            for occurrence in design.hierarchy_occurrences
-        }
+        occurrence_to_instance = build_occurrence_to_instance(design.hierarchy_occurrences, ctx)
         cis_stream_data_by_path: dict[str, bytes] = {}
         for path, entry in stream_entries:
             if path.startswith("CIS/VariantStore/"):

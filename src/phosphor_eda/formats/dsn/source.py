@@ -209,6 +209,46 @@ class DsnPageSource:
     off_page_connectors: list[DsnOffPageConnector]
     bus_entries: list[DsnBusEntry] = field(default_factory=list)
     title_block: TitleBlock | None = None
+    # Cross-page net-name merge partition. Root and singly-instantiated pages
+    # share ``"root"`` (global name merge, as before); each repeated-sheet
+    # occurrence gets its own domain so identical child net names never merge
+    # across occurrences (finding H2).
+    merge_domain: str = "root"
+    # ``True`` for a page belonging to a child view instantiated more than once.
+    repeated: bool = False
+
+
+@dataclass(slots=True)
+class DsnBlockBinding:
+    """A hierarchical block sheet pin bound to a parent-page net.
+
+    ``sheet_pin_name`` is also the child page's port net name (the cross-sheet
+    merge key); ``parent_local_net_id`` is the parent page's local net the
+    block's T0x10 record binds this sheet pin to.
+    """
+
+    sheet_pin_name: str
+    sheet_pin_name_key: str
+    port_type_name: str
+    parent_net_id: int
+    parent_local_net_id: str
+
+
+@dataclass(slots=True)
+class DsnBlockOccurrence:
+    """One hierarchical block placement linking a parent page to child sheets.
+
+    Drives KiCad-style sheet-pin merging: each binding's parent net unions with
+    the matching-named port net in every ``child_scope_ids`` page (E3).
+    """
+
+    id: str
+    parent_scope_id: ScopeId
+    parent_page_id: str
+    block_reference: str
+    child_schematic: str
+    child_scope_ids: tuple[ScopeId, ...]
+    bindings: tuple[DsnBlockBinding, ...]
 
 
 @dataclass(slots=True)
@@ -225,4 +265,5 @@ class DsnSourceDesign:
     pages: list[DsnPageSource]
     hierarchy_mappings: list[DsnHierarchyMapping]
     net_bundles: list[DsnNetBundle] = field(default_factory=list)
+    block_occurrences: list[DsnBlockOccurrence] = field(default_factory=list)
     metadata: dict[str, str] = field(default_factory=dict)
