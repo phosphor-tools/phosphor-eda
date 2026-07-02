@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.schematic import Schematic, ScopeId, TitleBlock
@@ -70,6 +71,64 @@ def _local_net_id(page_id: str, net_id: int) -> str:
 # (seen on pins whose connection comes from a power symbol at the pin
 # coordinate). They must never materialize as nets.
 _SENTINEL_NET_IDS = frozenset({0, 0xFFFFFFFF})
+
+# Capture stores ERC-object anchor coordinates in DSN internal units; the
+# persisted DRC-violation detail string reports them in millimetres at this
+# scale (validated against the embedded coordinate string on every fixture).
+_DSN_MM_PER_UNIT = 0.254
+
+# Floating graphic diagnostics: a port/power/off-page graphic that resolves to
+# no wire net and no synthetic anchor, and whose net name matches no page net
+# or block sheet-pin name, is genuinely dangling rather than hierarchy-wired.
+_FLOATING_DIAGNOSTIC = {
+    "port": ("dsn_floating_port", "port"),
+    "global": ("dsn_floating_power_symbol", "power symbol"),
+    "off_page_connector": ("dsn_floating_off_page_connector", "off-page connector"),
+}
+
+
+def _graphic_net_spelling(graphic: GraphicInst) -> str:
+    """The net name a graphic carries, without emitting a fallback diagnostic."""
+    return graphic.props.get("_net_name", "") or graphic.name
+
+
+def _no_connect_pin_metadata(
+    sidecar_metadata: dict[str, str],
+    marker_no_connect: bool,
+) -> dict[str, str]:
+    """Merge native-marker and sidecar no-connect provenance.
+
+    The sidecar records ``dsn_no_connect_source: "pstxnet.dat"`` plus its match
+    keys; a native marker contributes ``dsn_marker``. When both apply the
+    sources are joined (``"dsn_marker,pstxnet.dat"``) so neither provenance is
+    lost.
+    """
+    metadata = dict(sidecar_metadata)
+    if not marker_no_connect:
+        return metadata
+    sources = ["dsn_marker"]
+    existing = metadata.get("dsn_no_connect_source")
+    if existing:
+        sources.extend(source for source in existing.split(",") if source != "dsn_marker")
+    metadata["dsn_no_connect_source"] = ",".join(sources)
+    return metadata
+
+
+def _drc_violations(raw: RawDesign) -> list[dict[str, str | float]]:
+    """Placed ERC objects as raw DRC-violation records with a mm anchor."""
+    violations: list[dict[str, str | float]] = []
+    for raw_page in raw.pages:
+        for erc_object in raw_page.erc_objects:
+            violations.append(
+                {
+                    "page": erc_object.page_name,
+                    "message": erc_object.message,
+                    "subject": erc_object.subject.strip(),
+                    "x_mm": round(erc_object.bbox_x1 * _DSN_MM_PER_UNIT, 2),
+                    "y_mm": round(erc_object.bbox_y1 * _DSN_MM_PER_UNIT, 2),
+                }
+            )
+    return violations
 
 
 def _package_pin_metadata(
@@ -191,10 +250,16 @@ def _title_value(value: str) -> str:
     return "" if text in _TITLE_BLOCK_PLACEHOLDERS else text
 
 
-def _page_title_block(raw_page: RawPage) -> TitleBlock | None:
+def _page_title_block(raw_page: RawPage, ctx: ParseContext | None = None) -> TitleBlock | None:
     """The page's title block, from the first parsed title block record."""
     if not isinstance(raw_page, DsnSchematicPage) or not raw_page.title_blocks:
         return None
+    if len(raw_page.title_blocks) > 1 and ctx is not None:
+        ctx.warn(
+            "dsn_title_block",
+            f"{raw_page.name or 'unnamed'}: {len(raw_page.title_blocks)} title blocks on the page; "
+            "only the first is mapped",
+        )
     return _title_block(raw_page.title_blocks[0])
 
 
@@ -294,6 +359,35 @@ def _graphic_net_name(graphic: GraphicInst, ctx: ParseContext | None, kind: str)
     return graphic.name
 
 
+def _warn_floating_graphic(
+    *,
+    graphic: GraphicInst,
+    kind: str,
+    location: tuple[int, int],
+    page_name: str,
+    hierarchy_name_keys: set[str],
+    ctx: ParseContext | None,
+) -> None:
+    """Diagnose a graphic that connects to neither a wire net nor a hierarchy name.
+
+    Ports (and most power symbols/off-page connectors) connect by net name
+    rather than a coincident wire, so a graphic whose net name matches a page
+    net or block sheet-pin name is hierarchy-wired, not floating. Only a name
+    that matches nothing is genuinely dangling.
+    """
+    if ctx is None:
+        return
+    net_name = _graphic_net_spelling(graphic)
+    if dsn_name_key(net_name) in hierarchy_name_keys:
+        return
+    category, label = _FLOATING_DIAGNOSTIC[kind]
+    ctx.warn(
+        category,
+        f"{page_name}: floating {label} {graphic.name!r} carrying net {net_name!r} "
+        f"at {location} matches no wire net or hierarchy name",
+    )
+
+
 def _graphic_sources(
     *,
     raw_page: RawPage,
@@ -304,6 +398,7 @@ def _graphic_sources(
     page_id: str,
     scope_id: ScopeId,
     kind: str,
+    hierarchy_name_keys: set[str],
     ctx: ParseContext | None = None,
 ) -> None:
     for index, graphic in enumerate(graphics):
@@ -333,6 +428,16 @@ def _graphic_sources(
             # anchor net; attach the symbol so its name applies.
             synthetic_net = synthetic_nets_by_location[location]
             net_targets.append((synthetic_net.id, synthetic_net, synthetic_net.net_id))
+        if not net_targets:
+            _warn_floating_graphic(
+                graphic=graphic,
+                kind=kind,
+                location=location,
+                page_name=page_source.name,
+                hierarchy_name_keys=hierarchy_name_keys,
+                ctx=ctx,
+            )
+            continue
         for ordinal, (local_net_id, page_net, net_id) in enumerate(net_targets):
             object_id = f"{page_id}:{kind}:{index}"
             if ordinal > 0:
@@ -403,8 +508,15 @@ def _source_page(
         globals=[],
         off_page_connectors=[],
         bus_entries=[],
-        title_block=_page_title_block(raw_page),
+        title_block=_page_title_block(raw_page, ctx),
     )
+    # Names a port/power/off-page graphic can hierarchy-connect to when no wire
+    # sits at its location: page net names plus block sheet-pin names.
+    hierarchy_name_keys = {dsn_name_key(net.name) for net in raw_page.nets if net.name}
+    for block in raw_page.block_instances:
+        for sheet_pin in block.sheet_pins:
+            if sheet_pin.name:
+                hierarchy_name_keys.add(dsn_name_key(sheet_pin.name))
     page_nets_by_id: dict[int, DsnPageNet] = {}
     synthetic_nets_by_location: dict[tuple[int, int], DsnPageNet] = {}
     for raw_net in raw_page.nets:
@@ -500,6 +612,7 @@ def _source_page(
                 location,
             )
             page_net: DsnPageNet | None = None
+            anchored = False
             if source_net_id is not None:
                 page_net = _add_page_net_if_missing(
                     page_nets_by_id=page_nets_by_id,
@@ -509,6 +622,7 @@ def _source_page(
                     net_id=source_net_id,
                 )
             elif (anchor := _global_anchor(raw_page, location)) is not None:
+                anchored = True
                 page_net = _synthetic_net_at(
                     synthetic_nets_by_location=synthetic_nets_by_location,
                     page_source=page_source,
@@ -516,12 +630,30 @@ def _source_page(
                     scope_id=scope_id,
                     location=(anchor.loc_x, anchor.loc_y),
                 )
-            elif ctx is not None:
-                ctx.warn(
-                    "dsn_netless_pin",
-                    f"{raw_inst.reference} pin {raw_pin.pin_number} has a sentinel "
-                    "net id and no wire or power symbol at its location; pin is netless",
-                )
+            # A native no-connect marker on a pin that resolves to no net is a
+            # designer-asserted NC; a marker on a wired or power-anchored pin is
+            # an ambiguity worth surfacing but never a no_connect.
+            is_netless = source_net_id is None and not anchored
+            marker_no_connect = raw_pin.has_no_connect_marker and is_netless
+            if ctx is not None:
+                if raw_pin.has_no_connect_marker and source_net_id is not None:
+                    ctx.warn(
+                        "dsn_marker_on_wired_pin",
+                        f"{raw_inst.reference} pin {raw_pin.pin_number} carries a no-connect "
+                        "marker but resolves to a net; marker ignored",
+                    )
+                elif raw_pin.has_no_connect_marker and anchored:
+                    ctx.warn(
+                        "dsn_marker_on_power_pin",
+                        f"{raw_inst.reference} pin {raw_pin.pin_number} carries a no-connect "
+                        "marker but is anchored to a power symbol; marker ignored",
+                    )
+                elif is_netless and not raw_pin.has_no_connect_marker:
+                    ctx.warn(
+                        "dsn_netless_pin",
+                        f"{raw_inst.reference} pin {raw_pin.pin_number} has a sentinel "
+                        "net id and no wire or power symbol at its location; pin is netless",
+                    )
             pin_metadata = _symbol_pin_metadata(
                 resolve_symbol_pin(
                     raw_inst.package_name,
@@ -531,7 +663,13 @@ def _source_page(
                     raw.symbol_pin_names,
                 )
             )
-            pin_metadata.update(raw_pin.no_connect_metadata)
+            pin_metadata.update(
+                _no_connect_pin_metadata(raw_pin.no_connect_metadata, marker_no_connect)
+            )
+            if raw_pin.package_pin_number:
+                # Sidecar (pstchip.dat) physical pin number; distinct from the
+                # native Packages/* dsn_package_pin so both can coexist.
+                pin_metadata["dsn_sidecar_package_pin"] = raw_pin.package_pin_number
             pin_occurrence_metadata: dict[str, str] = {}
             component_metadata: dict[str, str] = {}
             if package is not None and package_device is not None:
@@ -558,7 +696,7 @@ def _source_page(
                 pin_designator=raw_pin.pin_number,
                 pin_name=pin_name,
                 location=location,
-                no_connect=raw_pin.no_connect,
+                no_connect=raw_pin.no_connect or marker_no_connect,
                 component_props=component_props,
                 component_props_list=component_props_list,
                 component_x=component_x,
@@ -580,6 +718,7 @@ def _source_page(
         page_id=page_id,
         scope_id=scope_id,
         kind="port",
+        hierarchy_name_keys=hierarchy_name_keys,
         ctx=ctx,
     )
     _graphic_sources(
@@ -591,6 +730,7 @@ def _source_page(
         page_id=page_id,
         scope_id=scope_id,
         kind="global",
+        hierarchy_name_keys=hierarchy_name_keys,
         ctx=ctx,
     )
     _graphic_sources(
@@ -602,6 +742,7 @@ def _source_page(
         page_id=page_id,
         scope_id=scope_id,
         kind="off_page_connector",
+        hierarchy_name_keys=hierarchy_name_keys,
         ctx=ctx,
     )
     return page_source
@@ -626,6 +767,13 @@ def dsn_to_source(
 ) -> DsnSourceDesign:
     """Extract OrCAD DSN-native source connectivity from already parsed records."""
     packages_by_key = build_package_lookup(raw)
+    metadata = _library_header_metadata(raw)
+    drc_violations = _drc_violations(raw)
+    if drc_violations:
+        # Persisted OrCAD ERC/DRC violations surfaced as raw queryable evidence;
+        # not a suppression model — just what Capture stored on the page tail.
+        metadata["dsn_drc_violation_count"] = str(len(drc_violations))
+        metadata["dsn_drc_violations"] = json.dumps(drc_violations, separators=(",", ":"))
     return DsnSourceDesign(
         name=name,
         pages=[_source_page(raw_page, raw, packages_by_key, ctx) for raw_page in raw.pages],
@@ -654,7 +802,7 @@ def dsn_to_source(
             )
             for index, bundle in enumerate(raw.net_bundle_maps)
         ],
-        metadata=_library_header_metadata(raw),
+        metadata=metadata,
     )
 
 
