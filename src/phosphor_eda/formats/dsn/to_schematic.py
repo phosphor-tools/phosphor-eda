@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.schematic import Schematic, ScopeId, TitleBlock
 from phosphor_eda.formats.common.electrical import set_pin_electrical
+from phosphor_eda.formats.dsn.binary_reader import STRUCT_SYMBOL_PIN_BUS
 from phosphor_eda.formats.dsn.package_evidence import (
     build_package_lookup,
     native_package_device,
@@ -41,16 +42,16 @@ from phosphor_eda.formats.dsn.source import (
 
 if TYPE_CHECKING:
     from phosphor_eda.formats.common.diagnostics import ParseContext
-    from phosphor_eda.formats.common.raw_models import (
+    from phosphor_eda.formats.dsn.package_evidence import PackageLookup
+    from phosphor_eda.formats.dsn.raw_models import (
         DsnPackage,
         DsnPackageDevice,
         DsnPackageDevicePin,
         DsnSymbolPin,
         GraphicInst,
     )
-    from phosphor_eda.formats.common.raw_models import ParsedDesign as RawDesign
-    from phosphor_eda.formats.common.raw_models import SchematicPage as RawPage
-    from phosphor_eda.formats.dsn.package_evidence import PackageLookup
+    from phosphor_eda.formats.dsn.raw_models import ParsedDesign as RawDesign
+    from phosphor_eda.formats.dsn.raw_models import SchematicPage as RawPage
 
 
 def _page_id(raw_page: RawPage) -> str:
@@ -147,7 +148,9 @@ def _symbol_pin_metadata(symbol_pin: DsnSymbolPin | None) -> dict[str, str]:
         "dsn_symbol_pin_shape": str(symbol_pin.pin_shape),
         "dsn_symbol_pin_start": f"{symbol_pin.start_x},{symbol_pin.start_y}",
         "dsn_symbol_pin_hotpt": f"{symbol_pin.hotpt_x},{symbol_pin.hotpt_y}",
-        "dsn_symbol_pin_structure": ("bus" if symbol_pin.structure_type == 27 else "scalar"),
+        "dsn_symbol_pin_structure": (
+            "bus" if symbol_pin.structure_type == STRUCT_SYMBOL_PIN_BUS else "scalar"
+        ),
     }
     if symbol_pin.display_prop_count:
         metadata["dsn_symbol_pin_display_props"] = str(symbol_pin.display_prop_count)

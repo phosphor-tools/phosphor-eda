@@ -6,7 +6,6 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from phosphor_eda.formats.common.raw_models import DsnNoConnectPin, PinConnection
 from phosphor_eda.formats.common.text import strip_overline
 from phosphor_eda.formats.dsn.package_evidence import (
     build_package_lookup,
@@ -15,6 +14,7 @@ from phosphor_eda.formats.dsn.package_evidence import (
     native_package_pin,
 )
 from phosphor_eda.formats.dsn.pins import resolve_pin_name
+from phosphor_eda.formats.dsn.raw_models import DsnNoConnectPin, PinConnection
 from phosphor_eda.formats.dsn.source import (
     dsn_component_source_id,
     dsn_page_id,
@@ -25,8 +25,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from phosphor_eda.formats.common.diagnostics import ParseContext
-    from phosphor_eda.formats.common.raw_models import ParsedDesign, PlacedInstance
     from phosphor_eda.formats.dsn.package_evidence import PackageLookup
+    from phosphor_eda.formats.dsn.raw_models import ParsedDesign, PlacedInstance
 
 _PART_RE = re.compile(r"^\s+(\S+)\s+'([^']+)':;")
 _PRIMITIVE_RE = re.compile(r"^primitive '([^']+)';")

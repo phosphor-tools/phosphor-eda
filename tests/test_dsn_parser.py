@@ -7,18 +7,24 @@ import pytest
 
 import phosphor_eda.formats.dsn.parser as dsn_parser
 from phosphor_eda.formats.common.diagnostics import ParseContext
-from phosphor_eda.formats.common.raw_models import DsnView
-from phosphor_eda.formats.dsn.binary_reader import PREAMBLE, BinaryReader
+from phosphor_eda.formats.dsn.binary_reader import (
+    PREAMBLE,
+    STRUCT_BUS_ENTRY,
+    STRUCT_ERC_OBJECT,
+    STRUCT_ERC_SYMBOL,
+    BinaryReader,
+)
 from phosphor_eda.formats.dsn.cis import parse_cis_variant_store
+from phosphor_eda.formats.dsn.erc import parse_erc_symbol_stream
+from phosphor_eda.formats.dsn.packages import parse_package_stream
 from phosphor_eda.formats.dsn.parser import (
     DsnSchematicPage,
     parse_dsn,
-    parse_erc_symbol_stream,
     parse_net_bundle_map_data,
     parse_net_bundle_map_streams,
-    parse_package_stream,
     parse_page_tail_objects,
 )
+from phosphor_eda.formats.dsn.raw_models import DsnView
 from phosphor_eda.formats.dsn.views import parse_view_schematic, warn_repeated_sheet_identity
 
 
@@ -402,7 +408,7 @@ def test_overrun_erc_symbol_stream_warns() -> None:
         + struct.pack("<I", 48)
         + struct.pack("<H", 0)
     )
-    data = _structure_with_end_offset(dsn_parser.STRUCT_ERC_SYMBOL, body, byte_offset=24)
+    data = _structure_with_end_offset(STRUCT_ERC_SYMBOL, body, byte_offset=24)
 
     symbol = parse_erc_symbol_stream(data, "Symbols/ERC", ctx)
 
@@ -459,7 +465,7 @@ def test_page_tail_erc_object_overrun_warns_without_rewinding() -> None:
         + _dsn_string("NET_A")
     )
     bus_entry = (
-        _short_prefix(dsn_parser.STRUCT_BUS_ENTRY)
+        _short_prefix(STRUCT_BUS_ENTRY)
         + PREAMBLE
         + struct.pack("<I", 0)
         + struct.pack("<I", 0xAABBCCDD)
@@ -470,7 +476,7 @@ def test_page_tail_erc_object_overrun_warns_without_rewinding() -> None:
         + b"TRAILING!"
     )
     malformed_object = _structure_with_end_offset(
-        dsn_parser.STRUCT_ERC_OBJECT,
+        STRUCT_ERC_OBJECT,
         body_before_bus_count + struct.pack("<H", 1) + bus_entry,
         byte_offset=3 + len(body_before_bus_count),
     )

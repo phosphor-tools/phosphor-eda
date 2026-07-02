@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from phosphor_eda.domain.schematic import Component, Parameter, Schematic
-from phosphor_eda.formats.common.raw_models import (
+from phosphor_eda.formats.dsn.raw_models import (
     DsnCisBom,
     DsnCisGroup,
     DsnCisGroupMember,

@@ -6,7 +6,9 @@ import struct
 from collections import Counter
 from typing import TYPE_CHECKING
 
-from phosphor_eda.formats.common.raw_models import (
+from phosphor_eda.formats.common.diagnostics import warn_optional
+from phosphor_eda.formats.dsn.binary_reader import BinaryReader
+from phosphor_eda.formats.dsn.raw_models import (
     DsnCisBom,
     DsnCisBomEntry,
     DsnCisGroup,
@@ -16,6 +18,7 @@ from phosphor_eda.formats.common.raw_models import (
     DsnCisUpdateStorageRow,
     DsnCisVariantName,
     DsnCisVariantStore,
+    DsnResolutionKind,
 )
 
 if TYPE_CHECKING:
@@ -166,7 +169,7 @@ def _parse_group_members(
             continue
         instance_db_id = occurrence_to_instance.get(occurrence_id)
         diagnostics: list[str] = []
-        resolution_kind = "hierarchy_occurrence"
+        resolution_kind: DsnResolutionKind = "hierarchy_occurrence"
         if instance_db_id is None:
             resolution_kind = "unresolved"
             diagnostics.append("group member ID did not resolve through hierarchy occurrences")
@@ -218,10 +221,9 @@ def _parse_update_storage_rows(
         values = _split_caret_list(columns_and_values[1]) if len(columns_and_values) == 2 else []
         diagnostics: list[str] = []
         instance_db_id: int | None = None
-        resolution_kind = "unresolved"
+        resolution_kind: DsnResolutionKind = "unresolved"
         if occurrence_id is None:
             diagnostics.append(f"update-storage row has non-numeric ID {occurrence_value!r}")
-            occurrence_id = 0
         else:
             instance_db_id = occurrence_to_instance.get(occurrence_id)
             if instance_db_id is None:
@@ -293,6 +295,9 @@ def _parse_boms(
     if len(raw_fields) < 2:
         return []
 
+    # BOMDataStream field list is stream-level evidence: record it once on the
+    # store rather than copying the same list onto every BOM below.
+    store.bom_raw_fields = raw_fields
     declared_count = _parse_decimal(raw_fields[0])
     bom_names = raw_fields[1:]
     if declared_count is not None and declared_count != len(bom_names):
@@ -307,7 +312,6 @@ def _parse_boms(
         bom = DsnCisBom(
             name=bom_name,
             stream_path=bom_stream_path,
-            raw_fields=raw_fields,
         )
 
         child_prefix = f"CIS/VariantStore/BOM/{bom_name}/"
@@ -315,18 +319,18 @@ def _parse_boms(
         if not child_paths:
             _warn(store, ctx, f"{bom_stream_path}: BOM {bom_name!r} has no child streams")
         for path in child_paths:
-            data = cis_streams[path]
+            child_data = cis_streams[path]
             child_name = path.removeprefix(child_prefix)
             if child_name == bom_name:
                 bom.child_string_lists.append(
                     DsnCisStringList(
                         stream_path=path,
-                        values=_parse_cis_string_list(data, path, store, ctx),
+                        values=_parse_cis_string_list(child_data, path, store, ctx),
                     )
                 )
             elif child_name == "BOMPartData":
                 bom.entries = _parse_bom_part_data(
-                    data,
+                    child_data,
                     path,
                     occurrence_to_instance,
                     store,
@@ -336,7 +340,7 @@ def _parse_boms(
                 store.unknown_streams.append(
                     DsnCisRawStream(
                         stream_path=path,
-                        size=len(data),
+                        size=len(child_data),
                         reason="unsupported BOM child",
                     )
                 )
@@ -378,7 +382,7 @@ def _parse_bom_part_data(
             continue
         instance_db_id = occurrence_to_instance.get(raw_id)
         diagnostics: list[str] = []
-        resolution_kind = "hierarchy_occurrence"
+        resolution_kind: DsnResolutionKind = "hierarchy_occurrence"
         if instance_db_id is None:
             resolution_kind = "unresolved"
             diagnostics.append("BOMPartData ID did not resolve through hierarchy occurrences")
@@ -405,26 +409,24 @@ def _parse_variant_names(
         _warn(store, ctx, f"{stream_path}: VariantNames stream is too short")
         return []
 
-    _version = struct.unpack_from("<I", data, 0)[0]
-    declared_count = struct.unpack_from("<I", data, 4)[0]
-    pos = 8
+    r = BinaryReader(data, stream_path)
+    _version = r.read_uint32()
+    declared_count = r.read_uint32()
     names: list[DsnCisVariantName] = []
     seen: Counter[str] = Counter()
-    while pos < len(data):
-        if pos + 2 > len(data):
-            _warn(store, ctx, f"{stream_path}: truncated VariantNames length at byte {pos}")
+    while r.pos < len(data):
+        if r.pos + 2 > len(data):
+            _warn(store, ctx, f"{stream_path}: truncated VariantNames length at byte {r.pos}")
             break
-        string_len = struct.unpack_from("<H", data, pos)[0]
-        pos += 2
-        end = pos + string_len
-        if end > len(data):
-            _warn(store, ctx, f"{stream_path}: truncated VariantNames value at byte {pos}")
+        string_len = struct.unpack_from("<H", data, r.pos)[0]
+        value_end = r.pos + 2 + string_len
+        if value_end > len(data):
+            _warn(store, ctx, f"{stream_path}: truncated VariantNames value at byte {r.pos + 2}")
             break
-        name = data[pos:end].decode("latin1", errors="replace")
-        pos = end
-        if pos < len(data) and data[pos] == 0:
-            pos += 1
-        elif pos < len(data):
+        name = r.read_string_len_zero(encoding="latin1")
+        # read_string_len_zero consumes the null terminator when present; if it
+        # did not advance past value_end there was no terminator to consume.
+        if r.pos == value_end and r.pos < len(data):
             _warn(store, ctx, f"{stream_path}: missing null terminator after {name!r}")
         duplicate_index = seen[name]
         seen[name] += 1
@@ -521,5 +523,4 @@ def _parse_decimal(value: str) -> int | None:
 
 def _warn(store: DsnCisVariantStore, ctx: ParseContext | None, message: str) -> None:
     store.diagnostics.append(message)
-    if ctx is not None:
-        ctx.warn("dsn_cis", message)
+    warn_optional(ctx, "dsn_cis", message)

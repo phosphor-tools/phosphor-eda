@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
 
     from phosphor_eda.domain.schematic import Component, Schematic
-    from phosphor_eda.formats.common.raw_models import (
+    from phosphor_eda.formats.dsn.raw_models import (
         DsnCisGroup,
         DsnCisGroupMember,
         DsnCisVariantStore,

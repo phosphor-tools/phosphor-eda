@@ -5,8 +5,9 @@ from __future__ import annotations
 import struct
 from typing import TYPE_CHECKING
 
-from phosphor_eda.formats.common.raw_models import DsnView
+from phosphor_eda.formats.common.diagnostics import warn_optional
 from phosphor_eda.formats.dsn.binary_reader import BinaryReader
+from phosphor_eda.formats.dsn.raw_models import DsnView
 
 if TYPE_CHECKING:
     from phosphor_eda.formats.common.diagnostics import ParseContext
@@ -46,7 +47,7 @@ def parse_view_schematic(
             msg = f"{stream_path} has {r.remaining()} trailing bytes"
             raise ValueError(msg)
     except (struct.error, IndexError, ValueError) as e:
-        _warn(ctx, "dsn_view", f"View schematic parse error in {stream_path}: {e}")
+        warn_optional(ctx, "dsn_view", f"View schematic parse error in {stream_path}: {e}")
         return None
 
     return DsnView(
@@ -84,7 +85,7 @@ def warn_repeated_sheet_identity(
         if len(view_names) < 2:
             continue
         scopes = ", ".join(sorted(view_names))
-        _warn(
+        warn_optional(
             ctx,
             "dsn_repeated_sheet_identity",
             (
@@ -92,8 +93,3 @@ def warn_repeated_sheet_identity(
                 "current DSN resolver flattens page/source-page identity"
             ),
         )
-
-
-def _warn(ctx: ParseContext | None, category: str, message: str) -> None:
-    if ctx is not None:
-        ctx.warn(category, message)
