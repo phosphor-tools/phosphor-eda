@@ -58,7 +58,8 @@ def test_dsn_to_design_pins_have_names():
     design = dsn_to_design(raw, name="PicoW")
     u1 = next(c for c in design.components if c.reference == "U1")
     named_pins = [p for p in u1.pins if p.name]
-    assert len(named_pins) > 0
+    # RP2040 (U1): every one of its 57 pins carries a name.
+    assert len(named_pins) == len(u1.pins) == 57
 
 
 def test_dsn_to_design_gnd_has_many_pins():

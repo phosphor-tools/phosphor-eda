@@ -3,6 +3,7 @@
 import struct
 from pathlib import Path
 
+import olefile
 import pytest
 
 import phosphor_eda.formats.dsn.parser as dsn_parser
@@ -26,6 +27,20 @@ from phosphor_eda.formats.dsn.parser import (
 )
 from phosphor_eda.formats.dsn.raw_models import DsnView
 from phosphor_eda.formats.dsn.views import parse_view_schematic, warn_repeated_sheet_identity
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+SYNC_DSN = (
+    FIXTURES
+    / "orcad/opencellular-sync/orcad/OpenCellular/electronics/sync/schematics/dsn"
+    / "FB_CONNECT1_SYNC_LIFE-3_V1P1.DSN"
+)
+SYNC_ERC_STREAM = "Symbols/ERC"
+SYNC_VIEW_SCHEMATIC_STREAM = "Views/opencellular_coonect1_sync/Schematic"
+
+
+def _read_dsn_stream(dsn_path: Path, stream_path: str) -> bytes:
+    with olefile.OleFileIO(str(dsn_path)) as ole:
+        return ole.openstream(stream_path).read()
 
 
 def _dsn_string(value: str) -> bytes:
@@ -338,46 +353,112 @@ def test_cis_update_storage_rows_preserve_mismatches_without_external_corpus() -
     ]
 
 
-def test_malformed_view_schematic_warns_and_returns_no_view() -> None:
+# H3/T3: the CIS parser has ~14 ``_warn`` branches; most of the truncation and
+# malformed-stream paths were unexercised. Each case below slices a synthetic
+# builder mid-field (or supplies a deliberately malformed size prefix / count)
+# to drive exactly one branch, asserting the diagnostic content rather than just
+# "an error happened".
+_CIS_WARN_CASES: list[tuple[str, dict[str, bytes], str]] = [
+    (
+        "empty_group_name",
+        {"CIS/VariantStore/Groups/GroupsDataStream": b"\xb00\xb0\xb0"},
+        "group row 0 has an empty name",
+    ),
+    (
+        "group_has_no_member_stream",
+        {"CIS/VariantStore/Groups/GroupsDataStream": _cis_size_prefixed(b"DNI\xb00")},
+        "group 'DNI' has no member stream",
+    ),
+    (
+        "group_member_non_numeric_id",
+        {
+            "CIS/VariantStore/Groups/GroupsDataStream": _cis_size_prefixed(b"DNI\xb00"),
+            "CIS/VariantStore/Groups/DNI/DNI": _cis_size_prefixed(b"0\xb0ABC"),
+        },
+        "group row 0 has non-numeric ID 'ABC'",
+    ),
+    (
+        "update_storage_missing_columns",
+        {
+            "CIS/VariantStore/Groups/GroupsDataStream": _cis_size_prefixed(b"DNI\xb00"),
+            "CIS/VariantStore/Groups/DNI/DNI": _cis_size_prefixed(b"0\xb0101"),
+            "CIS/VariantStore/Groups/DNI/UpdateStorageGroupDataStream": _cis_size_prefixed(b"101"),
+        },
+        "update-storage row 0 is missing columns",
+    ),
+    (
+        "bom_declared_count_mismatch",
+        {
+            "CIS/VariantStore/BOM/BOMDataStream": _cis_string_list(["2", "BomA"]),
+            "CIS/VariantStore/BOM/BomA/BomA": _cis_string_list(["0"]),
+        },
+        "declared 2 BOM names but parsed 1",
+    ),
+    (
+        "bom_has_no_child_streams",
+        {"CIS/VariantStore/BOM/BOMDataStream": _cis_string_list(["1", "BomA"])},
+        "BOM 'BomA' has no child streams",
+    ),
+    (
+        "bom_part_data_declared_count_mismatch",
+        {
+            "CIS/VariantStore/BOM/BOMDataStream": _cis_string_list(["1", "BomA"]),
+            "CIS/VariantStore/BOM/BomA/BomA": _cis_string_list(["0"]),
+            "CIS/VariantStore/BOM/BomA/BOMPartData": _cis_string_list(["2", "101"]),
+        },
+        "declared 2 BOMPartData IDs but parsed 1",
+    ),
+    (
+        "bom_part_data_non_numeric_id",
+        {
+            "CIS/VariantStore/BOM/BOMDataStream": _cis_string_list(["1", "BomA"]),
+            "CIS/VariantStore/BOM/BomA/BomA": _cis_string_list(["0"]),
+            "CIS/VariantStore/BOM/BomA/BOMPartData": _cis_string_list(["1", "XYZ"]),
+        },
+        "BOMPartData row 0 has non-numeric ID 'XYZ'",
+    ),
+    (
+        "variant_names_stream_too_short",
+        {"CIS/VariantStore/VariantNames": b"\x00\x00\x00"},
+        "VariantNames stream is too short",
+    ),
+    (
+        "variant_names_truncated_length",
+        {"CIS/VariantStore/VariantNames": struct.pack("<II", 900, 1) + b"\x01"},
+        "truncated VariantNames length at byte 8",
+    ),
+    (
+        "variant_names_truncated_value",
+        {"CIS/VariantStore/VariantNames": struct.pack("<II", 900, 1) + struct.pack("<H", 50)},
+        "truncated VariantNames value at byte 10",
+    ),
+    (
+        "stream_too_short_for_size_prefix",
+        {"CIS/VariantStore/BOM/BOMDataStream": b"\x00"},
+        "stream is too short for size prefix",
+    ),
+    (
+        "size_prefix_mismatch",
+        {"CIS/VariantStore/BOM/BOMDataStream": struct.pack("<I", 99) + b"1\xf9BomA"},
+        "declared 99 payload bytes but found 6",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("streams", "expected_substring"),
+    [(streams, substring) for _, streams, substring in _CIS_WARN_CASES],
+    ids=[case_id for case_id, _, _ in _CIS_WARN_CASES],
+)
+def test_cis_malformed_streams_emit_targeted_warning(
+    streams: dict[str, bytes], expected_substring: str
+) -> None:
     ctx = ParseContext()
 
-    view = parse_view_schematic(
-        b"\x00",
-        stream_path="Views/Broken/Schematic",
-        hierarchy_stream_paths=[],
-        ctx=ctx,
-    )
+    _ = parse_cis_variant_store(streams, {"CIS/VariantStore"}, {}, ctx)
 
-    assert view is None
-    assert any(issue.category == "dsn_view" for issue in ctx.issues)
-
-
-def test_repeated_sheet_identity_warning_uses_reused_page_names() -> None:
-    ctx = ParseContext()
-
-    warn_repeated_sheet_identity(
-        [
-            DsnView(name="A", page_names=["Shared"]),
-            DsnView(name="B", page_names=["Shared"]),
-        ],
-        ctx,
-    )
-
-    assert [issue.category for issue in ctx.issues] == ["dsn_repeated_sheet_identity"]
-
-
-def test_unique_view_page_names_do_not_warn_about_repeated_sheet_identity() -> None:
-    ctx = ParseContext()
-
-    warn_repeated_sheet_identity(
-        [
-            DsnView(name="A", page_names=["A1"]),
-            DsnView(name="B", page_names=["B1"]),
-        ],
-        ctx,
-    )
-
-    assert ctx.issues == []
+    messages = [issue.message for issue in ctx.issues if issue.category == "dsn_cis"]
+    assert any(expected_substring in message for message in messages), messages
 
 
 def test_unsupported_erc_symbol_stream_warns() -> None:
@@ -516,6 +597,111 @@ def test_page_tail_erc_object_decodes_raw_fields() -> None:
     assert erc_object.subject == "NET_A "
     assert erc_object.detail == "SCHEMATIC1, PAGE1  (30.48, 78.74) "
     assert not ctx.issues
+
+
+def test_malformed_view_schematic_warns_and_returns_no_view() -> None:
+    ctx = ParseContext()
+
+    view = parse_view_schematic(
+        b"\x00",
+        stream_path="Views/Broken/Schematic",
+        hierarchy_stream_paths=[],
+        ctx=ctx,
+    )
+
+    assert view is None
+    assert any(issue.category == "dsn_view" for issue in ctx.issues)
+
+
+# H4/T4: the trivial ``b""`` / ``b"\x00"`` malformed tests above cover the empty
+# edge; these augment them with the established realistic pattern -- slice a real
+# fixture stream at several cut points and assert the parser degrades to a
+# diagnostic (never a crash, never a partially-built object).
+@pytest.mark.parametrize("cut_fraction", [0.25, 0.5, 0.75])
+def test_truncated_real_erc_symbol_stream_diagnoses_without_partial_result(
+    cut_fraction: float,
+) -> None:
+    data = _read_dsn_stream(SYNC_DSN, SYNC_ERC_STREAM)
+    truncated = data[: int(len(data) * cut_fraction)]
+    ctx = ParseContext()
+
+    symbol = parse_erc_symbol_stream(truncated, SYNC_ERC_STREAM, ctx)
+
+    assert symbol is None
+    assert any(issue.category == "dsn_erc_symbol" for issue in ctx.issues)
+
+
+def test_full_real_erc_symbol_stream_parses_cleanly() -> None:
+    data = _read_dsn_stream(SYNC_DSN, SYNC_ERC_STREAM)
+    ctx = ParseContext()
+
+    symbol = parse_erc_symbol_stream(data, SYNC_ERC_STREAM, ctx)
+
+    assert symbol is not None
+    assert not ctx.issues
+
+
+@pytest.mark.parametrize("cut_fraction", [0.25, 0.5, 0.75])
+def test_truncated_real_view_schematic_stream_diagnoses_without_partial_result(
+    cut_fraction: float,
+) -> None:
+    data = _read_dsn_stream(SYNC_DSN, SYNC_VIEW_SCHEMATIC_STREAM)
+    truncated = data[: int(len(data) * cut_fraction)]
+    ctx = ParseContext()
+
+    view = parse_view_schematic(
+        truncated,
+        stream_path=SYNC_VIEW_SCHEMATIC_STREAM,
+        hierarchy_stream_paths=[],
+        ctx=ctx,
+    )
+
+    assert view is None
+    assert any(issue.category == "dsn_view" for issue in ctx.issues)
+
+
+def test_full_real_view_schematic_stream_parses_all_pages() -> None:
+    data = _read_dsn_stream(SYNC_DSN, SYNC_VIEW_SCHEMATIC_STREAM)
+    ctx = ParseContext()
+
+    view = parse_view_schematic(
+        data,
+        stream_path=SYNC_VIEW_SCHEMATIC_STREAM,
+        hierarchy_stream_paths=[],
+        ctx=ctx,
+    )
+
+    assert view is not None
+    assert len(view.page_names) == 14
+    assert not ctx.issues
+
+
+def test_repeated_sheet_identity_warning_uses_reused_page_names() -> None:
+    ctx = ParseContext()
+
+    warn_repeated_sheet_identity(
+        [
+            DsnView(name="A", page_names=["Shared"]),
+            DsnView(name="B", page_names=["Shared"]),
+        ],
+        ctx,
+    )
+
+    assert [issue.category for issue in ctx.issues] == ["dsn_repeated_sheet_identity"]
+
+
+def test_unique_view_page_names_do_not_warn_about_repeated_sheet_identity() -> None:
+    ctx = ParseContext()
+
+    warn_repeated_sheet_identity(
+        [
+            DsnView(name="A", page_names=["A1"]),
+            DsnView(name="B", page_names=["B1"]),
+        ],
+        ctx,
+    )
+
+    assert ctx.issues == []
 
 
 # --- A3: binary reader hardening ---
