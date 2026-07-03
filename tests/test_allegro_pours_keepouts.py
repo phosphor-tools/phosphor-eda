@@ -4,7 +4,7 @@ from pathlib import Path
 
 from phosphor_eda.domain.pcb import LayerRole, PcbConductorKind, PcbPolygon, PcbPourFillMode
 from phosphor_eda.formats.allegro.build import build_allegro_board
-from phosphor_eda.formats.allegro.graphics import extract_allegro_copper
+from phosphor_eda.formats.allegro.copper import extract_allegro_copper
 from phosphor_eda.formats.allegro.layers import build_allegro_layers
 from phosphor_eda.formats.allegro.parser import parse_allegro_records
 from phosphor_eda.formats.allegro.records import AllegroRecord, AllegroRecordSet

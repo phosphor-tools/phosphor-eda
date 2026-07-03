@@ -37,6 +37,11 @@ class _TokenResolution:
 _STYLE_PROPERTIES = ("fill", "stroke", "opacity", "strokeWidthMm")
 _EDA_NAMESPACE = "eda"
 _REALISTIC_NAMESPACE = "realistic"
+# Shared hairline stroke widths so a future change can't drift between the sites
+# that paint outlined roles (silkscreen, fabrication, edge, keepout, mechanical)
+# and the narrower drill outline stroke.
+_HAIRLINE_STROKE_MM = 0.08
+_DRILL_STROKE_MM = 0.06
 _EDA_COPPER_ANCHOR_COLORS = {
     "F.Cu": "#cc0000",
     "Top Layer": "#cc0000",
@@ -86,7 +91,7 @@ _REALISTIC_DEFAULTS: dict[tuple[str, str], object] = {
     ("exposed_copper", "fill"): "#b87333",
     ("exposed_copper", "opacity"): 0.9,
     ("silkscreen", "fill"): "#ffffff",
-    ("silkscreen", "strokeWidthMm"): 0.08,
+    ("silkscreen", "strokeWidthMm"): _HAIRLINE_STROKE_MM,
 }
 _EDA_STYLE_FALLBACK_FUNCTIONS = {
     "assembly": ("fabrication", "mechanical"),
@@ -278,7 +283,7 @@ def _resolve_eda_fabrication_default(prop: str) -> object | None:
     if prop == "stroke":
         return _EDA_FABRICATION_COLOR
     if prop == "strokeWidthMm":
-        return 0.08
+        return _HAIRLINE_STROKE_MM
     if prop == "opacity":
         return 0.8
     return None
@@ -314,7 +319,7 @@ def _resolve_eda_silkscreen_default(role: VisualRole, prop: str) -> object | Non
     if prop == "stroke":
         return "none"
     if prop == "strokeWidthMm":
-        return 0.08
+        return _HAIRLINE_STROKE_MM
     return None
 
 
@@ -324,7 +329,7 @@ def _resolve_eda_edge_default(role: VisualRole, prop: str) -> object | None:
     if prop == "stroke":
         return _EDA_EDGE_ANCHOR_COLORS.get(role.source_layer_name, _EDA_EDGE_COLOR)
     if prop == "strokeWidthMm":
-        return 0.08
+        return _HAIRLINE_STROKE_MM
     return None
 
 
@@ -334,7 +339,7 @@ def _resolve_eda_drill_default(role: VisualRole, prop: str) -> object | None:
     if prop == "stroke":
         return _EDA_DRILL_ANCHOR_COLORS.get(role.source_layer_name, _EDA_DRILL_COLOR)
     if prop == "strokeWidthMm":
-        return 0.06
+        return _DRILL_STROKE_MM
     return None
 
 
@@ -344,7 +349,7 @@ def _resolve_eda_keepout_default(prop: str) -> object | None:
     if prop == "stroke":
         return _EDA_KEEPOUT_COLOR
     if prop == "strokeWidthMm":
-        return 0.08
+        return _HAIRLINE_STROKE_MM
     if prop == "opacity":
         return 0.8
     return None
@@ -366,7 +371,7 @@ def _resolve_eda_mechanical_default(prop: str) -> object | None:
     if prop == "stroke":
         return _EDA_MECHANICAL_COLOR
     if prop == "strokeWidthMm":
-        return 0.08
+        return _HAIRLINE_STROKE_MM
     if prop == "opacity":
         return 0.8
     return None

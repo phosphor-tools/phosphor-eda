@@ -143,8 +143,8 @@ def test_allegro_board_assembly_centers_pad_drills_from_native_extent() -> None:
 
 
 def test_allegro_refdes_detection_preserves_lowercase_source_identifiers() -> None:
-    assert allegro_build.looks_like_refdes("r1")
-    assert allegro_build.looks_like_refdes(" R1 ")
+    assert allegro_build._looks_like_refdes("r1")
+    assert allegro_build._looks_like_refdes(" R1 ")
 
 
 def test_allegro_board_assembly_classifies_device_type_text_as_fabrication() -> None:

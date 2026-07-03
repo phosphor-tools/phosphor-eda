@@ -14,6 +14,8 @@ from phosphor_eda.formats.allegro.constants import AllegroBoardUnits, allegro_un
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from phosphor_eda.domain.pcb_builder import PcbBuilder
+
 _PAD_SUFFIX = ".pad"
 _PACKAGE_SYMBOL_SUFFIXES = {".dra", ".psm"}
 _ZIP_MAGIC = b"PK\x03\x04"
@@ -116,6 +118,67 @@ def discover_allegro_sidecars(board_path: Path) -> AllegroSidecarSet:
         package_symbols=tuple(package_symbols),
         diagnostics=tuple(diagnostics),
     )
+
+
+def add_sidecar_board_metadata(
+    builder: PcbBuilder,
+    sidecars: AllegroSidecarSet | None,
+    *,
+    matched_padstack_sidecars: set[Path],
+    matched_package_sidecars: set[Path],
+) -> None:
+    if sidecars is None or not sidecars.has_evidence:
+        return
+    builder.metadata.properties["allegro_sidecar_root"] = str(sidecars.root)
+    builder.metadata.properties["allegro_sidecar_count"] = str(
+        len(sidecars.padstacks) + len(sidecars.package_symbols)
+    )
+    if sidecars.padstacks:
+        builder.metadata.properties["allegro_padstack_sidecar_count"] = str(len(sidecars.padstacks))
+        unmatched_padstacks = sorted(
+            sidecar.name
+            for sidecar in sidecars.padstacks
+            if sidecar.path not in matched_padstack_sidecars
+        )
+        if unmatched_padstacks:
+            builder.metadata.properties["allegro_unmatched_padstack_sidecars"] = ";".join(
+                unmatched_padstacks
+            )
+    if sidecars.package_symbols:
+        builder.metadata.properties["allegro_package_symbol_sidecar_count"] = str(
+            len(sidecars.package_symbols)
+        )
+        unmatched_package_symbols = sorted(
+            sidecar.name
+            for sidecar in sidecars.package_symbols
+            if sidecar.path not in matched_package_sidecars
+        )
+        if unmatched_package_symbols:
+            builder.metadata.properties["allegro_unmatched_package_symbol_sidecars"] = ";".join(
+                unmatched_package_symbols
+            )
+    if sidecars.diagnostics:
+        builder.metadata.properties["allegro_sidecar_diagnostic_count"] = str(
+            len(sidecars.diagnostics)
+        )
+        builder.metadata.properties["allegro_sidecar_diagnostic_codes"] = ";".join(
+            diagnostic.code for diagnostic in sidecars.diagnostics
+        )
+        builder.metadata.properties["allegro_sidecar_diagnostic_paths"] = ";".join(
+            str(diagnostic.path) for diagnostic in sidecars.diagnostics
+        )
+
+
+def package_symbol_metadata(
+    package_sidecar: AllegroPackageSymbolSidecar,
+) -> dict[str, str]:
+    return {
+        "sidecar_package_symbol_path": str(package_sidecar.path),
+        "sidecar_package_symbol_name": package_sidecar.name,
+        "sidecar_package_symbol_kind": package_sidecar.kind,
+        "sidecar_package_symbol_byte_size": str(package_sidecar.byte_size),
+        "sidecar_package_symbol_signature": package_sidecar.signature_hex,
+    }
 
 
 def parse_allegro_package_symbol_sidecar(
