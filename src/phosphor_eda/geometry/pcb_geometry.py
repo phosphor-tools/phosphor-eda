@@ -662,19 +662,37 @@ def polygon_shape_geometry(poly: PcbPolygon) -> BaseGeometry:
     return normalize_geometry(unary_union(outlines))
 
 
-def closed_path_geometry(path: PcbClosedPath) -> Polygon | None:
-    """Convert a closed PCB path to a Shapely Polygon, or None if degenerate."""
+def closed_path_geometry(path: PcbClosedPath) -> Polygon | MultiPolygon | None:
+    """Convert a closed PCB path to normalized Shapely geometry.
+
+    Returns ``None`` for degenerate paths. A self-intersecting boundary
+    normalizes to its valid repair (possibly a ``MultiPolygon``) — never raw
+    invalid geometry, which corrupts WKB and SVG serialization downstream.
+    """
     boundary = _closed_path_points(path)
     if len(boundary) < 3:
         return None
     holes = [
         hole_points for hole in path.holes if len(hole_points := _closed_path_points(hole)) >= 3
     ]
-    geometry = Polygon(boundary, holes=holes or None)
-    normalized = normalize_geometry(geometry)
-    if not normalized.is_empty and isinstance(normalized, Polygon):
+    normalized = normalize_geometry(Polygon(boundary, holes=holes or None))
+    if normalized.is_empty:
+        return None
+    if isinstance(normalized, Polygon | MultiPolygon):
         return normalized
-    return geometry
+    # A repair can yield a collection with linework alongside the area; keep
+    # the polygonal parts only.
+    parts = [
+        geom
+        for geom in getattr(normalized, "geoms", ())
+        if isinstance(geom, Polygon | MultiPolygon) and not geom.is_empty
+    ]
+    if not parts:
+        return None
+    merged = normalize_geometry(unary_union(parts))
+    if merged.is_empty or not isinstance(merged, Polygon | MultiPolygon):
+        return None
+    return merged
 
 
 def _closed_path_points(path: PcbClosedPath) -> list[tuple[float, float]]:

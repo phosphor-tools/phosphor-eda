@@ -13,6 +13,7 @@ from phosphor_eda.domain.pcb import (
     PcbBoardProfile,
     PcbBoardProfileElement,
     PcbCircle,
+    PcbClosedPath,
     PcbDrill,
     PcbLine,
     PcbPad,
@@ -25,6 +26,7 @@ from phosphor_eda.geometry.pcb_geometry import (
     arc_sweep_angle,
     arc_to_polyline,
     board_outline_polygon,
+    closed_path_geometry,
     pad_polygon,
     polygon_geometry,
     polygon_shape_geometry,
@@ -426,3 +428,15 @@ def _outline_line(
         layer=None,
         data=PcbLine(start_x, start_y, end_x, end_y, 0.1),
     )
+
+
+def test_closed_path_geometry_repairs_self_intersecting_boundary() -> None:
+    """A bowtie boundary must yield the valid repaired area, never raw invalid
+    geometry - invalid WKB corrupts spatial queries and SVG serialization."""
+    bowtie = PcbClosedPath.from_points([(0.0, 0.0), (2.0, 2.0), (2.0, 0.0), (0.0, 2.0)])
+
+    geometry = closed_path_geometry(bowtie)
+
+    assert geometry is not None
+    assert geometry.is_valid
+    assert geometry.area > 0.0

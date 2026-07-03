@@ -20,6 +20,7 @@ from phosphor_eda.formats.allegro.diagnostics import drop_diagnostic, missing_la
 from phosphor_eda.formats.allegro.graph import build_allegro_object_graph
 from phosphor_eda.formats.allegro.graphics import (
     closed_path_from_segment_chain,
+    flash_symbol_keys,
     graphic_segment_primitives,
     line_or_arc_primitive,
     owned_segment_chain,
@@ -154,11 +155,29 @@ def _shape_pours_and_fills(
         for item in net_items
         if item.item.tag == 0x28 and item.item.key is not None
     }
+    flash_keys = flash_symbol_keys(record_set)
     for shape in (record for record in record_set.records if record.tag == 0x28):
         owner = graph.by_key.get(payload_int(shape, "owner_key"))
         if owner is not None and owner.tag == 0x2B:
             # Owned by a footprint definition: package-symbol pad geometry in
-            # local footprint coordinates, not board-level copper.
+            # local footprint coordinates, not board-level copper. Flash-symbol
+            # shapes surface through padstacks; anything else is dropped and
+            # must say so.
+            if (
+                payload_int(shape, "layer_class_id") == _CLASS_ETCH
+                and shape.key is not None
+                and shape.key not in flash_keys
+            ):
+                diagnostics.append(
+                    drop_diagnostic(
+                        shape,
+                        code="skipped-footprint-shape",
+                        message=(
+                            f"shape record {shape.key} is footprint-definition-owned but "
+                            "not referenced as a padstack flash symbol; geometry dropped"
+                        ),
+                    )
+                )
             continue
         item = assigned_shapes.get(shape.key) if shape.key is not None else None
         net_key = None if item is None else item.net_key

@@ -35,6 +35,7 @@ from phosphor_eda.formats.allegro.primitives import (
     AllegroPrimitiveRole,
 )
 from phosphor_eda.formats.allegro.records import (
+    AllegroPadstackComponent,
     AllegroRecordDiagnostic,
     payload_coords,
     payload_float,
@@ -80,6 +81,7 @@ def extract_allegro_graphics(
 ) -> AllegroGraphics:
     graph = build_allegro_object_graph(record_set)
     frame = board_frame(record_set.header)
+    flash_keys = flash_symbol_keys(record_set)
     diagnostics: list[AllegroRecordDiagnostic] = list(graph.diagnostics)
     board_profile: list[AllegroGraphicPrimitive] = []
     artwork: list[AllegroGraphicPrimitive] = []
@@ -145,6 +147,7 @@ def extract_allegro_graphics(
                 frame=frame,
                 layer_map=layer_map,
                 diagnostics=diagnostics,
+                flash_keys=flash_keys,
             )
             if shape is not None:
                 if shape.has_role(AllegroPrimitiveRole.BOARD_PROFILE):
@@ -335,6 +338,7 @@ def _shape_polygon_primitive(
     frame: BoardFrame | None,
     layer_map: AllegroLayerMap,
     diagnostics: list[AllegroRecordDiagnostic],
+    flash_keys: frozenset[int] = frozenset(),
 ) -> AllegroGraphicPrimitive | None:
     """Build a filled-polygon primitive from a non-etch 0x28 shape record.
 
@@ -350,6 +354,17 @@ def _shape_polygon_primitive(
         return None
     owner = graph.by_key.get(payload_int(record, "owner_key"))
     if owner is not None and owner.tag == 0x2B:
+        if record.key is not None and record.key not in flash_keys:
+            diagnostics.append(
+                drop_diagnostic(
+                    record,
+                    code="skipped-footprint-shape",
+                    message=(
+                        f"shape record {record.key} is footprint-definition-owned but "
+                        "not referenced as a padstack flash symbol; geometry dropped"
+                    ),
+                )
+            )
         return None
     if frame is None:
         diagnostics.append(missing_header_diagnostic(record))
@@ -422,6 +437,20 @@ def _keepout_primitive(
         source_key=record.key or 0,
         metadata=record_metadata(record, layer),
     )
+
+
+def flash_symbol_keys(record_set: AllegroRecordSet) -> frozenset[int]:
+    """Shape-record keys referenced as padstack flash symbols."""
+    keys: set[int] = set()
+    for record in record_set.records:
+        if record.tag != 0x1C:
+            continue
+        components = record.payload.get("components", ())
+        if isinstance(components, tuple):
+            for component in components:
+                if isinstance(component, AllegroPadstackComponent) and component.string_key:
+                    keys.add(component.string_key)
+    return frozenset(keys)
 
 
 def closed_path_from_segment_chain(

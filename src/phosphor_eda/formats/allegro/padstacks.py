@@ -177,6 +177,25 @@ def _resolve_shape_symbol(
     if graph is None or component.string_key == 0:
         return ()
     shape_record = graph.by_key.get(component.string_key)
+    if shape_record is not None and shape_record.tag == _SHAPE_SYMBOL_TAG:
+        # Flash symbols must be footprint-definition-owned; a board-level shape
+        # here would double-emit (copper already renders it) and its absolute
+        # coordinates would be misread as pad-local.
+        owner = graph.by_key.get(payload_int(shape_record, "owner_key"))
+        if owner is None or owner.tag != 0x2B:
+            if diagnostics is not None:
+                diagnostics.append(
+                    build_diagnostic(
+                        record,
+                        code=_DIAG_UNRESOLVED_SHAPE_SYMBOL,
+                        message=(
+                            f"padstack {record.key} custom component references shape "
+                            f"{component.string_key} that is not footprint-definition-owned"
+                        ),
+                        reference_key=component.string_key,
+                    )
+                )
+            return ()
     if shape_record is None or shape_record.tag != _SHAPE_SYMBOL_TAG:
         if diagnostics is not None:
             diagnostics.append(
