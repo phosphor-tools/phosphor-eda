@@ -1006,6 +1006,8 @@ def _owned_segment_chain(
     seen: set[int] = set()
     current_key = head_key
     while current_key != 0:
+        if current_key == owner.key:
+            break
         if current_key in seen:
             diagnostics.append(
                 _drop_diagnostic(

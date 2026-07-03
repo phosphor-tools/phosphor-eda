@@ -294,9 +294,9 @@ def test_allegro_breakout_render_inventory_uses_typed_domain_collections() -> No
 
     assert counts == {
         InventoryItemKind.BOARD_PROFILE: 5,
-        InventoryItemKind.PAD: 1006,
+        InventoryItemKind.PAD: 1134,
         InventoryItemKind.VIA: 1424,
-        InventoryItemKind.DRILL: 272,
+        InventoryItemKind.DRILL: 288,
         InventoryItemKind.CONDUCTOR: 219,
         InventoryItemKind.ARTWORK: 20713,
         InventoryItemKind.KEEPOUT: 131,

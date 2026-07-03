@@ -65,7 +65,9 @@ if TYPE_CHECKING:
 
 _REFDES_RE = re.compile(r"^[A-Z]+[A-Z0-9]*\d+[A-Z0-9]*$", re.IGNORECASE)
 _DIAG_COMPONENT_PAD_CHAIN_CYCLE = "component-pad-chain-cycle"
+_DIAG_FOOTPRINT_PAD_CHAIN_CYCLE = "footprint-pad-chain-cycle"
 _DIAG_UNRESOLVED_COMPONENT_PAD = "unresolved-component-pad"
+_DIAG_UNRESOLVED_FOOTPRINT_PAD = "unresolved-footprint-pad"
 _DIAG_UNRESOLVED_FOOTPRINT_INSTANCE = "unresolved-footprint-instance"
 _DIAG_UNRESOLVED_FOOTPRINT_INSTANCE_CHAIN = "unresolved-footprint-instance-chain"
 _DIAG_UNRESOLVED_PAD_DEFINITION = "unresolved-pad-definition"
@@ -74,7 +76,9 @@ _DIAG_UNRESOLVED_VIA_PADSTACK = "unresolved-via-padstack"
 _DIAG_UNSUPPORTED_VIA_WITHOUT_DRILL = "unsupported-via-without-drill"
 _BOARD_ASSEMBLY_DIAGNOSTIC_CODES = {
     _DIAG_COMPONENT_PAD_CHAIN_CYCLE,
+    _DIAG_FOOTPRINT_PAD_CHAIN_CYCLE,
     _DIAG_UNRESOLVED_COMPONENT_PAD,
+    _DIAG_UNRESOLVED_FOOTPRINT_PAD,
     _DIAG_UNRESOLVED_FOOTPRINT_INSTANCE,
     _DIAG_UNRESOLVED_FOOTPRINT_INSTANCE_CHAIN,
     _DIAG_UNRESOLVED_PAD_DEFINITION,
@@ -159,6 +163,7 @@ def build_allegro_board(
         diagnostics=build_diagnostics,
     )
 
+    added_pad_keys: set[int] = set()
     for component in (record for record in record_set.records if record.tag == 0x07):
         footprint_key = _payload_int(component, "footprint_instance_key")
         footprint = footprints_by_instance_key.get(footprint_key)
@@ -169,6 +174,8 @@ def build_allegro_board(
         seen: set[int] = set()
         chain_broken = False
         while current_key and current_key not in seen:
+            if current_key == component.key:
+                break
             seen.add(current_key)
             pad_record = graph.by_key.get(current_key)
             if pad_record is None or pad_record.tag != 0x32:
@@ -197,6 +204,7 @@ def build_allegro_board(
                 text_by_wrapper=text_by_wrapper,
                 diagnostics=build_diagnostics,
             )
+            added_pad_keys.add(current_key)
             current_key = _payload_int(pad_record, "next_in_component_key")
         if current_key and current_key in seen and not chain_broken:
             build_diagnostics.append(
@@ -210,6 +218,20 @@ def build_allegro_board(
                     reference_key=current_key,
                 )
             )
+
+    _add_footprint_mechanical_pads(
+        builder,
+        graph=graph,
+        footprints_by_instance_key=footprints_by_instance_key,
+        added_pad_keys=added_pad_keys,
+        pad_definitions=pad_definitions,
+        padstacks=padstacks,
+        nets_by_key=nets_by_key,
+        unit_to_mm=unit_to_mm,
+        copper_layers=copper_layers,
+        text_by_wrapper=text_by_wrapper,
+        diagnostics=build_diagnostics,
+    )
 
     _add_vias(
         builder,
@@ -517,6 +539,83 @@ def _package_symbol_metadata(
         "sidecar_package_symbol_byte_size": str(package_sidecar.byte_size),
         "sidecar_package_symbol_signature": package_sidecar.signature_hex,
     }
+
+
+def _add_footprint_mechanical_pads(
+    builder: PcbBuilder,
+    *,
+    graph: AllegroObjectGraph,
+    footprints_by_instance_key: Mapping[int, PcbFootprint],
+    added_pad_keys: set[int],
+    pad_definitions: Mapping[int, AllegroRecord],
+    padstacks: Mapping[int, AllegroExpandedPadstack],
+    nets_by_key: Mapping[int, PcbNet],
+    unit_to_mm: float,
+    copper_layers: tuple[PcbLayer, ...],
+    text_by_wrapper: Mapping[int, str],
+    diagnostics: list[AllegroRecordDiagnostic],
+) -> None:
+    """Add mechanical/NPTH pads carried on each footprint instance's own chain.
+
+    The component pad chain (``next_in_component_key``) only threads electrical
+    pins. Mounting posts and other NPTH pads hang off the footprint instance's
+    native chain instead: the 0x2D record's ``first_pad_key`` followed via each
+    0x32 pad's ``next_in_footprint_key``, ringing back to the 0x2D key. Pads
+    already placed via the component chain are skipped by record key.
+    """
+    for instance_key, footprint in footprints_by_instance_key.items():
+        instance = graph.by_key.get(instance_key)
+        if instance is None or instance.tag != 0x2D:
+            continue
+        current_key = _payload_int(instance, "first_pad_key")
+        seen: set[int] = set()
+        chain_broken = False
+        while current_key and current_key not in seen:
+            if current_key == instance_key:
+                break
+            seen.add(current_key)
+            pad_record = graph.by_key.get(current_key)
+            if pad_record is None or pad_record.tag != 0x32:
+                chain_broken = True
+                diagnostics.append(
+                    _diagnostic(
+                        instance,
+                        code=_DIAG_UNRESOLVED_FOOTPRINT_PAD,
+                        message=(
+                            f"footprint instance record {instance_key} references missing "
+                            f"pad record {current_key}"
+                        ),
+                        reference_key=current_key,
+                    )
+                )
+                break
+            if current_key not in added_pad_keys:
+                _add_pad(
+                    builder,
+                    pad_record,
+                    footprint=footprint,
+                    pad_definitions=pad_definitions,
+                    padstacks=padstacks,
+                    nets_by_key=nets_by_key,
+                    unit_to_mm=unit_to_mm,
+                    copper_layers=copper_layers,
+                    text_by_wrapper=text_by_wrapper,
+                    diagnostics=diagnostics,
+                )
+                added_pad_keys.add(current_key)
+            current_key = _payload_int(pad_record, "next_in_footprint_key")
+        if current_key and current_key in seen and not chain_broken:
+            diagnostics.append(
+                _diagnostic(
+                    instance,
+                    code=_DIAG_FOOTPRINT_PAD_CHAIN_CYCLE,
+                    message=(
+                        f"footprint instance record {instance_key} repeats pad record "
+                        f"{current_key} in its native pad chain"
+                    ),
+                    reference_key=current_key,
+                )
+            )
 
 
 def _add_pad(

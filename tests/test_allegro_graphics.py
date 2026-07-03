@@ -494,3 +494,66 @@ def test_allegro_graphics_reports_segment_chain_truncation_diagnostics() -> None
         ("segment-owner-mismatch", 200, 201),
         ("segment-chain-cycle", 300, 301),
     }
+
+
+def test_allegro_graphics_terminates_segment_chain_at_owner_ring() -> None:
+    """Proves a segment chain that rings back to its owner terminates cleanly.
+
+    Allegro segment chains are circular: the final segment's ``next_key`` points
+    back at the owning shape record. That owner record is not a segment, so it
+    must terminate the walk without a ``segment-owner-mismatch`` diagnostic while
+    still yielding every segment before the ring closes.
+    """
+    source = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    layer_map = build_allegro_layers(source)
+    keepout = AllegroRecord(
+        tag=0x34,
+        offset=100,
+        end_offset=120,
+        key=10,
+        next_key=None,
+        payload={
+            "layer_class_id": 21,
+            "layer_subclass_id": 0,
+            "first_segment_key": 20,
+        },
+    )
+    line_1 = AllegroRecord(
+        tag=0x15,
+        offset=120,
+        end_offset=140,
+        key=20,
+        next_key=21,
+        payload={"parent_key": 10, "start_x": 0, "start_y": 0},
+    )
+    line_2 = AllegroRecord(
+        tag=0x15,
+        offset=140,
+        end_offset=160,
+        key=21,
+        next_key=22,
+        payload={"parent_key": 10, "start_x": 1000, "start_y": 0},
+    )
+    line_3 = AllegroRecord(
+        tag=0x15,
+        offset=160,
+        end_offset=180,
+        key=22,
+        next_key=10,
+        payload={"parent_key": 10, "start_x": 1000, "start_y": 1000},
+    )
+    record_set = AllegroRecordSet(
+        header=source.header,
+        string_table=source.string_table,
+        records=(keepout, line_1, line_2, line_3),
+        end_offset=line_3.end_offset,
+    )
+
+    graphics = extract_allegro_graphics(record_set, layer_map)
+
+    assert len(graphics.keepouts) == 1
+    assert isinstance(graphics.keepouts[0].data, PcbPolygon)
+    assert len(graphics.keepouts[0].data.points) == 3
+    assert not any(
+        diagnostic.code == "segment-owner-mismatch" for diagnostic in graphics.diagnostics
+    )

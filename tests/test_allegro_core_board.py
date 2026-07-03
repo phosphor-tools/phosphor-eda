@@ -6,11 +6,11 @@ from pathlib import Path
 from types import MappingProxyType
 
 import phosphor_eda.formats.allegro.build as allegro_build
-from phosphor_eda.domain.pcb import LayerRole, PcbArtworkPurpose
+from phosphor_eda.domain.pcb import LayerRole, PcbArtworkPurpose, PcbPadType
 from phosphor_eda.formats.allegro.build import build_allegro_board
 from phosphor_eda.formats.allegro.oracle import parse_packaged_netlist_summary
 from phosphor_eda.formats.allegro.parser import parse_allegro_records
-from phosphor_eda.formats.allegro.records import AllegroRecordSet
+from phosphor_eda.formats.allegro.records import AllegroRecord, AllegroRecordSet
 from phosphor_eda.render.inventory import build_inventory
 from phosphor_eda.render.modes import build_realistic_layers
 from phosphor_eda.render.settings import (
@@ -282,7 +282,7 @@ def test_allegro_board_assembly_reports_component_pad_chain_cycles() -> None:
 
     board = build_allegro_board(record_set, name=BREAKOUT_BOARD.stem)
 
-    assert int(board.metadata.properties["parse_diagnostic_count"]) == base_count
+    assert int(board.metadata.properties["parse_diagnostic_count"]) == base_count + 1
     assert "component-pad-chain-cycle" in board.metadata.properties["parse_diagnostic_codes"].split(
         ";"
     )
@@ -290,6 +290,108 @@ def test_allegro_board_assembly_reports_component_pad_chain_cycles() -> None:
     assert str(first_pad_key) in board.metadata.properties["parse_diagnostic_reference_keys"].split(
         ";"
     )
+
+
+def test_allegro_board_assembly_terminates_ring_chains_without_diagnostics() -> None:
+    """Proves owner-ring chain terminators no longer surface as parser noise.
+
+    Segment chains and component pad chains ring back to their owning record.
+    Those clean terminators previously produced ~18.5k ``segment-owner-mismatch``
+    and one ``unresolved-component-pad`` per component; both are genuine
+    non-anomalies and must not appear in board diagnostics.
+    """
+    record_set = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+
+    board = build_allegro_board(record_set, name=BREAKOUT_BOARD.stem)
+
+    codes = board.metadata.properties.get("parse_diagnostic_codes", "").split(";")
+    assert "segment-owner-mismatch" not in codes
+    assert "unresolved-component-pad" not in codes
+
+
+def test_allegro_board_assembly_includes_footprint_mechanical_pads() -> None:
+    """Proves NPTH pads on the footprint-instance chain are placed as pads.
+
+    Mechanical pads (mounting posts, tooling holes) hang off the footprint
+    instance's own ``first_pad_key`` chain rather than the component's electrical
+    pin chain. They are through-hole, carry no net, and must still be added to
+    the board. The SW16 switch is a worked example: three SMD electrical pins
+    plus two drilled mounting posts.
+    """
+    record_set = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+
+    board = build_allegro_board(record_set, name=BREAKOUT_BOARD.stem)
+
+    switch = next(footprint for footprint in board.footprints if footprint.reference == "SW16")
+    switch_pads = [pad for pad in board.pads if pad.footprint is switch]
+    mounting_pads = [pad for pad in switch_pads if pad.net is None and pad.drill is not None]
+    electrical_pads = [pad for pad in switch_pads if pad.net is not None]
+    assert len(mounting_pads) == 2
+    assert {pad.number for pad in electrical_pads} == {"1", "2", "3"}
+    assert all(pad.pad_type is PcbPadType.THROUGH_HOLE for pad in mounting_pads)
+
+    expected_mechanical_keys = _footprint_mechanical_pad_keys(record_set)
+    placed_pad_ids = {pad.id for pad in board.pads}
+    assert len(expected_mechanical_keys) == 16
+    mechanical_ids = {f"pad-{key}" for key in expected_mechanical_keys}
+    assert mechanical_ids <= placed_pad_ids
+    mechanical_footprints = {
+        pad.footprint.reference
+        for pad in board.pads
+        if pad.id in mechanical_ids and pad.footprint is not None
+    }
+    assert len(mechanical_footprints) == 7
+
+
+def _walk_pad_keys(
+    record_set: AllegroRecordSet, *, owner: AllegroRecord, head_key: object, next_field: str
+) -> set[int]:
+    """Ring-terminated walk of a 0x32 pad chain, returning visited pad keys."""
+    by_key = record_set.by_key
+    keys: set[int] = set()
+    current = head_key or 0
+    seen: set[int] = set()
+    while isinstance(current, int) and current and current not in seen and current != owner.key:
+        seen.add(current)
+        pad = by_key.get(current)
+        if pad is None or pad.tag != 0x32:
+            break
+        keys.add(current)
+        current = pad.payload.get(next_field) or 0
+    return keys
+
+
+def _footprint_mechanical_pad_keys(record_set: AllegroRecordSet) -> set[int]:
+    """Independent oracle: pad keys reachable only via footprint-instance chains.
+
+    Walks the electrical component chains (``next_in_component_key``) and the
+    footprint-instance chains (``next_in_footprint_key``), returning pad keys
+    that appear on an instance chain but never on a component chain.
+    """
+    components = [record for record in record_set.records if record.tag == 0x07]
+    electrical: set[int] = set()
+    for component in components:
+        electrical |= _walk_pad_keys(
+            record_set,
+            owner=component,
+            head_key=component.payload.get("first_pad_key"),
+            next_field="next_in_component_key",
+        )
+
+    component_instances = {
+        component.payload.get("footprint_instance_key") for component in components
+    }
+    mechanical: set[int] = set()
+    for instance in (record for record in record_set.records if record.tag == 0x2D):
+        if instance.key not in component_instances:
+            continue
+        mechanical |= _walk_pad_keys(
+            record_set,
+            owner=instance,
+            head_key=instance.payload.get("first_pad_key"),
+            next_field="next_in_footprint_key",
+        )
+    return mechanical - electrical
 
 
 def test_allegro_board_assembly_reports_missing_footprint_instance_once() -> None:
