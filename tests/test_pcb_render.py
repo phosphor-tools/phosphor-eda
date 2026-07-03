@@ -297,9 +297,8 @@ def test_allegro_breakout_render_inventory_uses_typed_domain_collections() -> No
         InventoryItemKind.PAD: 1134,
         InventoryItemKind.VIA: 1424,
         InventoryItemKind.DRILL: 288,
-        InventoryItemKind.CONDUCTOR: 225,
+        InventoryItemKind.CONDUCTOR: 1623,
         InventoryItemKind.ARTWORK: 20713,
-        InventoryItemKind.KEEPOUT: 581,
     }
 
 

@@ -53,9 +53,15 @@ def pour_from_primitive(
 
 def _pour_fill_mode(primitive: AllegroPourPrimitive) -> PcbPourFillMode:
     properties = primitive.metadata.properties
-    if (
-        "native_first_keepout_key" in properties and "native_void_hole_count" not in properties
-    ) or properties.get("dynamic_shape_degraded") == "true":
+    if properties.get("dynamic_shape_degraded") == "true":
+        return PcbPourFillMode.UNKNOWN
+    # A void chain is only fully resolved when every void on it parsed into a
+    # hole. ``native_void_hole_count`` is set whenever *any* hole parses, so it
+    # cannot on its own prove the fill is solid; compare it against the chain
+    # length. Missing keys read as 0, so an unvoided shape stays SOLID.
+    void_total = int(properties.get("native_void_total_count", "0") or "0")
+    void_resolved = int(properties.get("native_void_hole_count", "0") or "0")
+    if void_resolved != void_total:
         return PcbPourFillMode.UNKNOWN
     return PcbPourFillMode.SOLID
 

@@ -125,6 +125,14 @@ def test_allegro_fixed_class_subclass_roles_are_concrete_layers() -> None:
     _assert_roles(result, 0x07, 0xF7, LayerRole.DRILL, LayerRole.DRILL_DRAWING)
 
 
+def test_anti_etch_class_maps_to_keepout_not_copper() -> None:
+    # Anti-etch is negative copper (a copper clearance/keepout), not a copper
+    # conductor. Boundary (0x15) holds copper shape boundaries and stays copper.
+    assert allegro_layers._class_roles(0x14) == (LayerRole.KEEPOUT,)
+    assert LayerRole.COPPER not in allegro_layers._class_subclass_roles(0x14, 0, "ANTI ETCH TOP")
+    assert allegro_layers._class_roles(0x15) == (LayerRole.COPPER,)
+
+
 def test_allegro_layer_name_roles_do_not_treat_solid_as_solder_mask() -> None:
     assert LayerRole.SOLDER_MASK not in allegro_layers._name_roles("solid_fill")
     assert LayerRole.SOLDER_MASK in allegro_layers._name_roles("solder_mask_top")

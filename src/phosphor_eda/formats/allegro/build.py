@@ -648,6 +648,7 @@ def _add_pad(
             net=nets_by_key.get(payload_int(record, "net_key")),
             footprint=footprint,
             drill=drill,
+            rotation=footprint.rotation % 360.0,
             metadata=metadata,
         ),
         source=_source("pad", record),

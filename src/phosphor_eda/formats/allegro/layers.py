@@ -411,7 +411,12 @@ def _class_roles(class_id: int) -> tuple[LayerRole, ...]:
         return (LayerRole.FABRICATION,)
     if class_id == _CLASS_DRAWING_FORMAT:
         return (LayerRole.MECHANICAL, LayerRole.DRAWING)
-    if class_id in {_CLASS_ANTI_ETCH, _CLASS_BOUNDARY}:
+    if class_id == _CLASS_ANTI_ETCH:
+        # Anti-etch is negative copper (a copper clearance/keepout), not a
+        # conductor; its geometry removes copper rather than adding it.
+        return (LayerRole.KEEPOUT,)
+    if class_id == _CLASS_BOUNDARY:
+        # Boundary holds copper shape/pour boundary geometry, so it stays copper.
         return (LayerRole.COPPER,)
     if class_id == _CLASS_CONSTRAINTS_REGION:
         return (LayerRole.KEEPOUT,)

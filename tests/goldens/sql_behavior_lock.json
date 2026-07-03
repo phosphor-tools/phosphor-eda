@@ -59,8 +59,8 @@
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       "conductors": {
-        "rows": 225,
-        "sha256": "3bb4a3571c6c7e08c04d27485d76a7881a31cf286436f9aa8eff90e01930c575"
+        "rows": 1623,
+        "sha256": "df80212ef9ba141067e28bca6d19edb530c6c8dee88c29cd21b1b49b00d14bb1"
       },
       "design_rules": {
         "rows": 4,
@@ -79,8 +79,8 @@
         "sha256": "c6ffce72e2c4a6a6a171594f7b5b67f0d8bff39972887c52bb3d13754eb41c69"
       },
       "keepouts": {
-        "rows": 581,
-        "sha256": "3dc4d82f39765fd7ab3d82690b073954575483e74ed0074cf586ceea20bb2d11"
+        "rows": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       "layers": {
         "rows": 186,
@@ -124,7 +124,7 @@
       },
       "pads": {
         "rows": 364,
-        "sha256": "4b7e415975901826c42bcd3452d513d0120dc95d118a6b419417a5c0f303357e"
+        "sha256": "a820f6ccab6f5f9341affdcdf3e777a7be7cbcb8229919abc5a98286dec13f4d"
       },
       "page_annotations": {
         "rows": 0,
@@ -148,7 +148,7 @@
       },
       "pours": {
         "rows": 14,
-        "sha256": "91fe6da23a98506d8bda9f7e6622cf1c9242da91fd5c30e32f981a5b386367d1"
+        "sha256": "a9e947ad2ac16c1b915fbff450ed9e16a4f099c603cc33c62cf0750ff40cedc4"
       },
       "project": {
         "rows": 2,

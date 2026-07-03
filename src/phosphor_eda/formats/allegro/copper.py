@@ -96,10 +96,12 @@ def _track_conductors(
     net_items: tuple[_NetAssignedItem, ...],
 ) -> tuple[AllegroConductorPrimitive, ...]:
     conductors: list[AllegroConductorPrimitive] = []
-    for item in net_items:
-        track = item.item
-        if track.tag != 0x05:
-            continue
+    net_key_by_track = {
+        item.item.key: item.net_key
+        for item in net_items
+        if item.item.tag == 0x05 and item.item.key is not None
+    }
+    for track in (record for record in record_set.records if record.tag == 0x05):
         layer = _copper_layer(track, layer_map, diagnostics, require_etch=True)
         if layer is None:
             continue
@@ -113,6 +115,10 @@ def _track_conductors(
                 )
             )
             continue
+        # Tracks absent from the net-assignment map are un-netted board copper
+        # (manually drawn etch, unrouted stubs); render them with net_key=None
+        # rather than dropping the geometry.
+        net_key = net_key_by_track.get(track.key) if track.key is not None else None
         for segment in owned_segment_chain(
             track,
             graph=graph,
@@ -124,7 +130,7 @@ def _track_conductors(
                 track=track,
                 frame=frame,
                 layer=layer,
-                net_key=item.net_key,
+                net_key=net_key,
             )
             if conductor is not None:
                 conductors.append(conductor)
@@ -170,7 +176,7 @@ def _shape_pours_and_fills(
         )
         if boundary is None:
             continue
-        holes = _shape_void_holes(
+        holes, void_total = _shape_void_holes(
             shape,
             graph=graph,
             frame=frame,
@@ -184,6 +190,7 @@ def _shape_pours_and_fills(
             assignment_key=assignment_key,
             net_key=net_key,
             void_hole_count=len(holes),
+            void_total_count=void_total,
         )
         dynamic_shape_flags = payload_int(shape, "dynamic_shape_flags")
         if dynamic_shape_flags & 0x1000:
@@ -248,11 +255,17 @@ def _shape_void_holes(
     graph: AllegroObjectGraph,
     frame: BoardFrame | None,
     diagnostics: list[AllegroRecordDiagnostic],
-) -> list[PcbClosedPath]:
+) -> tuple[list[PcbClosedPath], int]:
+    """Return the parsed void holes and the total void count on the chain.
+
+    ``void_total`` is the number of 0x34 void records reached on the shape's
+    keepout chain; ``len(holes)`` is how many of those resolved to a boundary.
+    A shortfall means a void was dropped, so the fill is not fully resolved.
+    """
     holes: list[PcbClosedPath] = []
     first_keepout_key = payload_int(shape, "first_keepout_key")
     if first_keepout_key == 0:
-        return holes
+        return holes, 0
     walk = graph.walk_key_chain(
         head_key=first_keepout_key,
         owner_key=shape.key,
@@ -278,7 +291,7 @@ def _shape_void_holes(
         )
         if path is not None:
             holes.append(path)
-    return holes
+    return holes, len(walk.records)
 
 
 def _rectangle_region_conductors(
@@ -420,7 +433,7 @@ def _track_conductor_primitive(
     track: AllegroRecord,
     frame: BoardFrame | None,
     layer: PcbLayer,
-    net_key: int,
+    net_key: int | None,
 ) -> AllegroConductorPrimitive | None:
     if frame is None:
         return None
@@ -442,7 +455,7 @@ def _track_conductor_primitive(
     )
     properties = dict(graphic.metadata.properties)
     properties["native_track_key"] = str(track.key or "")
-    properties["native_net_key"] = str(net_key)
+    properties["native_net_key"] = "" if net_key is None else str(net_key)
     return AllegroConductorPrimitive(
         id=graphic.id,
         kind=kind,
@@ -522,6 +535,7 @@ def _shape_fill_metadata(
     assignment_key: int | None,
     net_key: int | None,
     void_hole_count: int,
+    void_total_count: int,
 ) -> PcbObjectMetadata:
     metadata = record_metadata(record, layer)
     properties = dict(metadata.properties)
@@ -532,6 +546,8 @@ def _shape_fill_metadata(
         properties["native_first_keepout_key"] = str(first_keepout_key)
     if void_hole_count:
         properties["native_void_hole_count"] = str(void_hole_count)
+    if void_total_count:
+        properties["native_void_total_count"] = str(void_total_count)
     dynamic_shape_flags = payload_int(record, "dynamic_shape_flags")
     if dynamic_shape_flags:
         properties["native_dynamic_shape_flags"] = str(dynamic_shape_flags)

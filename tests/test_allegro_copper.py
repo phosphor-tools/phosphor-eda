@@ -48,6 +48,7 @@ def test_allegro_board_assembly_emits_net_owned_trace_conductors() -> None:
         for conductor in board.conductors
         if conductor.kind is PcbConductorKind.TRACE
         and conductor.metadata.native_type == "track_segment"
+        and conductor.net is not None
     ]
     assert len(traces) == 155
     board_net_object_ids = {id(net) for net in board.nets.values()}
@@ -63,13 +64,66 @@ def test_allegro_board_assembly_emits_net_owned_trace_conductors() -> None:
     )
     assert {conductor.layer.name for conductor in traces} >= {"TOP", "BOTTOM"}
 
-    first_trace = traces[0]
-    assert first_trace.net is not None
-    assert first_trace.metadata.native_type == "track_segment"
-    assert first_trace.metadata.properties["native_track_key"]
-    assert first_trace.metadata.properties["native_class_id"] == "6"
-    assert first_trace.metadata.properties["native_layer_name"] == first_trace.layer.name
-    assert first_trace.data.width == pytest.approx(0.14478)
+    sample_trace = next(trace for trace in traces if trace.id == "allegro:634413176")
+    assert sample_trace.net is not None
+    assert sample_trace.metadata.native_type == "track_segment"
+    assert sample_trace.metadata.properties["native_track_key"]
+    assert sample_trace.metadata.properties["native_class_id"] == "6"
+    assert sample_trace.metadata.properties["native_layer_name"] == sample_trace.layer.name
+    assert sample_trace.data.width == pytest.approx(0.14478)
+
+
+def test_allegro_unassigned_track_becomes_conductor_with_no_net() -> None:
+    """A 0x05 track with a segment chain but no 0x04 net assignment still renders
+    as board copper, carrying net_key=None instead of being dropped."""
+    source = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    segment = AllegroRecord(
+        tag=0x15,
+        offset=source.end_offset,
+        end_offset=source.end_offset + 20,
+        key=990_000_101,
+        next_key=None,
+        payload={
+            "parent_key": 990_000_100,
+            "start_x": 1_000_000,
+            "start_y": 1_000_000,
+            "end_x": 2_000_000,
+            "end_y": 1_000_000,
+            "width": 10_000,
+        },
+    )
+    track = AllegroRecord(
+        tag=0x05,
+        offset=segment.end_offset,
+        end_offset=segment.end_offset + 20,
+        key=990_000_100,
+        next_key=None,
+        payload={
+            "layer_class_id": 6,
+            "layer_subclass_id": 0,
+            "first_segment_key": 990_000_101,
+        },
+    )
+    record_set = AllegroRecordSet(
+        header=source.header,
+        string_table=source.string_table,
+        records=(*source.records, segment, track),
+        end_offset=track.end_offset,
+    )
+
+    board = build_allegro_board(record_set, name=BREAKOUT_BOARD.stem)
+
+    conductor = next(
+        conductor
+        for conductor in board.conductors
+        if conductor.metadata.properties.get("native_track_key") == "990000100"
+    )
+    assert conductor.net is None
+    assert conductor.kind is PcbConductorKind.TRACE
+    assert conductor.metadata.native_type == "track_segment"
+    assert conductor.metadata.properties["native_net_key"] == ""
+    assert conductor.layer.has_role(LayerRole.COPPER)
+    assert isinstance(conductor.data, PcbLine)
 
 
 def test_allegro_board_assembly_preserves_trace_arcs_as_arc_conductors() -> None:
@@ -83,7 +137,11 @@ def test_allegro_board_assembly_preserves_trace_arcs_as_arc_conductors() -> None
     board = build_allegro_board(record_set, name=SYNC_BOARD.stem)
 
     arcs = [
-        conductor for conductor in board.conductors if conductor.kind is PcbConductorKind.TRACE_ARC
+        conductor
+        for conductor in board.conductors
+        if conductor.kind is PcbConductorKind.TRACE_ARC
+        and conductor.metadata.native_type == "track_arc"
+        and conductor.net is not None
     ]
     assert len(arcs) == 1
     arc = arcs[0]

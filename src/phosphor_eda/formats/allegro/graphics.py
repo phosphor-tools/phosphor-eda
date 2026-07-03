@@ -68,6 +68,7 @@ def extract_allegro_graphics(
     board_profile: list[AllegroGraphicPrimitive] = []
     artwork: list[AllegroGraphicPrimitive] = []
     keepouts: list[AllegroGraphicPrimitive] = []
+    shape_owned_void_keys = _shape_owned_void_keys(record_set, graph)
 
     for record in record_set.records:
         if record.key is None:
@@ -89,6 +90,11 @@ def extract_allegro_graphics(
                     artwork.append(rectangle)
             continue
         if record.tag == 0x34:
+            if record.key in shape_owned_void_keys:
+                # This 0x34 is a void cut into a 0x28 shape's fill (a hole on the
+                # fill conductor). Emitting it here too would double-render the
+                # clearance as a standalone keepout.
+                continue
             keepout = _keepout_primitive(
                 record,
                 graph=graph,
@@ -184,6 +190,31 @@ def _is_filled_rectangle_layer(layer: PcbLayer) -> bool:
     # graphics are stroked outlines. Failing safe to "outline" keeps new or
     # unmapped roles from silently rendering as filled slabs.
     return any(layer.has_role(role) for role in _FILLED_RECTANGLE_ROLES)
+
+
+_SHAPE_VOID_RECORD_TAGS = frozenset({0x34})
+
+
+def _shape_owned_void_keys(
+    record_set: AllegroRecordSet,
+    graph: AllegroObjectGraph,
+) -> frozenset[int]:
+    """Collect 0x34 void keys reachable from any 0x28 shape's keepout chain.
+
+    These voids are cut into the shape's copper fill as holes elsewhere, so the
+    keepout branch must not also emit them as standalone keepout primitives.
+    """
+    owned: set[int] = set()
+    for shape in record_set.records:
+        if shape.tag != 0x28 or shape.key is None:
+            continue
+        walk = graph.walk_key_chain(
+            head_key=payload_int(shape, "first_keepout_key"),
+            owner_key=shape.key,
+            expected_tags=_SHAPE_VOID_RECORD_TAGS,
+        )
+        owned.update(void.key for void in walk.records if void.key is not None)
+    return frozenset(owned)
 
 
 def _keepout_primitive(

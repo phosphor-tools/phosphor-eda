@@ -142,6 +142,23 @@ def test_allegro_board_assembly_centers_pad_drills_from_native_extent() -> None:
     _assert_close(pad.drill.y, -62.23)
 
 
+def test_allegro_board_assembly_inherits_pad_rotation_from_footprint_instance() -> None:
+    record_set = parse_allegro_records(ROHM_BOARD.read_bytes(), source_name=ROHM_BOARD.name)
+
+    board = build_allegro_board(record_set, name=ROHM_BOARD.stem)
+
+    rotated_pad = next(pad for pad in board.pads if pad.id == "pad-109479776")
+    assert rotated_pad.footprint is not None
+    assert rotated_pad.footprint.reference == "S1"
+    _assert_close(rotated_pad.footprint.rotation, 90.0)
+    _assert_close(rotated_pad.rotation, 90.0)
+
+    unrotated_pad = next(pad for pad in board.pads if pad.id == "pad-109494784")
+    assert unrotated_pad.footprint is not None
+    _assert_close(unrotated_pad.footprint.rotation, 0.0)
+    _assert_close(unrotated_pad.rotation, 0.0)
+
+
 def test_allegro_refdes_detection_preserves_lowercase_source_identifiers() -> None:
     assert allegro_build._looks_like_refdes("r1")
     assert allegro_build._looks_like_refdes(" R1 ")

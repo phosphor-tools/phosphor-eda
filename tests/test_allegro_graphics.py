@@ -20,7 +20,7 @@ from phosphor_eda.formats.allegro.graphics import extract_allegro_graphics, rect
 from phosphor_eda.formats.allegro.layers import AllegroLayerMap, build_allegro_layers
 from phosphor_eda.formats.allegro.parser import parse_allegro_records
 from phosphor_eda.formats.allegro.primitives import AllegroPrimitiveRole
-from phosphor_eda.formats.allegro.records import AllegroRecord, AllegroRecordSet
+from phosphor_eda.formats.allegro.records import AllegroRecord, AllegroRecordSet, payload_int
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 BREAKOUT_BOARD = (
@@ -223,26 +223,30 @@ def test_allegro_graphics_extracts_text_artwork_with_layer_provenance() -> None:
     )
 
 
-def test_allegro_graphics_extracts_keepouts_with_native_layer_provenance() -> None:
+def test_allegro_graphics_excludes_shape_owned_voids_from_keepouts() -> None:
+    """Shape voids are cut into the copper fill as holes; they must not also be
+    emitted as standalone keepouts, which would double-render the clearance."""
     record_set = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
     layer_map = build_allegro_layers(record_set)
+    graph = build_allegro_object_graph(record_set)
 
     graphics = extract_allegro_graphics(record_set, layer_map)
 
-    keepout = next(
-        primitive for primitive in graphics.keepouts if primitive.id == "allegro:634443400"
-    )
-    assert keepout.has_role(AllegroPrimitiveRole.KEEPOUT)
-    assert isinstance(keepout.data, PcbClosedPath)
-    assert len(keepout.data.segments) >= 8
-    assert keepout.metadata.properties["native_class_id"] == "21"
-    assert keepout.metadata.properties["native_subclass_id"] == "0"
+    shape_owned_void_keys: set[int] = set()
+    for shape in (record for record in record_set.records if record.tag == 0x28):
+        walk = graph.walk_key_chain(
+            head_key=payload_int(shape, "first_keepout_key"),
+            owner_key=shape.key,
+            expected_tags=frozenset({0x34}),
+        )
+        shape_owned_void_keys.update(void.key for void in walk.records if void.key is not None)
 
-    board = build_allegro_graphics_board(record_set, name=BREAKOUT_BOARD.stem)
-    domain_keepout = board.keepout_for("allegro:634443400")
-    assert domain_keepout is not None
-    assert domain_keepout.boundary == keepout.data
-    assert domain_keepout.metadata.properties["native_class_id"] == "21"
+    assert shape_owned_void_keys  # fixture actually carries shape voids
+    keepout_keys = {int(primitive.id.split(":")[1]) for primitive in graphics.keepouts}
+    assert keepout_keys.isdisjoint(shape_owned_void_keys)
+    # 634443400 was previously double-rendered as a keepout; it is a shape void.
+    assert 634_443_400 in shape_owned_void_keys
+    assert not any(primitive.id == "allegro:634443400" for primitive in graphics.keepouts)
 
 
 def test_allegro_graphics_preserves_keepout_arc_segments() -> None:

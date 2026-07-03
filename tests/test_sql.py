@@ -1790,10 +1790,10 @@ def test_allegro_breakout_typed_tables_are_populated(
     assert _count(allegro_db, "SELECT count(*) FROM pads") == 364
     assert _count(allegro_db, "SELECT count(*) FROM vias") == 178
     assert _count(allegro_db, "SELECT count(*) FROM drills") == 288
-    assert _count(allegro_db, "SELECT count(*) FROM conductors") == 225
+    assert _count(allegro_db, "SELECT count(*) FROM conductors") == 1623
     assert _count(allegro_db, "SELECT count(*) FROM artwork") == 20713
     assert _count(allegro_db, "SELECT count(*) FROM board_profile") == 4
-    assert _count(allegro_db, "SELECT count(*) FROM keepouts") == 581
+    assert _count(allegro_db, "SELECT count(*) FROM keepouts") == 0
 
 
 def test_allegro_breakout_sql_views_read_typed_board_collections(
@@ -1812,7 +1812,7 @@ def test_allegro_breakout_sql_views_read_typed_board_collections(
         """
     ).fetchall()
 
-    assert route_count == 63
+    assert route_count == 65
     assert width_violation_count == 33
     assert drill_histogram_rows == [
         (0.3048, "via", 178),
