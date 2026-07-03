@@ -42,7 +42,7 @@ def pour_from_primitive(
 ) -> PcbPour:
     return PcbPour(
         id=primitive.id,
-        boundary=PcbClosedPath.from_points(primitive.boundary.points),
+        boundary=primitive.boundary,
         layers=(primitive.layer,),
         net=nets_by_key.get(primitive.net_key) if primitive.net_key is not None else None,
         settings=PcbPourSettings(fill_mode=_pour_fill_mode(primitive)),
@@ -111,7 +111,7 @@ def artwork_from_primitive(primitive: AllegroGraphicPrimitive) -> PcbArtwork:
 
 
 def keepout_from_primitive(primitive: AllegroGraphicPrimitive) -> PcbKeepout:
-    if not isinstance(primitive.data, PcbPolygon):
+    if not isinstance(primitive.data, PcbClosedPath):
         msg = f"keepout primitive {primitive.id} has unsupported data"
         raise ValueError(msg)
     if primitive.layer is None:
@@ -119,7 +119,7 @@ def keepout_from_primitive(primitive: AllegroGraphicPrimitive) -> PcbKeepout:
         raise ValueError(msg)
     return PcbKeepout(
         id=primitive.id,
-        boundary=PcbClosedPath.from_points(primitive.data.points),
+        boundary=primitive.data,
         layers=(primitive.layer,),
         metadata=primitive.metadata,
     )

@@ -290,7 +290,9 @@ class PcbModel3D:
     cache_key: str = ""
 
 
-PcbShape = PcbLine | PcbArc | PcbCircle | PcbPolygon | PcbText | PcbDimension | PcbModel3D
+PcbShape = (
+    PcbLine | PcbArc | PcbCircle | PcbPolygon | PcbClosedPath | PcbText | PcbDimension | PcbModel3D
+)
 
 
 class PcbPadType(StrEnum):
@@ -691,7 +693,7 @@ class PcbConductor:
     id: str
     kind: PcbConductorKind
     layer: PcbLayer
-    data: PcbLine | PcbArc | PcbCircle | PcbPolygon
+    data: PcbLine | PcbArc | PcbCircle | PcbPolygon | PcbClosedPath
     net: PcbNet | None = None
     footprint: PcbFootprint | None = None
     pour: PcbPour | None = None
@@ -938,6 +940,13 @@ def extend_shape_bounds(xs: list[float], ys: list[float], shape: object) -> None
     elif isinstance(shape, PcbPolygon):
         xs.extend(x for x, _y in shape.points)
         ys.extend(y for _x, y in shape.points)
+    elif isinstance(shape, PcbClosedPath):
+        for segment in shape.segments:
+            xs.extend([segment.start_x, segment.end_x])
+            ys.extend([segment.start_y, segment.end_y])
+            if segment.kind is PcbPathSegmentKind.ARC:
+                xs.append(segment.mid_x)
+                ys.append(segment.mid_y)
 
 
 # Endpoint-match tolerance for "a trace connects here" checks (mm).
@@ -1004,7 +1013,9 @@ def _endpoint_connected_layers(item: PcbPad | PcbVia, board: Board, span: list[s
     return touched
 
 
-def _endpoint_touches(shape: PcbLine | PcbArc | PcbCircle | PcbPolygon, x: float, y: float) -> bool:
+def _endpoint_touches(
+    shape: PcbLine | PcbArc | PcbCircle | PcbPolygon | PcbClosedPath, x: float, y: float
+) -> bool:
     if isinstance(shape, PcbLine | PcbArc):
         return (
             abs(shape.start_x - x) <= _COPPER_TOUCH_TOLERANCE

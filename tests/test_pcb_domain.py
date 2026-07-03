@@ -218,7 +218,7 @@ def test_pcb_builder_rejects_pour_with_degenerate_boundary() -> None:
     builder = PcbBuilder("bad-pour")
     builder.add_layer(layer)
     pour = PcbPour(id="pour:1", boundary=_degenerate_boundary(), layers=(layer,))
-    with pytest.raises(PcbBuildError, match="at least 3 points"):
+    with pytest.raises(PcbBuildError, match="at least 3 line segments"):
         builder.add_pour_object(pour, source="pour:1")
 
 
@@ -227,7 +227,7 @@ def test_pcb_builder_rejects_keepout_with_degenerate_boundary() -> None:
     builder = PcbBuilder("bad-keepout")
     builder.add_layer(layer)
     keepout = PcbKeepout(id="keepout:1", boundary=_degenerate_boundary(), layers=(layer,))
-    with pytest.raises(PcbBuildError, match="at least 3 points"):
+    with pytest.raises(PcbBuildError, match="at least 3 line segments"):
         builder.add_keepout_object(keepout, source="keepout:1")
 
 

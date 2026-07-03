@@ -9,6 +9,7 @@ from phosphor_eda.domain.pcb import (
     LayerRole,
     PcbArc,
     PcbCircle,
+    PcbClosedPath,
     PcbConductorKind,
     PcbLine,
     PcbObjectMetadata,
@@ -18,10 +19,10 @@ from phosphor_eda.formats.allegro.coords import board_frame
 from phosphor_eda.formats.allegro.diagnostics import drop_diagnostic, missing_layer_diagnostic
 from phosphor_eda.formats.allegro.graph import build_allegro_object_graph
 from phosphor_eda.formats.allegro.graphics import (
+    closed_path_from_segment_chain,
     graphic_segment_primitives,
     line_or_arc_primitive,
     owned_segment_chain,
-    polygon_from_segment_chain,
     record_layer,
     record_metadata,
     rectangle_primitive,
@@ -159,25 +160,23 @@ def _shape_pours_and_fills(
         layer = _copper_layer(shape, layer_map, diagnostics, require_etch=True)
         if layer is None:
             continue
-        polygon = polygon_from_segment_chain(
+        boundary = closed_path_from_segment_chain(
             shape,
             graph=graph,
             frame=frame,
-            layer=layer,
             head_key=payload_int(shape, "first_segment_key"),
             diagnostics=diagnostics,
             diagnostic_prefix="shape",
         )
-        if polygon is None:
+        if boundary is None:
             continue
         holes = _shape_void_holes(
             shape,
             graph=graph,
             frame=frame,
-            layer=layer,
             diagnostics=diagnostics,
         )
-        fill_polygon = PcbPolygon(points=polygon.points, holes=holes)
+        fill_path = PcbClosedPath(segments=boundary.segments, holes=tuple(holes))
         pour_id = f"allegro:{shape.key}:pour"
         metadata = _shape_fill_metadata(
             shape,
@@ -202,7 +201,7 @@ def _shape_pours_and_fills(
         pours.append(
             AllegroPourPrimitive(
                 id=pour_id,
-                boundary=polygon,
+                boundary=boundary,
                 layer=layer,
                 net_key=net_key,
                 metadata=replace(metadata, native_type="copper_shape_pour"),
@@ -225,7 +224,7 @@ def _shape_pours_and_fills(
             AllegroConductorPrimitive(
                 id=f"allegro:{shape.key}:fill",
                 kind=PcbConductorKind.POUR_FILL,
-                data=fill_polygon,
+                data=fill_path,
                 layer=layer,
                 net_key=net_key,
                 pour_id=pour_id,
@@ -248,10 +247,9 @@ def _shape_void_holes(
     *,
     graph: AllegroObjectGraph,
     frame: BoardFrame | None,
-    layer: PcbLayer,
     diagnostics: list[AllegroRecordDiagnostic],
-) -> list[list[tuple[float, float]]]:
-    holes: list[list[tuple[float, float]]] = []
+) -> list[PcbClosedPath]:
+    holes: list[PcbClosedPath] = []
     first_keepout_key = payload_int(shape, "first_keepout_key")
     if first_keepout_key == 0:
         return holes
@@ -270,17 +268,16 @@ def _shape_void_holes(
             )
         )
     for void in walk.records:
-        polygon = polygon_from_segment_chain(
+        path = closed_path_from_segment_chain(
             void,
             graph=graph,
             frame=frame,
-            layer=layer,
             head_key=payload_int(void, "first_segment_key"),
             diagnostics=diagnostics,
             diagnostic_prefix="shape-void",
         )
-        if polygon is not None:
-            holes.append(polygon.points)
+        if path is not None:
+            holes.append(path)
     return holes
 
 

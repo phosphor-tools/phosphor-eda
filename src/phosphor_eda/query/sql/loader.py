@@ -23,6 +23,7 @@ from phosphor_eda.domain.pcb import (
     LayerRole,
     PcbArc,
     PcbCircle,
+    PcbClosedPath,
     PcbDimension,
     PcbDrill,
     PcbDrillShape,
@@ -207,6 +208,8 @@ def _shape_geometry(payload: PcbShape) -> BaseGeometry | None:
         )
     if isinstance(payload, PcbPolygon):
         return polygon_shape_geometry(payload)
+    if isinstance(payload, PcbClosedPath):
+        return closed_path_geometry(payload)
     if isinstance(payload, PcbCircle):
         outer = Point(payload.cx, payload.cy).buffer(payload.radius, quad_segs=_QUAD_SEGS_CIRCLE)
         if payload.fill:

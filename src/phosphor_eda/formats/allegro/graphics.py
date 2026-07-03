@@ -10,8 +10,11 @@ from phosphor_eda.domain.pcb import (
     LayerRole,
     PcbArc,
     PcbCircle,
+    PcbClosedPath,
     PcbLine,
     PcbObjectMetadata,
+    PcbPathSegment,
+    PcbPathSegmentKind,
     PcbPolygon,
     PcbText,
 )
@@ -199,22 +202,21 @@ def _keepout_primitive(
         diagnostics.append(missing_layer_diagnostic(record))
         return None
     segment_key = payload_int(record, "first_segment_key")
-    polygon = polygon_from_segment_chain(
+    path = closed_path_from_segment_chain(
         record,
         graph=graph,
         frame=frame,
-        layer=layer,
         head_key=segment_key,
         diagnostics=diagnostics,
         diagnostic_prefix="keepout",
     )
-    if polygon is None:
+    if path is None:
         return None
     return AllegroGraphicPrimitive(
         id=f"allegro:{record.key}",
         kind=AllegroPrimitiveKind.POLYGON,
         roles=(AllegroPrimitiveRole.KEEPOUT,),
-        data=polygon,
+        data=path,
         layer=layer,
         source_tag=record.tag,
         source_key=record.key or 0,
@@ -222,16 +224,21 @@ def _keepout_primitive(
     )
 
 
-def polygon_from_segment_chain(
+def closed_path_from_segment_chain(
     record: AllegroRecord,
     *,
     graph: AllegroObjectGraph,
     frame: BoardFrame | None,
-    layer: PcbLayer,
     head_key: int,
     diagnostics: list[AllegroRecordDiagnostic],
     diagnostic_prefix: str,
-) -> PcbPolygon | None:
+) -> PcbClosedPath | None:
+    """Build a closed boundary path from a record's segment chain.
+
+    Line segments become LINE path segments and arc segments keep their native
+    curvature as ARC path segments; a full-circle arc (start == end) becomes
+    two complementary half-circle arcs so circular boundaries survive intact.
+    """
     if frame is None:
         diagnostics.append(missing_header_diagnostic(record))
         return None
@@ -244,41 +251,84 @@ def polygon_from_segment_chain(
             )
         )
         return None
-    points: list[tuple[float, float]] = []
+    segments: list[PcbPathSegment] = []
     for segment in owned_segment_chain(
         record,
         graph=graph,
         head_key=head_key,
         diagnostics=diagnostics,
     ):
-        if segment.tag == 0x01:
-            diagnostics.append(
-                drop_diagnostic(
-                    record,
-                    code=f"approximated-{diagnostic_prefix}-arc",
-                    message=(
-                        f"{diagnostic_prefix} record {record.key} includes arc segment "
-                        f"{segment.key}; polygon boundary preserves only segment vertices"
-                    ),
-                    reference_key=segment.key,
+        start = frame.point(payload_int(segment, "start_x"), payload_int(segment, "start_y"))
+        end = frame.point(payload_int(segment, "end_x"), payload_int(segment, "end_y"))
+        if segment.tag != 0x01:
+            segments.append(
+                PcbPathSegment(PcbPathSegmentKind.LINE, start[0], start[1], end[0], end[1])
+            )
+        elif _is_full_circle_arc(segment):
+            segments.extend(_full_circle_path_segments(segment, frame))
+        else:
+            mid_x, mid_y = _arc_midpoint(segment, frame)
+            segments.append(
+                PcbPathSegment(
+                    PcbPathSegmentKind.ARC,
+                    start[0],
+                    start[1],
+                    end[0],
+                    end[1],
+                    mid_x=mid_x,
+                    mid_y=mid_y,
                 )
             )
-        points.append(
-            frame.point(
-                payload_int(segment, "start_x"),
-                payload_int(segment, "start_y"),
-            )
-        )
-    if len(points) < 3:
+    has_arc = any(segment.kind is PcbPathSegmentKind.ARC for segment in segments)
+    if len(segments) < 3 and not has_arc:
         diagnostics.append(
             drop_diagnostic(
                 record,
                 code=f"invalid-{diagnostic_prefix}-boundary",
-                message=f"{diagnostic_prefix} record {record.key} resolved to {len(points)} points",
+                message=(
+                    f"{diagnostic_prefix} record {record.key} resolved to "
+                    f"{len(segments)} line segments"
+                ),
             )
         )
         return None
-    return PcbPolygon(points=points)
+    return PcbClosedPath(segments=tuple(segments))
+
+
+def _full_circle_path_segments(
+    segment: AllegroRecord, frame: BoardFrame
+) -> tuple[PcbPathSegment, PcbPathSegment]:
+    """Split a full-circle arc record into two complementary half-circle arcs."""
+    start_x, start_y = frame.point(payload_int(segment, "start_x"), payload_int(segment, "start_y"))
+    center_x, center_y = frame.point(
+        payload_float(segment, "center_x"), payload_float(segment, "center_y")
+    )
+    vector_x = start_x - center_x
+    vector_y = start_y - center_y
+    antipode_x = center_x - vector_x
+    antipode_y = center_y - vector_y
+    mid_1 = (center_x - vector_y, center_y + vector_x)
+    mid_2 = (center_x + vector_y, center_y - vector_x)
+    return (
+        PcbPathSegment(
+            PcbPathSegmentKind.ARC,
+            start_x,
+            start_y,
+            antipode_x,
+            antipode_y,
+            mid_x=mid_1[0],
+            mid_y=mid_1[1],
+        ),
+        PcbPathSegment(
+            PcbPathSegmentKind.ARC,
+            antipode_x,
+            antipode_y,
+            start_x,
+            start_y,
+            mid_x=mid_2[0],
+            mid_y=mid_2[1],
+        ),
+    )
 
 
 def _text_primitive(

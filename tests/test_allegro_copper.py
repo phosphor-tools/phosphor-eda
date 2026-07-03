@@ -4,7 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from phosphor_eda.domain.pcb import LayerRole, PcbArc, PcbConductorKind, PcbLine, PcbPolygon
+from phosphor_eda.domain.pcb import (
+    LayerRole,
+    PcbArc,
+    PcbClosedPath,
+    PcbConductorKind,
+    PcbLine,
+    PcbPolygon,
+)
 from phosphor_eda.formats.allegro.build import build_allegro_board
 from phosphor_eda.formats.allegro.parser import parse_allegro_records
 from phosphor_eda.formats.allegro.records import AllegroRecord, AllegroRecordSet
@@ -167,7 +174,7 @@ def test_allegro_board_assembly_emits_unassigned_voided_shape_pours() -> None:
     assert fill.pour is not None
     assert fill.pour.net is None
     assert fill.layer.name == "GND"
-    assert isinstance(fill.data, PcbPolygon)
+    assert isinstance(fill.data, PcbClosedPath)
     assert fill.data.holes
     assert len(fill.data.points) >= 3
     assert fill.metadata.native_type == "copper_shape_fill"

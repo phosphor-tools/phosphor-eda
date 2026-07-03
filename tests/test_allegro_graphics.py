@@ -3,7 +3,16 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from phosphor_eda.domain.pcb import LayerRole, PcbArc, PcbCircle, PcbLayer, PcbPolygon, PcbText
+from phosphor_eda.domain.pcb import (
+    LayerRole,
+    PcbArc,
+    PcbCircle,
+    PcbClosedPath,
+    PcbLayer,
+    PcbPathSegmentKind,
+    PcbPolygon,
+    PcbText,
+)
 from phosphor_eda.formats.allegro.build import build_allegro_graphics_board
 from phosphor_eda.formats.allegro.coords import BoardFrame
 from phosphor_eda.formats.allegro.graph import build_allegro_object_graph
@@ -224,19 +233,20 @@ def test_allegro_graphics_extracts_keepouts_with_native_layer_provenance() -> No
         primitive for primitive in graphics.keepouts if primitive.id == "allegro:634443400"
     )
     assert keepout.has_role(AllegroPrimitiveRole.KEEPOUT)
-    assert isinstance(keepout.data, PcbPolygon)
-    assert len(keepout.data.points) >= 8
+    assert isinstance(keepout.data, PcbClosedPath)
+    assert len(keepout.data.segments) >= 8
     assert keepout.metadata.properties["native_class_id"] == "21"
     assert keepout.metadata.properties["native_subclass_id"] == "0"
 
     board = build_allegro_graphics_board(record_set, name=BREAKOUT_BOARD.stem)
     domain_keepout = board.keepout_for("allegro:634443400")
     assert domain_keepout is not None
-    assert len(domain_keepout.boundary.segments) == len(keepout.data.points)
+    assert domain_keepout.boundary == keepout.data
     assert domain_keepout.metadata.properties["native_class_id"] == "21"
 
 
-def test_allegro_graphics_reports_keepout_arc_approximation() -> None:
+def test_allegro_graphics_preserves_keepout_arc_segments() -> None:
+    """Proves a keepout boundary keeps native arc curvature as ARC path segments."""
     source = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
     layer_map = build_allegro_layers(source)
     keepout = AllegroRecord(
@@ -258,9 +268,16 @@ def test_allegro_graphics_reports_keepout_arc_approximation() -> None:
         key=20,
         next_key=21,
         payload={
+            "subtype": 0,
             "parent_key": 10,
-            "start_x": 0,
+            "width": 0,
+            "start_x": 1000,
             "start_y": 0,
+            "end_x": 0,
+            "end_y": 1000,
+            "center_x": 0.0,
+            "center_y": 0.0,
+            "radius": 1000.0,
         },
     )
     line_1 = AllegroRecord(
@@ -271,8 +288,10 @@ def test_allegro_graphics_reports_keepout_arc_approximation() -> None:
         next_key=22,
         payload={
             "parent_key": 10,
-            "start_x": 1000,
-            "start_y": 0,
+            "start_x": 0,
+            "start_y": 1000,
+            "end_x": 0,
+            "end_y": 0,
         },
     )
     line_2 = AllegroRecord(
@@ -283,8 +302,10 @@ def test_allegro_graphics_reports_keepout_arc_approximation() -> None:
         next_key=None,
         payload={
             "parent_key": 10,
-            "start_x": 1000,
-            "start_y": 1000,
+            "start_x": 0,
+            "start_y": 0,
+            "end_x": 1000,
+            "end_y": 0,
         },
     )
     record_set = AllegroRecordSet(
@@ -297,12 +318,11 @@ def test_allegro_graphics_reports_keepout_arc_approximation() -> None:
     graphics = extract_allegro_graphics(record_set, layer_map)
 
     assert len(graphics.keepouts) == 1
-    assert any(
-        diagnostic.code == "approximated-keepout-arc"
-        and diagnostic.key == 10
-        and diagnostic.reference_key == 20
-        for diagnostic in graphics.diagnostics
-    )
+    data = graphics.keepouts[0].data
+    assert isinstance(data, PcbClosedPath)
+    arc_segments = [segment for segment in data.segments if segment.kind is PcbPathSegmentKind.ARC]
+    assert len(arc_segments) == 1
+    assert not any("approximated" in diagnostic.code for diagnostic in graphics.diagnostics)
 
 
 def test_allegro_graphics_extracts_rectangle_artwork() -> None:
@@ -593,7 +613,7 @@ def test_allegro_graphics_terminates_segment_chain_at_owner_ring() -> None:
     graphics = extract_allegro_graphics(record_set, layer_map)
 
     assert len(graphics.keepouts) == 1
-    assert isinstance(graphics.keepouts[0].data, PcbPolygon)
+    assert isinstance(graphics.keepouts[0].data, PcbClosedPath)
     assert len(graphics.keepouts[0].data.points) == 3
     assert not any(
         diagnostic.code == "segment-owner-mismatch" for diagnostic in graphics.diagnostics

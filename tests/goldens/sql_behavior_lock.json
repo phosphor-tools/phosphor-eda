@@ -59,8 +59,8 @@
         "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
       },
       "conductors": {
-        "rows": 219,
-        "sha256": "b8065787f26d9c3b288bcd3a297b630c4e59a9dbd15e6097b2660014cd4aea5d"
+        "rows": 225,
+        "sha256": "3bb4a3571c6c7e08c04d27485d76a7881a31cf286436f9aa8eff90e01930c575"
       },
       "design_rules": {
         "rows": 4,
@@ -79,8 +79,8 @@
         "sha256": "c6ffce72e2c4a6a6a171594f7b5b67f0d8bff39972887c52bb3d13754eb41c69"
       },
       "keepouts": {
-        "rows": 131,
-        "sha256": "1caa6ca79cd51bb69a8ecec0ba9c8600090b3903ded156ed3446e0f637403d63"
+        "rows": 581,
+        "sha256": "3dc4d82f39765fd7ab3d82690b073954575483e74ed0074cf586ceea20bb2d11"
       },
       "layers": {
         "rows": 186,
@@ -148,7 +148,7 @@
       },
       "pours": {
         "rows": 14,
-        "sha256": "1dad6ac3e35fb7d5b090d293d439fbfdabe7396b44ac0a31cf1f5becab67c6d1"
+        "sha256": "91fe6da23a98506d8bda9f7e6622cf1c9242da91fd5c30e32f981a5b386367d1"
       },
       "project": {
         "rows": 2,

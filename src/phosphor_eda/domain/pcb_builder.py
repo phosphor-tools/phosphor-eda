@@ -18,6 +18,7 @@ from phosphor_eda.domain.pcb import (
     PcbMetadata,
     PcbNet,
     PcbPad,
+    PcbPathSegmentKind,
     PcbPour,
     PcbVia,
 )
@@ -225,9 +226,12 @@ class PcbBuilder:
         )
 
     def _validate_boundary(self, boundary: PcbClosedPath, source: str) -> None:
-        if len(boundary.segments) < 3:
+        # A circular boundary is two complementary arc segments; only an
+        # all-line path needs three segments to enclose area.
+        has_arc = any(segment.kind is PcbPathSegmentKind.ARC for segment in boundary.segments)
+        if len(boundary.segments) < 3 and not has_arc:
             self._fail(
-                f"closed path needs at least 3 points, got {len(boundary.segments)}",
+                f"closed path needs at least 3 line segments, got {len(boundary.segments)}",
                 source,
             )
 
