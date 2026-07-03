@@ -124,6 +124,23 @@ def test_unfilled_polygon_shape_geometry_uses_outline_corridor() -> None:
     assert 34.0 <= geom.area <= 46.0
 
 
+def test_unfilled_polygon_zero_width_shape_geometry_is_min_buffered_ring() -> None:
+    # A zero-width unfilled outline paints a hairline ring, not the full
+    # enclosed region (which would disagree with the SVG hairline stroke).
+    poly = PcbPolygon(
+        points=[(0, 0), (10, 0), (10, 10), (0, 10)],
+        width=0.0,
+        fill=False,
+    )
+
+    geom = polygon_shape_geometry(poly)
+
+    assert not geom.is_empty
+    # Ring, not the 100mm^2 filled region: perimeter 40mm * 0.05mm ~= 2mm^2.
+    assert geom.area < 10.0
+    assert geom.area == pytest.approx(40.0 * 0.05, rel=0.2)
+
+
 def test_polygon_degenerate_returns_empty() -> None:
     # Never raw, possibly-invalid geometry: degenerate input yields an empty
     # geometry (treated as "no shape" by both SQL WKB and SVG serialization).
@@ -301,6 +318,62 @@ def test_board_outline_polygon_subtracts_repaired_self_intersecting_cutout() -> 
 
     assert geom is not None
     assert geom.area == pytest.approx(36.0 - 8.0)
+
+
+def test_pad_polygon_octagon_area_and_bounds() -> None:
+    pad = _pad("octagon", width=4.0, height=4.0)
+
+    geom = pad_polygon(pad)
+
+    # Regular octagon = box area minus four 45-degree corner triangles with
+    # legs (half-extent * (2 - sqrt2)): w*h - (w*h/2) * (2 - sqrt2)^2.
+    expected = 16.0 - 0.5 * 16.0 * (2.0 - math.sqrt(2.0)) ** 2
+    assert geom.area == pytest.approx(expected, rel=0.001)
+    min_x, min_y, max_x, max_y = geom.bounds
+    assert (max_x - min_x, max_y - min_y) == pytest.approx((4.0, 4.0), abs=0.001)
+    assert len(geom.exterior.coords) == 9  # 8 vertices + closing point
+
+
+def test_pad_polygon_diamond_is_half_box_area() -> None:
+    pad = _pad("diamond", width=4.0, height=2.0)
+
+    geom = pad_polygon(pad)
+
+    assert geom.area == pytest.approx(0.5 * 4.0 * 2.0, rel=0.001)
+    assert len(geom.exterior.coords) == 5  # 4 vertices + closing point
+
+
+def test_pad_polygon_octagon_honors_rotation() -> None:
+    upright = pad_polygon(_pad("octagon", width=4.0, height=2.0))
+    rotated = pad_polygon(_pad("octagon", width=4.0, height=2.0, rotation=90.0))
+
+    assert rotated.area == pytest.approx(upright.area, rel=0.001)
+    # 90-degree rotation swaps the bounding-box extents.
+    ux0, uy0, ux1, uy1 = upright.bounds
+    rx0, ry0, rx1, ry1 = rotated.bounds
+    assert (rx1 - rx0) == pytest.approx(uy1 - uy0, abs=0.001)
+    assert (ry1 - ry0) == pytest.approx(ux1 - ux0, abs=0.001)
+
+
+def test_pad_polygon_custom_annular_circle_uses_centerline_radius() -> None:
+    # PcbCircle.radius is the stroke centerline; an unfilled circle paints an
+    # annulus spanning radius +/- width/2 (outer 2.25, inner 1.75).
+    pad = PcbPad(
+        id="pad:ring",
+        number="1",
+        x=0.0,
+        y=0.0,
+        stack=PadStack.simple("custom", 4.0, 4.0),
+        pad_type=PcbPadType.SMD,
+        layers=(),
+        custom_shapes=(PcbCircle(cx=0.0, cy=0.0, radius=2.0, width=0.5, fill=False),),
+    )
+
+    geom = pad_polygon(pad)
+
+    _, _, max_x, _ = geom.bounds
+    assert max_x == pytest.approx(2.25, abs=0.02)
+    assert geom.area == pytest.approx(math.pi * (2.25**2 - 1.75**2), rel=0.02)
 
 
 def test_pad_polygon_custom_honors_dimension_overrides() -> None:

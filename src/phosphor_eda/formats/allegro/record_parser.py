@@ -610,7 +610,24 @@ def _parse_known_record(
         payload["coord_y"] = reader.read_int32()
         payload["track_key"] = reader.read_uint32()
         payload["padstack_key"] = reader.read_uint32()
-        reader.skip(4 * 4 + 4 * 4)
+        if _version_lt(version, AllegroVersion.V_172):
+            # Confirmed 0x33 tail on V16.x (V16.5/16.6): a label text-wrapper
+            # key, an always-zero word, via flags, rotation (mdeg, right angles
+            # only observed), then a centered bbox. The layout on V17.2+ shifts
+            # (extra conditional words earlier in the record), so leave the tail
+            # opaque there rather than guess -- keep the byte count identical.
+            payload["label_key"] = reader.read_uint32()
+            reader.skip(4)
+            payload["via_flags"] = reader.read_uint32()
+            payload["rotation_mdeg"] = reader.read_uint32()
+            payload["bbox"] = (
+                reader.read_int32(),
+                reader.read_int32(),
+                reader.read_int32(),
+                reader.read_int32(),
+            )
+        else:
+            reader.skip(4 * 4 + 4 * 4)
     elif tag == 0x34:
         reader.skip(1)
         _read_layer_info(reader, payload)

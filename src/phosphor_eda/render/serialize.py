@@ -13,6 +13,7 @@ import re
 from typing import TYPE_CHECKING
 from xml.sax.saxutils import escape as xml_escape
 
+from phosphor_eda.geometry.pcb_geometry import MIN_STROKE_WIDTH_MM
 from phosphor_eda.geometry.text_metrics import EMBEDDED_FONT_FAMILY, embedded_font_css
 from phosphor_eda.render.annotation_svg import annotation_css, render_annotations
 from phosphor_eda.render.primitives import PaintMode
@@ -439,8 +440,9 @@ def _stroke_primitive_style_attrs(
     stroke_width = primitive.stroke_width
     if stroke_width is None and style is not None:
         stroke_width = style.stroke_width_mm
-    if stroke_width is not None:
-        declarations.append(f"stroke-width: {stroke_width:.4f}")
+    # Floor to a hairline rather than letting the SVG default 1mm stroke apply
+    # when no width source exists.
+    declarations.append(f"stroke-width: {max(stroke_width or 0.0, MIN_STROKE_WIDTH_MM):.4f}")
     if primitive.stroke_linecap is not None:
         declarations.append(f"stroke-linecap: {primitive.stroke_linecap}")
     return {"style": "; ".join(declarations)}
@@ -457,8 +459,10 @@ def _stroke_paint(style: ResolvedStyle | None) -> str | None:
 def _layer_mask_path_attrs(primitive: SvgPrimitive, *, fill: str) -> dict[str, str]:
     if primitive.paint is PaintMode.STROKE:
         attrs = {"fill": "none", "stroke": fill}
-        if primitive.stroke_width is not None:
-            attrs["stroke-width"] = f"{primitive.stroke_width:.4f}"
+        # Floor to a hairline so a widthless mask stroke never falls through to
+        # the SVG default 1mm stroke.
+        stroke_width = max(primitive.stroke_width or 0.0, MIN_STROKE_WIDTH_MM)
+        attrs["stroke-width"] = f"{stroke_width:.4f}"
         if primitive.stroke_linecap is not None:
             attrs["stroke-linecap"] = primitive.stroke_linecap
     else:

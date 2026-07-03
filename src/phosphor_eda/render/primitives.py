@@ -30,12 +30,14 @@ from phosphor_eda.domain.pcb import (
 from phosphor_eda.geometry.pcb_geometry import (
     arc_center_from_three_points,
     arc_sweep_angle,
+    arc_to_polyline,
     board_outline_polygon,
     circle_path_d,
     closed_path_geometry,
     pad_path_d,
     pad_polygon,
     polygon_geometry,
+    polygon_shape_geometry,
 )
 from phosphor_eda.geometry.text_metrics import (
     baseline_center_offset,
@@ -258,26 +260,40 @@ def _bounds_for_item(item: InventoryItem) -> Bounds | None:
 
 def _payload_bounds(payload: object) -> Bounds | None:
     if isinstance(payload, PcbLine):
-        return _point_bounds(((payload.start_x, payload.start_y), (payload.end_x, payload.end_y)))
+        # Round-capped stroke: the painted extent grows by half the width on
+        # every side, including past the endpoints.
+        bounds = _point_bounds(((payload.start_x, payload.start_y), (payload.end_x, payload.end_y)))
+        return _expand_bounds(bounds, payload.width / 2.0)
     if isinstance(payload, PcbArc):
-        return _point_bounds(
-            (
-                (payload.start_x, payload.start_y),
-                (payload.mid_x, payload.mid_y),
-                (payload.end_x, payload.end_y),
+        # Linearize so the bbox captures the arc's bulge extremes, not just the
+        # three defining points, then grow by the stroke half-width.
+        bounds = _point_bounds(
+            tuple(
+                arc_to_polyline(
+                    payload.start_x,
+                    payload.start_y,
+                    payload.mid_x,
+                    payload.mid_y,
+                    payload.end_x,
+                    payload.end_y,
+                )
             )
         )
+        return _expand_bounds(bounds, payload.width / 2.0)
     if isinstance(payload, PcbCircle):
+        # radius is the stroke centerline; an unfilled circle paints out to
+        # radius + width/2.
+        extent = payload.radius + (0.0 if payload.fill else payload.width / 2.0)
         return (
-            payload.cx - payload.radius,
-            payload.cy - payload.radius,
-            payload.cx + payload.radius,
-            payload.cy + payload.radius,
+            payload.cx - extent,
+            payload.cy - extent,
+            payload.cx + extent,
+            payload.cy + extent,
         )
     if isinstance(payload, PcbDimension):
         return _point_bounds(((payload.start_x, payload.start_y), (payload.end_x, payload.end_y)))
     if isinstance(payload, PcbPolygon):
-        return _geometry_bounds(polygon_geometry(payload))
+        return _geometry_bounds(polygon_shape_geometry(payload))
     if isinstance(payload, PcbText):
         return _text_bounds(payload)
     if isinstance(payload, PcbClosedPath):
@@ -293,6 +309,13 @@ def _point_bounds(points: tuple[tuple[float, float], ...]) -> Bounds | None:
     xs = [x for x, _ in points]
     ys = [y for _, y in points]
     return (min(xs), min(ys), max(xs), max(ys))
+
+
+def _expand_bounds(bounds: Bounds | None, margin: float) -> Bounds | None:
+    if bounds is None or margin <= 0.0:
+        return bounds
+    min_x, min_y, max_x, max_y = bounds
+    return (min_x - margin, min_y - margin, max_x + margin, max_y + margin)
 
 
 @dataclass(frozen=True)
@@ -319,10 +342,13 @@ def _filled(d: str, style: Mapping[str, str] | None = None) -> _ShapeRender:
 
 
 def _stroked(d: str, width: float | None) -> _ShapeRender:
+    # A zero width leaves ``stroke_width`` unset so the serializer can fall back
+    # to the layer's hairline token; only when no width source exists at all
+    # does it floor to ``MIN_STROKE_WIDTH_MM`` (never the SVG default 1mm).
     return _ShapeRender(
         d=d,
         paint=PaintMode.STROKE,
-        stroke_width=width,
+        stroke_width=width if (width or 0.0) > 0.0 else None,
         stroke_linecap=_STROKE_LINECAP,
     )
 
@@ -412,23 +438,20 @@ def _shape_render_for_payload(payload: object, *, filled: bool = True) -> _Shape
     everything else stays filled.
     """
     if isinstance(payload, PcbLine):
-        width = max(payload.width, 0.0)
         if filled:
-            return _stroked(_line_path_d(payload), width if width > 0.0 else None)
+            return _stroked(_line_path_d(payload), payload.width)
         return _filled(_line_path_d(payload))
     if isinstance(payload, PcbArc):
-        width = max(payload.width, 0.0)
         if filled:
-            return _stroked(_arc_path_d(payload), width if width > 0.0 else None)
+            return _stroked(_arc_path_d(payload), payload.width)
         return _filled(_arc_path_d(payload))
     if isinstance(payload, PcbCircle):
         if payload.fill:
             return _filled(circle_path_d(payload.cx, payload.cy, payload.radius))
         if filled:
-            width = max(payload.width, 0.0)
             return _stroked(
                 circle_path_d(payload.cx, payload.cy, payload.radius),
-                width if width > 0.0 else None,
+                payload.width,
             )
         return _filled(circle_path_d(payload.cx, payload.cy, payload.radius))
     if isinstance(payload, PcbPolygon):

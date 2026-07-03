@@ -241,6 +241,15 @@ class PcbArc:
 
 @dataclass
 class PcbCircle:
+    """A circle or annular ring.
+
+    ``radius`` is the canonical **centerline** radius (matching PcbLine/PcbArc
+    stroke semantics): a filled circle is a disc of that radius, and an
+    unfilled stroked circle paints an annulus spanning ``radius +/- width/2``.
+    Parsers that carry an outer radius must subtract ``width/2`` before
+    building a PcbCircle.
+    """
+
     cx: float
     cy: float
     radius: float
@@ -935,8 +944,11 @@ def extend_shape_bounds(xs: list[float], ys: list[float], shape: object) -> None
         xs.extend([shape.start_x, shape.mid_x, shape.end_x])
         ys.extend([shape.start_y, shape.mid_y, shape.end_y])
     elif isinstance(shape, PcbCircle):
-        xs.extend([shape.cx - shape.radius, shape.cx + shape.radius])
-        ys.extend([shape.cy - shape.radius, shape.cy + shape.radius])
+        # radius is the stroke centerline; an unfilled ring paints out to
+        # radius + width/2.
+        extent = shape.radius + (0.0 if shape.fill else shape.width / 2.0)
+        xs.extend([shape.cx - extent, shape.cx + extent])
+        ys.extend([shape.cy - extent, shape.cy + extent])
     elif isinstance(shape, PcbPolygon):
         xs.extend(x for x, _y in shape.points)
         ys.extend(y for _x, y in shape.points)

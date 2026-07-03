@@ -87,6 +87,26 @@ def test_allegro_board_assembly_emits_connectivity_padstacks_and_drills() -> Non
     assert all(drill.layers for drill in board.drills)
 
 
+def test_allegro_vias_surface_rotation_metadata_and_stay_through() -> None:
+    from phosphor_eda.domain.pcb import PcbViaType
+
+    record_set = parse_allegro_records(SYNC_BOARD.read_bytes(), source_name=SYNC_BOARD.name)
+
+    board = build_allegro_board(record_set, name=SYNC_BOARD.stem)
+
+    assert board.vias
+    # No span field exists in the corpus, so every via is THROUGH.
+    assert all(via.via_type is PcbViaType.THROUGH for via in board.vias)
+    # Rotation is surfaced as via metadata; SYNC has rotated vias.
+    rotations = {
+        via.metadata.properties["via_rotation_deg"]
+        for via in board.vias
+        if "via_rotation_deg" in via.metadata.properties
+    }
+    assert rotations
+    assert rotations & {"90", "180", "270"}
+
+
 def test_allegro_board_assembly_places_padstack_objects_in_profile_coordinate_space() -> None:
     """Proves pads, vias, drills, and placements share the profile coordinate frame."""
     record_set = parse_allegro_records(SYNC_BOARD.read_bytes(), source_name=SYNC_BOARD.name)

@@ -3,6 +3,8 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+import pytest
+
 from phosphor_eda.domain.pcb import (
     LayerRole,
     PcbArc,
@@ -14,7 +16,7 @@ from phosphor_eda.domain.pcb import (
     PcbText,
 )
 from phosphor_eda.formats.allegro.build import build_allegro_graphics_board
-from phosphor_eda.formats.allegro.coords import BoardFrame
+from phosphor_eda.formats.allegro.coords import BoardFrame, board_frame
 from phosphor_eda.formats.allegro.graph import build_allegro_object_graph
 from phosphor_eda.formats.allegro.graphics import extract_allegro_graphics, rectangle_primitive
 from phosphor_eda.formats.allegro.layers import AllegroLayerMap, build_allegro_layers
@@ -464,6 +466,117 @@ def test_allegro_rectangle_fill_follows_physical_aperture_layers() -> None:
     copper_rect = _rectangle(0x05, 0x00)
     assert copper_rect.fill is True
     assert copper_rect.width == 0.0
+
+
+def _rotated_rectangle(rotation_mdeg: int) -> PcbPolygon:
+    copper_layer = PcbLayer(name="TOP", roles=(LayerRole.COPPER,))
+    layer_map = AllegroLayerMap(
+        layers=(copper_layer,),
+        stackup=None,
+        by_class_subclass={(0x05, 0x00): copper_layer},
+    )
+    frame = BoardFrame(unit_to_mm=1e-5)
+    record = AllegroRecord(
+        tag=0x0E,
+        offset=0,
+        end_offset=20,
+        key=1,
+        next_key=None,
+        payload={
+            "layer_class_id": 0x05,
+            "layer_subclass_id": 0x00,
+            "coords": (0, 0, 1000, 2000),
+            "rotation_mdeg": rotation_mdeg,
+        },
+    )
+    primitive = rectangle_primitive(record, frame=frame, layer_map=layer_map, diagnostics=[])
+    assert primitive is not None
+    assert isinstance(primitive.data, PcbPolygon)
+    return primitive.data
+
+
+def test_allegro_rectangle_rotation_preserves_center_area_and_radius() -> None:
+    upright = _rotated_rectangle(0)
+    rotated = _rotated_rectangle(30_000)
+
+    from shapely import Polygon
+
+    up_poly = Polygon(upright.points)
+    rot_poly = Polygon(rotated.points)
+
+    # Center and area (a rigid rotation) are preserved; the shape is no longer
+    # axis-aligned.
+    assert rot_poly.area == pytest.approx(up_poly.area, rel=1e-9)
+    assert rot_poly.centroid.x == pytest.approx(up_poly.centroid.x, abs=1e-12)
+    assert rot_poly.centroid.y == pytest.approx(up_poly.centroid.y, abs=1e-12)
+
+    cx = sum(x for x, _ in upright.points) / 4.0
+    cy = sum(y for _, y in upright.points) / 4.0
+    for (ux, uy), (rx, ry) in zip(upright.points, rotated.points, strict=True):
+        # Each corner keeps its distance from the center and moves by 30 degrees.
+        assert math.hypot(rx - cx, ry - cy) == pytest.approx(math.hypot(ux - cx, uy - cy))
+    # At least one corner has visibly moved (not still axis-aligned).
+    assert any(
+        abs(rx - ux) > 1e-6 for (ux, _), (rx, _) in zip(upright.points, rotated.points, strict=True)
+    )
+
+
+def test_allegro_rectangle_right_angle_rotation_swaps_extents() -> None:
+    upright = _rotated_rectangle(0)
+    rotated = _rotated_rectangle(90_000)
+
+    ux = [x for x, _ in upright.points]
+    uy = [y for _, y in upright.points]
+    rx = [x for x, _ in rotated.points]
+    ry = [y for _, y in rotated.points]
+
+    # 90-degree rotation about the center swaps the bbox width and height.
+    assert (max(rx) - min(rx)) == pytest.approx(max(uy) - min(uy))
+    assert (max(ry) - min(ry)) == pytest.approx(max(ux) - min(ux))
+    assert sum(rx) / 4.0 == pytest.approx(sum(ux) / 4.0)
+    assert sum(ry) / 4.0 == pytest.approx(sum(uy) / 4.0)
+
+
+def test_allegro_rotated_fixture_rectangles_swap_extents_about_center() -> None:
+    # Every rotated rectangle in the fixtures uses a right-angle rotation; a
+    # 90/270 rotation about the center swaps the coords bbox width and height
+    # while holding the center, and 180 leaves it unchanged. A corner anchor
+    # (the wrong one) would move the center instead.
+    record_set = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    layer_map = build_allegro_layers(record_set)
+    frame = board_frame(record_set.header)
+    assert frame is not None
+
+    checked = 0
+    for record in record_set.records:
+        if record.tag not in {0x0E, 0x24}:
+            continue
+        rotation_mdeg = payload_int(record, "rotation_mdeg")
+        coords = record.payload.get("coords")
+        if not rotation_mdeg or not isinstance(coords, tuple):
+            continue
+        primitive = rectangle_primitive(record, frame=frame, layer_map=layer_map, diagnostics=[])
+        if primitive is None or not isinstance(primitive.data, PcbPolygon):
+            continue
+        checked += 1
+        x0, y0, x1, y1 = coords
+        raw_w = abs(x1 - x0) * frame.unit_to_mm
+        raw_h = abs(y1 - y0) * frame.unit_to_mm
+        raw_cx = (frame.x(x0) + frame.x(x1)) / 2.0
+        raw_cy = (frame.y(y0) + frame.y(y1)) / 2.0
+        xs = [x for x, _ in primitive.data.points]
+        ys = [y for _, y in primitive.data.points]
+        out_w = max(xs) - min(xs)
+        out_h = max(ys) - min(ys)
+        assert (sum(xs) / 4.0) == pytest.approx(raw_cx, abs=1e-9)
+        assert (sum(ys) / 4.0) == pytest.approx(raw_cy, abs=1e-9)
+        if (rotation_mdeg // 1000) % 180 == 90:
+            assert out_w == pytest.approx(raw_h, abs=1e-9)
+            assert out_h == pytest.approx(raw_w, abs=1e-9)
+        else:
+            assert out_w == pytest.approx(raw_w, abs=1e-9)
+            assert out_h == pytest.approx(raw_h, abs=1e-9)
+    assert checked > 0
 
 
 def test_allegro_graphics_extracts_outline_rectangles_as_board_profile() -> None:

@@ -29,6 +29,25 @@ def test_parse_allegro_records_starts_after_aligned_string_table_padding() -> No
     assert first_record.offset > record_set.string_table.end_offset
 
 
+def test_parse_allegro_via_tail_carries_rotation_and_bbox_on_v16() -> None:
+    record_set = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+
+    vias = [record for record in record_set.records if record.tag == 0x33]
+    assert vias
+    for via in vias:
+        # The confirmed V16.x tail is parsed into named fields.
+        assert "rotation_mdeg" in via.payload
+        assert "bbox" in via.payload
+        assert "label_key" in via.payload
+        rotation_mdeg = via.payload["rotation_mdeg"]
+        assert isinstance(rotation_mdeg, int)
+        # Only right-angle rotations are present in the corpus.
+        assert rotation_mdeg % 90_000 == 0
+        bbox = via.payload["bbox"]
+        assert isinstance(bbox, tuple)
+        assert len(bbox) == 4
+
+
 def test_parse_allegro_records_preserves_native_key_next_and_raw_extent() -> None:
     record_set = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
 

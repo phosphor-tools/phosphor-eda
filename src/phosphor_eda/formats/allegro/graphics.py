@@ -188,6 +188,19 @@ def rectangle_primitive(
     right = frame.x(max(x0, x1))
     top = frame.y(max(y0, y1))
     bottom = frame.y(min(y0, y1))
+    points = [(left, top), (right, top), (right, bottom), (left, bottom)]
+    rotation_mdeg = payload_int(record, "rotation_mdeg")
+    if rotation_mdeg:
+        # rotation_mdeg is CCW in Allegro's native y-up frame; the board frame
+        # flips y, so rotate the corners about the rectangle center by the
+        # negated angle. The center anchor was confirmed empirically: it keeps
+        # every rotated fixture rectangle inside the board bbox, unlike a
+        # corner anchor. (For right-angle rotations the corner order is
+        # immaterial to the filled shape.)
+        center_x = (left + right) / 2.0
+        center_y = (top + bottom) / 2.0
+        angle = -rotation_mdeg / 1000.0
+        points = [_rotate_about(px, py, center_x, center_y, angle) for px, py in points]
     roles = _roles_for_record(record, layer)
     fill = _is_filled_rectangle_layer(layer)
     return AllegroGraphicPrimitive(
@@ -195,7 +208,7 @@ def rectangle_primitive(
         kind=AllegroPrimitiveKind.RECTANGLE,
         roles=roles,
         data=PcbPolygon(
-            points=[(left, top), (right, top), (right, bottom), (left, bottom)],
+            points=points,
             width=0.0 if fill else _DEFAULT_RECTANGLE_STROKE_WIDTH_MM,
             fill=fill,
         ),
@@ -204,6 +217,16 @@ def rectangle_primitive(
         source_key=record.key or 0,
         metadata=record_metadata(record, layer),
     )
+
+
+def _rotate_about(x: float, y: float, cx: float, cy: float, degrees: float) -> tuple[float, float]:
+    """Rotate (x, y) about (cx, cy) by ``degrees`` (CCW positive)."""
+    angle = math.radians(degrees)
+    cos_a = math.cos(angle)
+    sin_a = math.sin(angle)
+    dx = x - cx
+    dy = y - cy
+    return cx + dx * cos_a - dy * sin_a, cy + dx * sin_a + dy * cos_a
 
 
 def _is_filled_rectangle_layer(layer: PcbLayer) -> bool:

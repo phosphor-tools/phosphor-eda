@@ -41,6 +41,7 @@ from phosphor_eda.domain.pcb import (
 )
 from phosphor_eda.formats.common.electrical import ELECTRICAL_KEY
 from phosphor_eda.geometry.pcb_geometry import (
+    MIN_STROKE_WIDTH_MM,
     arc_center_from_three_points,
     arc_sweep_angle,
     arc_to_polyline,
@@ -214,7 +215,7 @@ def _shape_geometry(payload: PcbShape) -> BaseGeometry | None:
         outer = Point(payload.cx, payload.cy).buffer(payload.radius, quad_segs=_QUAD_SEGS_CIRCLE)
         if payload.fill:
             return outer
-        return outer.boundary.buffer(max(payload.width, 0.01) / 2.0)
+        return outer.boundary.buffer(max(payload.width, MIN_STROKE_WIDTH_MM) / 2.0)
     if isinstance(payload, PcbText):
         return text_outline_geometry(payload)
     if isinstance(payload, PcbDimension):

@@ -703,6 +703,8 @@ def _add_vias(
             frame,
             owner_prefix="via",
         )
+        metadata = _object_metadata(record, "via", padstack.metadata)
+        _enrich_via_metadata(metadata, record)
         builder.add_via_object(
             PcbVia(
                 id=f"via-{record.key}",
@@ -712,11 +714,31 @@ def _add_vias(
                 layers=copper_layers,
                 drill=drill,
                 net=nets_by_key.get(payload_int(record, "net_key")),
+                # No blind/buried span field exists in the analyzed corpus
+                # (V16.5/16.6); every fixture via is through. Blind/buried
+                # support needs new fixture evidence, so keep THROUGH rather
+                # than guess a span encoding.
                 via_type=PcbViaType.THROUGH,
-                metadata=_object_metadata(record, "via", padstack.metadata),
+                metadata=metadata,
             ),
             source=_source("via", record),
         )
+
+
+def _enrich_via_metadata(metadata: PcbObjectMetadata, record: AllegroRecord) -> None:
+    """Attach the confirmed 0x33 tail (rotation, label ref) as via properties.
+
+    Only V16.x records carry the parsed tail; on V17.2+ the fields are absent
+    (the tail layout is unverified) so nothing is surfaced.
+    """
+    if "rotation_mdeg" in record.payload:
+        rotation = (payload_int(record, "rotation_mdeg") / 1000.0) % 360.0
+        metadata.properties["via_rotation_deg"] = f"{rotation:g}"
+    label_key = payload_int(record, "label_key")
+    if label_key:
+        # A text-wrapper key (not a direct string-table id); surface the raw
+        # reference so a downstream consumer can resolve the label text.
+        metadata.properties["via_label_key"] = str(label_key)
 
 
 def _add_conductors(
