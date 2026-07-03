@@ -3,10 +3,11 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
-from phosphor_eda.domain.pcb import PcbArc, PcbCircle, PcbPolygon, PcbText
+from phosphor_eda.domain.pcb import LayerRole, PcbArc, PcbCircle, PcbLayer, PcbPolygon, PcbText
 from phosphor_eda.formats.allegro.build import build_allegro_graphics_board
+from phosphor_eda.formats.allegro.coords import BoardFrame
 from phosphor_eda.formats.allegro.graph import build_allegro_object_graph
-from phosphor_eda.formats.allegro.graphics import extract_allegro_graphics
+from phosphor_eda.formats.allegro.graphics import extract_allegro_graphics, rectangle_primitive
 from phosphor_eda.formats.allegro.layers import AllegroLayerMap, build_allegro_layers
 from phosphor_eda.formats.allegro.parser import parse_allegro_records
 from phosphor_eda.formats.allegro.primitives import AllegroPrimitiveRole
@@ -320,6 +321,46 @@ def test_allegro_graphics_extracts_rectangle_artwork() -> None:
     assert rectangle.data.width > 0.0
     assert rectangle.metadata.properties["native_class_id"] == "4"
     assert rectangle.metadata.properties["native_subclass_id"] == "13"
+
+
+def test_allegro_rectangle_fill_follows_physical_aperture_layers() -> None:
+    keepout_layer = PcbLayer(name="ROUTE KEEPOUT", roles=(LayerRole.KEEPOUT,))
+    copper_layer = PcbLayer(name="TOP", roles=(LayerRole.COPPER,))
+    layer_map = AllegroLayerMap(
+        layers=(keepout_layer, copper_layer),
+        stackup=None,
+        by_class_subclass={(0x0F, 0xFD): keepout_layer, (0x05, 0x00): copper_layer},
+    )
+    frame = BoardFrame(unit_to_mm=1e-5)
+
+    def _rectangle(class_id: int, subclass_id: int) -> PcbPolygon:
+        record = AllegroRecord(
+            tag=0x0E,
+            offset=0,
+            end_offset=20,
+            key=1,
+            next_key=None,
+            payload={
+                "layer_class_id": class_id,
+                "layer_subclass_id": subclass_id,
+                "coords": (0, 0, 1000, 2000),
+            },
+        )
+        primitive = rectangle_primitive(record, frame=frame, layer_map=layer_map, diagnostics=[])
+        assert primitive is not None
+        assert isinstance(primitive.data, PcbPolygon)
+        return primitive.data
+
+    # Documentation graphics (keepout here) render as stroked outlines, not
+    # filled slabs — fill only physical apertures.
+    keepout_rect = _rectangle(0x0F, 0xFD)
+    assert keepout_rect.fill is False
+    assert keepout_rect.width > 0.0
+
+    # Copper apertures stay filled.
+    copper_rect = _rectangle(0x05, 0x00)
+    assert copper_rect.fill is True
+    assert copper_rect.width == 0.0
 
 
 def test_allegro_graphics_extracts_outline_rectangles_as_board_profile() -> None:

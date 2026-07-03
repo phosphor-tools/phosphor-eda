@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.pcb import (
-    LayerRole,
     PcbArc,
     PcbArtwork,
     PcbArtworkKind,
@@ -20,6 +19,7 @@ from phosphor_eda.domain.pcb import (
     PcbPour,
     PcbPourFillMode,
     PcbPourSettings,
+    artwork_purpose_for_layer,
 )
 from phosphor_eda.formats.allegro.primitives import (
     AllegroConductorPrimitive,
@@ -33,22 +33,6 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from phosphor_eda.domain.pcb import PcbFootprint, PcbNet
-
-_ARTWORK_PURPOSE_BY_LAYER_ROLE: tuple[tuple[LayerRole, PcbArtworkPurpose], ...] = (
-    (LayerRole.DESIGNATOR, PcbArtworkPurpose.DESIGNATOR),
-    (LayerRole.VALUE, PcbArtworkPurpose.VALUE),
-    (LayerRole.SILKSCREEN, PcbArtworkPurpose.SILKSCREEN),
-    (LayerRole.FABRICATION, PcbArtworkPurpose.FABRICATION),
-    (LayerRole.ASSEMBLY, PcbArtworkPurpose.ASSEMBLY),
-    (LayerRole.COURTYARD, PcbArtworkPurpose.COURTYARD),
-    (LayerRole.SOLDER_MASK, PcbArtworkPurpose.SOLDER_MASK),
-    (LayerRole.SOLDER_PASTE, PcbArtworkPurpose.SOLDER_PASTE),
-    (LayerRole.DIMENSION, PcbArtworkPurpose.DIMENSION),
-    (LayerRole.KEEPOUT, PcbArtworkPurpose.KEEPOUT),
-    (LayerRole.COPPER, PcbArtworkPurpose.COPPER),
-    (LayerRole.USER, PcbArtworkPurpose.USER),
-    (LayerRole.MECHANICAL, PcbArtworkPurpose.MECHANICAL),
-)
 
 
 def pour_from_primitive(
@@ -154,10 +138,9 @@ def _artwork_kind(kind: AllegroPrimitiveKind) -> PcbArtworkKind:
 
 
 def _artwork_purpose(primitive: AllegroGraphicPrimitive) -> PcbArtworkPurpose:
-    if primitive.layer is not None:
-        for role, purpose in _ARTWORK_PURPOSE_BY_LAYER_ROLE:
-            if primitive.layer.has_role(role):
-                return purpose
+    purpose = artwork_purpose_for_layer(primitive.layer)
+    if purpose is not None:
+        return purpose
     if primitive.has_role(AllegroPrimitiveRole.TEXT):
         return PcbArtworkPurpose.USER_TEXT
     return PcbArtworkPurpose.MECHANICAL

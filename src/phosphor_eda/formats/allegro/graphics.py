@@ -48,20 +48,11 @@ if TYPE_CHECKING:
 
 _CLASS_BOARD_GEOMETRY = 0x01
 _OUTLINE_SUBCLASSES = {0xEA, 0xFD}
-_OUTLINE_RECTANGLE_ROLES = {
-    LayerRole.SILKSCREEN,
-    LayerRole.FABRICATION,
-    LayerRole.ASSEMBLY,
-    LayerRole.COURTYARD,
-    LayerRole.DESIGNATOR,
-    LayerRole.VALUE,
-    LayerRole.USER,
-    LayerRole.MECHANICAL,
-    LayerRole.DIMENSION,
-    LayerRole.EDGE,
-    LayerRole.BOARD,
-    LayerRole.BOARD_SHAPE,
-}
+_FILLED_RECTANGLE_ROLES = (
+    LayerRole.COPPER,
+    LayerRole.SOLDER_MASK,
+    LayerRole.SOLDER_PASTE,
+)
 
 
 def extract_allegro_graphics(
@@ -168,7 +159,7 @@ def rectangle_primitive(
     top = frame.y(max(y0, y1))
     bottom = frame.y(min(y0, y1))
     roles = _roles_for_record(record, layer)
-    fill = not _is_outline_rectangle_layer(layer)
+    fill = _is_filled_rectangle_layer(layer)
     return AllegroGraphicPrimitive(
         id=f"allegro:{record.key}",
         kind=AllegroPrimitiveKind.RECTANGLE,
@@ -185,8 +176,11 @@ def rectangle_primitive(
     )
 
 
-def _is_outline_rectangle_layer(layer: PcbLayer) -> bool:
-    return any(layer.has_role(role) for role in _OUTLINE_RECTANGLE_ROLES)
+def _is_filled_rectangle_layer(layer: PcbLayer) -> bool:
+    # Fill only physical apertures (copper, mask, paste); documentation
+    # graphics are stroked outlines. Failing safe to "outline" keeps new or
+    # unmapped roles from silently rendering as filled slabs.
+    return any(layer.has_role(role) for role in _FILLED_RECTANGLE_ROLES)
 
 
 def _keepout_primitive(

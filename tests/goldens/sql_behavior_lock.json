@@ -4,7 +4,7 @@
     "tables": {
       "artwork": {
         "rows": 20713,
-        "sha256": "ce93aebde8212866d83324cd471d27d92ccef693a03c93e60f4e0e1e75be12e3"
+        "sha256": "9d3db4fb59e9e511d107d67540afc38c77026c1334564ecddc2dd9f6b57f4295"
       },
       "board": {
         "rows": 1,
@@ -189,7 +189,7 @@
     "tables": {
       "artwork": {
         "rows": 149352,
-        "sha256": "e869c861cf04f625a8a52369f3a1b5b43b6b8337180bd59dcb58c67314b74112"
+        "sha256": "b376f4e34ce9a38f32e56a90d233efbbf70ee30b86b6f8634390e1405ecc871a"
       },
       "board": {
         "rows": 1,

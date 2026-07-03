@@ -356,6 +356,53 @@ class PcbArtworkPurpose(StrEnum):
     UNKNOWN = "unknown"
 
 
+# Layer-role → artwork-purpose, in priority order (first matching role wins).
+# This is the single domain mapping every parser consults to classify an
+# authored graphic from the semantic role of the layer it lives on. Formats
+# keep their own pre/post handling (KiCad footprint-text kinds and 3D model
+# bodies, Allegro's text fallback) and use this table only for the layer-role
+# step.
+#
+# The order reconciles the per-format tables that preceded it. Text roles
+# (DESIGNATOR/VALUE) lead — Allegro carries dedicated RefDes/Value layers,
+# while KiCad resolves those from text_kind so its layers never hold them.
+# MECHANICAL precedes USER as the more specific role (KiCad's order; Allegro
+# previously had them reversed). COPPER/KEEPOUT trail the documentation roles
+# so a graphic that also carries silkscreen/fab/etc. keeps that more specific
+# purpose.
+_ARTWORK_PURPOSE_BY_ROLE: tuple[tuple[LayerRole, PcbArtworkPurpose], ...] = (
+    (LayerRole.DESIGNATOR, PcbArtworkPurpose.DESIGNATOR),
+    (LayerRole.VALUE, PcbArtworkPurpose.VALUE),
+    (LayerRole.SILKSCREEN, PcbArtworkPurpose.SILKSCREEN),
+    (LayerRole.COURTYARD, PcbArtworkPurpose.COURTYARD),
+    (LayerRole.FABRICATION, PcbArtworkPurpose.FABRICATION),
+    (LayerRole.ASSEMBLY, PcbArtworkPurpose.ASSEMBLY),
+    (LayerRole.SOLDER_MASK, PcbArtworkPurpose.SOLDER_MASK),
+    (LayerRole.SOLDER_PASTE, PcbArtworkPurpose.SOLDER_PASTE),
+    (LayerRole.DIMENSION, PcbArtworkPurpose.DIMENSION),
+    (LayerRole.KEEPOUT, PcbArtworkPurpose.KEEPOUT),
+    (LayerRole.COPPER, PcbArtworkPurpose.COPPER),
+    (LayerRole.MECHANICAL, PcbArtworkPurpose.MECHANICAL),
+    (LayerRole.USER, PcbArtworkPurpose.USER),
+    (LayerRole.COMMENT, PcbArtworkPurpose.USER),
+)
+
+
+def artwork_purpose_for_layer(layer: PcbLayer | None) -> PcbArtworkPurpose | None:
+    """Classify an authored graphic's purpose from its layer's roles.
+
+    Returns the first purpose whose role the layer carries, in priority order,
+    or ``None`` when the layer is absent or carries no mapped role. Callers
+    apply their own format-specific fallback for the ``None`` case.
+    """
+    if layer is None:
+        return None
+    for role, purpose in _ARTWORK_PURPOSE_BY_ROLE:
+        if layer.has_role(role):
+            return purpose
+    return None
+
+
 @dataclass
 class PcbFootprint:
     """A placed footprint on the board."""
