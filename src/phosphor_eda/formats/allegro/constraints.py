@@ -15,6 +15,7 @@ from phosphor_eda.formats.allegro.records import (
     AllegroRecord,
     AllegroRecordDiagnostic,
     AllegroStringTable,
+    payload_int,
 )
 
 if TYPE_CHECKING:
@@ -132,7 +133,7 @@ def extract_allegro_constraints(record_set: AllegroRecordSet) -> AllegroConstrai
         )
         net_classes.append(net_class)
         class_by_name[name] = net_class
-        raw_name_key = _payload_int(record, "name_string_key")
+        raw_name_key = payload_int(record, "name_string_key")
         if raw_name_key:
             class_by_raw_name_key[raw_name_key] = net_class
         design_rules.append(
@@ -275,7 +276,7 @@ def _match_group(
         return None
     return _AllegroMatchGroup(
         name=name,
-        subtype=_payload_int(group_record, "subtype"),
+        subtype=payload_int(group_record, "subtype"),
         members=members,
         source_record_key=group_record.key,
     )
@@ -285,7 +286,7 @@ def _match_group_key(
     net_record: AllegroRecord,
     records_by_key: Mapping[int, AllegroRecord],
 ) -> int:
-    current_key = _payload_int(net_record, "match_group_key")
+    current_key = payload_int(net_record, "match_group_key")
     seen: set[int] = set()
     while current_key:
         if current_key in seen:
@@ -295,7 +296,7 @@ def _match_group_key(
         if record is None:
             return 0
         if record.tag == 0x26:
-            current_key = _payload_int(record, "group_key")
+            current_key = payload_int(record, "group_key")
             continue
         if record.tag == 0x2C:
             return current_key
@@ -307,7 +308,7 @@ def _constraint_table_name(
     record: AllegroRecord,
     string_table: AllegroStringTable | None,
 ) -> str:
-    string_key = _payload_int(record, "string_key")
+    string_key = payload_int(record, "string_key")
     if string_key == 0 or string_table is None:
         return ""
     return string_table.by_id.get(string_key, "")
@@ -357,7 +358,7 @@ def _net_name(
     records_by_key: Mapping[int, AllegroRecord],
     string_table: AllegroStringTable | None,
 ) -> str:
-    name_key = _payload_int(record, "net_name_key")
+    name_key = payload_int(record, "net_name_key")
     if string_table is not None:
         resolved = string_table.by_id.get(name_key, "")
         if resolved:
@@ -376,7 +377,7 @@ def _first_field(
     records_by_key: Mapping[int, AllegroRecord],
     field_key: int,
 ) -> AllegroRecord | None:
-    current_key = _payload_int(owner_record, "fields_key")
+    current_key = payload_int(owner_record, "fields_key")
     seen: set[int] = set()
     owner_key = owner_record.key
     while current_key and current_key != owner_key:
@@ -386,7 +387,7 @@ def _first_field(
         field = records_by_key.get(current_key)
         if field is None or field.tag != 0x03:
             return None
-        if _payload_int(field, "field_key") == field_key:
+        if payload_int(field, "field_key") == field_key:
             return field
         current_key = field.next_key or 0
     return None
@@ -405,13 +406,13 @@ def _constraint_set_name(
     string_table: AllegroStringTable | None,
     index: int,
 ) -> str:
-    name_key = _payload_int(record, "name_string_key")
+    name_key = payload_int(record, "name_string_key")
     if string_table is not None:
         resolved = string_table.by_id.get(name_key, "")
         if resolved:
             return resolved
 
-    field_key = _payload_int(record, "field_key")
+    field_key = payload_int(record, "field_key")
     field = records_by_key.get(field_key)
     if field is not None:
         field_value = field.payload.get("value")
@@ -479,8 +480,3 @@ def _physical_values_mm(
 
 def _coord_to_mm(value: int, *, units: AllegroBoardUnits, unit_divisor: int) -> float:
     return round(value * allegro_unit_to_mm(units, unit_divisor), 9)
-
-
-def _payload_int(record: AllegroRecord, key: str) -> int:
-    value = record.payload.get(key)
-    return value if isinstance(value, int) else 0

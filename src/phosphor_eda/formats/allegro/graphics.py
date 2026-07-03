@@ -16,7 +16,14 @@ from phosphor_eda.domain.pcb import (
     PcbPolygon,
     PcbText,
 )
-from phosphor_eda.formats.allegro.constants import allegro_unit_to_mm
+from phosphor_eda.formats.allegro.coords import BoardFrame, board_frame
+from phosphor_eda.formats.allegro.diagnostics import (
+    drc_marker_diagnostic,
+    drop_diagnostic,
+    missing_header_diagnostic,
+    missing_layer_diagnostic,
+    missing_payload_diagnostic,
+)
 from phosphor_eda.formats.allegro.graph import build_allegro_object_graph
 from phosphor_eda.formats.allegro.primitives import (
     AllegroConductorPrimitive,
@@ -27,7 +34,12 @@ from phosphor_eda.formats.allegro.primitives import (
     AllegroPrimitiveKind,
     AllegroPrimitiveRole,
 )
-from phosphor_eda.formats.allegro.records import AllegroRecordDiagnostic
+from phosphor_eda.formats.allegro.records import (
+    AllegroRecordDiagnostic,
+    payload_coords,
+    payload_float,
+    payload_int,
+)
 
 _FALLBACK_TEXT_FONT_SIZE_MM = 1.0
 _DEFAULT_RECTANGLE_STROKE_WIDTH_MM = 0.12
@@ -36,7 +48,7 @@ if TYPE_CHECKING:
     from phosphor_eda.domain.pcb import PcbLayer
     from phosphor_eda.formats.allegro.graph import AllegroObjectGraph
     from phosphor_eda.formats.allegro.layers import AllegroLayerMap
-    from phosphor_eda.formats.allegro.records import AllegroHeader, AllegroRecord, AllegroRecordSet
+    from phosphor_eda.formats.allegro.records import AllegroRecord, AllegroRecordSet
 
 _CLASS_BOARD_GEOMETRY = 0x01
 _CLASS_ETCH = 0x06
@@ -69,6 +81,7 @@ def extract_allegro_graphics(
     layer_map: AllegroLayerMap,
 ) -> AllegroGraphics:
     graph = build_allegro_object_graph(record_set)
+    frame = board_frame(record_set.header)
     diagnostics: list[AllegroRecordDiagnostic] = list(graph.diagnostics)
     board_profile: list[AllegroGraphicPrimitive] = []
     artwork: list[AllegroGraphicPrimitive] = []
@@ -78,12 +91,12 @@ def extract_allegro_graphics(
         if record.key is None:
             continue
         if record.tag == 0x0A:
-            diagnostics.append(_drc_marker_diagnostic(record))
+            diagnostics.append(drc_marker_diagnostic(record))
             continue
         if record.tag in {0x0E, 0x24}:
             rectangle = _rectangle_primitive(
                 record,
-                header=record_set.header,
+                frame=frame,
                 layer_map=layer_map,
                 diagnostics=diagnostics,
             )
@@ -97,7 +110,7 @@ def extract_allegro_graphics(
             keepout = _keepout_primitive(
                 record,
                 graph=graph,
-                header=record_set.header,
+                frame=frame,
                 layer_map=layer_map,
                 diagnostics=diagnostics,
             )
@@ -108,7 +121,7 @@ def extract_allegro_graphics(
             text = _text_primitive(
                 record,
                 graph=graph,
-                header=record_set.header,
+                frame=frame,
                 layer_map=layer_map,
                 diagnostics=diagnostics,
             )
@@ -119,13 +132,13 @@ def extract_allegro_graphics(
             continue
         layer = _record_layer(record, layer_map)
         if layer is None:
-            diagnostics.append(_missing_layer_diagnostic(record))
+            diagnostics.append(missing_layer_diagnostic(record))
             continue
         roles = _roles_for_record(record, layer)
         primitives = _graphic_segment_primitives(
             record,
             graph=graph,
-            header=record_set.header,
+            frame=frame,
             layer=layer,
             roles=roles,
             diagnostics=diagnostics,
@@ -149,6 +162,7 @@ def extract_allegro_copper(
     graph: AllegroObjectGraph | None = None,
 ) -> AllegroCopper:
     graph = graph or build_allegro_object_graph(record_set)
+    frame = board_frame(record_set.header)
     diagnostics: list[AllegroRecordDiagnostic] = list(graph.diagnostics)
     net_items = _net_assigned_items(record_set, graph, diagnostics)
     shape_pours, shape_fills = _shape_pours_and_fills(
@@ -156,13 +170,16 @@ def extract_allegro_copper(
         graph,
         layer_map,
         diagnostics,
+        frame=frame,
         net_items=net_items,
     )
     conductors = [
-        *_track_conductors(record_set, graph, layer_map, diagnostics, net_items=net_items),
+        *_track_conductors(
+            record_set, graph, layer_map, diagnostics, frame=frame, net_items=net_items
+        ),
         *shape_fills,
-        *_rectangle_region_conductors(record_set, layer_map, diagnostics),
-        *_graphic_segment_conductors(record_set, graph, layer_map, diagnostics),
+        *_rectangle_region_conductors(record_set, layer_map, diagnostics, frame=frame),
+        *_graphic_segment_conductors(record_set, graph, layer_map, diagnostics, frame=frame),
     ]
     return AllegroCopper(
         pours=shape_pours,
@@ -177,6 +194,7 @@ def _track_conductors(
     layer_map: AllegroLayerMap,
     diagnostics: list[AllegroRecordDiagnostic],
     *,
+    frame: BoardFrame | None,
     net_items: tuple[_NetAssignedItem, ...],
 ) -> tuple[AllegroConductorPrimitive, ...]:
     conductors: list[AllegroConductorPrimitive] = []
@@ -187,10 +205,10 @@ def _track_conductors(
         layer = _copper_layer(track, layer_map, diagnostics, require_etch=True)
         if layer is None:
             continue
-        segment_key = _payload_int(track, "first_segment_key")
+        segment_key = payload_int(track, "first_segment_key")
         if segment_key == 0:
             diagnostics.append(
-                _drop_diagnostic(
+                drop_diagnostic(
                     track,
                     code="missing-track-segment-chain",
                     message=f"track record {track.key} has no first segment key",
@@ -206,7 +224,7 @@ def _track_conductors(
             conductor = _track_conductor_primitive(
                 segment,
                 track=track,
-                header=record_set.header,
+                frame=frame,
                 layer=layer,
                 net_key=item.net_key,
             )
@@ -221,6 +239,7 @@ def _shape_pours_and_fills(
     layer_map: AllegroLayerMap,
     diagnostics: list[AllegroRecordDiagnostic],
     *,
+    frame: BoardFrame | None,
     net_items: tuple[_NetAssignedItem, ...],
 ) -> tuple[tuple[AllegroPourPrimitive, ...], tuple[AllegroConductorPrimitive, ...]]:
     pours: list[AllegroPourPrimitive] = []
@@ -232,7 +251,7 @@ def _shape_pours_and_fills(
     }
     for shape in (record for record in record_set.records if record.tag == 0x28):
         item = assigned_shapes.get(shape.key) if shape.key is not None else None
-        if item is None and _payload_int(shape, "first_keepout_key") == 0:
+        if item is None and payload_int(shape, "first_keepout_key") == 0:
             # Unassigned, unvoided copper shapes commonly include package-symbol
             # pad geometry in local footprint coordinates. Keep them out of the
             # board-level copper model until native ownership is known.
@@ -243,9 +262,9 @@ def _shape_pours_and_fills(
         polygon = _polygon_from_segment_chain(
             shape,
             graph=graph,
-            header=record_set.header,
+            frame=frame,
             layer=layer,
-            head_key=_payload_int(shape, "first_segment_key"),
+            head_key=payload_int(shape, "first_segment_key"),
             diagnostics=diagnostics,
             diagnostic_prefix="shape",
         )
@@ -254,7 +273,7 @@ def _shape_pours_and_fills(
         holes = _shape_void_holes(
             shape,
             graph=graph,
-            header=record_set.header,
+            frame=frame,
             layer=layer,
             diagnostics=diagnostics,
         )
@@ -267,10 +286,10 @@ def _shape_pours_and_fills(
             net_key=None if item is None else item.net_key,
             void_hole_count=len(holes),
         )
-        dynamic_shape_flags = _payload_int(shape, "dynamic_shape_flags")
+        dynamic_shape_flags = payload_int(shape, "dynamic_shape_flags")
         if dynamic_shape_flags & 0x1000:
             diagnostics.append(
-                _drop_diagnostic(
+                drop_diagnostic(
                     shape,
                     code="unsupported-dynamic-shape-rules",
                     message=(
@@ -289,10 +308,10 @@ def _shape_pours_and_fills(
                 metadata=replace(metadata, native_type="copper_shape_pour"),
             )
         )
-        first_keepout_key = _payload_int(shape, "first_keepout_key")
+        first_keepout_key = payload_int(shape, "first_keepout_key")
         if first_keepout_key and not holes:
             diagnostics.append(
-                _drop_diagnostic(
+                drop_diagnostic(
                     shape,
                     code="unsupported-shape-voids",
                     message=(
@@ -329,12 +348,12 @@ def _shape_void_holes(
     shape: AllegroRecord,
     *,
     graph: AllegroObjectGraph,
-    header: AllegroHeader | None,
+    frame: BoardFrame | None,
     layer: PcbLayer,
     diagnostics: list[AllegroRecordDiagnostic],
 ) -> list[list[tuple[float, float]]]:
     holes: list[list[tuple[float, float]]] = []
-    first_keepout_key = _payload_int(shape, "first_keepout_key")
+    first_keepout_key = payload_int(shape, "first_keepout_key")
     if first_keepout_key == 0:
         return holes
     walk = graph.walk_key_chain(
@@ -344,7 +363,7 @@ def _shape_void_holes(
     )
     for diagnostic in walk.diagnostics:
         diagnostics.append(
-            _drop_diagnostic(
+            drop_diagnostic(
                 shape,
                 code=_VOID_CHAIN_CODES[diagnostic.code],
                 message=f"shape record {shape.key} void chain degraded: {diagnostic.message}",
@@ -355,9 +374,9 @@ def _shape_void_holes(
         polygon = _polygon_from_segment_chain(
             void,
             graph=graph,
-            header=header,
+            frame=frame,
             layer=layer,
-            head_key=_payload_int(void, "first_segment_key"),
+            head_key=payload_int(void, "first_segment_key"),
             diagnostics=diagnostics,
             diagnostic_prefix="shape-void",
         )
@@ -370,6 +389,8 @@ def _rectangle_region_conductors(
     record_set: AllegroRecordSet,
     layer_map: AllegroLayerMap,
     diagnostics: list[AllegroRecordDiagnostic],
+    *,
+    frame: BoardFrame | None,
 ) -> tuple[AllegroConductorPrimitive, ...]:
     conductors: list[AllegroConductorPrimitive] = []
     for record in record_set.records:
@@ -379,7 +400,7 @@ def _rectangle_region_conductors(
             continue
         rectangle = _rectangle_primitive(
             record,
-            header=record_set.header,
+            frame=frame,
             layer_map=layer_map,
             diagnostics=diagnostics,
         )
@@ -395,6 +416,8 @@ def _graphic_segment_conductors(
     graph: AllegroObjectGraph,
     layer_map: AllegroLayerMap,
     diagnostics: list[AllegroRecordDiagnostic],
+    *,
+    frame: BoardFrame | None,
 ) -> tuple[AllegroConductorPrimitive, ...]:
     conductors: list[AllegroConductorPrimitive] = []
     for record in record_set.records:
@@ -403,11 +426,11 @@ def _graphic_segment_conductors(
         layer = _copper_layer(record, layer_map, diagnostics, require_etch=True)
         if layer is None:
             continue
-        footprint_key = _parent_footprint_key(_payload_int(record, "parent_key"), graph)
+        footprint_key = _parent_footprint_key(payload_int(record, "parent_key"), graph)
         primitives = _graphic_segment_primitives(
             record,
             graph=graph,
-            header=record_set.header,
+            frame=frame,
             layer=layer,
             roles=(AllegroPrimitiveRole.ARTWORK,),
             diagnostics=diagnostics,
@@ -428,9 +451,9 @@ def _copper_layer(
 ) -> PcbLayer | None:
     layer = _record_layer(record, layer_map)
     if layer is None:
-        diagnostics.append(_missing_layer_diagnostic(record))
+        diagnostics.append(missing_layer_diagnostic(record))
         return None
-    if require_etch and _payload_int(record, "layer_class_id") != _CLASS_ETCH:
+    if require_etch and payload_int(record, "layer_class_id") != _CLASS_ETCH:
         return None
     return layer if layer.has_role(LayerRole.COPPER) else None
 
@@ -454,13 +477,13 @@ def _net_assigned_items(
         if net_key is None:
             continue
         walk = graph.walk_key_chain(
-            head_key=_payload_int(net, "assignment_key"),
+            head_key=payload_int(net, "assignment_key"),
             owner_key=net_key,
             expected_tags=_NET_ASSIGNMENT_TAGS,
         )
         for diagnostic in walk.diagnostics:
             diagnostics.append(
-                _drop_diagnostic(
+                drop_diagnostic(
                     net,
                     code=_NET_ASSIGNMENT_CHAIN_CODES[diagnostic.code],
                     message=(
@@ -470,11 +493,11 @@ def _net_assigned_items(
                 )
             )
         for assignment in walk.records:
-            connected_key = _payload_int(assignment, "connected_item_key")
+            connected_key = payload_int(assignment, "connected_item_key")
             connected_item = graph.by_key.get(connected_key)
             if connected_key and connected_item is None:
                 diagnostics.append(
-                    _drop_diagnostic(
+                    drop_diagnostic(
                         assignment,
                         code="unresolved-connected-copper-item",
                         message=(
@@ -489,7 +512,7 @@ def _net_assigned_items(
                     _NetAssignedItem(
                         assignment=assignment,
                         item=connected_item,
-                        net_key=_payload_int(assignment, "net_key") or net_key,
+                        net_key=payload_int(assignment, "net_key") or net_key,
                     )
                 )
     return tuple(result)
@@ -499,16 +522,16 @@ def _track_conductor_primitive(
     record: AllegroRecord,
     *,
     track: AllegroRecord,
-    header: AllegroHeader | None,
+    frame: BoardFrame | None,
     layer: PcbLayer,
     net_key: int,
 ) -> AllegroConductorPrimitive | None:
-    if header is None:
+    if frame is None:
         return None
     graphic = _line_or_arc_primitive(
         record,
         owner=track,
-        header=header,
+        frame=frame,
         layer=layer,
         roles=(AllegroPrimitiveRole.ARTWORK,),
     )
@@ -578,7 +601,7 @@ def _rectangle_region_conductor_primitive(
     if primitive.layer is None or not isinstance(primitive.data, PcbPolygon):
         return None
     properties = dict(primitive.metadata.properties)
-    footprint_key = _payload_int(record, "footprint_key")
+    footprint_key = payload_int(record, "footprint_key")
     if footprint_key:
         properties["native_footprint_key"] = str(footprint_key)
     return AllegroConductorPrimitive(
@@ -599,26 +622,26 @@ def _rectangle_region_conductor_primitive(
 def _rectangle_primitive(
     record: AllegroRecord,
     *,
-    header: AllegroHeader | None,
+    frame: BoardFrame | None,
     layer_map: AllegroLayerMap,
     diagnostics: list[AllegroRecordDiagnostic],
 ) -> AllegroGraphicPrimitive | None:
-    if header is None:
-        diagnostics.append(_missing_header_diagnostic(record))
+    if frame is None:
+        diagnostics.append(missing_header_diagnostic(record))
         return None
     layer = _record_layer(record, layer_map)
     if layer is None:
-        diagnostics.append(_missing_layer_diagnostic(record))
+        diagnostics.append(missing_layer_diagnostic(record))
         return None
-    coords = _payload_coords(record, "coords")
+    coords = payload_coords(record, "coords")
     if coords is None:
-        diagnostics.append(_missing_payload_diagnostic(record, "coords"))
+        diagnostics.append(missing_payload_diagnostic(record, "coords"))
         return None
     x0, y0, x1, y1 = coords
-    left = _coord_to_mm(min(x0, x1), header)
-    right = _coord_to_mm(max(x0, x1), header)
-    top = -_coord_to_mm(max(y0, y1), header)
-    bottom = -_coord_to_mm(min(y0, y1), header)
+    left = frame.x(min(x0, x1))
+    right = frame.x(max(x0, x1))
+    top = frame.y(max(y0, y1))
+    bottom = frame.y(min(y0, y1))
     roles = _roles_for_record(record, layer)
     fill = not _is_outline_rectangle_layer(layer)
     return AllegroGraphicPrimitive(
@@ -645,22 +668,22 @@ def _keepout_primitive(
     record: AllegroRecord,
     *,
     graph: AllegroObjectGraph,
-    header: AllegroHeader | None,
+    frame: BoardFrame | None,
     layer_map: AllegroLayerMap,
     diagnostics: list[AllegroRecordDiagnostic],
 ) -> AllegroGraphicPrimitive | None:
-    if header is None:
-        diagnostics.append(_missing_header_diagnostic(record))
+    if frame is None:
+        diagnostics.append(missing_header_diagnostic(record))
         return None
     layer = _record_layer(record, layer_map)
     if layer is None:
-        diagnostics.append(_missing_layer_diagnostic(record))
+        diagnostics.append(missing_layer_diagnostic(record))
         return None
-    segment_key = _payload_int(record, "first_segment_key")
+    segment_key = payload_int(record, "first_segment_key")
     polygon = _polygon_from_segment_chain(
         record,
         graph=graph,
-        header=header,
+        frame=frame,
         layer=layer,
         head_key=segment_key,
         diagnostics=diagnostics,
@@ -684,18 +707,18 @@ def _polygon_from_segment_chain(
     record: AllegroRecord,
     *,
     graph: AllegroObjectGraph,
-    header: AllegroHeader | None,
+    frame: BoardFrame | None,
     layer: PcbLayer,
     head_key: int,
     diagnostics: list[AllegroRecordDiagnostic],
     diagnostic_prefix: str,
 ) -> PcbPolygon | None:
-    if header is None:
-        diagnostics.append(_missing_header_diagnostic(record))
+    if frame is None:
+        diagnostics.append(missing_header_diagnostic(record))
         return None
     if head_key == 0:
         diagnostics.append(
-            _drop_diagnostic(
+            drop_diagnostic(
                 record,
                 code=f"missing-{diagnostic_prefix}-segment-chain",
                 message=f"{diagnostic_prefix} record {record.key} has no first segment key",
@@ -711,7 +734,7 @@ def _polygon_from_segment_chain(
     ):
         if segment.tag == 0x01:
             diagnostics.append(
-                _drop_diagnostic(
+                drop_diagnostic(
                     record,
                     code=f"approximated-{diagnostic_prefix}-arc",
                     message=(
@@ -722,14 +745,14 @@ def _polygon_from_segment_chain(
                 )
             )
         points.append(
-            (
-                _coord_to_mm(_payload_int(segment, "start_x"), header),
-                -_coord_to_mm(_payload_int(segment, "start_y"), header),
+            frame.point(
+                payload_int(segment, "start_x"),
+                payload_int(segment, "start_y"),
             )
         )
     if len(points) < 3:
         diagnostics.append(
-            _drop_diagnostic(
+            drop_diagnostic(
                 record,
                 code=f"invalid-{diagnostic_prefix}-boundary",
                 message=f"{diagnostic_prefix} record {record.key} resolved to {len(points)} points",
@@ -743,22 +766,22 @@ def _text_primitive(
     record: AllegroRecord,
     *,
     graph: AllegroObjectGraph,
-    header: AllegroHeader | None,
+    frame: BoardFrame | None,
     layer_map: AllegroLayerMap,
     diagnostics: list[AllegroRecordDiagnostic],
 ) -> AllegroGraphicPrimitive | None:
-    if header is None:
-        diagnostics.append(_missing_header_diagnostic(record))
+    if frame is None:
+        diagnostics.append(missing_header_diagnostic(record))
         return None
     layer = _record_layer(record, layer_map)
     if layer is None:
-        diagnostics.append(_missing_layer_diagnostic(record))
+        diagnostics.append(missing_layer_diagnostic(record))
         return None
-    text_key = _payload_int(record, "string_graphic_key")
+    text_key = payload_int(record, "string_graphic_key")
     text_record = graph.by_key.get(text_key)
     if text_record is None:
         diagnostics.append(
-            _drop_diagnostic(
+            drop_diagnostic(
                 record,
                 code="unresolved-text-record",
                 message=f"text wrapper {record.key} references missing text record {text_key}",
@@ -769,7 +792,7 @@ def _text_primitive(
     text_value = text_record.payload.get("text", "")
     if not isinstance(text_value, str) or not text_value:
         diagnostics.append(
-            _drop_diagnostic(
+            drop_diagnostic(
                 record,
                 code="empty-text-record",
                 message=f"text wrapper {record.key} references an empty text record {text_key}",
@@ -780,12 +803,12 @@ def _text_primitive(
     metadata = _metadata(record, layer)
     properties = dict(metadata.properties)
     properties["native_text_key"] = str(text_key)
-    properties["native_font_key"] = str(_payload_int(record, "font_key"))
+    properties["native_font_key"] = str(payload_int(record, "font_key"))
     if "text_alignment_code" in record.payload:
-        properties["native_text_alignment_code"] = str(_payload_int(record, "text_alignment_code"))
+        properties["native_text_alignment_code"] = str(payload_int(record, "text_alignment_code"))
     metadata = replace(metadata, properties=properties)
     diagnostics.append(
-        _drop_diagnostic(
+        drop_diagnostic(
             record,
             code="unresolved-text-size",
             message=(f"text wrapper {record.key} preserves text content with fallback native size"),
@@ -798,9 +821,9 @@ def _text_primitive(
         roles=(AllegroPrimitiveRole.ARTWORK, AllegroPrimitiveRole.TEXT),
         data=PcbText(
             text=text_value,
-            x=_coord_to_mm(_payload_int(record, "x"), header),
-            y=-_coord_to_mm(_payload_int(record, "y"), header),
-            rotation=_payload_int(record, "rotation_mdeg") / 1000.0,
+            x=frame.x(payload_int(record, "x")),
+            y=frame.y(payload_int(record, "y")),
+            rotation=payload_int(record, "rotation_mdeg") / 1000.0,
             font_size=_FALLBACK_TEXT_FONT_SIZE_MM,
         ),
         layer=layer,
@@ -814,18 +837,18 @@ def _graphic_segment_primitives(
     record: AllegroRecord,
     *,
     graph: AllegroObjectGraph,
-    header: AllegroHeader | None,
+    frame: BoardFrame | None,
     layer: PcbLayer,
     roles: tuple[AllegroPrimitiveRole, ...],
     diagnostics: list[AllegroRecordDiagnostic],
 ) -> tuple[AllegroGraphicPrimitive, ...]:
-    segment_key = _payload_int(record, "segment_key")
-    if header is None:
-        diagnostics.append(_missing_header_diagnostic(record))
+    segment_key = payload_int(record, "segment_key")
+    if frame is None:
+        diagnostics.append(missing_header_diagnostic(record))
         return ()
     if segment_key == 0:
         diagnostics.append(
-            _drop_diagnostic(
+            drop_diagnostic(
                 record,
                 code="missing-graphic-segment-chain",
                 message=f"graphic record {record.key} has no segment key",
@@ -833,7 +856,7 @@ def _graphic_segment_primitives(
         )
         return ()
     primitives: list[AllegroGraphicPrimitive] = []
-    parent_key = _payload_int(record, "parent_key")
+    parent_key = payload_int(record, "parent_key")
     for segment in _owned_segment_chain(
         record,
         graph=graph,
@@ -845,7 +868,7 @@ def _graphic_segment_primitives(
         primitive = _line_or_arc_primitive(
             segment,
             owner=record,
-            header=header,
+            frame=frame,
             layer=layer,
             roles=roles,
         )
@@ -862,21 +885,25 @@ def _line_or_arc_primitive(
     record: AllegroRecord,
     *,
     owner: AllegroRecord,
-    header: AllegroHeader,
+    frame: BoardFrame,
     layer: PcbLayer,
     roles: tuple[AllegroPrimitiveRole, ...],
 ) -> AllegroGraphicPrimitive | None:
     if record.tag in {0x15, 0x16, 0x17}:
+        start_x, start_y = frame.point(
+            payload_int(record, "start_x"), payload_int(record, "start_y")
+        )
+        end_x, end_y = frame.point(payload_int(record, "end_x"), payload_int(record, "end_y"))
         return AllegroGraphicPrimitive(
             id=f"allegro:{record.key}",
             kind=AllegroPrimitiveKind.LINE,
             roles=roles,
             data=PcbLine(
-                start_x=_coord_to_mm(_payload_int(record, "start_x"), header),
-                start_y=-_coord_to_mm(_payload_int(record, "start_y"), header),
-                end_x=_coord_to_mm(_payload_int(record, "end_x"), header),
-                end_y=-_coord_to_mm(_payload_int(record, "end_y"), header),
-                width=_coord_to_mm(_payload_int(record, "width"), header),
+                start_x=start_x,
+                start_y=start_y,
+                end_x=end_x,
+                end_y=end_y,
+                width=frame.length(payload_int(record, "width")),
             ),
             layer=layer,
             source_tag=record.tag,
@@ -885,15 +912,18 @@ def _line_or_arc_primitive(
         )
     if record.tag == 0x01:
         if _is_full_circle_arc(record):
+            cx, cy = frame.point(
+                payload_float(record, "center_x"), payload_float(record, "center_y")
+            )
             return AllegroGraphicPrimitive(
                 id=f"allegro:{record.key}",
                 kind=AllegroPrimitiveKind.CIRCLE,
                 roles=roles,
                 data=PcbCircle(
-                    cx=_coord_to_mm(_payload_float(record, "center_x"), header),
-                    cy=-_coord_to_mm(_payload_float(record, "center_y"), header),
-                    radius=_coord_to_mm(_payload_float(record, "radius"), header),
-                    width=_coord_to_mm(_payload_int(record, "width"), header),
+                    cx=cx,
+                    cy=cy,
+                    radius=frame.length(payload_float(record, "radius")),
+                    width=frame.length(payload_int(record, "width")),
                     fill=False,
                 ),
                 layer=layer,
@@ -901,19 +931,23 @@ def _line_or_arc_primitive(
                 source_key=record.key or 0,
                 metadata=_metadata(owner, layer),
             )
-        mid_x, mid_y = _arc_midpoint(record, header)
+        mid_x, mid_y = _arc_midpoint(record, frame)
+        start_x, start_y = frame.point(
+            payload_int(record, "start_x"), payload_int(record, "start_y")
+        )
+        end_x, end_y = frame.point(payload_int(record, "end_x"), payload_int(record, "end_y"))
         return AllegroGraphicPrimitive(
             id=f"allegro:{record.key}",
             kind=AllegroPrimitiveKind.ARC,
             roles=roles,
             data=PcbArc(
-                start_x=_coord_to_mm(_payload_int(record, "start_x"), header),
-                start_y=-_coord_to_mm(_payload_int(record, "start_y"), header),
+                start_x=start_x,
+                start_y=start_y,
                 mid_x=mid_x,
                 mid_y=mid_y,
-                end_x=_coord_to_mm(_payload_int(record, "end_x"), header),
-                end_y=-_coord_to_mm(_payload_int(record, "end_y"), header),
-                width=_coord_to_mm(_payload_int(record, "width"), header),
+                end_x=end_x,
+                end_y=end_y,
+                width=frame.length(payload_int(record, "width")),
             ),
             layer=layer,
             source_tag=record.tag,
@@ -925,26 +959,29 @@ def _line_or_arc_primitive(
 
 def _is_full_circle_arc(record: AllegroRecord) -> bool:
     return (
-        _payload_int(record, "start_x") == _payload_int(record, "end_x")
-        and _payload_int(record, "start_y") == _payload_int(record, "end_y")
-        and _payload_float(record, "radius") > 0.0
+        payload_int(record, "start_x") == payload_int(record, "end_x")
+        and payload_int(record, "start_y") == payload_int(record, "end_y")
+        and payload_float(record, "radius") > 0.0
     )
 
 
-def _arc_midpoint(record: AllegroRecord, header: AllegroHeader) -> tuple[float, float]:
-    center_x = _coord_to_mm(_payload_float(record, "center_x"), header)
-    center_y = _coord_to_mm(_payload_float(record, "center_y"), header)
-    radius = _coord_to_mm(_payload_float(record, "radius"), header)
+def _arc_midpoint(record: AllegroRecord, frame: BoardFrame) -> tuple[float, float]:
+    # Midpoint is derived in the native Y-up frame (frame.length, no sign) so the
+    # angle math matches Allegro; only the returned Y is flipped into the domain
+    # Y-down frame at the end.
+    center_x = frame.length(payload_float(record, "center_x"))
+    center_y = frame.length(payload_float(record, "center_y"))
+    radius = frame.length(payload_float(record, "radius"))
     if radius <= 0.0:
         return center_x, -center_y
 
-    start_x = _coord_to_mm(_payload_int(record, "start_x"), header)
-    start_y = _coord_to_mm(_payload_int(record, "start_y"), header)
-    end_x = _coord_to_mm(_payload_int(record, "end_x"), header)
-    end_y = _coord_to_mm(_payload_int(record, "end_y"), header)
+    start_x = frame.length(payload_int(record, "start_x"))
+    start_y = frame.length(payload_int(record, "start_y"))
+    end_x = frame.length(payload_int(record, "end_x"))
+    end_y = frame.length(payload_int(record, "end_y"))
     start_angle = math.atan2(start_y - center_y, start_x - center_x)
     end_angle = math.atan2(end_y - center_y, end_x - center_x)
-    clockwise = (_payload_int(record, "subtype") & 0x40) != 0
+    clockwise = (payload_int(record, "subtype") & 0x40) != 0
     if clockwise:
         if start_angle < end_angle:
             start_angle += math.tau
@@ -974,7 +1011,7 @@ def _owned_segment_chain(
     diagnostics: list[AllegroRecordDiagnostic],
 ) -> tuple[AllegroRecord, ...]:
     def owned_by_owner(segment: AllegroRecord) -> str | None:
-        parent_key = _payload_int(segment, "parent_key")
+        parent_key = payload_int(segment, "parent_key")
         return None if parent_key == owner.key else f"owned by {parent_key}"
 
     walk = graph.walk_key_chain(
@@ -985,7 +1022,7 @@ def _owned_segment_chain(
     )
     for diagnostic in walk.diagnostics:
         diagnostics.append(
-            _drop_diagnostic(
+            drop_diagnostic(
                 owner,
                 code=_SEGMENT_CHAIN_CODES[diagnostic.code],
                 message=f"record {owner.key} segment chain degraded: {diagnostic.message}",
@@ -999,8 +1036,8 @@ def _roles_for_record(
     record: AllegroRecord,
     layer: PcbLayer,
 ) -> tuple[AllegroPrimitiveRole, ...]:
-    class_id = _payload_int(record, "layer_class_id")
-    subclass_id = _payload_int(record, "layer_subclass_id")
+    class_id = payload_int(record, "layer_class_id")
+    subclass_id = payload_int(record, "layer_subclass_id")
     if _is_outline_layer(class_id, subclass_id, layer):
         return (AllegroPrimitiveRole.BOARD_PROFILE,)
     return (AllegroPrimitiveRole.ARTWORK,)
@@ -1016,18 +1053,14 @@ def _is_outline_layer(class_id: int, subclass_id: int, layer: PcbLayer) -> bool:
 
 def _record_layer(record: AllegroRecord, layer_map: AllegroLayerMap) -> PcbLayer | None:
     return layer_map.layer_for_class_subclass(
-        _payload_int(record, "layer_class_id"),
-        _payload_int(record, "layer_subclass_id"),
+        payload_int(record, "layer_class_id"),
+        payload_int(record, "layer_subclass_id"),
     )
 
 
-def _coord_to_mm(value: float | int, header: AllegroHeader) -> float:
-    return float(value) * allegro_unit_to_mm(header.board_units, header.unit_divisor)
-
-
 def _metadata(record: AllegroRecord, layer: PcbLayer) -> PcbObjectMetadata:
-    class_id = _payload_int(record, "layer_class_id")
-    subclass_id = _payload_int(record, "layer_subclass_id")
+    class_id = payload_int(record, "layer_class_id")
+    subclass_id = payload_int(record, "layer_subclass_id")
     return PcbObjectMetadata(
         source_collection="allegro_records",
         native_type=f"0x{record.tag:02X}",
@@ -1053,12 +1086,12 @@ def _shape_fill_metadata(
     properties = dict(metadata.properties)
     properties["native_assignment_key"] = str(assignment_key or "")
     properties["native_net_key"] = "" if net_key is None else str(net_key)
-    first_keepout_key = _payload_int(record, "first_keepout_key")
+    first_keepout_key = payload_int(record, "first_keepout_key")
     if first_keepout_key:
         properties["native_first_keepout_key"] = str(first_keepout_key)
     if void_hole_count:
         properties["native_void_hole_count"] = str(void_hole_count)
-    dynamic_shape_flags = _payload_int(record, "dynamic_shape_flags")
+    dynamic_shape_flags = payload_int(record, "dynamic_shape_flags")
     if dynamic_shape_flags:
         properties["native_dynamic_shape_flags"] = str(dynamic_shape_flags)
     if dynamic_shape_flags & 0x1000:
@@ -1089,91 +1122,4 @@ def _parent_footprint_key(parent_key: int, graph: AllegroObjectGraph) -> int | N
     parent = graph.by_key.get(parent_key)
     if parent is not None and parent.tag == 0x2D:
         return parent_key
-    return None
-
-
-def _missing_layer_diagnostic(record: AllegroRecord) -> AllegroRecordDiagnostic:
-    class_id = _payload_int(record, "layer_class_id")
-    subclass_id = _payload_int(record, "layer_subclass_id")
-    return AllegroRecordDiagnostic(
-        code="unresolved-graphic-layer",
-        message=(
-            f"graphic record {record.key} references missing Allegro layer {class_id}:{subclass_id}"
-        ),
-        offset=record.offset,
-        tag=record.tag,
-        key=record.key,
-    )
-
-
-def _missing_header_diagnostic(record: AllegroRecord) -> AllegroRecordDiagnostic:
-    return _drop_diagnostic(
-        record,
-        code="missing-allegro-header",
-        message=f"graphic record {record.key} cannot be converted without an Allegro header",
-    )
-
-
-def _missing_payload_diagnostic(record: AllegroRecord, payload_key: str) -> AllegroRecordDiagnostic:
-    return _drop_diagnostic(
-        record,
-        code="missing-graphic-payload",
-        message=f"graphic record {record.key} is missing payload field {payload_key}",
-    )
-
-
-def _drop_diagnostic(
-    record: AllegroRecord,
-    *,
-    code: str,
-    message: str,
-    reference_key: int | None = None,
-) -> AllegroRecordDiagnostic:
-    return AllegroRecordDiagnostic(
-        code=code,
-        message=message,
-        offset=record.offset,
-        tag=record.tag,
-        key=record.key,
-        reference_key=reference_key,
-    )
-
-
-def _drc_marker_diagnostic(record: AllegroRecord) -> AllegroRecordDiagnostic:
-    class_id = _payload_int(record, "layer_class_id")
-    subclass_id = _payload_int(record, "layer_subclass_id")
-    coords = _payload_coords(record, "coords")
-    coord_text = ",".join(str(coord) for coord in coords) if coords is not None else ""
-    return AllegroRecordDiagnostic(
-        code="drc-marker",
-        message=(
-            f"DRC marker {record.key} on Allegro layer {class_id}:{subclass_id}"
-            + (f" has native coords {coord_text}" if coord_text else "")
-        ),
-        offset=record.offset,
-        tag=record.tag,
-        key=record.key,
-    )
-
-
-def _payload_int(record: AllegroRecord, key: str) -> int:
-    value = record.payload.get(key, 0)
-    return value if isinstance(value, int) else 0
-
-
-def _payload_float(record: AllegroRecord, key: str) -> float:
-    value = record.payload.get(key, 0.0)
-    if isinstance(value, float):
-        return value
-    if isinstance(value, int):
-        return float(value)
-    return 0.0
-
-
-def _payload_coords(record: AllegroRecord, key: str) -> tuple[int, int, int, int] | None:
-    value = record.payload.get(key)
-    if isinstance(value, tuple) and len(value) == 4:
-        coords = tuple(coord for coord in value if isinstance(coord, int))
-        if len(coords) == 4:
-            return (coords[0], coords[1], coords[2], coords[3])
     return None

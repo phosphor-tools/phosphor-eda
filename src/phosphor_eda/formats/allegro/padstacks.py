@@ -11,7 +11,7 @@ from phosphor_eda.domain.pcb import (
     PcbDrillShape,
     PcbPadType,
 )
-from phosphor_eda.formats.allegro.records import AllegroPadstackComponent
+from phosphor_eda.formats.allegro.records import AllegroPadstackComponent, payload_int
 
 if TYPE_CHECKING:
     from phosphor_eda.formats.allegro.records import AllegroRecord
@@ -60,10 +60,10 @@ def expand_allegro_padstack(
     """Convert a decoded 0x1C source record to reusable pad/via geometry."""
     components = _pad_components(record)
     copper_component = _first_copper_component(record, components)
-    drill_size = _payload_int(record, "drill_size")
-    slot_x = _payload_int(record, "slot_x")
-    slot_y = _payload_int(record, "slot_y")
-    pad_type_code = _payload_int(record, "pad_type_code")
+    drill_size = payload_int(record, "drill_size")
+    slot_x = payload_int(record, "slot_x")
+    slot_y = payload_int(record, "slot_y")
+    pad_type_code = payload_int(record, "pad_type_code")
     drill_diameter = drill_size * unit_to_mm
     drill_width = slot_x * unit_to_mm if slot_x > 0 else drill_diameter
     drill_height = slot_y * unit_to_mm if slot_y > 0 else drill_diameter
@@ -78,8 +78,8 @@ def expand_allegro_padstack(
         "native_padstack_key": "" if record.key is None else str(record.key),
         "native_padstack_name": name,
         "native_pad_type_code": str(pad_type_code),
-        "native_layer_count": str(_payload_int(record, "layer_count")),
-        "native_component_count": str(_payload_int(record, "component_count")),
+        "native_layer_count": str(payload_int(record, "layer_count")),
+        "native_component_count": str(payload_int(record, "component_count")),
     }
     if copper_component is not None:
         metadata["native_pad_component_type"] = str(copper_component.component_type)
@@ -153,9 +153,9 @@ def _pad_components(record: AllegroRecord) -> tuple[AllegroPadstackComponent, ..
 def _first_copper_component(
     record: AllegroRecord, components: tuple[AllegroPadstackComponent, ...]
 ) -> AllegroPadstackComponent | None:
-    layer_count = _payload_int(record, "layer_count")
-    fixed_count = _payload_int(record, "fixed_component_count")
-    per_layer = _payload_int(record, "components_per_layer")
+    layer_count = payload_int(record, "layer_count")
+    fixed_count = payload_int(record, "fixed_component_count")
+    per_layer = payload_int(record, "components_per_layer")
     if layer_count <= 0 or fixed_count <= 0 or per_layer <= 0:
         candidates = components
     else:
@@ -204,14 +204,9 @@ def _pad_type(
 def _plating(record: AllegroRecord, pad_type_code: int) -> PcbDrillPlating:
     if pad_type_code == _PADSTACK_TYPE_NPTH:
         return PcbDrillPlating.NON_PLATED
-    plated = _payload_int(record, "plated")
+    plated = payload_int(record, "plated")
     if plated:
         return PcbDrillPlating.PLATED
     if pad_type_code in {_PADSTACK_TYPE_VIA, _PADSTACK_TYPE_SLOT}:
         return PcbDrillPlating.UNKNOWN
     return PcbDrillPlating.NON_PLATED
-
-
-def _payload_int(record: AllegroRecord, key: str) -> int:
-    value = record.payload.get(key, 0)
-    return value if isinstance(value, int) else 0

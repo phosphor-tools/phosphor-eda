@@ -155,3 +155,26 @@ class AllegroRecordSet:
     @property
     def tag_counts(self) -> Mapping[int, int]:
         return self._tag_counts
+
+
+def payload_int(record: AllegroRecord, key: str) -> int:
+    value = record.payload.get(key, 0)
+    return value if isinstance(value, int) else 0
+
+
+def payload_float(record: AllegroRecord, key: str) -> float:
+    value = record.payload.get(key, 0.0)
+    if isinstance(value, float):
+        return value
+    if isinstance(value, int):
+        return float(value)
+    return 0.0
+
+
+def payload_coords(record: AllegroRecord, key: str) -> tuple[int, int, int, int] | None:
+    value = record.payload.get(key)
+    if isinstance(value, tuple) and len(value) == 4:
+        coords = tuple(coord for coord in value if isinstance(coord, int))
+        if len(coords) == 4:
+            return (coords[0], coords[1], coords[2], coords[3])
+    return None
