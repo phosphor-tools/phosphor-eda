@@ -171,6 +171,19 @@ def payload_float(record: AllegroRecord, key: str) -> float:
     return 0.0
 
 
+def payload_int_items(record: AllegroRecord, key: str) -> tuple[tuple[int, ...], ...]:
+    """Return a payload value that is a tuple of int tuples, or an empty tuple."""
+    value = record.payload.get(key)
+    if not isinstance(value, tuple):
+        return ()
+    items: list[tuple[int, ...]] = []
+    for item in value:
+        if not isinstance(item, tuple):
+            return ()
+        items.append(tuple(item))
+    return tuple(items)
+
+
 def payload_coords(record: AllegroRecord, key: str) -> tuple[int, int, int, int] | None:
     value = record.payload.get(key)
     if isinstance(value, tuple) and len(value) == 4:

@@ -17,6 +17,24 @@ class AllegroVersion(Enum):
     V_180 = "V_180"
 
 
+_VERSION_ORDER = {
+    AllegroVersion.V_160: 160,
+    AllegroVersion.V_162: 162,
+    AllegroVersion.V_164: 164,
+    AllegroVersion.V_165: 165,
+    AllegroVersion.V_166: 166,
+    AllegroVersion.V_172: 172,
+    AllegroVersion.V_174: 174,
+    AllegroVersion.V_175: 175,
+    AllegroVersion.V_180: 180,
+}
+
+
+def version_at_least(version: AllegroVersion, minimum: AllegroVersion) -> bool:
+    """Return whether ``version`` is at least ``minimum`` in release order."""
+    return _VERSION_ORDER[version] >= _VERSION_ORDER[minimum]
+
+
 class AllegroBoardUnits(StrEnum):
     MILS = "mils"
     INCHES = "inches"

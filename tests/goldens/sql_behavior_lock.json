@@ -4,7 +4,7 @@
     "tables": {
       "artwork": {
         "rows": 20713,
-        "sha256": "9d3db4fb59e9e511d107d67540afc38c77026c1334564ecddc2dd9f6b57f4295"
+        "sha256": "8f1b7afb2f641ca1017cdd2cb54140b2b94650d3b958439435394bf5def1c46e"
       },
       "board": {
         "rows": 1,

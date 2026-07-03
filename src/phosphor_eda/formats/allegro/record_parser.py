@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import MappingProxyType
 
 from phosphor_eda.formats.allegro.binary import BoundedBinaryReader
-from phosphor_eda.formats.allegro.constants import AllegroVersion
+from phosphor_eda.formats.allegro.constants import AllegroVersion, version_at_least
 from phosphor_eda.formats.allegro.errors import AllegroParseError
 from phosphor_eda.formats.allegro.records import (
     AllegroHeader,
@@ -20,17 +20,11 @@ from phosphor_eda.formats.allegro.records import (
 _MAX_DYNAMIC_RECORD_ITEMS = 1_000_000
 _MAX_PADSTACK_LAYER_COUNT = 256
 
-_VERSION_ORDER = {
-    AllegroVersion.V_160: 160,
-    AllegroVersion.V_162: 162,
-    AllegroVersion.V_164: 164,
-    AllegroVersion.V_165: 165,
-    AllegroVersion.V_166: 166,
-    AllegroVersion.V_172: 172,
-    AllegroVersion.V_174: 174,
-    AllegroVersion.V_175: 175,
-    AllegroVersion.V_180: 180,
-}
+# Text-parameter (0x36 code 0x08) items carry 8 native int32 fields on V16.x.
+# Index 2 is char height, 3 char width, 4 inter-char spacing, 5 line spacing,
+# 7 stroke width. V17.2+ items are larger; the leading 8 int32 are read as a
+# hypothesis and the extra bytes are skipped to keep the stream aligned.
+_TEXT_PARAM_LEADING_INT32 = 8
 
 
 def parse_allegro_record_stream(
@@ -850,6 +844,7 @@ def _parse_definition_table_record(
     payload["item_count"] = num_items
     payload["filled_count"] = count
 
+    text_parameter_items: list[tuple[int, ...]] = []
     for _ in range(num_items):
         if code == 0x02:
             reader.skip(32 + 14 * 4)
@@ -868,11 +863,15 @@ def _parse_definition_table_record(
             if _version_lt(version, AllegroVersion.V_172):
                 reader.skip(50 * 4)
         elif code == 0x08:
-            reader.skip(4 * 4)
-            _skip_cond_u32(reader, version, AllegroVersion.V_174)
-            reader.skip(4 * 4)
-            if _version_at_least(version, AllegroVersion.V_172):
-                reader.skip(8 * 4)
+            # Text-parameter table. The leading 8 int32 hold char height/width,
+            # inter-char and line spacing, and stroke width in native units.
+            text_parameter_items.append(
+                tuple(reader.read_int32() for _ in range(_TEXT_PARAM_LEADING_INT32))
+            )
+            if _version_at_least(version, AllegroVersion.V_174):
+                reader.skip(36)
+            elif _version_at_least(version, AllegroVersion.V_172):
+                reader.skip(32)
         elif code == 0x0B:
             reader.skip(1016)
         elif code == 0x0C:
@@ -893,6 +892,9 @@ def _parse_definition_table_record(
                 offset=offset,
                 source_name=reader.source_name,
             )
+
+    if code == 0x08:
+        payload["text_parameter_items"] = tuple(text_parameter_items)
 
     return key, next_key
 
@@ -999,11 +1001,11 @@ def _skip_cond_u32(
 
 
 def _version_at_least(version: AllegroVersion, minimum: AllegroVersion) -> bool:
-    return _VERSION_ORDER[version] >= _VERSION_ORDER[minimum]
+    return version_at_least(version, minimum)
 
 
 def _version_lt(version: AllegroVersion, minimum: AllegroVersion) -> bool:
-    return _VERSION_ORDER[version] < _VERSION_ORDER[minimum]
+    return not version_at_least(version, minimum)
 
 
 def _align4(offset: int) -> int:

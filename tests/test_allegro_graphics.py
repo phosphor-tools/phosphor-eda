@@ -85,8 +85,8 @@ def test_allegro_string_graphic_records_preserve_text_and_position() -> None:
     assert text.payload["text"] == "C900H450"
 
 
-def test_allegro_text_graphics_use_renderable_fallback_font_size() -> None:
-    """Proves unresolved native Allegro text sizes still render visibly."""
+def test_allegro_text_graphics_resolve_font_size_from_parameter_table() -> None:
+    """Text font size resolves from the 0x36 code-0x08 table via 1-based font_key."""
     record_set = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
     layer_map = build_allegro_layers(record_set)
 
@@ -95,11 +95,92 @@ def test_allegro_text_graphics_use_renderable_fallback_font_size() -> None:
     text = next(primitive for primitive in graphics.artwork if primitive.id == "allegro:632913096")
     assert isinstance(text.data, PcbText)
     assert text.data.text == "C900H450"
-    assert text.data.font_size > 0
-    assert any(
+    # font_key=60 -> item[59] char height 31.5 mil = 0.800100 mm.
+    assert math.isclose(text.data.font_size, 0.800100, abs_tol=1e-6)
+    assert not any(
         diagnostic.code == "unresolved-text-size" and diagnostic.key == 632_913_096
         for diagnostic in graphics.diagnostics
     )
+
+
+def test_allegro_text_font_sizes_lock_research_worked_examples() -> None:
+    """Locks the research worked examples: refdes, fab note, and drill-legend."""
+    record_set = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    layer_map = build_allegro_layers(record_set)
+
+    graphics = extract_allegro_graphics(record_set, layer_map)
+    by_id = {primitive.id: primitive for primitive in graphics.artwork}
+
+    # U8 refdes font_key=1 -> 30 mil = 0.762 mm.
+    u8 = by_id["allegro:633255704"]
+    assert isinstance(u8.data, PcbText)
+    assert u8.data.text == "U8"
+    assert math.isclose(u8.data.font_size, 0.762, abs_tol=1e-6)
+
+    # Fab note font_key=9 -> 125 mil = 3.175 mm.
+    note = by_id["allegro:633029016"]
+    assert isinstance(note.data, PcbText)
+    assert "SURFACE FINISH" in note.data.text
+    assert math.isclose(note.data.font_size, 3.175, abs_tol=1e-6)
+
+
+def test_allegro_text_unresolved_size_diagnostics_are_eliminated() -> None:
+    """The 0x36 text table resolves every fixture font key: no unresolved sizes."""
+    record_set = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    layer_map = build_allegro_layers(record_set)
+
+    graphics = extract_allegro_graphics(record_set, layer_map)
+
+    unresolved = [d for d in graphics.diagnostics if d.code == "unresolved-text-size"]
+    assert unresolved == []
+
+
+def test_allegro_text_parameter_table_is_parsed() -> None:
+    """The 0x36 code-0x08 record exposes native text-parameter item fields."""
+    record_set = parse_allegro_records(ROHM_BOARD.read_bytes(), source_name=ROHM_BOARD.name)
+
+    table = next(
+        record
+        for record in record_set.records
+        if record.tag == 0x36 and record.payload.get("code") == 0x08
+    )
+    items = table.payload["text_parameter_items"]
+    assert isinstance(items, tuple)
+    # rohm divisor 100: text block 1 char height 2500 native units = 25 mil.
+    assert items[0][2] == 2500
+
+
+def test_allegro_text_justification_maps_alignment_codes() -> None:
+    """Alignment codes map to renderer justify tokens (1=left, 2=right, 3=center)."""
+    record_set = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    layer_map = build_allegro_layers(record_set)
+
+    graphics = extract_allegro_graphics(record_set, layer_map)
+    by_id = {primitive.id: primitive for primitive in graphics.artwork}
+
+    # align=1 (fab note) -> left; align=3 (U8) -> center ""; align=2 (back title) -> right.
+    note = by_id["allegro:633029016"].data
+    u8 = by_id["allegro:633255704"].data
+    back_title = by_id["allegro:633110304"].data
+    assert isinstance(note, PcbText) and note.justify == "left"
+    assert isinstance(u8, PcbText) and u8.justify == ""
+    assert isinstance(back_title, PcbText) and back_title.justify == "right"
+
+
+def test_allegro_text_mirroring_from_reversal_code() -> None:
+    """Nonzero text_reversal_code sets mirrored=True; zero sets False."""
+    record_set = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    layer_map = build_allegro_layers(record_set)
+
+    graphics = extract_allegro_graphics(record_set, layer_map)
+    by_id = {primitive.id: primitive for primitive in graphics.artwork}
+
+    front = by_id["allegro:633255704"].data  # U8, reversal 0
+    back = by_id["allegro:633270168"].data  # D10, reversal 1
+    assert isinstance(front, PcbText) and front.mirrored is False
+    assert isinstance(back, PcbText) and back.mirrored is True
+    back_primitive = by_id["allegro:633270168"]
+    assert back_primitive.metadata.properties["native_text_reversal_code"] == "1"
 
 
 def test_allegro_graphics_extract_board_profile_primitives_with_native_provenance() -> None:
@@ -215,10 +296,8 @@ def test_allegro_graphics_extracts_text_artwork_with_layer_provenance() -> None:
     assert text.metadata.properties["native_subclass_id"] == "248"
     assert text.metadata.properties["native_text_key"] == "632913056"
     assert text.metadata.properties["native_font_key"] == "60"
-    assert any(
-        diagnostic.code == "unresolved-text-size"
-        and diagnostic.key == 632_913_096
-        and diagnostic.reference_key == 632_913_056
+    assert not any(
+        diagnostic.code == "unresolved-text-size" and diagnostic.key == 632_913_096
         for diagnostic in graphics.diagnostics
     )
 

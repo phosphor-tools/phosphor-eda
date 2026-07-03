@@ -18,6 +18,7 @@ from phosphor_eda.domain.pcb import (
     PcbPolygon,
     PcbText,
 )
+from phosphor_eda.formats.allegro.constants import AllegroVersion, version_at_least
 from phosphor_eda.formats.allegro.coords import BoardFrame, board_frame
 from phosphor_eda.formats.allegro.diagnostics import (
     drc_marker_diagnostic,
@@ -38,10 +39,24 @@ from phosphor_eda.formats.allegro.records import (
     payload_coords,
     payload_float,
     payload_int,
+    payload_int_items,
 )
 
 _FALLBACK_TEXT_FONT_SIZE_MM = 1.0
 _DEFAULT_RECTANGLE_STROKE_WIDTH_MM = 0.12
+
+# Index of the char-height field inside a text-parameter table item.
+_TEXT_PARAM_HEIGHT_INDEX = 2
+
+# Allegro text-justification codes surveyed across the four V16.x fixtures:
+# 1 dominates left-aligned title-block prose and refdes, 3 dominates centered
+# single-character labels (pin numbers, legend counts), 2 is rare and covers
+# right-aligned cells. Codes map to renderer justify tokens; center is "".
+_TEXT_ALIGNMENT_JUSTIFY = {
+    1: "left",
+    2: "right",
+    3: "",
+}
 
 if TYPE_CHECKING:
     from phosphor_eda.domain.pcb import PcbLayer
@@ -69,6 +84,9 @@ def extract_allegro_graphics(
     artwork: list[AllegroGraphicPrimitive] = []
     keepouts: list[AllegroGraphicPrimitive] = []
     shape_owned_void_keys = _shape_owned_void_keys(record_set, graph)
+    text_params = _text_parameter_table(record_set)
+    version = record_set.header.version if record_set.header is not None else None
+    text_size_ceiling = _text_size_ceiling(record_set, frame, version)
 
     for record in record_set.records:
         if record.key is None:
@@ -112,6 +130,9 @@ def extract_allegro_graphics(
                 frame=frame,
                 layer_map=layer_map,
                 diagnostics=diagnostics,
+                text_params=text_params,
+                version=version,
+                size_ceiling=text_size_ceiling,
             )
             if text is not None:
                 artwork.append(text)
@@ -369,6 +390,9 @@ def _text_primitive(
     frame: BoardFrame | None,
     layer_map: AllegroLayerMap,
     diagnostics: list[AllegroRecordDiagnostic],
+    text_params: tuple[tuple[int, ...], ...] | None,
+    version: AllegroVersion | None,
+    size_ceiling: float | None,
 ) -> AllegroGraphicPrimitive | None:
     if frame is None:
         diagnostics.append(missing_header_diagnostic(record))
@@ -400,21 +424,48 @@ def _text_primitive(
             )
         )
         return None
+    font_key = payload_int(record, "font_key")
+    alignment_code = payload_int(record, "text_alignment_code")
+    reversal_code = payload_int(record, "text_reversal_code")
+
     metadata = record_metadata(record, layer)
     properties = dict(metadata.properties)
     properties["native_text_key"] = str(text_key)
-    properties["native_font_key"] = str(payload_int(record, "font_key"))
+    properties["native_font_key"] = str(font_key)
     if "text_alignment_code" in record.payload:
-        properties["native_text_alignment_code"] = str(payload_int(record, "text_alignment_code"))
+        properties["native_text_alignment_code"] = str(alignment_code)
+    if "text_reversal_code" in record.payload:
+        properties["native_text_reversal_code"] = str(reversal_code)
     metadata = replace(metadata, properties=properties)
-    diagnostics.append(
-        drop_diagnostic(
-            record,
-            code="unresolved-text-size",
-            message=(f"text wrapper {record.key} preserves text content with fallback native size"),
-            reference_key=text_key,
-        )
+
+    font_size = _resolve_text_font_size(
+        text_params, font_key=font_key, frame=frame, version=version, size_ceiling=size_ceiling
     )
+    if font_size is None:
+        diagnostics.append(
+            drop_diagnostic(
+                record,
+                code="unresolved-text-size",
+                message=(
+                    f"text wrapper {record.key} font key {font_key} "
+                    "has no resolvable table entry; using fallback native size"
+                ),
+                reference_key=text_key,
+            )
+        )
+        font_size = _FALLBACK_TEXT_FONT_SIZE_MM
+
+    justify = _TEXT_ALIGNMENT_JUSTIFY.get(alignment_code)
+    if justify is None:
+        diagnostics.append(
+            drop_diagnostic(
+                record,
+                code="unmapped-text-alignment",
+                message=(f"text wrapper {record.key} has unmapped alignment code {alignment_code}"),
+            )
+        )
+        justify = ""
+
     return AllegroGraphicPrimitive(
         id=f"allegro:{record.key}",
         kind=AllegroPrimitiveKind.TEXT,
@@ -424,13 +475,88 @@ def _text_primitive(
             x=frame.x(payload_int(record, "x")),
             y=frame.y(payload_int(record, "y")),
             rotation=payload_int(record, "rotation_mdeg") / 1000.0,
-            font_size=_FALLBACK_TEXT_FONT_SIZE_MM,
+            font_size=font_size,
+            justify=justify,
+            mirrored=reversal_code != 0,
         ),
         layer=layer,
         source_tag=record.tag,
         source_key=record.key or 0,
         metadata=metadata,
     )
+
+
+def _text_parameter_table(record_set: AllegroRecordSet) -> tuple[tuple[int, ...], ...] | None:
+    """Return the single 0x36 code-0x08 text-parameter table's items, if present."""
+    for record in record_set.records:
+        if record.tag == 0x36 and payload_int(record, "code") == 0x08:
+            items = payload_int_items(record, "text_parameter_items")
+            if items:
+                return items
+    return None
+
+
+def _resolve_text_font_size(
+    text_params: tuple[tuple[int, ...], ...] | None,
+    *,
+    font_key: int,
+    frame: BoardFrame,
+    version: AllegroVersion | None,
+    size_ceiling: float | None,
+) -> float | None:
+    """Resolve millimeter font size from a 1-based ``font_key`` into the table.
+
+    Returns ``None`` for genuinely unresolvable keys (no table, key 0, key out
+    of range, non-positive height, or an implausible V17.2+ value) so the caller
+    emits ``unresolved-text-size`` and falls back.
+    """
+    if text_params is None or font_key < 1 or font_key > len(text_params):
+        return None
+    item = text_params[font_key - 1]
+    if len(item) <= _TEXT_PARAM_HEIGHT_INDEX:
+        return None
+    size = frame.length(item[_TEXT_PARAM_HEIGHT_INDEX])
+    if size <= 0:
+        return None
+    # V17.2+ item layout is unverified (hypothesis); reject values that exceed
+    # the board so a mis-decoded field falls back instead of rendering garbage.
+    if (
+        version is not None
+        and version_at_least(version, AllegroVersion.V_172)
+        and size_ceiling is not None
+        and size > size_ceiling
+    ):
+        return None
+    return size
+
+
+def _text_size_ceiling(
+    record_set: AllegroRecordSet, frame: BoardFrame | None, version: AllegroVersion | None
+) -> float | None:
+    """Board coordinate extent (mm) used to reject implausible V17.2+ font sizes.
+
+    Only computed for V17.2+ boards, where the text-parameter item layout is a
+    hypothesis; V16.x boards return ``None`` (no ceiling, the layout is
+    confirmed).
+    """
+    if frame is None or version is None or not version_at_least(version, AllegroVersion.V_172):
+        return None
+    min_x = min_y = max_x = max_y = None
+    for record in record_set.records:
+        coords = payload_coords(record, "coords")
+        points = (
+            [(coords[0], coords[1]), (coords[2], coords[3])]
+            if coords is not None
+            else [(payload_int(record, "coord_x"), payload_int(record, "coord_y"))]
+        )
+        for native_x, native_y in points:
+            min_x = native_x if min_x is None else min(min_x, native_x)
+            max_x = native_x if max_x is None else max(max_x, native_x)
+            min_y = native_y if min_y is None else min(min_y, native_y)
+            max_y = native_y if max_y is None else max(max_y, native_y)
+    if min_x is None or max_x is None or min_y is None or max_y is None:
+        return None
+    return max(frame.length(max_x - min_x), frame.length(max_y - min_y))
 
 
 def graphic_segment_primitives(
