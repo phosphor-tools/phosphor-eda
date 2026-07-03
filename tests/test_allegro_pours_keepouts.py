@@ -43,9 +43,10 @@ def test_allegro_board_assembly_links_net_owned_shape_fills_to_pours() -> None:
         and conductor.metadata.native_type == "copper_shape_fill"
         and conductor.net is not None
     ]
-    assert len(fills) == 1
-    fill = fills[0]
-    assert fill.id == "allegro:129098328:fill"
+    # Every board-level shape resolves its net (via the assignment chain or
+    # its owner assignment); footprint-definition shapes are excluded.
+    assert len(fills) == 54
+    fill = next(fill for fill in fills if fill.id == "allegro:129098328:fill")
     assert fill.pour in board.pours
     assert fill.pour is not None
     assert fill in fill.pour.fills
@@ -546,3 +547,109 @@ def _arc_segment(
             "radius": radius,
         },
     )
+
+
+def test_allegro_footprint_owned_shapes_are_excluded_from_board_copper() -> None:
+    """Proves package-symbol-local 0x28 shapes stay out of board copper.
+
+    A shape whose owner_key resolves to a 0x2B footprint definition is
+    package-symbol geometry in local coordinates; including it would render
+    copper blobs near the board origin.
+    """
+    source = parse_allegro_records(LAUNCHXL_BOARD.read_bytes(), source_name=LAUNCHXL_BOARD.name)
+    definition = AllegroRecord(
+        tag=0x2B,
+        offset=source.end_offset,
+        end_offset=source.end_offset + 20,
+        key=990_004_050,
+        next_key=None,
+        payload={},
+    )
+    shape = AllegroRecord(
+        tag=0x28,
+        offset=definition.end_offset,
+        end_offset=definition.end_offset + 20,
+        key=990_004_102,
+        next_key=None,
+        payload={
+            "layer_class_id": 6,
+            "layer_subclass_id": 0,
+            "owner_key": definition.key or 0,
+            "first_segment_key": 990_004_103,
+        },
+    )
+    segments = (
+        _line_segment(990_004_103, shape.key or 0, 0, 0, 100_000, 0, 990_004_104),
+        _line_segment(990_004_104, shape.key or 0, 100_000, 0, 100_000, 100_000, 990_004_105),
+        _line_segment(990_004_105, shape.key or 0, 100_000, 100_000, 0, 0, None),
+    )
+    record_set = AllegroRecordSet(
+        header=source.header,
+        string_table=source.string_table,
+        records=(*source.records, definition, shape, *segments),
+        end_offset=segments[-1].end_offset,
+    )
+    layer_map = build_allegro_layers(record_set)
+
+    copper = extract_allegro_copper(record_set, layer_map)
+
+    assert not any(pour.id == "allegro:990004102:pour" for pour in copper.pours)
+    assert not any(conductor.id == "allegro:990004102:fill" for conductor in copper.conductors)
+
+
+def test_allegro_board_shape_inherits_net_from_owner_assignment() -> None:
+    """Proves a board-level shape resolves its net via its owner 0x04 record.
+
+    Board-level shapes reference a net assignment directly through their
+    owner pointer even when no net's assignment chain reaches them.
+    """
+    source = parse_allegro_records(LAUNCHXL_BOARD.read_bytes(), source_name=LAUNCHXL_BOARD.name)
+    net = AllegroRecord(
+        tag=0x1B,
+        offset=source.end_offset,
+        end_offset=source.end_offset + 20,
+        key=990_005_100,
+        next_key=None,
+        payload={"net_name_key": 0},
+    )
+    assignment = AllegroRecord(
+        tag=0x04,
+        offset=net.end_offset,
+        end_offset=net.end_offset + 20,
+        key=990_005_101,
+        next_key=None,
+        payload={"net_key": net.key or 0, "connected_item_key": 0},
+    )
+    shape = AllegroRecord(
+        tag=0x28,
+        offset=assignment.end_offset,
+        end_offset=assignment.end_offset + 20,
+        key=990_005_102,
+        next_key=None,
+        payload={
+            "layer_class_id": 6,
+            "layer_subclass_id": 0,
+            "owner_key": assignment.key or 0,
+            "first_segment_key": 990_005_103,
+        },
+    )
+    segments = (
+        _line_segment(990_005_103, shape.key or 0, 0, 0, 100_000, 0, 990_005_104),
+        _line_segment(990_005_104, shape.key or 0, 100_000, 0, 100_000, 100_000, 990_005_105),
+        _line_segment(990_005_105, shape.key or 0, 100_000, 100_000, 0, 0, None),
+    )
+    record_set = AllegroRecordSet(
+        header=source.header,
+        string_table=source.string_table,
+        records=(*source.records, net, assignment, shape, *segments),
+        end_offset=segments[-1].end_offset,
+    )
+    layer_map = build_allegro_layers(record_set)
+
+    copper = extract_allegro_copper(record_set, layer_map)
+
+    fill = next(
+        conductor for conductor in copper.conductors if conductor.id == "allegro:990005102:fill"
+    )
+    assert fill.net_key == net.key
+    assert fill.metadata.properties["native_assignment_key"] == str(assignment.key)

@@ -154,15 +154,23 @@ def _shape_pours_and_fills(
         if item.item.tag == 0x28 and item.item.key is not None
     }
     for shape in (record for record in record_set.records if record.tag == 0x28):
+        owner = graph.by_key.get(payload_int(shape, "owner_key"))
+        if owner is not None and owner.tag == 0x2B:
+            # Owned by a footprint definition: package-symbol pad geometry in
+            # local footprint coordinates, not board-level copper.
+            continue
         item = assigned_shapes.get(shape.key) if shape.key is not None else None
         net_key = None if item is None else item.net_key
         assignment_key = None if item is None else item.assignment.key
+        if net_key is None and owner is not None and owner.tag == 0x04:
+            # Board-level shapes reference their net assignment directly even
+            # when no net's assignment chain reaches them.
+            owner_net_key = payload_int(owner, "net_key")
+            owner_net = graph.by_key.get(owner_net_key)
+            if owner_net is not None and owner_net.tag == 0x1B:
+                net_key = owner_net_key
+                assignment_key = owner.key
         first_keepout_key = payload_int(shape, "first_keepout_key")
-        if item is None and first_keepout_key == 0:
-            # Unassigned, unvoided copper shapes commonly include package-symbol
-            # pad geometry in local footprint coordinates. Keep them out of the
-            # board-level copper model until native ownership is known.
-            continue
         layer = _copper_layer(shape, layer_map, diagnostics, require_etch=True)
         if layer is None:
             continue
@@ -331,6 +339,11 @@ def _graphic_segment_conductors(
     conductors: list[AllegroConductorPrimitive] = []
     for record in record_set.records:
         if record.tag != 0x14 or record.key is None:
+            continue
+        parent = graph.by_key.get(payload_int(record, "parent_key"))
+        if parent is not None and parent.tag == 0x2B:
+            # Owned by a footprint definition: geometry in local footprint
+            # coordinates, not placed board copper.
             continue
         layer = _copper_layer(record, layer_map, diagnostics, require_etch=True)
         if layer is None:

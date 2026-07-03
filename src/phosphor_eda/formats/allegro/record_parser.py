@@ -440,7 +440,10 @@ def _parse_known_record(
         _read_layer_info(reader, payload)
         key = reader.read_uint32()
         next_key = reader.read_uint32()
-        reader.skip(2 * 4)
+        # Owner: a 0x2B footprint definition for package-symbol-local shapes,
+        # or a 0x04 net assignment for board-level copper shapes.
+        payload["owner_key"] = reader.read_uint32()
+        reader.skip(4)
         if _version_at_least(version, AllegroVersion.V_172):
             payload["dynamic_shape_flags"] = reader.read_uint32()
             reader.skip(4)

@@ -171,7 +171,8 @@ def test_allegro_board_assembly_emits_copper_graphics_as_unassigned_conductors()
         for conductor in board.conductors
         if conductor.metadata.native_type == "copper_graphic_segment"
     ]
-    assert len(copper_graphics) == 56
+    # Footprint-definition-owned graphic chains are excluded from board copper.
+    assert len(copper_graphics) == 48
     copper_graphic = next(
         conductor for conductor in copper_graphics if conductor.id == "allegro:634089136"
     )
@@ -228,17 +229,18 @@ def test_allegro_board_assembly_emits_unassigned_voided_shape_pours() -> None:
         conductor for conductor in board.conductors if conductor.id == "allegro:649376864:fill"
     )
     assert fill.kind is PcbConductorKind.POUR_FILL
-    assert fill.net is None
+    assert fill.net is not None
+    assert fill.net.name == "GND"
     assert fill.pour is not None
-    assert fill.pour.net is None
+    assert fill.pour.net is fill.net
     assert fill.layer.name == "GND"
     assert isinstance(fill.data, PcbClosedPath)
     assert fill.data.holes
     assert len(fill.data.points) >= 3
     assert fill.metadata.native_type == "copper_shape_fill"
     assert fill.metadata.properties["native_first_keepout_key"] == "649377592"
-    assert fill.metadata.properties["native_assignment_key"] == ""
-    assert fill.metadata.properties["native_net_key"] == ""
+    assert fill.metadata.properties["native_assignment_key"] == "648034920"
+    assert fill.metadata.properties["native_net_key"] == "644801432"
 
     pour_layers = {pour.layers[0].name for pour in board.pours if pour.id.startswith("allegro:")}
     assert {"ETCH_1", "GND", "SIG1", "ETCH_4", "ETCH_5", "BOTTOM"} <= pour_layers
