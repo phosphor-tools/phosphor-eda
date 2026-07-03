@@ -570,7 +570,7 @@ def parse_page(
     """
     try:
         return _parse_page(data, string_list, ctx)
-    except (struct.error, IndexError) as exc:
+    except (struct.error, IndexError, DsnFormatError) as exc:
         msg = f"Page stream is truncated or uses an unsupported layout: {exc}"
         raise DsnFormatError(msg, offset=0, type_id=0) from exc
 

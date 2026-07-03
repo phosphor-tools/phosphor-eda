@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeGuard
 
 from phosphor_eda.domain.pcb import LayerRole, PcbLayer, PcbLayerMetadata
 from phosphor_eda.domain.project import Stackup, StackupLayer
@@ -309,10 +309,20 @@ def _layer_list_for_class(
 
 def _layer_entries(record: AllegroRecord) -> tuple[AllegroLayerListEntry, ...]:
     entries = record.payload.get("layer_entries", ())
-    if not isinstance(entries, tuple):
+    if not _is_layer_entries(entries):
         msg = f"Allegro 0x2A record {record.key} has malformed layer entries"
         raise ValueError(msg)
     return entries
+
+
+def _is_layer_entries(value: object) -> TypeGuard[tuple[AllegroLayerListEntry, ...]]:
+    if not _is_object_tuple(value):
+        return False
+    return all(isinstance(entry, AllegroLayerListEntry) for entry in value)
+
+
+def _is_object_tuple(value: object) -> TypeGuard[tuple[object, ...]]:
+    return isinstance(value, tuple)
 
 
 def _entry_name(entry: AllegroLayerListEntry, string_table: Mapping[int, str]) -> str:

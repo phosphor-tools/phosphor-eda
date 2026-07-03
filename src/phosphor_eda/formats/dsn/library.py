@@ -40,7 +40,7 @@ def parse_library(
     """
     try:
         return _parse_library_stream(data, ctx)
-    except (struct.error, IndexError) as exc:
+    except (struct.error, IndexError, DsnFormatError) as exc:
         msg = f"Library stream is truncated or uses an unsupported layout: {exc}"
         raise DsnFormatError(msg, offset=0, type_id=0) from exc
 
