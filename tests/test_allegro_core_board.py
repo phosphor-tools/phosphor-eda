@@ -81,6 +81,30 @@ def test_allegro_launchxl_board_profile_from_single_shape_outline() -> None:
     assert 40.0 < height < 120.0
 
 
+def test_allegro_shape_symbol_pads_resolve_placed_flash_geometry() -> None:
+    """Placed pads on a shape-symbol padstack render their true flash copper.
+
+    Sync carries 58 pads whose selected copper component references a 0x28 shape
+    record. Before resolution these degraded to a plain bounding rect; now each
+    placed pad carries a custom flash polygon positioned on the pad center.
+    """
+    board = parse_allegro_pcb(SYNC_BOARD)
+
+    custom_pads = [pad for pad in board.pads if pad.shape == "custom"]
+    assert custom_pads, "expected sync to place shape-symbol pads"
+    assert all(pad.custom_shapes for pad in custom_pads), (
+        "every custom pad must carry resolved flash geometry, not a rect fallback"
+    )
+
+    sample = next(pad for pad in custom_pads if len(pad.custom_shapes[0].points) > 4)
+    polygon = sample.custom_shapes[0]
+    xs = [x for x, _ in polygon.points]
+    ys = [y for _, y in polygon.points]
+    # The placed flash straddles the pad center (positioned, not left pad-local).
+    assert min(xs) <= sample.x <= max(xs)
+    assert min(ys) <= sample.y <= max(ys)
+
+
 def test_allegro_board_assembly_emits_connectivity_padstacks_and_drills() -> None:
     """Proves native Allegro records assemble into strict board-domain objects.
 

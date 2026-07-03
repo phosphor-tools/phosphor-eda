@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -10,12 +11,29 @@ from phosphor_eda.domain.pcb import (
     PcbDrillPlating,
     PcbDrillShape,
     PcbPadType,
+    PcbPathSegmentKind,
+    PcbPolygon,
 )
+from phosphor_eda.formats.allegro.coords import BoardFrame
+from phosphor_eda.formats.allegro.diagnostics import build_diagnostic
+from phosphor_eda.formats.allegro.graphics import closed_path_from_segment_chain
 from phosphor_eda.formats.allegro.records import AllegroPadstackComponent, payload_int
+from phosphor_eda.geometry.pcb_geometry import arc_to_polyline
 
 if TYPE_CHECKING:
-    from phosphor_eda.formats.allegro.records import AllegroRecord
+    from phosphor_eda.domain.pcb import PcbClosedPath
+    from phosphor_eda.formats.allegro.graph import AllegroObjectGraph
+    from phosphor_eda.formats.allegro.records import AllegroRecord, AllegroRecordDiagnostic
     from phosphor_eda.formats.allegro.sidecars import AllegroPadstackSidecar
+
+# Non-zero string_key on a "custom" (shape-symbol) pad component references a
+# 0x28 shape record whose segment chain holds the pad copper in pad-local units.
+_SHAPE_SYMBOL_TAG = 0x28
+# Points per arc when linearizing a shape-symbol boundary into a fill polygon.
+_ARC_LINEARIZE_POINTS = 24
+_DIAG_UNRESOLVED_SHAPE_SYMBOL = "unresolved-pad-shape-symbol"
+_DIAG_UNMODELED_SHAPE_VOID = "unmodeled-pad-shape-void"
+_DIAG_DEGENERATE_PAD_SIZE = "degenerate-pad-size"
 
 _PADSTACK_TYPE_VIA = 0x10
 _PADSTACK_TYPE_SMD = {0x20, 0xA0}
@@ -48,6 +66,10 @@ class AllegroExpandedPadstack:
     drill_height: float
     plating: PcbDrillPlating
     metadata: dict[str, str]
+    # Shape-symbol flash geometry in PAD-LOCAL millimeters (Y-down), centered on
+    # the pad origin. Placed instances rotate and translate these via
+    # ``place_custom_shapes``. Empty unless a "custom" component resolved a 0x28.
+    custom_shapes: tuple[PcbPolygon, ...] = ()
 
 
 def expand_allegro_padstack(
@@ -56,10 +78,18 @@ def expand_allegro_padstack(
     name: str,
     unit_to_mm: float,
     sidecar: AllegroPadstackSidecar | None = None,
+    graph: AllegroObjectGraph | None = None,
+    diagnostics: list[AllegroRecordDiagnostic] | None = None,
 ) -> AllegroExpandedPadstack:
     """Convert a decoded 0x1C source record to reusable pad/via geometry."""
     components = _pad_components(record)
     copper_component = _first_copper_component(record, components)
+    shape = _component_shape(copper_component)
+    custom_shapes: tuple[PcbPolygon, ...] = ()
+    if shape == "custom" and copper_component is not None:
+        custom_shapes = _resolve_shape_symbol(
+            record, copper_component, unit_to_mm, graph, diagnostics
+        )
     drill_size = payload_int(record, "drill_size")
     slot_x = payload_int(record, "slot_x")
     slot_y = payload_int(record, "slot_y")
@@ -70,6 +100,17 @@ def expand_allegro_padstack(
     pad_width = abs(copper_component.width) * unit_to_mm if copper_component else drill_width
     pad_height = abs(copper_component.height) * unit_to_mm if copper_component else drill_height
     if pad_width <= 0:
+        if drill_width <= 0 and diagnostics is not None:
+            diagnostics.append(
+                build_diagnostic(
+                    record,
+                    code=_DIAG_DEGENERATE_PAD_SIZE,
+                    message=(
+                        f"padstack {record.key} ({name}) has no copper or drill geometry; "
+                        "falling back to a 0.1 mm pad"
+                    ),
+                )
+            )
         pad_width = drill_width if drill_width > 0 else 0.1
     if pad_height <= 0:
         pad_height = drill_height if drill_height > 0 else pad_width
@@ -83,20 +124,22 @@ def expand_allegro_padstack(
     }
     if copper_component is not None:
         metadata["native_pad_component_type"] = str(copper_component.component_type)
+    if custom_shapes and copper_component is not None:
+        metadata["native_pad_shape_symbol_key"] = str(copper_component.string_key)
     if sidecar is not None:
         metadata.update(
             _sidecar_metadata(
                 sidecar,
                 pad_width,
                 pad_height,
-                shape=_component_shape(copper_component),
+                shape=shape,
             )
         )
 
     return AllegroExpandedPadstack(
         name=name,
         stack=PadStack.simple(
-            _component_shape(copper_component),
+            shape,
             pad_width,
             pad_height,
             _corner_radius_ratio(copper_component),
@@ -112,6 +155,124 @@ def expand_allegro_padstack(
         drill_height=drill_height,
         plating=_plating(record, pad_type_code),
         metadata=metadata,
+        custom_shapes=custom_shapes,
+    )
+
+
+def _resolve_shape_symbol(
+    record: AllegroRecord,
+    component: AllegroPadstackComponent,
+    unit_to_mm: float,
+    graph: AllegroObjectGraph | None,
+    diagnostics: list[AllegroRecordDiagnostic] | None,
+) -> tuple[PcbPolygon, ...]:
+    """Resolve a custom pad component's 0x28 flash into a pad-local fill polygon.
+
+    The component's ``string_key`` references a 0x28 shape record owned by the
+    footprint definition; its segment chain holds the pad copper boundary in
+    pad-local units around the origin. Arcs are linearized into a single filled
+    polygon. Anything unresolvable keeps the bounding-rect fallback and records
+    a diagnostic instead of degrading silently.
+    """
+    if graph is None or component.string_key == 0:
+        return ()
+    shape_record = graph.by_key.get(component.string_key)
+    if shape_record is None or shape_record.tag != _SHAPE_SYMBOL_TAG:
+        if diagnostics is not None:
+            diagnostics.append(
+                build_diagnostic(
+                    record,
+                    code=_DIAG_UNRESOLVED_SHAPE_SYMBOL,
+                    message=(
+                        f"padstack {record.key} custom component references shape symbol "
+                        f"{component.string_key} that is missing or not a 0x28 shape record"
+                    ),
+                    reference_key=component.string_key,
+                )
+            )
+        return ()
+    boundary = closed_path_from_segment_chain(
+        shape_record,
+        graph=graph,
+        frame=BoardFrame(unit_to_mm),
+        head_key=payload_int(shape_record, "first_segment_key"),
+        diagnostics=diagnostics if diagnostics is not None else [],
+        diagnostic_prefix="pad-shape",
+    )
+    if boundary is None:
+        return ()
+    if payload_int(shape_record, "first_keepout_key") and diagnostics is not None:
+        diagnostics.append(
+            build_diagnostic(
+                shape_record,
+                code=_DIAG_UNMODELED_SHAPE_VOID,
+                message=(
+                    f"pad shape symbol {shape_record.key} carries a void chain that is "
+                    "not modeled in the flash polygon"
+                ),
+                reference_key=payload_int(shape_record, "first_keepout_key"),
+            )
+        )
+    points = _linearize_boundary(boundary)
+    if len(points) < 3:
+        return ()
+    return (PcbPolygon(points=points, fill=True),)
+
+
+def _linearize_boundary(boundary: PcbClosedPath) -> list[tuple[float, float]]:
+    """Flatten a closed path (lines + arcs) into a ring of polygon points."""
+    points: list[tuple[float, float]] = []
+    for segment in boundary.segments:
+        if segment.kind is PcbPathSegmentKind.ARC:
+            arc_points = arc_to_polyline(
+                segment.start_x,
+                segment.start_y,
+                segment.mid_x,
+                segment.mid_y,
+                segment.end_x,
+                segment.end_y,
+                num_points=_ARC_LINEARIZE_POINTS,
+            )
+            points.extend(arc_points[:-1])
+        else:
+            points.append((segment.start_x, segment.start_y))
+    return points
+
+
+def place_custom_shapes(
+    padstack: AllegroExpandedPadstack,
+    x: float,
+    y: float,
+    rotation_deg: float,
+) -> tuple[PcbPolygon, ...]:
+    """Rotate and translate a padstack's pad-local flash polygons onto the board.
+
+    Custom pad shapes are stored in absolute board coordinates (matching the
+    KiCad convention), so each placed pad bakes its instance rotation and center
+    into the shared padstack geometry. The ``-rotation`` sign matches
+    ``transform_point`` and the renderer's y-down pad rotation.
+    """
+    if not padstack.custom_shapes:
+        return ()
+    rad = math.radians(-rotation_deg)
+    cos_r = math.cos(rad)
+    sin_r = math.sin(rad)
+
+    def place(point: tuple[float, float]) -> tuple[float, float]:
+        local_x, local_y = point
+        return (
+            x + local_x * cos_r - local_y * sin_r,
+            y + local_x * sin_r + local_y * cos_r,
+        )
+
+    return tuple(
+        PcbPolygon(
+            points=[place(point) for point in polygon.points],
+            holes=[[place(point) for point in ring] for ring in polygon.holes],
+            width=polygon.width,
+            fill=polygon.fill,
+        )
+        for polygon in padstack.custom_shapes
     )
 
 

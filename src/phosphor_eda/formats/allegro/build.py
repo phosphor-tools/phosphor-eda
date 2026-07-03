@@ -38,7 +38,11 @@ from phosphor_eda.formats.allegro.diagnostics import build_diagnostic
 from phosphor_eda.formats.allegro.graph import AllegroObjectGraph, build_allegro_object_graph
 from phosphor_eda.formats.allegro.graphics import extract_allegro_graphics
 from phosphor_eda.formats.allegro.layers import build_allegro_layers
-from phosphor_eda.formats.allegro.padstacks import AllegroExpandedPadstack, expand_allegro_padstack
+from phosphor_eda.formats.allegro.padstacks import (
+    AllegroExpandedPadstack,
+    expand_allegro_padstack,
+    place_custom_shapes,
+)
 from phosphor_eda.formats.allegro.records import AllegroRecordDiagnostic, payload_int
 from phosphor_eda.formats.allegro.sidecars import (
     add_sidecar_board_metadata,
@@ -115,12 +119,15 @@ def build_allegro_board(
     copper_layers = tuple(layer for layer in builder.layers if layer.has_role(LayerRole.COPPER))
 
     nets_by_key = _add_nets(builder, record_set)
+    build_diagnostics: list[AllegroRecordDiagnostic] = []
     matched_padstack_sidecars: set[Path] = set()
     padstacks = _padstacks(
         record_set,
         unit_to_mm,
+        graph=graph,
         sidecars=sidecars,
         matched_sidecars=matched_padstack_sidecars,
+        diagnostics=build_diagnostics,
     )
     text_by_wrapper = _text_by_wrapper(record_set)
     pad_definitions = {
@@ -128,7 +135,6 @@ def build_allegro_board(
         for record in record_set.records
         if record.tag == 0x0D and record.key is not None
     }
-    build_diagnostics: list[AllegroRecordDiagnostic] = []
     footprint_sources = _footprint_sources(record_set, graph, diagnostics=build_diagnostics)
     matched_package_sidecars: set[Path] = set()
     footprints_by_instance_key = _add_footprints(
@@ -281,8 +287,10 @@ def _padstacks(
     record_set: AllegroRecordSet,
     unit_to_mm: float,
     *,
+    graph: AllegroObjectGraph,
     sidecars: AllegroSidecarSet | None = None,
     matched_sidecars: set[Path] | None = None,
+    diagnostics: list[AllegroRecordDiagnostic] | None = None,
 ) -> dict[int, AllegroExpandedPadstack]:
     string_table = _strings(record_set)
     sidecars_by_name = sidecars.padstacks_by_name if sidecars is not None else {}
@@ -301,6 +309,8 @@ def _padstacks(
             name=padstack_name,
             unit_to_mm=unit_to_mm,
             sidecar=sidecar,
+            graph=graph,
+            diagnostics=diagnostics,
         )
     return result
 
@@ -636,19 +646,23 @@ def _add_pad(
             "native_parent_footprint_key": str(payload_int(record, "parent_footprint_key")),
         },
     )
+    x = _record_center_x(record, frame)
+    y = _record_center_y(record, frame)
+    rotation = footprint.rotation % 360.0
     builder.add_pad_object(
         PcbPad(
             id=f"pad-{record.key}",
             number=_pad_number(record, text_by_wrapper),
-            x=_record_center_x(record, frame),
-            y=_record_center_y(record, frame),
+            x=x,
+            y=y,
             stack=padstack.stack,
             pad_type=padstack.pad_type,
             layers=layers,
             net=nets_by_key.get(payload_int(record, "net_key")),
             footprint=footprint,
             drill=drill,
-            rotation=footprint.rotation % 360.0,
+            rotation=rotation,
+            custom_shapes=place_custom_shapes(padstack, x, y, rotation),
             metadata=metadata,
         ),
         source=_source("pad", record),
