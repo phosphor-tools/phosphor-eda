@@ -36,6 +36,13 @@ _PSTXNET_NODE_RE = re.compile(r"^NODE_NAME\s+(\S+)\s+(\S+)")
 _PSTXNET_QUOTED_RE = re.compile(r"^\s*'([^']*)'")
 
 
+@dataclass(frozen=True, slots=True)
+class PstChipPinEvidence:
+    order: int
+    pin_name: str
+    package_pin: str
+
+
 def parse_pstxnet_no_connects(path: Path) -> list[DsnNoConnectPin]:
     """Parse Cadence's generated NC pseudo-net members from ``pstxnet.dat``."""
     no_connects: list[DsnNoConnectPin] = []
@@ -78,13 +85,6 @@ def parse_pstxnet_no_connects(path: Path) -> list[DsnNoConnectPin]:
     return no_connects
 
 
-@dataclass(frozen=True, slots=True)
-class PstChipPinEvidence:
-    order: int
-    pin_name: str
-    package_pin: str
-
-
 def apply_packaged_pin_names(
     raw: ParsedDesign,
     netlist_dir: Path,
@@ -115,12 +115,12 @@ def apply_packaged_pin_names(
             pin_names = pins_by_primitive.get(primitive)
             if pin_names:
                 instance.pin_name_overrides = pin_names
-                _compare_native_package_evidence(
-                    instance,
-                    pin_evidence_by_primitive.get(primitive, {}),
-                    packages_by_key,
-                    ctx,
-                )
+            _compare_native_package_evidence(
+                instance,
+                pin_evidence_by_primitive.get(primitive, {}),
+                packages_by_key,
+                ctx,
+            )
             pin_numbers = pin_numbers_by_primitive.get(primitive, {})
             for pin in instance.pin_connections:
                 package_pin_number = pin_numbers.get(pin.pin_number)

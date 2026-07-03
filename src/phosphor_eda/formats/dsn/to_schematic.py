@@ -693,15 +693,14 @@ def _source_page(
                 component_metadata.update(_package_component_metadata(package))
                 pin_occurrence_metadata.update(_package_occurrence_metadata(package_device))
                 if package_pin := native_package_pin(raw_pin, package_device, raw_inst, ctx):
-                    pin_metadata.update(
-                        _package_pin_metadata(
-                            package_pin=package_pin,
-                            resolved_pin_name=pin_name,
-                        )
+                    native_pin_metadata = _package_pin_metadata(
+                        package_pin=package_pin,
+                        resolved_pin_name=pin_name,
                     )
+                    pin_metadata.update(native_pin_metadata)
                     # SQL exposes occurrence metadata, while callers read the
                     # same logical pin evidence from Pin.metadata.
-                    pin_occurrence_metadata.update(pin_metadata)
+                    pin_occurrence_metadata.update(native_pin_metadata)
             pin = DsnPinOccurrence(
                 id=f"{component_source_id}:pin:{pin_index}",
                 scope_id=scope_id,
@@ -716,9 +715,9 @@ def _source_page(
                 no_connect=raw_pin.no_connect or marker_no_connect,
                 component_props=component_props,
                 component_props_list=component_props_list,
+                pin_metadata=pin_metadata,
                 component_x=component_x,
                 component_y=component_y,
-                pin_metadata=pin_metadata,
                 pin_occurrence_metadata=pin_occurrence_metadata,
                 component_metadata=component_metadata,
             )
