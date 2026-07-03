@@ -317,6 +317,14 @@ def _shape_pours_and_fills(
     return tuple(pours), tuple(fills)
 
 
+_VOID_RECORD_TAGS = frozenset({0x34})
+_VOID_CHAIN_CODES = {
+    "linked-list-cycle": "shape-void-chain-cycle",
+    "unresolved-reference": "unresolved-shape-void",
+    "unexpected-record-tag": "invalid-shape-void-record",
+}
+
+
 def _shape_void_holes(
     shape: AllegroRecord,
     *,
@@ -329,44 +337,21 @@ def _shape_void_holes(
     first_keepout_key = _payload_int(shape, "first_keepout_key")
     if first_keepout_key == 0:
         return holes
-    current_key = first_keepout_key
-    seen: set[int] = set()
-    while current_key != 0:
-        if current_key in seen:
-            diagnostics.append(
-                _drop_diagnostic(
-                    shape,
-                    code="shape-void-chain-cycle",
-                    message=f"shape record {shape.key} void chain cycles at {current_key}",
-                    reference_key=current_key,
-                )
+    walk = graph.walk_key_chain(
+        head_key=first_keepout_key,
+        owner_key=shape.key,
+        expected_tags=_VOID_RECORD_TAGS,
+    )
+    for diagnostic in walk.diagnostics:
+        diagnostics.append(
+            _drop_diagnostic(
+                shape,
+                code=_VOID_CHAIN_CODES[diagnostic.code],
+                message=f"shape record {shape.key} void chain degraded: {diagnostic.message}",
+                reference_key=diagnostic.reference_key,
             )
-            break
-        seen.add(current_key)
-        void = graph.by_key.get(current_key)
-        if void is None:
-            diagnostics.append(
-                _drop_diagnostic(
-                    shape,
-                    code="unresolved-shape-void",
-                    message=f"shape record {shape.key} references missing void {current_key}",
-                    reference_key=current_key,
-                )
-            )
-            break
-        if void.tag != 0x34:
-            diagnostics.append(
-                _drop_diagnostic(
-                    shape,
-                    code="invalid-shape-void-record",
-                    message=(
-                        f"shape record {shape.key} void chain reached "
-                        f"0x{void.tag:02X} record {void.key}"
-                    ),
-                    reference_key=void.key,
-                )
-            )
-            break
+        )
+    for void in walk.records:
         polygon = _polygon_from_segment_chain(
             void,
             graph=graph,
@@ -378,9 +363,6 @@ def _shape_void_holes(
         )
         if polygon is not None:
             holes.append(polygon.points)
-        next_void_key = void.next_key or 0
-        next_void = graph.by_key.get(next_void_key)
-        current_key = next_void_key if next_void is not None and next_void.tag == 0x34 else 0
     return holes
 
 
@@ -453,6 +435,14 @@ def _copper_layer(
     return layer if layer.has_role(LayerRole.COPPER) else None
 
 
+_NET_ASSIGNMENT_TAGS = frozenset({0x04})
+_NET_ASSIGNMENT_CHAIN_CODES = {
+    "linked-list-cycle": "net-assignment-cycle",
+    "unresolved-reference": "unresolved-net-assignment",
+    "unexpected-record-tag": "invalid-net-assignment-record",
+}
+
+
 def _net_assigned_items(
     record_set: AllegroRecordSet,
     graph: AllegroObjectGraph,
@@ -463,44 +453,23 @@ def _net_assigned_items(
         net_key = net.key
         if net_key is None:
             continue
-        current_key = _payload_int(net, "assignment_key")
-        seen: set[int] = set()
-        while current_key != 0:
-            if current_key in seen:
-                diagnostics.append(
-                    _drop_diagnostic(
-                        net,
-                        code="net-assignment-cycle",
-                        message=f"net record {net.key} assignment chain cycles at {current_key}",
-                        reference_key=current_key,
-                    )
+        walk = graph.walk_key_chain(
+            head_key=_payload_int(net, "assignment_key"),
+            owner_key=net_key,
+            expected_tags=_NET_ASSIGNMENT_TAGS,
+        )
+        for diagnostic in walk.diagnostics:
+            diagnostics.append(
+                _drop_diagnostic(
+                    net,
+                    code=_NET_ASSIGNMENT_CHAIN_CODES[diagnostic.code],
+                    message=(
+                        f"net record {net.key} assignment chain degraded: {diagnostic.message}"
+                    ),
+                    reference_key=diagnostic.reference_key,
                 )
-                break
-            seen.add(current_key)
-            assignment = graph.by_key.get(current_key)
-            if assignment is None:
-                diagnostics.append(
-                    _drop_diagnostic(
-                        net,
-                        code="unresolved-net-assignment",
-                        message=f"net record {net.key} references missing assignment {current_key}",
-                        reference_key=current_key,
-                    )
-                )
-                break
-            if assignment.tag != 0x04:
-                diagnostics.append(
-                    _drop_diagnostic(
-                        net,
-                        code="invalid-net-assignment-record",
-                        message=(
-                            f"net record {net.key} assignment chain reached "
-                            f"0x{assignment.tag:02X} record {assignment.key}"
-                        ),
-                        reference_key=assignment.key,
-                    )
-                )
-                break
+            )
+        for assignment in walk.records:
             connected_key = _payload_int(assignment, "connected_item_key")
             connected_item = graph.by_key.get(connected_key)
             if connected_key and connected_item is None:
@@ -523,13 +492,6 @@ def _net_assigned_items(
                         net_key=_payload_int(assignment, "net_key") or net_key,
                     )
                 )
-            next_assignment_key = assignment.next_key or 0
-            next_assignment = graph.by_key.get(next_assignment_key)
-            current_key = (
-                next_assignment_key
-                if next_assignment is not None and next_assignment.tag == 0x04
-                else 0
-            )
     return tuple(result)
 
 
@@ -995,6 +957,15 @@ def _arc_midpoint(record: AllegroRecord, header: AllegroHeader) -> tuple[float, 
     )
 
 
+_SEGMENT_RECORD_TAGS = frozenset({0x01, 0x15, 0x16, 0x17})
+_SEGMENT_CHAIN_CODES = {
+    "linked-list-cycle": "segment-chain-cycle",
+    "unresolved-reference": "unresolved-segment-record",
+    "unexpected-record-tag": "invalid-segment-record",
+    "chain-guard-rejected": "segment-owner-mismatch",
+}
+
+
 def _owned_segment_chain(
     owner: AllegroRecord,
     *,
@@ -1002,51 +973,26 @@ def _owned_segment_chain(
     head_key: int,
     diagnostics: list[AllegroRecordDiagnostic],
 ) -> tuple[AllegroRecord, ...]:
-    records: list[AllegroRecord] = []
-    seen: set[int] = set()
-    current_key = head_key
-    while current_key != 0:
-        if current_key == owner.key:
-            break
-        if current_key in seen:
-            diagnostics.append(
-                _drop_diagnostic(
-                    owner,
-                    code="segment-chain-cycle",
-                    message=(f"record {owner.key} segment chain cycles at segment {current_key}"),
-                    reference_key=current_key,
-                )
-            )
-            break
-        seen.add(current_key)
-        segment = graph.by_key.get(current_key)
-        if segment is None:
-            diagnostics.append(
-                _drop_diagnostic(
-                    owner,
-                    code="unresolved-segment-record",
-                    message=f"record {owner.key} references missing segment {current_key}",
-                    reference_key=current_key,
-                )
-            )
-            break
+    def owned_by_owner(segment: AllegroRecord) -> str | None:
         parent_key = _payload_int(segment, "parent_key")
-        if parent_key != owner.key:
-            diagnostics.append(
-                _drop_diagnostic(
-                    owner,
-                    code="segment-owner-mismatch",
-                    message=(
-                        f"record {owner.key} segment chain reached segment {current_key} "
-                        f"owned by {parent_key}"
-                    ),
-                    reference_key=current_key,
-                )
+        return None if parent_key == owner.key else f"owned by {parent_key}"
+
+    walk = graph.walk_key_chain(
+        head_key=head_key,
+        owner_key=owner.key,
+        expected_tags=_SEGMENT_RECORD_TAGS,
+        guard=owned_by_owner,
+    )
+    for diagnostic in walk.diagnostics:
+        diagnostics.append(
+            _drop_diagnostic(
+                owner,
+                code=_SEGMENT_CHAIN_CODES[diagnostic.code],
+                message=f"record {owner.key} segment chain degraded: {diagnostic.message}",
+                reference_key=diagnostic.reference_key,
             )
-            break
-        records.append(segment)
-        current_key = segment.next_key or 0
-    return tuple(records)
+        )
+    return walk.records
 
 
 def _roles_for_record(

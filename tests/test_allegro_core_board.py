@@ -295,10 +295,12 @@ def test_allegro_board_assembly_reports_component_pad_chain_cycles() -> None:
 def test_allegro_board_assembly_terminates_ring_chains_without_diagnostics() -> None:
     """Proves owner-ring chain terminators no longer surface as parser noise.
 
-    Segment chains and component pad chains ring back to their owning record.
-    Those clean terminators previously produced ~18.5k ``segment-owner-mismatch``
-    and one ``unresolved-component-pad`` per component; both are genuine
-    non-anomalies and must not appear in board diagnostics.
+    Segment, pad, void, net-assignment, and footprint-instance chains all ring
+    back to their owning record. Those clean terminators previously produced
+    ~18.5k ``segment-owner-mismatch``, one ``unresolved-component-pad`` per
+    component, and one ``unresolved-footprint-instance-chain`` per footprint
+    definition; all are genuine non-anomalies and must not appear in board
+    diagnostics.
     """
     record_set = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
 
@@ -307,6 +309,9 @@ def test_allegro_board_assembly_terminates_ring_chains_without_diagnostics() -> 
     codes = board.metadata.properties.get("parse_diagnostic_codes", "").split(";")
     assert "segment-owner-mismatch" not in codes
     assert "unresolved-component-pad" not in codes
+    assert "unresolved-footprint-instance-chain" not in codes
+    assert "invalid-shape-void-record" not in codes
+    assert "invalid-net-assignment-record" not in codes
 
 
 def test_allegro_board_assembly_includes_footprint_mechanical_pads() -> None:

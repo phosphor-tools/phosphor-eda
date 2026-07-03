@@ -64,6 +64,8 @@ if TYPE_CHECKING:
     )
 
 _REFDES_RE = re.compile(r"^[A-Z]+[A-Z0-9]*\d+[A-Z0-9]*$", re.IGNORECASE)
+_PAD_RECORD_TAGS = frozenset({0x32})
+_FOOTPRINT_INSTANCE_TAGS = frozenset({0x2D})
 _DIAG_COMPONENT_PAD_CHAIN_CYCLE = "component-pad-chain-cycle"
 _DIAG_FOOTPRINT_PAD_CHAIN_CYCLE = "footprint-pad-chain-cycle"
 _DIAG_UNRESOLVED_COMPONENT_PAD = "unresolved-component-pad"
@@ -169,29 +171,21 @@ def build_allegro_board(
         footprint = footprints_by_instance_key.get(footprint_key)
         if footprint is None:
             continue
-        first_pad_key = _payload_int(component, "first_pad_key")
-        current_key = first_pad_key
-        seen: set[int] = set()
-        chain_broken = False
-        while current_key and current_key not in seen:
-            if current_key == component.key:
-                break
-            seen.add(current_key)
-            pad_record = graph.by_key.get(current_key)
-            if pad_record is None or pad_record.tag != 0x32:
-                chain_broken = True
-                build_diagnostics.append(
-                    _diagnostic(
-                        component,
-                        code=_DIAG_UNRESOLVED_COMPONENT_PAD,
-                        message=(
-                            f"component record {component.key} references missing pad "
-                            f"record {current_key}"
-                        ),
-                        reference_key=current_key,
-                    )
-                )
-                break
+        walk = graph.walk_key_chain(
+            head_key=_payload_int(component, "first_pad_key"),
+            owner_key=component.key,
+            expected_tags=_PAD_RECORD_TAGS,
+            next_key_of=_next_component_pad_key,
+        )
+        _append_pad_chain_diagnostics(
+            build_diagnostics,
+            walk.diagnostics,
+            owner=component,
+            owner_kind="component",
+            cycle_code=_DIAG_COMPONENT_PAD_CHAIN_CYCLE,
+            unresolved_code=_DIAG_UNRESOLVED_COMPONENT_PAD,
+        )
+        for pad_record in walk.records:
             _add_pad(
                 builder,
                 pad_record,
@@ -204,20 +198,8 @@ def build_allegro_board(
                 text_by_wrapper=text_by_wrapper,
                 diagnostics=build_diagnostics,
             )
-            added_pad_keys.add(current_key)
-            current_key = _payload_int(pad_record, "next_in_component_key")
-        if current_key and current_key in seen and not chain_broken:
-            build_diagnostics.append(
-                _diagnostic(
-                    component,
-                    code=_DIAG_COMPONENT_PAD_CHAIN_CYCLE,
-                    message=(
-                        f"component record {component.key} repeats pad record "
-                        f"{current_key} in its native pad chain"
-                    ),
-                    reference_key=current_key,
-                )
-            )
+            if pad_record.key is not None:
+                added_pad_keys.add(pad_record.key)
 
     _add_footprint_mechanical_pads(
         builder,
@@ -380,7 +362,11 @@ def _footprint_sources(
         package_name = _string(string_table, _payload_int(definition, "footprint_name_key"))
         if not package_name:
             package_name = f"PACKAGE_{definition.key or 'unknown'}"
-        walk = graph.walk_key_chain(head_key=_payload_int(definition, "first_instance_key"))
+        walk = graph.walk_key_chain(
+            head_key=_payload_int(definition, "first_instance_key"),
+            owner_key=definition.key,
+            expected_tags=_FOOTPRINT_INSTANCE_TAGS,
+        )
         for diagnostic in walk.diagnostics:
             diagnostics.append(
                 _diagnostic(
@@ -394,12 +380,47 @@ def _footprint_sources(
                 )
             )
         for instance in walk.records:
-            if instance.tag == 0x2D and instance.key is not None:
+            if instance.key is not None:
                 result[instance.key] = _FootprintSource(
                     record=definition,
                     package_name=package_name,
                 )
     return result
+
+
+def _next_component_pad_key(record: AllegroRecord) -> int:
+    return _payload_int(record, "next_in_component_key")
+
+
+def _next_footprint_pad_key(record: AllegroRecord) -> int:
+    return _payload_int(record, "next_in_footprint_key")
+
+
+def _append_pad_chain_diagnostics(
+    diagnostics: list[AllegroRecordDiagnostic],
+    walk_diagnostics: tuple[AllegroRecordDiagnostic, ...],
+    *,
+    owner: AllegroRecord,
+    owner_kind: str,
+    cycle_code: str,
+    unresolved_code: str,
+) -> None:
+    for diagnostic in walk_diagnostics:
+        if diagnostic.code == "linked-list-cycle":
+            code = cycle_code
+            message = (
+                f"{owner_kind} record {owner.key} repeats pad record "
+                f"{diagnostic.reference_key} in its native pad chain"
+            )
+        else:
+            code = unresolved_code
+            message = (
+                f"{owner_kind} record {owner.key} references missing pad "
+                f"record {diagnostic.reference_key}"
+            )
+        diagnostics.append(
+            _diagnostic(owner, code=code, message=message, reference_key=diagnostic.reference_key)
+        )
 
 
 def _add_footprints(
@@ -567,55 +588,36 @@ def _add_footprint_mechanical_pads(
         instance = graph.by_key.get(instance_key)
         if instance is None or instance.tag != 0x2D:
             continue
-        current_key = _payload_int(instance, "first_pad_key")
-        seen: set[int] = set()
-        chain_broken = False
-        while current_key and current_key not in seen:
-            if current_key == instance_key:
-                break
-            seen.add(current_key)
-            pad_record = graph.by_key.get(current_key)
-            if pad_record is None or pad_record.tag != 0x32:
-                chain_broken = True
-                diagnostics.append(
-                    _diagnostic(
-                        instance,
-                        code=_DIAG_UNRESOLVED_FOOTPRINT_PAD,
-                        message=(
-                            f"footprint instance record {instance_key} references missing "
-                            f"pad record {current_key}"
-                        ),
-                        reference_key=current_key,
-                    )
-                )
-                break
-            if current_key not in added_pad_keys:
-                _add_pad(
-                    builder,
-                    pad_record,
-                    footprint=footprint,
-                    pad_definitions=pad_definitions,
-                    padstacks=padstacks,
-                    nets_by_key=nets_by_key,
-                    unit_to_mm=unit_to_mm,
-                    copper_layers=copper_layers,
-                    text_by_wrapper=text_by_wrapper,
-                    diagnostics=diagnostics,
-                )
-                added_pad_keys.add(current_key)
-            current_key = _payload_int(pad_record, "next_in_footprint_key")
-        if current_key and current_key in seen and not chain_broken:
-            diagnostics.append(
-                _diagnostic(
-                    instance,
-                    code=_DIAG_FOOTPRINT_PAD_CHAIN_CYCLE,
-                    message=(
-                        f"footprint instance record {instance_key} repeats pad record "
-                        f"{current_key} in its native pad chain"
-                    ),
-                    reference_key=current_key,
-                )
+        walk = graph.walk_key_chain(
+            head_key=_payload_int(instance, "first_pad_key"),
+            owner_key=instance_key,
+            expected_tags=_PAD_RECORD_TAGS,
+            next_key_of=_next_footprint_pad_key,
+        )
+        _append_pad_chain_diagnostics(
+            diagnostics,
+            walk.diagnostics,
+            owner=instance,
+            owner_kind="footprint instance",
+            cycle_code=_DIAG_FOOTPRINT_PAD_CHAIN_CYCLE,
+            unresolved_code=_DIAG_UNRESOLVED_FOOTPRINT_PAD,
+        )
+        for pad_record in walk.records:
+            if pad_record.key is None or pad_record.key in added_pad_keys:
+                continue
+            _add_pad(
+                builder,
+                pad_record,
+                footprint=footprint,
+                pad_definitions=pad_definitions,
+                padstacks=padstacks,
+                nets_by_key=nets_by_key,
+                unit_to_mm=unit_to_mm,
+                copper_layers=copper_layers,
+                text_by_wrapper=text_by_wrapper,
+                diagnostics=diagnostics,
             )
+            added_pad_keys.add(pad_record.key)
 
 
 def _add_pad(
