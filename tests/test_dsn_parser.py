@@ -48,14 +48,6 @@ def _dsn_string(value: str) -> bytes:
     return struct.pack("<H", len(encoded)) + encoded + b"\x00"
 
 
-def _cis_size_prefixed(payload: bytes) -> bytes:
-    return struct.pack("<I", len(payload)) + payload
-
-
-def _cis_string_list(values: list[str]) -> bytes:
-    return _cis_size_prefixed(b"\xf9".join(value.encode("latin1") for value in values))
-
-
 def _short_prefix(type_id: int, size: int = 0) -> bytes:
     return bytes([type_id]) + struct.pack("<h", size)
 
@@ -78,6 +70,14 @@ def _structure_with_end_offset(type_id: int, body: bytes, byte_offset: int) -> b
         + _short_prefix(type_id, -1)
         + body
     )
+
+
+def _cis_size_prefixed(payload: bytes) -> bytes:
+    return struct.pack("<I", len(payload)) + payload
+
+
+def _cis_string_list(values: list[str]) -> bytes:
+    return _cis_size_prefixed(b"\xf9".join(value.encode("latin1") for value in values))
 
 
 def _cis_variant_names(names: list[tuple[str, bool]]) -> bytes:
