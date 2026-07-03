@@ -727,7 +727,7 @@ class PcbBoardProfileElement:
     id: str
     kind: PcbArtworkKind
     layer: PcbLayer | None
-    data: PcbLine | PcbArc | PcbCircle | PcbPolygon
+    data: PcbLine | PcbArc | PcbCircle | PcbPolygon | PcbClosedPath
     is_cutout: bool = False
     metadata: PcbObjectMetadata = field(default_factory=PcbObjectMetadata)
 

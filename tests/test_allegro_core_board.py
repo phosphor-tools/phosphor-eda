@@ -9,7 +9,7 @@ import phosphor_eda.formats.allegro.build as allegro_build
 from phosphor_eda.domain.pcb import LayerRole, PcbArtworkPurpose, PcbPadType
 from phosphor_eda.formats.allegro.build import build_allegro_board
 from phosphor_eda.formats.allegro.oracle import parse_packaged_netlist_summary
-from phosphor_eda.formats.allegro.parser import parse_allegro_records
+from phosphor_eda.formats.allegro.parser import parse_allegro_pcb, parse_allegro_records
 from phosphor_eda.formats.allegro.records import AllegroRecord, AllegroRecordSet
 from phosphor_eda.render.inventory import build_inventory
 from phosphor_eda.render.modes import build_realistic_layers
@@ -47,10 +47,38 @@ ROHM_BOARD = (
     / "Design Files for Rev 1.0"
     / "STEPPER EVAL BRD - PCB Board File - Rev 1.0.brd"
 )
+LAUNCHXL_BOARD = (
+    FIXTURES
+    / "orcad"
+    / "cp-smartgarden-launchxl-cc1310"
+    / "Document/Hardware/mcu/swrc319/Cadence/Allegro"
+    / "LAUNCHXL-CC1310.brd"
+)
 
 
 def _assert_close(actual: float, expected: float) -> None:
     assert math.isclose(actual, expected, abs_tol=1e-6)
+
+
+def test_allegro_launchxl_board_profile_from_single_shape_outline() -> None:
+    """LAUNCHXL's board outline is a single 0x28 shape on BOARD GEOMETRY (0x01/0xFD).
+
+    Without a 0x28 branch in graphics extraction the outline was dropped and the
+    build failed with "board profile is required". The shape must now assemble
+    into a board profile with a sane bounding box.
+    """
+    board = parse_allegro_pcb(LAUNCHXL_BOARD)
+
+    assert board.board_profile is not None
+    assert board.board_profile.elements
+    bbox = board.bbox()
+    assert bbox is not None
+    min_x, min_y, max_x, max_y = bbox
+    width = max_x - min_x
+    height = max_y - min_y
+    # Outline measures ~58.5 x 95.3 mm; lock a generous board-sized envelope.
+    assert 40.0 < width < 120.0
+    assert 40.0 < height < 120.0
 
 
 def test_allegro_board_assembly_emits_connectivity_padstacks_and_drills() -> None:

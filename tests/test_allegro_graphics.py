@@ -612,6 +612,164 @@ def test_allegro_graphics_extracts_outline_rectangles_as_board_profile() -> None
     assert rectangle.metadata.properties["native_subclass_id"] == "253"
 
 
+def _shape_record_set(
+    source: AllegroRecordSet,
+    *,
+    layer_class_id: int,
+    layer_subclass_id: int,
+    owner_key: int = 0,
+    owner: AllegroRecord | None = None,
+) -> AllegroRecordSet:
+    """A 0x28 shape (triangle boundary + one triangular void) plus its chains."""
+    shape = AllegroRecord(
+        tag=0x28,
+        offset=100,
+        end_offset=120,
+        key=10,
+        next_key=None,
+        payload={
+            "layer_class_id": layer_class_id,
+            "layer_subclass_id": layer_subclass_id,
+            "owner_key": owner_key,
+            "first_keepout_key": 30,
+            "first_segment_key": 20,
+        },
+    )
+    boundary = [
+        AllegroRecord(
+            tag=0x15,
+            offset=120 + 20 * i,
+            end_offset=140 + 20 * i,
+            key=20 + i,
+            next_key=(20 + i + 1) if i < 2 else 10,
+            payload={"parent_key": 10, "start_x": sx, "start_y": sy, "end_x": ex, "end_y": ey},
+        )
+        for i, (sx, sy, ex, ey) in enumerate(
+            [(0, 0, 4000, 0), (4000, 0, 4000, 4000), (4000, 4000, 0, 0)]
+        )
+    ]
+    void = AllegroRecord(
+        tag=0x34,
+        offset=200,
+        end_offset=220,
+        key=30,
+        next_key=10,
+        payload={
+            "layer_class_id": layer_class_id,
+            "layer_subclass_id": layer_subclass_id,
+            "first_segment_key": 40,
+        },
+    )
+    void_segments = [
+        AllegroRecord(
+            tag=0x15,
+            offset=220 + 20 * i,
+            end_offset=240 + 20 * i,
+            key=40 + i,
+            next_key=(40 + i + 1) if i < 2 else 30,
+            payload={"parent_key": 30, "start_x": sx, "start_y": sy, "end_x": ex, "end_y": ey},
+        )
+        for i, (sx, sy, ex, ey) in enumerate(
+            [(1000, 1000, 2000, 1000), (2000, 1000, 2000, 2000), (2000, 2000, 1000, 1000)]
+        )
+    ]
+    records = (shape, *boundary, void, *void_segments)
+    if owner is not None:
+        records = (owner, *records)
+    return AllegroRecordSet(
+        header=source.header,
+        string_table=source.string_table,
+        records=records,
+        end_offset=void_segments[-1].end_offset,
+    )
+
+
+def test_allegro_graphics_extracts_non_etch_shape_as_artwork_polygon() -> None:
+    """A non-etch 0x28 shape becomes a closed-path artwork polygon with voids."""
+    source = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    silk_layer = PcbLayer(name="SILKSCREEN TOP", roles=(LayerRole.SILKSCREEN,))
+    layer_map = AllegroLayerMap(
+        layers=(silk_layer,),
+        stackup=None,
+        by_class_subclass={(0x09, 0x00): silk_layer},
+    )
+    record_set = _shape_record_set(source, layer_class_id=0x09, layer_subclass_id=0x00)
+
+    graphics = extract_allegro_graphics(record_set, layer_map)
+
+    assert len(graphics.artwork) == 1
+    assert graphics.board_profile == ()
+    shape = graphics.artwork[0]
+    assert shape.id == "allegro:10"
+    assert shape.kind.value == "polygon"
+    assert shape.has_role(AllegroPrimitiveRole.ARTWORK)
+    assert isinstance(shape.data, PcbClosedPath)
+    assert len(shape.data.segments) == 3
+    assert len(shape.data.holes) == 1
+
+
+def test_allegro_graphics_does_not_emit_etch_shapes() -> None:
+    """Etch-class 0x28 shapes belong to copper extraction, not graphics."""
+    source = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    copper_layer = PcbLayer(name="TOP", roles=(LayerRole.COPPER,))
+    layer_map = AllegroLayerMap(
+        layers=(copper_layer,),
+        stackup=None,
+        by_class_subclass={(0x06, 0x00): copper_layer},
+    )
+    record_set = _shape_record_set(source, layer_class_id=0x06, layer_subclass_id=0x00)
+
+    graphics = extract_allegro_graphics(record_set, layer_map)
+
+    assert graphics.artwork == ()
+    assert graphics.board_profile == ()
+
+
+def test_allegro_graphics_skips_footprint_definition_owned_shapes() -> None:
+    """Shapes owned by a footprint definition (0x2B) are local symbol geometry."""
+    source = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    silk_layer = PcbLayer(name="SILKSCREEN TOP", roles=(LayerRole.SILKSCREEN,))
+    layer_map = AllegroLayerMap(
+        layers=(silk_layer,),
+        stackup=None,
+        by_class_subclass={(0x09, 0x00): silk_layer},
+    )
+    footprint_def = AllegroRecord(
+        tag=0x2B, offset=0, end_offset=20, key=99, next_key=None, payload={}
+    )
+    record_set = _shape_record_set(
+        source, layer_class_id=0x09, layer_subclass_id=0x00, owner_key=99, owner=footprint_def
+    )
+
+    graphics = extract_allegro_graphics(record_set, layer_map)
+
+    assert graphics.artwork == ()
+    assert graphics.board_profile == ()
+
+
+def test_allegro_graphics_routes_board_outline_shape_to_board_profile() -> None:
+    """A 0x28 shape on a board-outline subclass lands in board_profile."""
+    source = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    outline_layer = PcbLayer(
+        name="BOARD GEOMETRY OUTLINE",
+        roles=(LayerRole.BOARD_SHAPE, LayerRole.EDGE),
+    )
+    layer_map = AllegroLayerMap(
+        layers=(outline_layer,),
+        stackup=None,
+        by_class_subclass={(0x01, 0xFD): outline_layer},
+    )
+    record_set = _shape_record_set(source, layer_class_id=0x01, layer_subclass_id=0xFD)
+
+    graphics = extract_allegro_graphics(record_set, layer_map)
+
+    assert graphics.artwork == ()
+    assert len(graphics.board_profile) == 1
+    outline = graphics.board_profile[0]
+    assert outline.has_role(AllegroPrimitiveRole.BOARD_PROFILE)
+    assert isinstance(outline.data, PcbClosedPath)
+
+
 def test_allegro_graphics_preserves_drc_markers_as_diagnostics() -> None:
     record_set = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
     layer_map = build_allegro_layers(record_set)

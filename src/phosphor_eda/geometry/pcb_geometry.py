@@ -13,7 +13,14 @@ from shapely import GeometryCollection, LineString, MultiPolygon, Point, Polygon
 from shapely.affinity import rotate
 from shapely.ops import unary_union
 
-from phosphor_eda.domain.pcb import PcbArc, PcbCircle, PcbLine, PcbPathSegmentKind, PcbPolygon
+from phosphor_eda.domain.pcb import (
+    PcbArc,
+    PcbCircle,
+    PcbClosedPath,
+    PcbLine,
+    PcbPathSegmentKind,
+    PcbPolygon,
+)
 from phosphor_eda.geometry.shapely_ops import normalize_geometry, robust_polygonize
 
 if TYPE_CHECKING:
@@ -22,7 +29,6 @@ if TYPE_CHECKING:
 
     from phosphor_eda.domain.pcb import (
         PcbBoardProfile,
-        PcbClosedPath,
         PcbFootprint,
         PcbPad,
         PcbVia,
@@ -743,6 +749,15 @@ def board_outline_polygon(profile: PcbBoardProfile) -> Polygon | MultiPolygon | 
                 cutouts.append(ring)
             else:
                 solids.append(ring)
+
+        elif isinstance(item.data, PcbClosedPath):
+            polygon = closed_path_geometry(item.data)
+            if polygon is None or polygon.is_empty:
+                continue
+            if item.is_cutout:
+                cutouts.append(polygon)
+            else:
+                solids.append(polygon)
 
         else:
             # Repairing a self-intersecting outline can yield a MultiPolygon;

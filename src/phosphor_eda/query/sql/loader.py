@@ -251,7 +251,7 @@ def _line_artwork_wkbs(lines: list[PcbLine]) -> list[bytes | None]:
 
 
 def _profile_shape_geometry(
-    payload: PcbLine | PcbArc | PcbCircle | PcbPolygon,
+    payload: PcbLine | PcbArc | PcbCircle | PcbPolygon | PcbClosedPath,
 ) -> BaseGeometry | None:
     if isinstance(payload, PcbLine):
         return LineString(((payload.start_x, payload.start_y), (payload.end_x, payload.end_y)))

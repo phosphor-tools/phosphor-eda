@@ -65,6 +65,7 @@ if TYPE_CHECKING:
     from phosphor_eda.formats.allegro.records import AllegroRecord, AllegroRecordSet
 
 _CLASS_BOARD_GEOMETRY = 0x01
+_CLASS_ETCH = 0x06
 _OUTLINE_SUBCLASSES = {0xEA, 0xFD}
 _FILLED_RECTANGLE_ROLES = (
     LayerRole.COPPER,
@@ -136,6 +137,20 @@ def extract_allegro_graphics(
             )
             if text is not None:
                 artwork.append(text)
+            continue
+        if record.tag == 0x28:
+            shape = _shape_polygon_primitive(
+                record,
+                graph=graph,
+                frame=frame,
+                layer_map=layer_map,
+                diagnostics=diagnostics,
+            )
+            if shape is not None:
+                if shape.has_role(AllegroPrimitiveRole.BOARD_PROFILE):
+                    board_profile.append(shape)
+                else:
+                    artwork.append(shape)
             continue
         if record.tag != 0x14:
             continue
@@ -259,6 +274,116 @@ def _shape_owned_void_keys(
         )
         owned.update(void.key for void in walk.records if void.key is not None)
     return frozenset(owned)
+
+
+_VOID_CHAIN_CODES = {
+    "linked-list-cycle": "shape-void-chain-cycle",
+    "unresolved-reference": "unresolved-shape-void",
+    "unexpected-record-tag": "invalid-shape-void-record",
+}
+
+
+def shape_void_holes(
+    shape: AllegroRecord,
+    *,
+    graph: AllegroObjectGraph,
+    frame: BoardFrame | None,
+    diagnostics: list[AllegroRecordDiagnostic],
+) -> tuple[list[PcbClosedPath], int]:
+    """Return a 0x28 shape's parsed void holes and the total void count.
+
+    ``void_total`` is the number of 0x34 void records reached on the shape's
+    keepout chain; ``len(holes)`` is how many of those resolved to a boundary.
+    A shortfall means a void was dropped, so the fill is not fully resolved.
+    """
+    holes: list[PcbClosedPath] = []
+    first_keepout_key = payload_int(shape, "first_keepout_key")
+    if first_keepout_key == 0:
+        return holes, 0
+    walk = graph.walk_key_chain(
+        head_key=first_keepout_key,
+        owner_key=shape.key,
+        expected_tags=_SHAPE_VOID_RECORD_TAGS,
+    )
+    for diagnostic in walk.diagnostics:
+        diagnostics.append(
+            drop_diagnostic(
+                shape,
+                code=_VOID_CHAIN_CODES[diagnostic.code],
+                message=f"shape record {shape.key} void chain degraded: {diagnostic.message}",
+                reference_key=diagnostic.reference_key,
+            )
+        )
+    for void in walk.records:
+        path = closed_path_from_segment_chain(
+            void,
+            graph=graph,
+            frame=frame,
+            head_key=payload_int(void, "first_segment_key"),
+            diagnostics=diagnostics,
+            diagnostic_prefix="shape-void",
+        )
+        if path is not None:
+            holes.append(path)
+    return holes, len(walk.records)
+
+
+def _shape_polygon_primitive(
+    record: AllegroRecord,
+    *,
+    graph: AllegroObjectGraph,
+    frame: BoardFrame | None,
+    layer_map: AllegroLayerMap,
+    diagnostics: list[AllegroRecordDiagnostic],
+) -> AllegroGraphicPrimitive | None:
+    """Build a filled-polygon primitive from a non-etch 0x28 shape record.
+
+    Etch-class shapes are copper pours/fills and belong to
+    ``extract_allegro_copper``; footprint-definition-local shapes are package
+    symbol geometry, not placed board geometry. Everything else becomes board
+    artwork (or a board profile when the layer is a board-outline subclass),
+    carrying its void chain as closed-path holes.
+    """
+    # Key off the class id, not the COPPER role, so anti-etch (keepout) shapes
+    # are not excluded here as well as by the etch-class check.
+    if payload_int(record, "layer_class_id") == _CLASS_ETCH:
+        return None
+    owner = graph.by_key.get(payload_int(record, "owner_key"))
+    if owner is not None and owner.tag == 0x2B:
+        return None
+    if frame is None:
+        diagnostics.append(missing_header_diagnostic(record))
+        return None
+    layer = record_layer(record, layer_map)
+    if layer is None:
+        diagnostics.append(missing_layer_diagnostic(record))
+        return None
+    boundary = closed_path_from_segment_chain(
+        record,
+        graph=graph,
+        frame=frame,
+        head_key=payload_int(record, "first_segment_key"),
+        diagnostics=diagnostics,
+        diagnostic_prefix="shape",
+    )
+    if boundary is None:
+        return None
+    holes, _void_total = shape_void_holes(
+        record,
+        graph=graph,
+        frame=frame,
+        diagnostics=diagnostics,
+    )
+    return AllegroGraphicPrimitive(
+        id=f"allegro:{record.key}",
+        kind=AllegroPrimitiveKind.POLYGON,
+        roles=_roles_for_record(record, layer),
+        data=PcbClosedPath(segments=boundary.segments, holes=tuple(holes)),
+        layer=layer,
+        source_tag=record.tag,
+        source_key=record.key or 0,
+        metadata=record_metadata(record, layer),
+    )
 
 
 def _keepout_primitive(

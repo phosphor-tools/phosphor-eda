@@ -92,7 +92,7 @@ def conductor_from_primitive(
 def profile_element_from_primitive(
     primitive: AllegroGraphicPrimitive,
 ) -> PcbBoardProfileElement:
-    if not isinstance(primitive.data, PcbLine | PcbArc | PcbCircle | PcbPolygon):
+    if not isinstance(primitive.data, PcbLine | PcbArc | PcbCircle | PcbPolygon | PcbClosedPath):
         msg = f"board profile primitive {primitive.id} has unsupported data"
         raise ValueError(msg)
     return PcbBoardProfileElement(

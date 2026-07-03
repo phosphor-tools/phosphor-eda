@@ -26,6 +26,7 @@ from phosphor_eda.formats.allegro.graphics import (
     record_layer,
     record_metadata,
     rectangle_primitive,
+    shape_void_holes,
 )
 from phosphor_eda.formats.allegro.primitives import (
     AllegroConductorPrimitive,
@@ -184,7 +185,7 @@ def _shape_pours_and_fills(
         )
         if boundary is None:
             continue
-        holes, void_total = _shape_void_holes(
+        holes, void_total = shape_void_holes(
             shape,
             graph=graph,
             frame=frame,
@@ -247,59 +248,6 @@ def _shape_pours_and_fills(
             )
         )
     return tuple(pours), tuple(fills)
-
-
-_VOID_RECORD_TAGS = frozenset({0x34})
-_VOID_CHAIN_CODES = {
-    "linked-list-cycle": "shape-void-chain-cycle",
-    "unresolved-reference": "unresolved-shape-void",
-    "unexpected-record-tag": "invalid-shape-void-record",
-}
-
-
-def _shape_void_holes(
-    shape: AllegroRecord,
-    *,
-    graph: AllegroObjectGraph,
-    frame: BoardFrame | None,
-    diagnostics: list[AllegroRecordDiagnostic],
-) -> tuple[list[PcbClosedPath], int]:
-    """Return the parsed void holes and the total void count on the chain.
-
-    ``void_total`` is the number of 0x34 void records reached on the shape's
-    keepout chain; ``len(holes)`` is how many of those resolved to a boundary.
-    A shortfall means a void was dropped, so the fill is not fully resolved.
-    """
-    holes: list[PcbClosedPath] = []
-    first_keepout_key = payload_int(shape, "first_keepout_key")
-    if first_keepout_key == 0:
-        return holes, 0
-    walk = graph.walk_key_chain(
-        head_key=first_keepout_key,
-        owner_key=shape.key,
-        expected_tags=_VOID_RECORD_TAGS,
-    )
-    for diagnostic in walk.diagnostics:
-        diagnostics.append(
-            drop_diagnostic(
-                shape,
-                code=_VOID_CHAIN_CODES[diagnostic.code],
-                message=f"shape record {shape.key} void chain degraded: {diagnostic.message}",
-                reference_key=diagnostic.reference_key,
-            )
-        )
-    for void in walk.records:
-        path = closed_path_from_segment_chain(
-            void,
-            graph=graph,
-            frame=frame,
-            head_key=payload_int(void, "first_segment_key"),
-            diagnostics=diagnostics,
-            diagnostic_prefix="shape-void",
-        )
-        if path is not None:
-            holes.append(path)
-    return holes, len(walk.records)
 
 
 def _rectangle_region_conductors(
