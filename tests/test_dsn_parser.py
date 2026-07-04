@@ -899,6 +899,31 @@ def test_malformed_cache_stream_warns_and_continues() -> None:
     assert any(issue.category == "dsn_cache" for issue in ctx.issues)
 
 
+def test_cache_entry_with_rewinding_end_offset_does_not_stall() -> None:
+    from phosphor_eda.formats.dsn.cache import parse_cache_symbols
+
+    # A corrupt long-form prefix whose end offset (4) points back into the
+    # header. Jumping there would re-read the same entry forever; the guard
+    # keeps the cursor at the end of the chain so the loop terminates.
+    data = (
+        b"\x00" * 4  # header
+        + _dsn_string("SYM")
+        + struct.pack("<II", 7, 7)  # id0 == id1: no package reference loop
+        + struct.pack("<H", 99)  # struct_type: not a LibraryPart
+        + b"\x63"
+        + struct.pack("<I", 4)  # long prefix: end offset before the entry
+        + b"\x00" * 4
+        + b"\x63"
+        + struct.pack("<h", 0)  # short prefix, no name-value pairs
+    )
+    ctx = ParseContext()
+
+    result = parse_cache_symbols(data, ctx)
+
+    assert result.pin_names == {}
+    assert result.pins == {}
+
+
 def test_wire_alias_count_pre_check_rejects_truncated_wire_body() -> None:
     # The 1 unknown byte + uint16 count must fit inside the wire body before it
     # is read; a body that ends first fails the pre-check instead of reading a

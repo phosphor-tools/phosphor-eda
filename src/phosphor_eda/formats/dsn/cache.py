@@ -133,7 +133,9 @@ def parse_cache_symbols(data: bytes, ctx: ParseContext | None = None) -> DsnCach
             struct_start = r.pos
             try:
                 _type_id, end_offset, _pairs = r.read_prefix_chain()
-                if end_offset > 0:
+                # A corrupt stream can carry a positive end_offset at or before
+                # the cursor; jumping to it would rewind and stall this loop.
+                if end_offset > r.pos:
                     struct_end = end_offset
                     r.pos = end_offset
                 else:
