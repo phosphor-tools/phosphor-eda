@@ -58,11 +58,24 @@ from phosphor_eda.domain.variants import (
     VariantTarget,
     VariantTargetKind,
 )
+from phosphor_eda.formats.dsn.parser import parse_dsn
+from phosphor_eda.formats.dsn.raw_models import (
+    DsnPackage,
+    DsnPackageDevice,
+    DsnPackageDevicePin,
+    PageNetEntry,
+    ParsedDesign,
+    PinConnection,
+    PlacedInstance,
+    SchematicPage,
+)
+from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
 from phosphor_eda.formats.kicad.board import parse_kicad_pcb
 from phosphor_eda.query.project_loader import load_project
 from phosphor_eda.query.sql import load_database
 
 FIXTURES = Path(__file__).parent / "fixtures"
+RFSOC_DSN = FIXTURES / "orcad/rfsoc-frontend/RFMC_Frontend/RFMC_FRONTEND_V1_00.DSN"
 SWD_SWITCH_PCB = FIXTURES / "swd_switch.kicad_pcb"
 ORANGECRAB_PRO = FIXTURES / "kicad-orangecrab/OrangeCrab.kicad_pro"
 PI_MX8_PRJPCB = FIXTURES / "altium/pi-mx8/PiMX8MP_r0.3_release.PrjPcb"
@@ -76,6 +89,100 @@ def _count(db: duckdb.DuckDBPyConnection, sql: str) -> int:
     row = db.execute(sql).fetchone()
     assert row is not None
     return int(row[0])
+
+
+def test_orcad_package_pin_metadata_is_queryable_in_sql() -> None:
+    raw = ParsedDesign(
+        pages=[
+            SchematicPage(
+                name="Main",
+                nets=[PageNetEntry(name="SIG", net_id=1)],
+                instances=[
+                    PlacedInstance(
+                        package_name="SYNTH.Normal",
+                        source_package="SYNTH",
+                        db_id=100,
+                        reference="U1",
+                        pin_connections=[PinConnection(pin_number="1", net_id=1)],
+                    )
+                ],
+            )
+        ],
+        packages={
+            "Packages/SYNTH": DsnPackage(
+                name="SYNTH",
+                source_library="synthetic.olb",
+                devices=[
+                    DsnPackageDevice(
+                        refdes_suffix="SYNTH",
+                        pins=[DsnPackageDevicePin(order=0, package_pin="A1")],
+                    )
+                ],
+            )
+        },
+        symbol_pin_names={"SYNTH": ["IN"]},
+    )
+    con = load_database(Project(name="orcad", schematic=dsn_to_design(raw)))
+    try:
+        pin_rows = con.execute(
+            """
+            SELECT p.reference, p.designator, pom.key, pom.value
+            FROM pins p
+            JOIN pin_occurrence_metadata pom USING (pin_id)
+            WHERE pom.key IN ('dsn_package_device', 'dsn_package_pin')
+            ORDER BY pom.key
+            """
+        ).fetchall()
+        component_rows = con.execute(
+            """
+            SELECT reference, key, value
+            FROM component_metadata
+            WHERE key IN ('dsn_package_name', 'dsn_source_library')
+            ORDER BY key
+            """
+        ).fetchall()
+    finally:
+        con.close()
+
+    assert pin_rows == [
+        ("U1", "1", "dsn_package_device", "SYNTH"),
+        ("U1", "1", "dsn_package_pin", "A1"),
+    ]
+    assert component_rows == [
+        ("U1", "dsn_package_name", "SYNTH"),
+        ("U1", "dsn_source_library", "synthetic.olb"),
+    ]
+
+
+def test_orcad_repeated_sheet_scope_path_is_queryable_in_sql() -> None:
+    """E5: occurrence-scoped repeated sheets expose their hierarchical
+    ``scope_path`` in SQL, distinguishing each channel instantiation."""
+    con = load_database(Project(name="rfsoc", schematic=dsn_to_design(parse_dsn(RFSOC_DSN))))
+    try:
+        rows = con.execute(
+            """
+            SELECT reference, scope_path
+            FROM component_occurrences
+            WHERE reference IN ('R23', 'R107')
+              AND scope_path LIKE '/DAC_ADC_TOP/%/DAC_ADC'
+            ORDER BY reference
+            """
+        ).fetchall()
+        distinct_channel_scopes = con.execute(
+            """
+            SELECT COUNT(DISTINCT scope_path)
+            FROM component_occurrences
+            WHERE scope_path LIKE '/DAC_ADC_TOP/CH%/DAC_ADC'
+            """
+        ).fetchone()
+    finally:
+        con.close()
+
+    assert ("R107", "/DAC_ADC_TOP/CH7/DAC_ADC") in rows
+    assert ("R23", "/DAC_ADC_TOP/CH0/DAC_ADC") in rows
+    # Eight DAC channels, each a distinct scope path.
+    assert distinct_channel_scopes is not None
+    assert distinct_channel_scopes[0] == 8
 
 
 def _write_swd_project(tmp_path: Path) -> Path:

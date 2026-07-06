@@ -9,18 +9,28 @@ own pstxnet netlists.
 
 from pathlib import Path
 
+import pytest
 from dsn_oracle_helpers import compare_net_names, compare_schematic_net_names
 
 from phosphor_eda.domain.schematic import Net, NetNameKind, ScopeId
 from phosphor_eda.formats.common.diagnostics import ParseContext
-from phosphor_eda.formats.common.raw_models import (
+from phosphor_eda.formats.dsn.package_netlist import (
+    apply_packaged_pin_names,
+    parse_pstchip_pin_evidence,
+    parse_pstchip_pin_number_maps,
+)
+from phosphor_eda.formats.dsn.parser import parse_dsn
+from phosphor_eda.formats.dsn.raw_models import (
+    DsnPackage,
+    DsnPackageDevice,
+    DsnPackageDevicePin,
     GraphicInst,
     ParsedDesign,
+    PinConnection,
+    PlacedInstance,
     SchematicPage,
     Wire,
 )
-from phosphor_eda.formats.dsn.package_netlist import parse_pstchip_pin_maps
-from phosphor_eda.formats.dsn.parser import parse_dsn
 from phosphor_eda.formats.dsn.resolver import resolve_dsn_source
 from phosphor_eda.formats.dsn.source import (
     DsnGlobal,
@@ -57,6 +67,12 @@ SYNC_DSN = (
     SYNC_DIR / "orcad/OpenCellular/electronics/sync/schematics/dsn/FB_CONNECT1_SYNC_LIFE-3_V1P1.DSN"
 )
 SYNC_PSTXNET = SYNC_DIR / "orcad/OpenCellular/electronics/sync/schematics/Netlist/pstxnet.dat"
+SYNC_NETLIST_DIR = SYNC_DIR / "orcad/OpenCellular/electronics/sync/schematics/Netlist"
+CP_SMARTGARDEN_DIR = FIXTURES / "orcad/cp-smartgarden-launchxl-cc1310"
+CP_SMARTGARDEN_DSN = (
+    CP_SMARTGARDEN_DIR / "Document/Hardware/mcu/swrc319/Cadence/LAUNCHXL-CC1310.DSN"
+)
+CP_SMARTGARDEN_NETLIST_DIR = CP_SMARTGARDEN_DIR / "Document/Hardware/mcu/swrc319/Cadence/Allegro"
 
 # --- synthetic-source helpers ---
 
@@ -201,7 +217,7 @@ def test_pstchip_pin_map_preserves_scalar_pins_when_mixed_numbering(tmp_path: Pa
 primitive 'MIXED_PRIMITIVE';
   pin
     'A':
-      PIN_NUMBER='(1)';
+      PIN_NUMBER='(A1)';
     'BUS':
       PIN_NUMBER='(2,3)';
     'D':
@@ -212,7 +228,127 @@ end_primitive;
         encoding="utf-8",
     )
 
-    assert parse_pstchip_pin_maps(pstchip) == {"MIXED_PRIMITIVE": {"1": "A", "3": "D"}}
+    evidence = parse_pstchip_pin_evidence(pstchip)
+
+    assert {order: item.pin_name for order, item in evidence["MIXED_PRIMITIVE"].items()} == {
+        "1": "A",
+        "3": "D",
+    }
+    assert evidence["MIXED_PRIMITIVE"]["1"].package_pin == "A1"
+
+
+def test_pstchip_pin_number_map_preserves_physical_pin_numbers(tmp_path: Path) -> None:
+    pstchip = tmp_path / "pstchip.dat"
+    pstchip.write_text(
+        """\
+primitive 'PKG_PRIMITIVE';
+  pin
+    'GPIO':
+      PIN_NUMBER='(A1)';
+    'RESET':
+      PIN_NUMBER='(42)';
+  end_pin;
+end_primitive;
+""",
+        encoding="utf-8",
+    )
+
+    assert parse_pstchip_pin_number_maps(pstchip) == {"PKG_PRIMITIVE": {"1": "A1", "2": "42"}}
+
+
+def test_packaged_netlist_diagnoses_native_package_pin_mismatch(tmp_path: Path) -> None:
+    (tmp_path / "pstxprt.dat").write_text("    U1 'SYNTH_PRIMITIVE':;\n")
+    (tmp_path / "pstchip.dat").write_text(
+        "\n".join(
+            [
+                "primitive 'SYNTH_PRIMITIVE';",
+                "pin",
+                "    'IN':",
+                "        PIN_NUMBER='(A9)';",
+                "end_pin;",
+                "",
+            ]
+        )
+    )
+    raw = ParsedDesign(
+        pages=[
+            SchematicPage(
+                name="Main",
+                instances=[
+                    PlacedInstance(
+                        package_name="SYNTH.Normal",
+                        source_package="SYNTH",
+                        reference="U1",
+                        pin_connections=[PinConnection(pin_number="1")],
+                    )
+                ],
+            )
+        ],
+        packages={
+            "Packages/SYNTH": DsnPackage(
+                name="SYNTH",
+                devices=[
+                    DsnPackageDevice(
+                        refdes_suffix="SYNTH",
+                        pins=[DsnPackageDevicePin(order=0, package_pin="A1")],
+                    )
+                ],
+            )
+        },
+    )
+    ctx = ParseContext()
+
+    apply_packaged_pin_names(raw, tmp_path, ctx)
+
+    assert raw.pages[0].instances[0].pin_name_overrides == {"1": "IN"}
+    assert any(
+        issue.category == "dsn_package_evidence"
+        and "U1 pin order 1" in issue.message
+        and "native package pin 'A1'" in issue.message
+        and "pstchip.dat pin 'A9'" in issue.message
+        for issue in ctx.issues
+    )
+
+
+@pytest.mark.parametrize(
+    ("dsn_path", "netlist_dir", "pstchip_evidence_count", "applied_override_count"),
+    [
+        (SYNC_DSN, SYNC_NETLIST_DIR, 70, 255),
+        (CP_SMARTGARDEN_DSN, CP_SMARTGARDEN_NETLIST_DIR, 66, 141),
+    ],
+)
+def test_packaged_netlist_oracle_matches_native_package_evidence(
+    dsn_path: Path,
+    netlist_dir: Path,
+    pstchip_evidence_count: int,
+    applied_override_count: int,
+) -> None:
+    pstxprt = netlist_dir / "pstxprt.dat"
+    pstchip = netlist_dir / "pstchip.dat"
+    assert pstxprt.is_file()
+    assert pstchip.is_file()
+    # H6/T6: lock the exact evidence/override counts instead of bare truthiness.
+    assert len(parse_pstchip_pin_evidence(pstchip)) == pstchip_evidence_count
+
+    ctx = ParseContext()
+    raw = parse_dsn(dsn_path, ctx)
+    before = len(ctx.issues)
+
+    apply_packaged_pin_names(raw, netlist_dir, ctx)
+
+    applied_overrides = [
+        instance.pin_name_overrides
+        for page in raw.pages
+        for instance in page.instances
+        if instance.pin_name_overrides
+    ]
+    assert len(applied_overrides) == applied_override_count
+    mismatch_messages = [
+        issue.message
+        for issue in ctx.issues[before:]
+        if issue.category == "dsn_package_evidence" and "differs from pstchip.dat" in issue.message
+    ]
+    assert mismatch_messages == []
 
 
 def test_stored_page_net_name_wins_over_label_evidence() -> None:

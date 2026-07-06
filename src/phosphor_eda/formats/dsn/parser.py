@@ -7,6 +7,7 @@ Based on the reverse-engineering work of the OpenOrCadParser C++ project:
 https://github.com/Werni2A/OpenOrCadParser
 """
 
+import json
 import struct
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -14,11 +15,70 @@ from pathlib import Path
 
 import olefile
 
-from phosphor_eda.formats.common.diagnostics import ParseContext
-from phosphor_eda.formats.common.raw_models import (
+from phosphor_eda.formats.common.diagnostics import ParseContext, warn_optional
+from phosphor_eda.formats.dsn.binary_reader import (
+    PAGE_SETTINGS_SIZE,
+    PRIM_COMMENT_TEXT,
+    PRIM_ELLIPSE,
+    PRIM_LINE,
+    PRIM_RECT,
+    STRUCT_BUS_ENTRY,
+    STRUCT_DRAWN_INST,
+    STRUCT_DSN_STREAM,
+    STRUCT_GLOBAL,
+    STRUCT_GRAPHIC_BITMAP,
+    STRUCT_GRAPHIC_BOX,
+    STRUCT_GRAPHIC_COMMENT_TEXT,
+    STRUCT_GRAPHIC_ELLIPSE,
+    STRUCT_GRAPHIC_LINE,
+    STRUCT_GRAPHIC_OLE_EMBED,
+    STRUCT_NET_GROUP,
+    STRUCT_OFF_PAGE_CONNECTOR,
+    STRUCT_PART_INST,
+    STRUCT_PORT,
+    STRUCT_WIRE_BUS,
+    STRUCT_WIRE_SCALAR,
+    BinaryReader,
+    skip_counted_self_describing,
+    skip_structure,
+)
+from phosphor_eda.formats.dsn.cis import parse_cis_variant_store
+from phosphor_eda.formats.dsn.erc import (
+    MAX_ERC_OBJECTS,
+    parse_erc_object,
+    parse_erc_symbol_stream,
+)
+from phosphor_eda.formats.dsn.errors import DsnFormatError
+from phosphor_eda.formats.dsn.hierarchy import (
+    build_occurrence_to_instance,
+    merge_net_id_mappings,
+    parse_hierarchy,
+    parse_hierarchy_occurrences,
+    parse_hierarchy_stream,
+    warn_repeated_sheet_blocks,
+)
+from phosphor_eda.formats.dsn.library import (
+    ole_stream_entries,
+    parse_cache_from_ole,
+    parse_library,
+    parse_packages_from_ole,
+)
+from phosphor_eda.formats.dsn.pins import ORCAD_PORT_TYPES
+from phosphor_eda.formats.dsn.raw_models import (
+    DsnBlockInstance,
+    DsnBlockPinBinding,
+    DsnBlockSheetPin,
     DsnBusEntry,
+    DsnCommentText,
+    DsnDesignStream,
     DsnNetBundleMap,
     DsnNetBundleMember,
+    DsnNetDisplayProp,
+    DsnPageGraphic,
+    DsnPageImage,
+    DsnStreamInventory,
+    DsnStreamRef,
+    DsnSymbolType,
     GraphicInst,
     NetIdMapping,
     PageNetEntry,
@@ -29,19 +89,11 @@ from phosphor_eda.formats.common.raw_models import (
     Wire,
     WireAlias,
 )
-from phosphor_eda.formats.dsn.binary_reader import (
-    PAGE_SETTINGS_SIZE,
-    PREAMBLE,
-    STRUCT_BUS_ENTRY,
-    STRUCT_GLOBAL,
-    STRUCT_NET_GROUP,
-    STRUCT_OFF_PAGE_CONNECTOR,
-    STRUCT_PORT,
-    STRUCT_WIRE_BUS,
-    STRUCT_WIRE_SCALAR,
-    BinaryReader,
+from phosphor_eda.formats.dsn.views import (
+    parse_view_schematic,
+    view_name_from_path,
+    warn_repeated_sheet_identity,
 )
-from phosphor_eda.formats.dsn.errors import DsnFormatError
 
 
 @dataclass
@@ -63,105 +115,11 @@ class DsnSchematicPage(SchematicPage):
     title_blocks: list[RawTitleBlock] = field(default_factory=list)
 
 
-# --- Structure parsers ---
-
-
-def skip_structure(r: BinaryReader) -> int:
-    """Skip a structure using prefix chain end_offset.
-
-    Returns the type_id of the skipped structure.
-    """
-    type_id, end_offset, _ = r.read_prefix_chain()
-    if end_offset > 0:
-        r.pos = end_offset
-    else:
-        r.try_read_preamble()
-    return type_id
-
-
-def skip_self_describing(r: BinaryReader) -> int:
-    """Skip a self-describing structure: [type:1][body_len:4][zero:4][body].
-
-    T0x34, T0x35, and similar structures use this format.
-    body_len is the byte count of the body AFTER the 9-byte header.
-
-    The declared length comes straight from the stream; older (PSD-era)
-    files carry layouts this parser misreads, producing absurd lengths.
-    Validate against the bytes that actually remain so those files fail
-    with a typed, located error instead of an IndexError far away.
-    """
-    offset = r.pos
-    type_id = r.read_uint8()
-    body_len = r.read_uint32()
-    r.skip(4)  # zero padding
-    remaining = len(r.data) - r.pos
-    if body_len > remaining:
-        msg = (
-            f"self-describing structure 0x{type_id:02x} at offset {offset} declares a "
-            f"{body_len}-byte body but only {remaining} bytes remain in the stream"
-        )
-        raise DsnFormatError(msg, offset=offset, type_id=type_id)
-    r.skip(body_len)  # skip the body
-    return type_id
-
-
 # Net labels placed on a wire never exceed a handful; a larger count means
 # the wire body layout differs from the StructWire layout we know.
 _MAX_WIRE_ALIASES = 64
 _MAX_NET_BUNDLE_GROUPS = 4096
 _MAX_NET_BUNDLE_MEMBERS = 4096
-
-
-def _parse_wire_aliases(
-    r: BinaryReader, wire_end_offset: int, ctx: ParseContext | None
-) -> list[WireAlias]:
-    """Parse the StructAlias (net label) records inside a wire body.
-
-    Layout per OpenOrCadParser ``StructWire.cpp``: after the end coordinates
-    come one unknown byte, a uint16 alias count, then one StructAlias per
-    label (prefix chain, preamble, locX/locY/color/rotation/fontIdx, name).
-    Versions whose wire body differs fail the bounds checks and are recorded
-    as diagnostics; the wire itself stays (the caller re-anchors at the
-    wire's end offset).
-    """
-    r.skip(1)
-    num_aliases = r.read_uint16()
-    if num_aliases == 0:
-        return []
-    if num_aliases > _MAX_WIRE_ALIASES:
-        msg = f"implausible wire alias count {num_aliases}; wire body layout unknown"
-        raise ValueError(msg)
-    aliases: list[WireAlias] = []
-    for _ in range(num_aliases):
-        _tid, alias_end, _pairs = r.read_prefix_chain()
-        r.try_read_preamble()
-        alias = WireAlias()
-        alias.x = r.read_int32()
-        alias.y = r.read_int32()
-        alias.color = r.read_uint32()
-        alias.rotation = r.read_uint32()
-        alias.font_idx = r.read_uint32()
-        alias.name = r.read_string_len_zero()
-        if wire_end_offset > 0 and r.pos > wire_end_offset:
-            msg = "wire alias overruns the wire body"
-            raise ValueError(msg)
-        aliases.append(alias)
-        if alias_end > 0:
-            r.pos = alias_end
-    return aliases
-
-
-def skip_counted_self_describing(r: BinaryReader) -> int:
-    """Read a uint16 count, then skip that many self-describing structures."""
-    count = r.read_uint16()
-    for _ in range(count):
-        skip_self_describing(r)
-    return count
-
-
-def _warn(ctx: ParseContext | None, category: str, message: str) -> None:
-    if ctx is not None:
-        ctx.warn(category, message)
 
 
 def _props_from_pairs(
@@ -181,6 +139,54 @@ def _prop_entries_from_pairs(
         value = string_list[value_idx] if 0 <= value_idx < len(string_list) else f"idx:{value_idx}"
         entries.append((name, value))
     return tuple(entries)
+
+
+def _parse_wire_aliases(
+    r: BinaryReader, wire_end_offset: int, ctx: ParseContext | None
+) -> list[WireAlias]:
+    """Parse the StructAlias (net label) records inside a wire body.
+
+    Layout per OpenOrCadParser ``StructWire.cpp``: after the end coordinates
+    come one unknown byte, a uint16 alias count, then one StructAlias per
+    label (prefix chain, preamble, locX/locY/color/rotation/fontIdx, name).
+    Versions whose wire body differs fail the bounds checks and are recorded
+    as diagnostics; the wire itself stays (the caller re-anchors at the
+    wire's end offset).
+    """
+    # Pre-check the 1 unknown byte + uint16 count against the wire body before
+    # reading them, so a truncated/foreign wire layout fails here instead of
+    # reading a bogus count out of the following structure.
+    if wire_end_offset > 0 and r.pos + 3 > wire_end_offset:
+        msg = "wire body ends before its alias count"
+        raise ValueError(msg)
+    r.skip(1)
+    num_aliases = r.read_uint16()
+    if num_aliases == 0:
+        return []
+    if num_aliases > _MAX_WIRE_ALIASES:
+        msg = f"implausible wire alias count {num_aliases}; wire body layout unknown"
+        raise ValueError(msg)
+    aliases: list[WireAlias] = []
+    for _ in range(num_aliases):
+        if wire_end_offset > 0 and r.pos >= wire_end_offset:
+            msg = "wire alias record starts past the wire body"
+            raise ValueError(msg)
+        _tid, alias_end, _pairs = r.read_prefix_chain()
+        r.try_read_preamble()
+        alias = WireAlias()
+        alias.x = r.read_int32()
+        alias.y = r.read_int32()
+        alias.color = r.read_uint32()
+        alias.rotation = r.read_uint32()
+        alias.font_idx = r.read_uint32()
+        alias.name = r.read_string_len_zero()
+        if wire_end_offset > 0 and r.pos > wire_end_offset:
+            msg = "wire alias overruns the wire body"
+            raise ValueError(msg)
+        aliases.append(alias)
+        if alias_end > 0:
+            r.pos = alias_end
+    return aliases
 
 
 def _parse_graphic_inst(
@@ -245,8 +251,7 @@ def _parse_title_blocks(
                 r.skip(8)  # unknown bytes before the name, per StructGraphicInst
                 block.name = r.read_string_len_zero()
             except (struct.error, IndexError, ValueError) as e:
-                if ctx is not None:
-                    ctx.warn("dsn_title_block", f"Title block parse error: {e}")
+                warn_optional(ctx, "dsn_title_block", f"Title block parse error: {e}")
             r.pos = end_offset
         else:
             r.try_read_preamble()
@@ -254,66 +259,323 @@ def _parse_title_blocks(
     return title_blocks
 
 
-# --- Stream parsers ---
+def _warn_unknown_structure(
+    ctx: ParseContext | None, section: str, type_id: int, offset: int
+) -> None:
+    warn_optional(
+        ctx,
+        "dsn_unknown_structure",
+        f"page {section} section: unsupported structure type 0x{type_id:02x} at offset {offset}",
+    )
 
 
-def parse_library(data: bytes) -> tuple[list[str], list[str]]:
-    """Parse the Library stream. Returns (string_list, part_fields)."""
-    r = BinaryReader(data, "Library")
+def _parse_block_sheet_pin(r: BinaryReader) -> DsnBlockSheetPin:
+    """Read one StructSymbolPin from a block instance's embedded symbol body."""
+    _type_id, pin_end, _pairs = r.read_prefix_chain()
+    r.try_read_preamble()
+    name = r.read_string_len_zero()
+    start_x = r.read_int32()
+    start_y = r.read_int32()
+    r.skip(8)  # hotpoint x/y
+    r.read_uint16()  # pin shape
+    r.skip(2)  # StructSymbolPin unknown field after pinShape
+    port_type = r.read_uint32()
+    r.skip(4)  # StructSymbolPin unknown field before display properties
+    display_prop_count = r.read_uint16()
+    for _ in range(display_prop_count):
+        skip_structure(r)
+    port_type_info = ORCAD_PORT_TYPES.get(port_type)
+    pin = DsnBlockSheetPin(
+        name=name,
+        x=start_x,
+        y=start_y,
+        port_type=port_type,
+        port_type_name=port_type_info.name if port_type_info is not None else "",
+    )
+    if pin_end > 0:
+        r.pos = pin_end
+    return pin
 
-    # Introduction (32-byte padded string)
-    intro_start = r.pos
-    r.read_string_zero()
-    r.pos = intro_start + 32  # pad to 32 bytes
 
-    # Version
-    r.read_uint16()  # version_major
-    r.read_uint16()  # version_minor
+def _parse_block_instance(r: BinaryReader) -> DsnBlockInstance:
+    """Parse a 0x0c DrawnInst (hierarchical block placement).
 
-    # Timestamps (uint32 + uint32 = 8 bytes)
-    r.read_uint32()  # create_date
-    r.read_uint32()  # modify_date
+    Layout (fixture-proven; OOCP names ``DrawnInst`` but ships no parser):
+    preamble, 8 unknown bytes, an empty package name, the block db_id (joins
+    the Hierarchy stream's child-schematic edge), a 4x int16 bounding box,
+    loc x/y, 4 unknown bytes, the SymbolDisplayProp list, one separator byte,
+    then an embedded LibraryPart-shaped struct holding the block's sheet pins
+    (StructSymbolPin: name, coordinates, port-type direction). After the
+    embedded struct comes the block instance label, 14 bytes, and the T0x10
+    records binding each sheet pin (by 1-based order) to a parent-page net id.
+    """
+    block = DsnBlockInstance()
+    r.try_read_preamble()
+    r.skip(8)  # unknown
+    r.read_string_len_zero()  # empty package name
+    block.db_id = r.read_uint32()
+    r.skip(8)  # bounding box (4x int16)
+    block.loc_x = r.read_int16()
+    block.loc_y = r.read_int16()
+    r.skip(4)  # unknown
 
-    # Zero padding (4 bytes)
-    r.skip(4)
+    num_display_props = r.read_uint16()
+    for _ in range(num_display_props):
+        skip_structure(r)
+    r.skip(1)  # separator before the embedded symbol struct
 
-    # Text fonts
-    text_font_len = r.read_uint16()
-    for _ in range(text_font_len - 1):
-        r.skip(60)  # LOGFONTA structure
+    # Embedded LibraryPart-shaped struct carrying the block's sheet pins.
+    _emb_type, emb_end, _emb_pairs = r.read_prefix_chain()
+    r.try_read_preamble()
+    r.read_string_len_zero()  # empty symbol name
+    r.read_string_len_zero()  # empty source library
+    r.skip(4)  # unknown
+    r.read_uint16()  # nPrimitives
+    r.skip(8)  # unknown
+    num_pins = r.read_uint16()
+    for _ in range(num_pins):
+        block.sheet_pins.append(_parse_block_sheet_pin(r))
+    if emb_end > 0:
+        r.pos = emb_end
 
-    # someLen array
-    some_len = r.read_uint16()
-    r.skip(some_len * 2)  # uint16 array
+    block.reference = r.read_string_len_zero()
+    r.skip(14)  # unknown
+    num_bindings = r.read_uint16()
+    for _ in range(num_bindings):
+        _t_type, t_end, _t_pairs = r.read_prefix_chain()
+        r.try_read_preamble()
+        binding = DsnBlockPinBinding(
+            pin_order=r.read_uint16(),
+            pin_x=r.read_int16(),
+            pin_y=r.read_int16(),
+            net_id=r.read_uint32(),
+        )
+        block.net_bindings.append(binding)
+        if t_end > 0:
+            r.pos = t_end
+    return block
 
-    # Unknown data
-    r.skip(4)  # unknown_2_0
-    r.skip(4)  # unknown_2_1
 
-    # Part field mapping (8 strings)
-    part_fields: list[str] = []
-    for _ in range(8):
-        part_fields.append(r.read_string_len_zero())
+# A page carries one T0x34 display record per net group; thousands would mean
+# the self-describing header layout differs from what we know.
+_MAX_T34_RECORDS = 100000
 
-    # Page settings (fixed 156 bytes)
-    r.skip(PAGE_SETTINGS_SIZE)
 
-    # String list - determine length based on version
-    # Version A uses uint16, others use uint32
-    str_lst_len = r.read_uint32()
-    if str_lst_len > 100000:
-        # Probably was uint16, rewind and read as uint16
-        r.pos -= 4
-        str_lst_len = r.read_uint16()
+def _parse_net_display_props(r: BinaryReader, ctx: ParseContext | None) -> list[DsnNetDisplayProp]:
+    """Parse the T0x34 section: per-net display records keyed by runtime net id.
 
-    string_list: list[str] = []
-    for _ in range(str_lst_len):
-        string_list.append(r.read_string_len_zero())
+    Each record is a self-describing structure (``type:1``, ``body_len:4``,
+    ``zero:4``, then ``body_len`` body bytes). The body holds the runtime
+    page-net id, an empty string, a zero uint32, and color/lineStyle/lineWidth.
+    The declared body length keeps the section in sync even when a body fails
+    to decode.
+    """
+    count = r.read_uint16()
+    records: list[DsnNetDisplayProp] = []
+    for _ in range(count):
+        offset = r.pos
+        r.read_uint8()  # structure type (0x34)
+        body_len = r.read_uint32()
+        r.skip(4)  # zero padding
+        if body_len > r.remaining():
+            msg = (
+                f"T0x34 record at offset {offset} declares a {body_len}-byte body "
+                f"but only {r.remaining()} bytes remain"
+            )
+            raise ValueError(msg)
+        body = r.read_bytes(body_len)
+        try:
+            br = BinaryReader(body, "T0x34")
+            net_id = br.read_uint32()
+            br.read_string_len_zero()  # empty label
+            br.read_uint32()  # unknown zero
+            record = DsnNetDisplayProp(
+                net_id=net_id,
+                color=br.read_uint32(),
+                line_style=br.read_uint32(),
+                line_width=br.read_uint32(),
+            )
+            records.append(record)
+        except (struct.error, IndexError, ValueError) as e:
+            warn_optional(ctx, "dsn_t0x34", f"T0x34 record parse error: {e}")
+        if len(records) > _MAX_T34_RECORDS:
+            msg = f"implausible T0x34 record count {count}"
+            raise ValueError(msg)
+    return records
 
-    return string_list, part_fields
+
+def _skip_graphic_primitive(r: BinaryReader) -> tuple[int, DsnPageGraphic | None, int]:
+    """Read one StructSthInPages0 primitive; return (prim_type, shape, body_len).
+
+    A shape is returned for line/rect/ellipse primitives; the caller records
+    CommentText separately and treats every other primitive (bitmap/OLE
+    payloads) as an envelope to skip. All primitives share the ``u32 len`` + 4
+    zero-byte envelope; the body spans ``len`` bytes after the zeros.
+    """
+    prim_type = r.read_uint8()
+    prim_type2 = r.read_uint8()
+    if prim_type != prim_type2:
+        msg = f"primitive prefix mismatch {prim_type} != {prim_type2}"
+        raise ValueError(msg)
+    body_len = r.read_uint32()
+    body_end = r.pos + 4 + body_len
+    shape: DsnPageGraphic | None = None
+    if prim_type in {PRIM_LINE, PRIM_RECT, PRIM_ELLIPSE}:
+        r.skip(4)  # 4 zero bytes
+        x1 = r.read_int32()
+        y1 = r.read_int32()
+        x2 = r.read_int32()
+        y2 = r.read_int32()
+        line_style = 0
+        line_width = 0
+        if r.pos + 8 <= body_end:
+            line_style = r.read_uint32()
+            line_width = r.read_uint32()
+        kind = {PRIM_LINE: "line", PRIM_RECT: "box", PRIM_ELLIPSE: "ellipse"}[prim_type]
+        shape = DsnPageGraphic(
+            kind=kind,
+            type_id=prim_type,
+            x1=x1,
+            y1=y1,
+            x2=x2,
+            y2=y2,
+            line_style=line_style,
+            line_width=line_width,
+        )
+    r.pos = body_end
+    r.try_read_preamble()
+    return prim_type, shape, body_len
+
+
+def _parse_comment_text_primitive(r: BinaryReader) -> DsnCommentText:
+    """Parse a CommentText primitive (StructSthInPages0 body)."""
+    body_len = r.read_uint32()
+    body_end = r.pos + 4 + body_len
+    r.skip(4)  # 4 zero bytes
+    loc_x = r.read_int32()
+    loc_y = r.read_int32()
+    x2 = r.read_int32()
+    y2 = r.read_int32()
+    x1 = r.read_int32()
+    y1 = r.read_int32()
+    font_idx = r.read_uint16()
+    r.skip(2)  # unknown
+    text = r.read_string_len_zero()
+    r.pos = body_end
+    r.try_read_preamble()
+    return DsnCommentText(
+        text=text,
+        loc_x=loc_x,
+        loc_y=loc_y,
+        bbox_x1=x1,
+        bbox_y1=y1,
+        bbox_x2=x2,
+        bbox_y2=y2,
+        font_idx=font_idx,
+    )
+
+
+_IMAGE_GRAPHIC_KINDS = {STRUCT_GRAPHIC_BITMAP: "bitmap", STRUCT_GRAPHIC_OLE_EMBED: "ole_embed"}
+# Graphic-inst structure types validated on the corpus. Others (polygon,
+# polyline, arc, bezier — zero fixture instances) get a diagnostic and are
+# skipped via the record's prefix-chain end offset.
+_KNOWN_GRAPHIC_TYPES = frozenset(
+    {
+        STRUCT_GRAPHIC_BOX,
+        STRUCT_GRAPHIC_LINE,
+        STRUCT_GRAPHIC_ELLIPSE,
+        STRUCT_GRAPHIC_COMMENT_TEXT,
+        STRUCT_GRAPHIC_BITMAP,
+        STRUCT_GRAPHIC_OLE_EMBED,
+    }
+)
+
+
+def _parse_page_graphic_inst(
+    r: BinaryReader, page: DsnSchematicPage, ctx: ParseContext | None
+) -> None:
+    """Parse one page-tail StructGraphicInst and record it on *page*.
+
+    The record's own prefix-chain end offset bounds the whole decode (including
+    the SthInPages0 primitive wrapper), so a layout surprise never desyncs the
+    graphic section — the caller re-anchors at ``end_offset``.
+    """
+    graphic_offset = r.pos
+    type_id, end_offset, _pairs = r.read_prefix_chain()
+    if type_id not in _KNOWN_GRAPHIC_TYPES:
+        _warn_unknown_structure(ctx, "graphic", type_id, graphic_offset)
+    try:
+        r.try_read_preamble()
+        r.skip(8)  # unknown
+        r.read_string_len_zero()  # name (empty in the corpus)
+        r.read_uint32()  # db_id
+        r.skip(12)  # 6x int16 loc/bbox coordinates
+        r.skip(1)  # color
+        r.skip(3)  # unknown
+        num_display_props = r.read_uint16()
+        for _ in range(num_display_props):
+            skip_structure(r)
+        flag = r.read_uint8()
+        if flag == 0x02:
+            _read_sth_in_pages0(r, page, type_id, ctx)
+    except (struct.error, IndexError, ValueError) as e:
+        warn_optional(ctx, "dsn_graphic_inst", f"Graphic instance parse error: {e}")
+    if end_offset > 0:
+        r.pos = end_offset
+
+
+def _read_sth_in_pages0(
+    r: BinaryReader, page: DsnSchematicPage, type_id: int, ctx: ParseContext | None
+) -> None:
+    """Read the StructSthInPages0 wrapper and its primitives for a graphic inst."""
+    r.read_prefix_chain()
+    r.try_read_preamble()
+    r.read_string_len_zero()  # symbol name
+    r.read_string_len_zero()  # source library
+    r.read_uint32()  # color
+    num_prims = r.read_uint16()
+    payload_size = 0
+    for _ in range(num_prims):
+        if r.data[r.pos] == PRIM_COMMENT_TEXT and r.data[r.pos + 1] == PRIM_COMMENT_TEXT:
+            r.skip(2)  # matched primitive prefix
+            page.comment_texts.append(_parse_comment_text_primitive(r))
+        else:
+            _prim_type, shape, body_len = _skip_graphic_primitive(r)
+            if shape is not None:
+                page.page_graphics.append(shape)
+            payload_size = max(payload_size, body_len)
+    if type_id in _IMAGE_GRAPHIC_KINDS:
+        # Bitmap/OLE embeds carry a heavy payload; record kind and the envelope
+        # byte size only, never the (multi-megabyte) payload bytes themselves.
+        page.page_images.append(
+            DsnPageImage(
+                kind=_IMAGE_GRAPHIC_KINDS[type_id], type_id=type_id, payload_size=payload_size
+            )
+        )
 
 
 def parse_page(
+    data: bytes, string_list: list[str], ctx: ParseContext | None = None
+) -> DsnSchematicPage:
+    """Parse a Page stream into a SchematicPage.
+
+    The per-section loops (wires, instances, ports, globals, off-page
+    connectors) trap their own read errors and diagnose them, but the early
+    structural reads — header, page name/size, title blocks, T0x34 records,
+    and the net list — run outside those guards. A truncated or corrupt stream
+    there raises a raw ``struct.error``/``IndexError`` that the loader path only
+    catches as ``DsnFormatError``; convert it so a bad page is reported as a
+    malformed file rather than crashing the whole project load (matches the
+    Library-stream hardening).
+    """
+    try:
+        return _parse_page(data, string_list, ctx)
+    except (struct.error, IndexError) as exc:
+        msg = f"Page stream is truncated or uses an unsupported layout: {exc}"
+        raise DsnFormatError(msg, offset=0, type_id=0) from exc
+
+
+def _parse_page(
     data: bytes, string_list: list[str], ctx: ParseContext | None = None
 ) -> DsnSchematicPage:
     """Parse a Page stream into a SchematicPage.
@@ -340,11 +602,15 @@ def parse_page(
     # Title blocks — field values ride in the record's prefix-chain pairs
     page.title_blocks = _parse_title_blocks(r, string_list, ctx)
 
-    # T0x34 - self-describing format, skip
-    skip_counted_self_describing(r)
+    # T0x34 - per-net display records (color/lineStyle/lineWidth) keyed by
+    # runtime page-net id; one per net group per page.
+    page.net_display_props = _parse_net_display_props(r, ctx)
 
-    # T0x35 - self-describing format, skip
-    skip_counted_self_describing(r)
+    # T0x35 - self-describing format; zero instances in the corpus. Keep the
+    # skip and diagnose if any ever appear so a new layout is not lost silently.
+    num_t35 = skip_counted_self_describing(r)
+    if num_t35:
+        warn_optional(ctx, "dsn_t0x35", f"page {page.name!r}: {num_t35} T0x35 record(s) skipped")
 
     # Net-to-ID list - parse this carefully, it's just strings + uint32
     num_nets = r.read_uint16()
@@ -359,10 +625,16 @@ def parse_page(
     # Map: coordinate (x,y) -> set of net_ids
     wire_net_map: dict[tuple[int, int], set[int]] = {}
     for _ in range(num_wires):
-        type_id, end_offset, _pairs = r.read_prefix_chain()
+        wire_offset = r.pos
+        type_id, end_offset, pairs = r.read_prefix_chain()
         r.try_read_preamble()
         wire = Wire(type_id=type_id)
+        # Wire prefix-pair net properties (CDS_PHYS_NET_NAME, DIFFERENTIAL_PAIR,
+        # VOLTAGE) resolve against the Library string list like instance props.
+        wire.net_properties = _prop_entries_from_pairs(pairs, string_list)
         parsed_wire = False
+        if type_id not in {STRUCT_WIRE_SCALAR, STRUCT_WIRE_BUS}:
+            _warn_unknown_structure(ctx, "wire", type_id, wire_offset)
 
         try:
             # OpenOrCadParser's StructWire marks these 8 bytes "might be
@@ -393,74 +665,90 @@ def parse_page(
             page.wires.append(wire)
     page.wire_net_map = wire_net_map
 
-    # Placed instances — parse body to extract reference designator
+    # Placed instances and hierarchical block instances. The section mixes two
+    # structure types: 0x0d part instances and 0x0c block placements, each with
+    # its own body layout. Type-gate so a block record never desyncs the 0x0d
+    # decode, and diagnose anything else instead of guessing.
     num_instances = r.read_uint16()
     for _ in range(num_instances):
-        _type_id, end_offset, pairs = r.read_prefix_chain()
-        r.try_read_preamble()
+        inst_offset = r.pos
+        type_id, end_offset, pairs = r.read_prefix_chain()
 
-        inst = PlacedInstance()
-
-        inst.props_list = _prop_entries_from_pairs(pairs, string_list)
-        inst.props = dict(inst.props_list)
-
-        # Parse body to get package name, dbId, reference, and pin connections
-        try:
-            r.skip(8)  # instance_id_idx + source_library_idx
-            inst.package_name = r.read_string_len_zero()
-            inst.db_id = r.read_uint32()
-            r.skip(8)  # unknown_1
-            inst.loc_x = r.read_int16()
-            inst.loc_y = r.read_int16()
-            r.skip(4)  # unknown_2
-
-            # Skip SymbolDisplayProp structures
-            num_display_props = r.read_uint16()
-            for _ in range(num_display_props):
-                skip_structure(r)
-
-            r.skip(1)  # unknown_3
-
-            # Checkpoint boundary — may have preamble
+        if type_id == STRUCT_PART_INST:
             r.try_read_preamble()
+            inst = PlacedInstance()
+            inst.props_list = _prop_entries_from_pairs(pairs, string_list)
+            inst.props = dict(inst.props_list)
+            try:
+                r.skip(8)  # instance_id_idx + source_library_idx
+                inst.package_name = r.read_string_len_zero()
+                inst.db_id = r.read_uint32()
+                r.skip(8)  # unknown_1
+                inst.loc_x = r.read_int16()
+                inst.loc_y = r.read_int16()
+                r.skip(4)  # unknown_2
 
-            # Reference designator
-            inst.reference = r.read_string_len_zero()
+                # Skip SymbolDisplayProp structures
+                num_display_props = r.read_uint16()
+                for _ in range(num_display_props):
+                    skip_structure(r)
 
-            # 14 unknown bytes after reference
-            r.skip(14)
+                r.skip(1)  # unknown_3
 
-            # T0x10 structures = pin instances with net assignments
-            num_t0x10 = r.read_uint16()
-            for _ in range(num_t0x10):
-                _t_type, t_end, _t_pairs = r.read_prefix_chain()
+                # Checkpoint boundary — may have preamble
                 r.try_read_preamble()
 
-                pin = PinConnection()
-                pin.pin_number = str(r.read_uint16())
-                pin.pin_x = r.read_int16()
-                pin.pin_y = r.read_int16()
-                pin.net_id = r.read_uint32()
-                inst.pin_connections.append(pin)
+                # Reference designator
+                inst.reference = r.read_string_len_zero()
 
-                if t_end > 0:
-                    r.pos = t_end
+                # 14 unknown bytes after reference
+                r.skip(14)
 
-            # Checkpoint: source_package string
-            r.try_read_preamble()
-            inst.source_package = r.read_string_len_zero()
-            page.instances.append(inst)
-        except (struct.error, IndexError, ValueError) as e:
-            if ctx is not None:
-                ctx.warn("dsn_instance", f"PlacedInstance parse error: {e}")
+                # T0x10 structures = pin instances with net assignments. The
+                # pin-order field is int16: |v| is the 1-based display order and
+                # a negative sign is a user-placed no-connect marker.
+                num_t0x10 = r.read_uint16()
+                for _ in range(num_t0x10):
+                    _t_type, t_end, _t_pairs = r.read_prefix_chain()
+                    r.try_read_preamble()
+
+                    pin = PinConnection()
+                    order = r.read_int16()
+                    pin.pin_order = abs(order)
+                    pin.has_no_connect_marker = order < 0
+                    pin.pin_number = str(pin.pin_order)
+                    pin.pin_x = r.read_int16()
+                    pin.pin_y = r.read_int16()
+                    pin.net_id = r.read_uint32()
+                    inst.pin_connections.append(pin)
+
+                    if t_end > 0:
+                        r.pos = t_end
+
+                # Checkpoint: source_package string
+                r.try_read_preamble()
+                inst.source_package = r.read_string_len_zero()
+                page.instances.append(inst)
+            except (struct.error, IndexError, ValueError) as e:
+                if ctx is not None:
+                    ctx.warn("dsn_instance", f"PlacedInstance parse error: {e}")
+        elif type_id == STRUCT_DRAWN_INST:
+            try:
+                page.block_instances.append(_parse_block_instance(r))
+            except (struct.error, IndexError, ValueError) as e:
+                warn_optional(ctx, "dsn_block_instance", f"Block instance parse error: {e}")
+        else:
+            _warn_unknown_structure(ctx, "instance", type_id, inst_offset)
 
         # Jump to end_offset for safety
         if end_offset > 0:
             r.pos = end_offset
 
-    # Ports
+    # Ports. Like globals, the port body opens with an 8-byte string-index
+    # prefix (net-name index + source-library index) ahead of the symbol name.
     num_ports = r.read_uint16()
     for _ in range(num_ports):
+        port_offset = r.pos
         type_id, end_offset, pairs = r.read_prefix_chain()
         r.try_read_preamble()
         port: GraphicInst | None = None
@@ -471,11 +759,13 @@ def parse_page(
                     string_list,
                     pairs,
                     type_id,
-                    has_name_indices=False,
+                    has_name_indices=True,
                 )
             except (struct.error, IndexError, ValueError) as e:
                 if ctx is not None:
                     ctx.warn("dsn_port", f"Port parse error: {e}")
+        else:
+            _warn_unknown_structure(ctx, "port", type_id, port_offset)
         if end_offset > 0:
             r.pos = end_offset
         if port is not None:
@@ -484,6 +774,7 @@ def parse_page(
     # Globals (power symbols) — extract name, properties, and display props
     num_globals = r.read_uint16()
     for _ in range(num_globals):
+        global_offset = r.pos
         type_id, end_offset, pairs = r.read_prefix_chain()
         r.try_read_preamble()
 
@@ -498,6 +789,8 @@ def parse_page(
                     type_id,
                     has_name_indices=True,
                 )
+            else:
+                _warn_unknown_structure(ctx, "global", type_id, global_offset)
             r.skip(1)  # unknownFlag (0x21 for Global)
         except (struct.error, IndexError, ValueError) as e:
             if ctx is not None:
@@ -512,6 +805,7 @@ def parse_page(
     # Off-page connectors
     num_opc = r.read_uint16()
     for _ in range(num_opc):
+        opc_offset = r.pos
         type_id, end_offset, pairs = r.read_prefix_chain()
         r.try_read_preamble()
         connector: GraphicInst | None = None
@@ -528,18 +822,20 @@ def parse_page(
             except (struct.error, IndexError, ValueError) as e:
                 if ctx is not None:
                     ctx.warn("dsn_off_page_connector", f"Off-page connector parse error: {e}")
+        else:
+            _warn_unknown_structure(ctx, "off-page connector", type_id, opc_offset)
         if end_offset > 0:
             r.pos = end_offset
         if connector is not None:
             page.off_page_connectors.append(connector)
         r.skip(5)  # trailing data
 
-    _parse_page_tail_objects(r, page, ctx)
+    parse_page_tail_objects(r, page, ctx)
 
     return page
 
 
-def _parse_page_tail_objects(
+def parse_page_tail_objects(
     r: BinaryReader,
     page: DsnSchematicPage,
     ctx: ParseContext | None,
@@ -547,19 +843,28 @@ def _parse_page_tail_objects(
     """Parse known post-connector page structures without guessing at the rest."""
     if r.remaining() < 2:
         return
+    erc_parse_failed = False
     try:
         num_erc_objects = r.read_uint16()
+        if num_erc_objects > MAX_ERC_OBJECTS:
+            msg = f"implausible page-tail ERC object count {num_erc_objects}"
+            raise ValueError(msg)
         for _ in range(num_erc_objects):
-            skip_structure(r)
+            erc_object = parse_erc_object(r, page.name, ctx)
+            if erc_object is not None:
+                page.erc_objects.append(erc_object)
     except (struct.error, IndexError, ValueError) as e:
-        _warn(ctx, "dsn_page_tail", f"Page tail ERC object parse error: {e}")
-        return
+        warn_optional(ctx, "dsn_page_tail", f"Page tail ERC object parse error: {e}")
+        # A hard ERC decode failure can leave the page-tail cursor ambiguous.
+        # Skip bus entries rather than risking bogus connectivity-adjacent data.
+        erc_parse_failed = True
 
-    if r.remaining() < 2:
+    if erc_parse_failed or r.remaining() < 2:
         return
     try:
         num_bus_entries = r.read_uint16()
         for _ in range(num_bus_entries):
+            bus_entry_offset = r.pos
             type_id, end_offset, _pairs = r.read_prefix_chain()
             r.try_read_preamble()
             entry: DsnBusEntry | None = None
@@ -572,12 +877,53 @@ def _parse_page_tail_objects(
                     end_y=r.read_int32(),
                 )
                 r.skip(8)
+            else:
+                _warn_unknown_structure(ctx, "bus entry", type_id, bus_entry_offset)
             if end_offset > 0:
                 r.pos = end_offset
             if entry is not None:
                 page.bus_entries.append(entry)
     except (struct.error, IndexError, ValueError) as e:
-        _warn(ctx, "dsn_bus_entry", f"Bus entry parse error: {e}")
+        warn_optional(ctx, "dsn_bus_entry", f"Bus entry parse error: {e}")
+        return
+
+    _parse_page_graphic_section(r, page, ctx)
+
+
+def _parse_page_graphic_section(
+    r: BinaryReader,
+    page: DsnSchematicPage,
+    ctx: ParseContext | None,
+) -> None:
+    """Parse the page-tail GraphicInst section plus the two trailing sub-lists.
+
+    After bus entries the page carries ``u16 lenGraphicInsts`` + StructGraphicInst
+    records (CommentText notes, Line/Box/Ellipse shapes, Bitmap/OLE image
+    envelopes), then two more counted structure lists (``len10``/``len11``),
+    both empty on every fixture. Each graphic's prefix-chain end offset keeps
+    the section byte-exact, so the page parses to residue 0.
+    """
+    if r.remaining() < 2:
+        return
+    try:
+        num_graphics = r.read_uint16()
+        for _ in range(num_graphics):
+            _parse_page_graphic_inst(r, page, ctx)
+
+        len10 = r.read_uint16() if r.remaining() >= 2 else 0
+        for _ in range(len10):
+            skip_structure(r)
+        len11 = r.read_uint16() if r.remaining() >= 2 else 0
+        for _ in range(len11):
+            skip_structure(r)
+        if len10 or len11:
+            warn_optional(
+                ctx,
+                "dsn_page_tail_structures",
+                f"page {page.name!r}: unexpected trailing structures len10={len10} len11={len11}",
+            )
+    except (struct.error, IndexError, ValueError) as e:
+        warn_optional(ctx, "dsn_graphic_section", f"Page graphic section parse error: {e}")
 
 
 def parse_net_bundle_map_data(
@@ -630,12 +976,12 @@ def parse_net_bundle_map_data(
             msg = f"NetBundleMapData has {r.remaining()} trailing bytes"
             raise ValueError(msg)
     except (struct.error, IndexError, ValueError) as e:
-        _warn(ctx, "dsn_net_bundle_map", f"NetBundleMapData parse error: {e}")
+        warn_optional(ctx, "dsn_net_bundle_map", f"NetBundleMapData parse error: {e}")
         return []
     return groups
 
 
-def _parse_net_bundle_map_streams(
+def parse_net_bundle_map_streams(
     streams: Iterable[bytes],
     ctx: ParseContext | None = None,
 ) -> list[DsnNetBundleMap]:
@@ -645,196 +991,134 @@ def _parse_net_bundle_map_streams(
     return net_bundle_maps
 
 
-def parse_hierarchy(data: bytes) -> list[NetIdMapping]:
-    """Parse the Hierarchy stream for net-to-ID mappings."""
-    r = BinaryReader(data, "Hierarchy")
-    mappings: list[NetIdMapping] = []
+def parse_dsn_stream(
+    data: bytes, string_list: list[str], ctx: ParseContext | None = None
+) -> DsnDesignStream | None:
+    """Parse the top-level ``DsnStream`` design-settings stream (F4).
 
-    r.skip(9)  # unknown_0
-    r.read_string_len_zero()  # schematic_name
-    r.skip(7)  # unknown_1
-
-    # SthInHierarchy2 list
-    num_sth2 = r.read_uint16()
-    for _ in range(num_sth2):
-        skip_structure(r)
-        r.skip(4)  # trailing uint32
-        r.read_string_len_zero()  # someName
-
-    # Net DB ID Mappings - this is what we want
-    num_mappings = r.read_uint16()
-    for _ in range(num_mappings):
-        skip_structure(r)  # StructNetDbIdMapping (empty payload)
-        mapping = NetIdMapping()
-        mapping.db_id = r.read_uint32()
-        mapping.name = r.read_string_len_zero()
-        mappings.append(mapping)
-
-    return mappings
-
-
-def _can_read_string_len_zero(data: bytes, pos: int) -> bool:
-    """Check if readStringLenZeroTerm would succeed at `pos`.
-
-    Matches C++ semantics: reads uint16 length, then scans for null terminator,
-    and verifies the distance to null equals the length prefix.
+    Structure type 0x04 whose prefix-chain pairs index the Library string list
+    (``Library guid``, ``Time Format Index``), followed by a preamble whose
+    optional payload embeds an ``InstalledVersion*`` JSON blob on 17.4-era
+    files.
     """
-    size = len(data)
-    if pos + 2 > size:
-        return False
-    length = struct.unpack_from("<H", data, pos)[0]
-    if length == 0:
-        return pos + 2 < size and data[pos + 2] == 0
-    start = pos + 2
+    r = BinaryReader(data, "DsnStream")
     try:
-        null_pos = data.index(b"\x00", start)
-    except ValueError:
-        return False
-    return (null_pos - start) == length
+        type_id, _end_offset, pairs = r.read_prefix_chain()
+        if type_id != STRUCT_DSN_STREAM:
+            warn_optional(
+                ctx, "dsn_dsn_stream", f"DsnStream root structure is 0x{type_id:02x}, not 0x04"
+            )
+            return None
+        props = _props_from_pairs(pairs, string_list)
+        stream = DsnDesignStream(
+            library_guid=props.get("Library guid", ""),
+            time_format_index=props.get("Time Format Index", ""),
+            properties=props,
+        )
+        if r.at_preamble():
+            r.skip(4)  # preamble magic
+            payload_len = r.read_uint32()
+            payload = r.read_bytes(payload_len)
+            stream.version_info = _extract_version_json(payload)
+        return stream
+    except (struct.error, IndexError, ValueError) as e:
+        warn_optional(ctx, "dsn_dsn_stream", f"DsnStream parse error: {e}")
+        return None
 
 
-def parse_cache(data: bytes) -> dict[str, list[str]]:
-    """Parse the Cache stream to extract symbol pin names.
+def _extract_version_json(payload: bytes) -> dict[str, str]:
+    """Decode the embedded ``{...}`` JSON object from a DsnStream payload."""
+    start = payload.find(b"{")
+    end = payload.rfind(b"}")
+    if start < 0 or end < start:
+        return {}
+    # A ``{...}`` slice always decodes to a JSON object (dict); the annotation
+    # gives it a concrete type since json.loads returns Any.
+    try:
+        decoded: dict[str, object] = json.loads(payload[start : end + 1].decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return {}
+    return {key: str(value) for key, value in decoded.items()}
 
-    Returns a dict mapping symbol names (without .Normal suffix) to ordered
-    lists of pin names. Pin order matches T0x10 pin_number (1-indexed).
 
-    The Cache stream format (per OpenOrCadParser StreamCache.cpp):
-    - 4-byte header: 0x00 0x00 + 2 unknown bytes
-    - Repeated entries until EOF, each containing:
-      1. Optional preamble data (string or 8-byte prefix + string + refdes)
-      2. Symbol name (readStringLenZeroTerm)
-      3. Optional package reference loop (when id0 != id1)
-      4. Two matching uint32 IDs + uint16 struct_type + structure data
+def parse_symbol_types(data: bytes, ctx: ParseContext | None = None) -> list[DsnSymbolType]:
+    """Parse a ``Symbols/$Types$`` name -> structure-type catalog (F5).
 
-    The C++ tryRead() is a non-consuming probe: it saves/restores position
-    and only reports success/failure.
+    Layout: a flat sequence of ``[len-zero name][uint16 type]`` entries until
+    end of stream (e.g. ``ERC`` -> 0x4b, ``ERC_PHYSICAL`` -> 0x4b). Empty on
+    most designs.
     """
-    r = BinaryReader(data, "Cache")
-    size = len(data)
-    pin_map: dict[str, list[str]] = {}
-
-    # 4-byte header: 0x00 0x00 (assumed) + 2 unknown bytes
-    r.skip(4)
-
-    while r.pos < size - 4:
-        # Probe: hasStrAfter0Byte (non-consuming check)
-        if not _can_read_string_len_zero(data, r.pos):
-            # !hasStrAfter0Byte path
-            if _can_read_string_len_zero(data, r.pos + 8):
-                # hasStrAfter8Byte: consume 8 bytes + lib path + 2 unknown + refdes
-                r.skip(8)
-                r.read_string_len_zero()  # library path
-                r.skip(2)  # unknown bytes
-                r.read_string_len_zero()  # someRefDes
-            # Always: 2 unknown bytes (outside hasStrAfter8Byte)
-            r.skip(2)
-
-        # Symbol name
-        if r.pos >= size - 2:
-            break
-        name = r.read_string_len_zero()
-
-        # Peek id0, id1 to check for package reference loop
-        if r.pos + 8 > size:
-            break
-        id0 = struct.unpack_from("<I", data, r.pos)[0]
-        id1 = struct.unpack_from("<I", data, r.pos + 4)[0]
-
-        if id0 != id1:
-            # Package reference do-while loop
-            while True:
-                some_val = r.read_uint16()
-                if r.pos >= size:
-                    break
-                if r.pos + 1 >= size:
-                    r.skip(1)
-                    break
-                # hasMysterious2Byte = !can_read_string
-                if _can_read_string_len_zero(data, r.pos):
-                    r.read_string_len_zero()
-                else:
-                    r.skip(2)  # mysterious 2 bytes
-                    r.read_string_len_zero()
-                if some_val != 0:
-                    break
-
-        # Read some_id0, some_id1, struct_type
-        if r.pos + 10 > size:
-            break
-        r.skip(8)  # some_id0 + some_id1
-        struct_type = r.read_uint16()
-
-        # Skip the structure via prefix chain
-        struct_start = r.pos
-        try:
-            _type_id, end_offset, _pairs = r.read_prefix_chain()
-            if end_offset > 0:
-                struct_end = end_offset
-                r.pos = end_offset
-            else:
-                struct_end = r.pos
-        except ValueError:
-            break
-
-        # Extract pin names from symbol entries (struct_type 0x18 = 24)
-        if struct_type == 24 and name:
-            sub_symbols = _extract_pin_names(data, struct_start, struct_end, name)
-            for sym_key, pins in sub_symbols.items():
-                if pins:
-                    pin_map[sym_key] = pins
-
-    return pin_map
+    r = BinaryReader(data, "$Types$")
+    types: list[DsnSymbolType] = []
+    try:
+        while r.remaining() >= 3:
+            name = r.read_string_len_zero()
+            type_id = r.read_uint16()
+            types.append(DsnSymbolType(name=name, type_id=type_id))
+    except (struct.error, IndexError, ValueError) as e:
+        warn_optional(ctx, "dsn_symbol_types", f"Symbols/$Types$ parse error: {e}")
+    return types
 
 
-def _extract_pin_names(
-    data: bytes,
-    start: int,
-    end: int,
-    sym_name: str,
-) -> dict[str, list[str]]:
-    """Extract pin names from a symbol structure in data[start:end].
+def _stream_is_parsed(path: str) -> bool:
+    """True when *path* is consumed by a known DSN stream parser."""
+    if path in {"Library", "Cache", "DsnStream", "NetBundleMapData"}:
+        return True
+    if path.endswith("/NetBundleMapData"):
+        return True
+    if path.startswith("Packages/"):
+        return True
+    if path.startswith("Views/") and (path.endswith("/Schematic") or "/Pages/" in path):
+        return True
+    if "Hierarchy/Hierarchy" in path:
+        return True
+    if path.startswith("CIS/VariantStore/"):
+        return True
+    if path.startswith("Symbols/ERC"):
+        return True
+    return path == "Symbols/$Types$"
 
-    A single Cache structure may contain multiple sub-symbols (e.g., a
-    package entry can hold a DIODE_SCHOTTKY symbol with its own pins).
-    When a '.Normal' name is encountered, subsequent pins belong to that
-    sub-symbol until the next '.Normal' or end of range.
 
-    Returns a dict mapping symbol names (without .Normal) to pin lists.
-    The top-level symbol is keyed by sym_name (also without .Normal).
-    """
-    result: dict[str, list[str]] = {}
-    current_sym = sym_name.replace(".Normal", "")
-    result[current_sym] = []
+def _stream_is_known_unparsed(path: str) -> bool:
+    """True when *path* is an intentionally-skipped known stream."""
+    if path in {"AnnotateCtrl", "AdminData", "HSObjects"}:
+        return True
+    if path.endswith(" Directory"):
+        return True
+    if path == "Graphics/$Types$" or path.startswith("Graphics/"):
+        return True
+    if path.startswith("CIS/"):
+        return True
+    # Views-nested CIS schematic storage and the constraint track (DCF,
+    # Metadata, index storage) are recognised families handled elsewhere or
+    # deliberately deferred; they are not unknown.
+    return "/CISSchematic" in path or "/Constraint/" in path
 
-    pos = start
-    while pos < end - 4:
-        idx = data.find(PREAMBLE, pos, end)
-        if idx == -1:
-            break
-        # Skip preamble magic + trailing data
-        p = idx + 4
-        if p + 4 > end:
-            break
-        data_len = struct.unpack_from("<I", data, p)[0]
-        p += 4 + data_len
-        if p >= end:
-            break
-        # Try reading a name after the preamble
-        if _can_read_string_len_zero(data, p):
-            length = struct.unpack_from("<H", data, p)[0]
-            if length > 0:
-                name = data[p + 2 : p + 2 + length].decode("ascii", errors="replace")
-                if ".Normal" in name:
-                    # Start of a new sub-symbol
-                    current_sym = name.replace(".Normal", "")
-                    if current_sym not in result:
-                        result[current_sym] = []
-                elif name != sym_name and len(name) < 30:
-                    result[current_sym].append(name)
-        pos = idx + 1  # advance past this preamble
 
-    return result
+def _build_stream_inventory(
+    stream_entries: list[tuple[str, list[str]]],
+    ole: olefile.OleFileIO,
+    ctx: ParseContext | None,
+) -> DsnStreamInventory:
+    """Inventory every top-level OLE stream as parsed, known-unparsed, or unknown."""
+    inventory = DsnStreamInventory()
+    for path, _entry in stream_entries:
+        if _stream_is_parsed(path):
+            continue
+        size = ole.get_size(path)
+        ref = DsnStreamRef(path=path, size=size)
+        if _stream_is_known_unparsed(path):
+            inventory.known_unparsed_streams.append(ref)
+        else:
+            inventory.unknown_streams.append(ref)
+    if inventory.unknown_streams:
+        warn_optional(
+            ctx,
+            "dsn_unknown_stream",
+            f"{len(inventory.unknown_streams)} unrecognised OLE stream(s): "
+            + ", ".join(ref.path for ref in inventory.unknown_streams),
+        )
+    return inventory
 
 
 # --- Main entry point ---
@@ -849,19 +1133,49 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
     if ctx is None:
         ctx = ParseContext()
     ole = olefile.OleFileIO(str(dsn_path))
+    try:
+        # 1. Parse Library stream first (needed for string list)
+        lib_data = ole.openstream("Library").read()
+        library_header, string_list, part_fields = parse_library(lib_data, ctx)
 
-    # 1. Parse Library stream first (needed for string list)
-    lib_data = ole.openstream("Library").read()
-    string_list, part_fields = parse_library(lib_data)
+        design = ParsedDesign()
+        design.library_header = library_header
+        design.string_list = string_list
+        design.part_fields = part_fields
 
-    design = ParsedDesign()
-    design.string_list = string_list
-    design.part_fields = part_fields
+        stream_entries = ole_stream_entries(ole)
+        stream_paths = [path for path, _entry in stream_entries]
+        storage_paths = {"/".join(entry) for entry in ole.listdir(streams=False, storages=True)}
+        hierarchy_stream_paths_by_view: dict[str, list[str]] = {}
+        for path in stream_paths:
+            if path.startswith("Views/") and "/Hierarchy/Hierarchy" in path:
+                hierarchy_stream_paths_by_view.setdefault(view_name_from_path(path), []).append(
+                    path
+                )
 
-    # 2. Parse Page stream(s)
-    for entry in ole.listdir():
-        path = "/".join(entry)
-        if path.startswith("Views/") and "/Pages/" in path:
+        # 2. Parse raw Packages/* streams.
+        design.packages = parse_packages_from_ole(ole, ctx, stream_entries)
+
+        # 3. Parse schematic view metadata.
+        for path, entry in stream_entries:
+            if not (path.startswith("Views/") and path.endswith("/Schematic")):
+                continue
+            view_name = view_name_from_path(path)
+            view_data = ole.openstream(entry).read()
+            view = parse_view_schematic(
+                view_data,
+                stream_path=path,
+                hierarchy_stream_paths=hierarchy_stream_paths_by_view.get(view_name, []),
+                ctx=ctx,
+            )
+            if view is not None:
+                design.views.append(view)
+        warn_repeated_sheet_identity(design.views, ctx)
+
+        # 4. Parse Page stream(s)
+        for path, entry in stream_entries:
+            if not (path.startswith("Views/") and "/Pages/" in path):
+                continue
             page_data = ole.openstream(entry).read()
             try:
                 page = parse_page(page_data, string_list, ctx)
@@ -870,28 +1184,77 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
                 # it — a misread page header poisons everything after it.
                 ctx.error("dsn_format", f"page {path!r}: {exc}")
                 raise
+            page.view_name = view_name_from_path(path)
+            page.stream_path = path
             design.pages.append(page)
 
-    # 3. Parse Hierarchy stream
-    for entry in ole.listdir():
-        path = "/".join(entry)
-        if "Hierarchy/Hierarchy" in path:
+        # 5. Parse Hierarchy stream
+        instance_db_id_set = {
+            instance.db_id for page in design.pages for instance in page.instances if instance.db_id
+        }
+        mapping_groups: list[Iterable[NetIdMapping]] = [design.net_id_mappings]
+        for path, entry in stream_entries:
+            if "Hierarchy/Hierarchy" not in path:
+                continue
             hier_data = ole.openstream(entry).read()
-            design.net_id_mappings = parse_hierarchy(hier_data)
+            mapping_groups.append(parse_hierarchy(hier_data))
+            design.hierarchy_occurrences.extend(
+                parse_hierarchy_occurrences(hier_data, instance_db_id_set)
+            )
+            design.hierarchies.append(
+                parse_hierarchy_stream(hier_data, instance_db_id_set, stream_path=path, ctx=ctx)
+            )
+        design.net_id_mappings = merge_net_id_mappings(*mapping_groups)
+        warn_repeated_sheet_blocks(design.hierarchies, ctx)
 
-    # 4. Parse Cache stream for symbol pin names
-    for entry in ole.listdir():
-        path = "/".join(entry)
-        if path == "Cache":
-            cache_data = ole.openstream(entry).read()
-            design.symbol_pin_names = parse_cache(cache_data)
+        # 6. Parse raw CIS VariantStore evidence when present.
+        occurrence_to_instance = build_occurrence_to_instance(design.hierarchy_occurrences, ctx)
+        cis_stream_data_by_path: dict[str, bytes] = {}
+        for path, entry in stream_entries:
+            if path.startswith("CIS/VariantStore/"):
+                cis_stream_data_by_path[path] = ole.openstream(entry).read()
+        design.cis_variant_store = parse_cis_variant_store(
+            cis_stream_data_by_path,
+            storage_paths,
+            occurrence_to_instance,
+            ctx,
+        )
 
-    # 5. Parse design-level net bundle groups when present.
-    for entry in ole.listdir():
-        path = "/".join(entry)
-        if path == "NetBundleMapData" or path.endswith("/NetBundleMapData"):
+        # 7. Parse Cache stream for symbol pin names
+        cache_symbols = parse_cache_from_ole(ole, stream_entries, ctx)
+        design.symbol_pin_names = cache_symbols.pin_names
+        design.symbol_pins = cache_symbols.pins
+
+        # 8. Parse design-level net bundle groups when present.
+        for path, entry in stream_entries:
+            if path != "NetBundleMapData" and not path.endswith("/NetBundleMapData"):
+                continue
             bundle_data = ole.openstream(entry).read()
-            design.net_bundle_maps.extend(_parse_net_bundle_map_streams([bundle_data], ctx))
+            design.net_bundle_maps.extend(parse_net_bundle_map_streams([bundle_data], ctx))
 
-    ole.close()
-    return design
+        # 9. Parse raw ERC marker symbol catalog entries.
+        for path, entry in sorted(stream_entries):
+            if not path.startswith("Symbols/ERC"):
+                continue
+            erc_symbol = parse_erc_symbol_stream(ole.openstream(entry).read(), path, ctx)
+            if erc_symbol is not None:
+                design.erc_symbols.append(erc_symbol)
+
+        # 10. Parse the DsnStream design-settings stream (GUID, version JSON).
+        for path, entry in stream_entries:
+            if path == "DsnStream":
+                design.dsn_stream = parse_dsn_stream(ole.openstream(entry).read(), string_list, ctx)
+                break
+
+        # 11. Parse the Symbols/$Types$ name -> structure-type catalog.
+        for path, entry in stream_entries:
+            if path == "Symbols/$Types$":
+                design.symbol_types = parse_symbol_types(ole.openstream(entry).read(), ctx)
+                break
+
+        # 12. Inventory every top-level stream (unknown vs known-unparsed).
+        design.stream_inventory = _build_stream_inventory(stream_entries, ole, ctx)
+
+        return design
+    finally:
+        ole.close()

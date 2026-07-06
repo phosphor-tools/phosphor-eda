@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -31,7 +32,11 @@ from phosphor_eda.formats.common.resolved_graph import (
     ResolvedPinInput,
     build_resolved_schematic,
 )
-from phosphor_eda.formats.dsn.source import dsn_name_key
+from phosphor_eda.formats.dsn.source import (
+    dsn_component_public_id,
+    dsn_name_key,
+    dsn_pin_public_id,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
@@ -89,12 +94,17 @@ def resolve_dsn_source(source: DsnSourceDesign, ctx: ParseContext | None = None)
 
     _merge_stored_page_net_names(source.pages, net_union, local_net_ids)
     _merge_repeated_logical_pins(net_union, pin_occurrences, local_net_ids)
-    _merge_globals(source.pages, net_union, local_net_ids)
     _merge_known_scope_off_page_connectors(source.pages, net_union, local_net_ids)
+    _merge_block_sheet_pins(source, net_union, local_net_ids, ctx)
 
     name_evidence = _collect_name_evidence(source.pages)
     name_decisions = _resolve_net_names(source, local_refs, net_union, name_evidence, ctx)
-    metadata = {"dsn_resolver": "source"}
+    net_properties_by_root = _collect_net_properties(source.pages, net_union)
+    metadata = dict(source.metadata)
+    # The resolver owns parse_issue_count; drop any value carried in from
+    # source metadata so it cannot spoof the count set below from ctx.
+    metadata.pop("parse_issue_count", None)
+    metadata["dsn_resolver"] = "source"
     if ctx is not None and ctx.issues:
         metadata["parse_issue_count"] = str(len(ctx.issues))
     design = build_resolved_schematic(
@@ -107,6 +117,7 @@ def resolve_dsn_source(source: DsnSourceDesign, ctx: ParseContext | None = None)
             name_decisions,
             net_index,
             root_id,
+            net_properties_by_root,
         ),
         include_net=_include_dsn_net,
         net_ordering=_order_dsn_nets,
@@ -257,32 +268,90 @@ def _merge_stored_page_net_names(
     net_union: NetUnion,
     local_net_ids: set[str],
 ) -> None:
-    ids_by_name: dict[str, list[str]] = {}
+    ids_by_name: dict[tuple[str, str], list[str]] = {}
     for page in pages:
+        # Repeated-sheet pages merge page-net names only within their own
+        # occurrence domain so identical child net names never collapse across
+        # occurrences (finding H2). Every other page shares the ``"global"``
+        # bucket, reproducing the pre-hierarchy global-by-name merge exactly.
+        local_bucket = f"dom:{page.merge_domain}" if page.repeated else "global"
         for local_net in page.nets:
             if local_net.id in local_net_ids and local_net.name_key:
-                ids_by_name.setdefault(local_net.name_key, []).append(local_net.id)
+                ids_by_name.setdefault((local_bucket, local_net.name_key), []).append(local_net.id)
         for global_ in page.globals:
+            # Power/global nets are design-global; always merge across domains.
             if global_.local_net_id in local_net_ids and global_.name_key:
-                ids_by_name.setdefault(global_.name_key, []).append(global_.local_net_id)
+                ids_by_name.setdefault(("global", global_.name_key), []).append(
+                    global_.local_net_id
+                )
 
     for net_ids in ids_by_name.values():
         _merge_ids(net_union, net_ids)
 
 
-def _merge_globals(
-    pages: Iterable[DsnPageSource],
+def _merge_block_sheet_pins(
+    source: DsnSourceDesign,
     net_union: NetUnion,
     local_net_ids: set[str],
+    ctx: ParseContext | None,
 ) -> None:
-    ids_by_name: dict[str, list[str]] = {}
-    for page in pages:
-        for global_ in page.globals:
-            if global_.local_net_id in local_net_ids and global_.name_key:
-                ids_by_name.setdefault(global_.name_key, []).append(global_.local_net_id)
+    """Union each block sheet pin's parent net with the child sheet's net.
 
-    for net_ids in ids_by_name.values():
-        _merge_ids(net_union, net_ids)
+    KiCad sheet-pin style (``_merge_hierarchical_sheet_pins``): a hierarchical
+    block binds each sheet pin to a parent-page net; the child sheet exposes the
+    same net name as a port and/or a page-net entry. Merging them per occurrence
+    establishes cross-sheet connectivity explicitly (via the T0x10 parent-wire
+    binding and the sheet-pin name), which is what lets occurrence-scoped
+    repeated sheets resolve without name-keyed flattening. Diagnostics fire for
+    an unmatched sheet pin and for a child port that no sheet pin drives.
+    """
+    child_nets_by_scope_name: dict[tuple[ScopeId, str], list[str]] = {}
+    port_name_keys_by_scope: dict[ScopeId, set[str]] = {}
+    for page in source.pages:
+        for local_net in page.nets:
+            if local_net.id in local_net_ids and local_net.name_key:
+                child_nets_by_scope_name.setdefault((page.scope_id, local_net.name_key), []).append(
+                    local_net.id
+                )
+        for port in page.ports:
+            if port.local_net_id in local_net_ids and port.name_key:
+                child_nets_by_scope_name.setdefault((page.scope_id, port.name_key), []).append(
+                    port.local_net_id
+                )
+                port_name_keys_by_scope.setdefault(page.scope_id, set()).add(port.name_key)
+
+    for occurrence in source.block_occurrences:
+        bound_name_keys = {binding.sheet_pin_name_key for binding in occurrence.bindings}
+        for binding in occurrence.bindings:
+            if binding.parent_local_net_id not in local_net_ids:
+                continue
+            matched = [
+                child_net_id
+                for child_scope in occurrence.child_scope_ids
+                for child_net_id in child_nets_by_scope_name.get(
+                    (child_scope, binding.sheet_pin_name_key), []
+                )
+            ]
+            if not matched:
+                if ctx is not None:
+                    ctx.warn(
+                        "dsn_block_sheet_pin_unmatched",
+                        f"block {occurrence.block_reference!r} sheet pin "
+                        f"{binding.sheet_pin_name!r} has no matching net in child sheet "
+                        f"{occurrence.child_schematic!r}",
+                    )
+                continue
+            for child_net_id in matched:
+                _ = net_union.union(binding.parent_local_net_id, child_net_id)
+        if ctx is not None:
+            for child_scope in occurrence.child_scope_ids:
+                for name_key in sorted(port_name_keys_by_scope.get(child_scope, set())):
+                    if name_key not in bound_name_keys:
+                        ctx.warn(
+                            "dsn_child_port_unmatched",
+                            f"{child_scope}: port {name_key!r} has no matching sheet pin on "
+                            f"block {occurrence.block_reference!r}",
+                        )
 
 
 def _merge_known_scope_off_page_connectors(
@@ -411,6 +480,7 @@ def _page_inputs(source_pages: Iterable[DsnPageSource]) -> list[ResolvedPageInpu
             name=source_page.name,
             scope_id=source_page.scope_id,
             title_block=source_page.title_block,
+            annotations=tuple(source_page.annotations),
         )
         for source_page in source_pages
     ]
@@ -462,14 +532,50 @@ def _local_net_inputs(
     ]
 
 
+def _collect_net_properties(
+    pages: Iterable[DsnPageSource],
+    net_union: NetUnion,
+) -> dict[str, list[dict[str, str | int]]]:
+    """Aggregate wire net-property evidence per resolved net (keyed by root id).
+
+    Each record keeps its provenance — page name, wire dbid, runtime net id,
+    property name and value — so the raw evidence stays traceable. Constraint
+    interpretation is intentionally left out.
+    """
+    by_root: dict[str, list[dict[str, str | int]]] = {}
+    for page in pages:
+        for wire in page.wires:
+            if not wire.net_properties:
+                continue
+            root_id = net_union.find(wire.local_net_id)
+            records = by_root.setdefault(root_id, [])
+            for name, value in wire.net_properties:
+                records.append(
+                    {
+                        "name": name,
+                        "value": value,
+                        "page": page.name,
+                        "wire_db_id": wire.db_id,
+                        "net_id": wire.source_net_id,
+                    }
+                )
+    return by_root
+
+
 def _dsn_net_input_for_group(
     name_decisions: dict[str, _NetNameDecision],
     net_index: int,
     root_id: str,
+    net_properties_by_root: dict[str, list[dict[str, str | int]]],
 ) -> ResolvedNetInput:
     decision = name_decisions[root_id]
     metadata = {"dsn_root_local_net_id": root_id}
     metadata.update(decision.metadata)
+    net_properties = net_properties_by_root.get(root_id)
+    if net_properties:
+        # Raw net-property evidence with provenance; queryable via net_metadata.
+        metadata["dsn_net_property_count"] = str(len(net_properties))
+        metadata["dsn_net_properties"] = json.dumps(net_properties, separators=(",", ":"))
     return ResolvedNetInput(
         id=f"dsn:net:{net_index:04d}",
         name=decision.name,
@@ -740,6 +846,7 @@ def _component_info(pin_occurrence: DsnPinOccurrence) -> ResolvedComponentInfo:
 def _component_metadata(pin_occurrence: DsnPinOccurrence) -> dict[str, str]:
     """Convenience dict of instance properties; empty values are dropped."""
     metadata = {name: value for name, value in pin_occurrence.component_props.items() if value}
+    metadata.update(pin_occurrence.component_metadata)
     metadata["dsn_component_source_ids"] = pin_occurrence.component_source_id
     return metadata
 
@@ -750,7 +857,8 @@ def _pin_inputs(pin_occurrences: Iterable[DsnPinOccurrence]) -> list[ResolvedPin
     # the component info once per component identity.
     info_by_component: dict[str, ResolvedComponentInfo] = {}
     for pin_occurrence in pin_occurrences:
-        component_id = _component_identity(pin_occurrence)
+        component_source_key = _component_source_key(pin_occurrence)
+        component_id = dsn_component_public_id(component_source_key)
         component_info = info_by_component.get(component_id)
         if component_info is None:
             component_info = _component_info(pin_occurrence)
@@ -764,10 +872,10 @@ def _pin_inputs(pin_occurrences: Iterable[DsnPinOccurrence]) -> list[ResolvedPin
                 component_reference=pin_occurrence.component_reference,
                 component_part=pin_occurrence.component_part,
                 component_description="",
-                pin_id=f"{component_id}:pin:{pin_occurrence.pin_designator}",
+                pin_id=dsn_pin_public_id(component_source_key, pin_occurrence.pin_designator),
                 pin_designator=pin_occurrence.pin_designator,
                 pin_name=pin_occurrence.pin_name,
-                no_connect=False,
+                no_connect=pin_occurrence.no_connect,
                 component_occurrence=ResolvedComponentOccurrenceInput(
                     source_id=pin_occurrence.component_source_id,
                     part_id=pin_occurrence.component_part,
@@ -775,11 +883,13 @@ def _pin_inputs(pin_occurrences: Iterable[DsnPinOccurrence]) -> list[ResolvedPin
                     y=pin_occurrence.component_y,
                 ),
                 pin_metadata={
+                    **pin_occurrence.pin_metadata,
                     "dsn_pin_source_id": pin_occurrence.id,
                 },
                 pin_occurrence_metadata={
                     "dsn_source_net_id": str(pin_occurrence.source_net_id),
                     "dsn_local_net_id": pin_occurrence.local_net_id or "",
+                    **pin_occurrence.pin_occurrence_metadata,
                 },
                 component_metadata=_component_metadata(pin_occurrence),
                 component_info=component_info,
@@ -798,11 +908,16 @@ def _source_names(evidence: _NameEvidence) -> set[str]:
     return names
 
 
-def _component_identity(pin_occurrence: DsnPinOccurrence) -> str:
+def _component_source_key(pin_occurrence: DsnPinOccurrence) -> str:
+    """The source-level identity a component's public IDs are built from."""
     if pin_occurrence.component_source_id:
-        return f"dsn:component:{pin_occurrence.component_source_id}"
+        return pin_occurrence.component_source_id
     scope_key = _scope_key(pin_occurrence.scope_id)
-    return f"dsn:component:{scope_key}:{pin_occurrence.component_reference}"
+    return f"{scope_key}:{pin_occurrence.component_reference}"
+
+
+def _component_identity(pin_occurrence: DsnPinOccurrence) -> str:
+    return dsn_component_public_id(_component_source_key(pin_occurrence))
 
 
 def _order_dsn_nets(nets: list[Net]) -> list[Net]:

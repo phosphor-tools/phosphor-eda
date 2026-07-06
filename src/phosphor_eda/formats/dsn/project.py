@@ -16,11 +16,17 @@ import sexpdata
 from phosphor_eda.domain.project import DocumentKind, Project, ProjectDocument, ProjectMetadata
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.dsn.errors import DsnFormatError
-from phosphor_eda.formats.dsn.package_netlist import apply_packaged_pin_names
+from phosphor_eda.formats.dsn.package_netlist import (
+    apply_packaged_no_connects,
+    apply_packaged_pin_names,
+)
 from phosphor_eda.formats.dsn.parser import parse_dsn
 from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
+from phosphor_eda.formats.dsn.variants import map_orcad_cis_not_fitted_variants
 
 if TYPE_CHECKING:
+    from phosphor_eda.domain.schematic import Schematic
+    from phosphor_eda.domain.variants import Variant
     from phosphor_eda.formats.kicad.sexp import SExpItem, SExpNode
 
 
@@ -31,6 +37,15 @@ class OrCadProject:
     project_type: str = ""
     parameters: dict[str, str] = field(default_factory=dict)
     documents: list[ProjectDocument] = field(default_factory=list)
+    hierarchy_documents: list[OrCadHierarchyDocument] = field(default_factory=list)
+    diagnostics: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class OrCadHierarchyDocument:
+    path: str
+    schematic: str
+    page: str
 
 
 _PARAMETER_PREFIXES = (
@@ -75,14 +90,21 @@ def load_orcad_project(opj_path: Path) -> Project:
             f"{opj_path.name} references multiple existing schematic DSN files: {paths}"
         )
 
-    schematic = None
+    schematic: Schematic | None = None
+    variants: list[Variant] = []
     if schematic_docs:
         dsn_path = Path(schematic_docs[0].metadata["resolved_path"])
         ctx = ParseContext()
         try:
             raw = parse_dsn(dsn_path, ctx)
-            apply_packaged_pin_names(raw, dsn_path.parent.parent / "Netlist")
+            netlist_dir = _select_packaged_netlist_dir(
+                _packaged_netlist_dirs(project_info, dsn_path)
+            )
+            if netlist_dir is not None:
+                apply_packaged_pin_names(raw, netlist_dir, ctx)
+                apply_packaged_no_connects(raw, netlist_dir, ctx)
             schematic = dsn_to_design(raw, name=project_info.name or opj_path.stem, ctx=ctx)
+            variants = map_orcad_cis_not_fitted_variants(raw, schematic, ctx)
             schematic_docs[0].parsed = True
         except (DsnFormatError, OSError, ValueError) as exc:
             schematic_docs[0].metadata["parse_error"] = str(exc)
@@ -99,6 +121,7 @@ def load_orcad_project(opj_path: Path) -> Project:
         parameters=project_info.parameters,
         documents=project_info.documents,
         schematic=schematic,
+        variants=variants,
     )
 
 
@@ -112,8 +135,47 @@ def parse_opj(text: str, *, base_path: Path | None = None) -> OrCadProject:
     _walk(data, project, base_path=base_path)
     project.version = project.parameters.get("ProjectVersion", "")
     project.project_type = project.parameters.get("ProjectType", "")
+    _attach_hierarchy_view_metadata(project)
     _add_allegro_board_documents(project, base_path=base_path)
     return project
+
+
+_PACKAGED_NETLIST_FILES = frozenset({"pstxnet.dat", "pstxprt.dat", "pstchip.dat"})
+
+
+def _packaged_netlist_dirs(project_info: OrCadProject, dsn_path: Path) -> tuple[Path, ...]:
+    candidates: list[Path] = []
+    for doc in project_info.documents:
+        resolved_path = doc.metadata.get("resolved_path")
+        if not resolved_path:
+            continue
+        path = Path(resolved_path)
+        if path.name.casefold() in _PACKAGED_NETLIST_FILES:
+            candidates.append(path.parent)
+    candidates.extend((dsn_path.parent.parent / "Netlist", dsn_path.parent / "Allegro"))
+
+    result: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if any((candidate / name).exists() for name in _PACKAGED_NETLIST_FILES):
+            result.append(candidate)
+    return tuple(result)
+
+
+def _select_packaged_netlist_dir(candidates: tuple[Path, ...]) -> Path | None:
+    for required_names in (
+        ("pstxnet.dat", "pstxprt.dat", "pstchip.dat"),
+        ("pstxprt.dat", "pstchip.dat"),
+        ("pstxnet.dat",),
+    ):
+        for candidate in candidates:
+            if all((candidate / name).exists() for name in required_names):
+                return candidate
+    return None
 
 
 def resolve_opj_path(base_path: Path, raw_path: str) -> Path | None:
@@ -161,6 +223,10 @@ def _walk(node: object, project: OrCadProject, *, base_path: Path | None) -> Non
         doc = _document_from_file_node(items, len(project.documents) + 1, base_path=base_path)
         if doc is not None:
             project.documents.append(doc)
+    if _tag(items) == "Doc":
+        hierarchy_doc = _hierarchy_document_from_doc_node(items)
+        if hierarchy_doc is not None:
+            project.hierarchy_documents.append(hierarchy_doc)
     _collect_parameter(items, project)
     for child in items[1:]:
         _walk(child, project, base_path=base_path)
@@ -208,6 +274,70 @@ def _document_kind(raw_path: str, native_kind: str) -> DocumentKind:
     return DocumentKind.OTHER
 
 
+def _hierarchy_document_from_doc_node(node: SExpNode) -> OrCadHierarchyDocument | None:
+    if _child_value(node, "Type") != "COrSchematicDoc":
+        return None
+    schematic = _child_value(node, "Schematic")
+    page = _child_value(node, "Page")
+    path = _child_value(node, "Path")
+    if not schematic or not page:
+        return None
+    return OrCadHierarchyDocument(
+        path=path,
+        schematic=schematic,
+        page=page,
+    )
+
+
+def _attach_hierarchy_view_metadata(project: OrCadProject) -> None:
+    if not project.hierarchy_documents:
+        return
+
+    schematic_docs = [doc for doc in project.documents if doc.kind is DocumentKind.SCHEMATIC]
+    schematic_docs_by_basename: dict[str, list[ProjectDocument]] = {}
+    for doc in schematic_docs:
+        names = {_path_basename(doc.path)}
+        resolved_path = doc.metadata.get("resolved_path")
+        if resolved_path:
+            names.add(_path_basename(resolved_path))
+        for name in names:
+            if name:
+                schematic_docs_by_basename.setdefault(name, []).append(doc)
+
+    # Key by the document's index in project.documents rather than id(doc): the
+    # id of a short-lived object can be reused, and ProjectDocument is unhashable.
+    hierarchy_by_index: dict[int, list[OrCadHierarchyDocument]] = {}
+    for hierarchy_doc in project.hierarchy_documents:
+        matches = schematic_docs_by_basename.get(_path_basename(hierarchy_doc.path), [])
+        if not matches and len(schematic_docs) == 1:
+            matches = schematic_docs
+        if len(matches) != 1:
+            project.diagnostics.append(
+                f"hierarchy view {hierarchy_doc.path!r} matched {len(matches)} schematic "
+                "documents; view metadata not attached"
+            )
+            continue
+        index = next(i for i, doc in enumerate(project.documents) if doc is matches[0])
+        hierarchy_by_index.setdefault(index, []).append(hierarchy_doc)
+
+    for index, doc in enumerate(project.documents):
+        hierarchy_docs = hierarchy_by_index.get(index, [])
+        if not hierarchy_docs:
+            continue
+        doc.metadata["hierarchy_view_document_count"] = str(len(hierarchy_docs))
+        doc.metadata["hierarchy_view_pages"] = ";".join(
+            f"{hierarchy_doc.schematic}/{hierarchy_doc.page}" for hierarchy_doc in hierarchy_docs
+        )
+        doc.metadata["hierarchy_view_paths"] = ";".join(
+            hierarchy_doc.path for hierarchy_doc in hierarchy_docs if hierarchy_doc.path
+        )
+
+
+def _path_basename(path: str) -> str:
+    normalized = path.replace("\\", "/")
+    return Path(normalized).name.casefold()
+
+
 def _add_allegro_board_documents(project: OrCadProject, *, base_path: Path | None) -> None:
     board_keys = (
         "Allegro Netlist Output Board File",
@@ -253,7 +383,7 @@ def _is_parameter_key(key: str) -> bool:
 
 
 def _child_value(node: SExpNode, tag_name: str) -> str:
-    for child in node[2:]:
+    for child in node[1:]:
         if isinstance(child, list) and _tag(child) == tag_name and len(child) > 1:
             return _scalar(child[1])
     return ""

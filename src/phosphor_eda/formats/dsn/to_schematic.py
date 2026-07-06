@@ -2,13 +2,31 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.schematic import Schematic, ScopeId, TitleBlock
+from phosphor_eda.formats.common.diagnostics import warn_optional
+from phosphor_eda.formats.common.electrical import set_pin_electrical
+from phosphor_eda.formats.dsn.binary_reader import STRUCT_SYMBOL_PIN_BUS
+from phosphor_eda.formats.dsn.package_evidence import (
+    build_package_lookup,
+    native_package_device,
+    native_package_for_instance,
+    native_package_pin,
+)
 from phosphor_eda.formats.dsn.parser import DsnSchematicPage, RawTitleBlock
-from phosphor_eda.formats.dsn.pins import normalize_package_name, resolve_pin_name
+from phosphor_eda.formats.dsn.pins import (
+    ORCAD_PORT_TYPES,
+    normalize_package_name,
+    resolve_pin_name,
+    resolve_symbol_pin,
+)
 from phosphor_eda.formats.dsn.resolver import resolve_dsn_source
+from phosphor_eda.formats.dsn.sheet_tree import BlockLinkPlan, ScopePlan, build_sheet_tree
 from phosphor_eda.formats.dsn.source import (
+    DsnBlockBinding,
+    DsnBlockOccurrence,
     DsnBundleMember,
     DsnBusEntry,
     DsnGlobal,
@@ -22,22 +40,22 @@ from phosphor_eda.formats.dsn.source import (
     DsnSourceDesign,
     DsnWire,
     DsnWireAlias,
+    dsn_component_source_id,
     dsn_name_key,
 )
 
 if TYPE_CHECKING:
     from phosphor_eda.formats.common.diagnostics import ParseContext
-    from phosphor_eda.formats.common.raw_models import GraphicInst
-    from phosphor_eda.formats.common.raw_models import ParsedDesign as RawDesign
-    from phosphor_eda.formats.common.raw_models import SchematicPage as RawPage
-
-
-def _page_id(raw_page: RawPage) -> str:
-    return f"page:{_page_scope_name(raw_page)}"
-
-
-def _page_scope_name(raw_page: RawPage) -> str:
-    return raw_page.name or "unnamed"
+    from phosphor_eda.formats.dsn.package_evidence import PackageLookup
+    from phosphor_eda.formats.dsn.raw_models import (
+        DsnPackage,
+        DsnPackageDevice,
+        DsnPackageDevicePin,
+        DsnSymbolPin,
+        GraphicInst,
+    )
+    from phosphor_eda.formats.dsn.raw_models import ParsedDesign as RawDesign
+    from phosphor_eda.formats.dsn.raw_models import SchematicPage as RawPage
 
 
 def _local_net_id(page_id: str, net_id: int) -> str:
@@ -48,6 +66,92 @@ def _local_net_id(page_id: str, net_id: int) -> str:
 # (seen on pins whose connection comes from a power symbol at the pin
 # coordinate). They must never materialize as nets.
 _SENTINEL_NET_IDS = frozenset({0, 0xFFFFFFFF})
+
+# Capture stores ERC-object anchor coordinates in DSN internal units; the
+# persisted DRC-violation detail string reports them in millimetres at this
+# scale (validated against the embedded coordinate string on every fixture).
+_DSN_MM_PER_UNIT = 0.254
+
+# Floating graphic diagnostics: a port/power/off-page graphic that resolves to
+# no wire net and no synthetic anchor, and whose net name matches no page net
+# or block sheet-pin name, is genuinely dangling rather than hierarchy-wired.
+_FLOATING_DIAGNOSTIC = {
+    "port": ("dsn_floating_port", "port"),
+    "global": ("dsn_floating_power_symbol", "power symbol"),
+    "off_page_connector": ("dsn_floating_off_page_connector", "off-page connector"),
+}
+
+
+def _graphic_net_spelling(graphic: GraphicInst) -> str:
+    """The net name a graphic carries, without emitting a fallback diagnostic."""
+    return graphic.props.get("_net_name", "") or graphic.name
+
+
+def _no_connect_pin_metadata(
+    sidecar_metadata: dict[str, str],
+    marker_no_connect: bool,
+) -> dict[str, str]:
+    """Merge native-marker and sidecar no-connect provenance.
+
+    The sidecar records ``dsn_no_connect_source: "pstxnet.dat"`` plus its match
+    keys; a native marker contributes ``dsn_marker``. When both apply the
+    sources are joined (``"dsn_marker,pstxnet.dat"``) so neither provenance is
+    lost.
+    """
+    metadata = dict(sidecar_metadata)
+    if not marker_no_connect:
+        return metadata
+    sources = ["dsn_marker"]
+    existing = metadata.get("dsn_no_connect_source")
+    if existing:
+        sources.extend(source for source in existing.split(",") if source != "dsn_marker")
+    metadata["dsn_no_connect_source"] = ",".join(sources)
+    return metadata
+
+
+def _drc_violations(raw: RawDesign) -> list[dict[str, str | float]]:
+    """Placed ERC objects as raw DRC-violation records with a mm anchor."""
+    violations: list[dict[str, str | float]] = []
+    for raw_page in raw.pages:
+        for erc_object in raw_page.erc_objects:
+            violations.append(
+                {
+                    "page": erc_object.page_name,
+                    "message": erc_object.message,
+                    "subject": erc_object.subject.strip(),
+                    "x_mm": round(erc_object.bbox_x1 * _DSN_MM_PER_UNIT, 2),
+                    "y_mm": round(erc_object.bbox_y1 * _DSN_MM_PER_UNIT, 2),
+                }
+            )
+    return violations
+
+
+def _package_pin_metadata(
+    *,
+    package_pin: DsnPackageDevicePin,
+    resolved_pin_name: str,
+) -> dict[str, str]:
+    # OrCAD Packages/* gives the physical pin and order; the pin name is the
+    # resolved logical symbol/sidecar name for that order.
+    return {
+        "dsn_package_pin": package_pin.package_pin,
+        "dsn_package_pin_name": resolved_pin_name,
+        "dsn_symbol_pin_order": str(package_pin.order),
+        "dsn_pin_group": package_pin.group,
+        "dsn_pin_ignored": "true" if package_pin.ignored else "false",
+    }
+
+
+def _package_component_metadata(package: DsnPackage) -> dict[str, str]:
+    metadata = {"dsn_package_name": package.name}
+    if package.source_library:
+        metadata["dsn_source_library"] = package.source_library
+    return metadata
+
+
+def _package_occurrence_metadata(device: DsnPackageDevice) -> dict[str, str]:
+    name = device.refdes_suffix or device.unit_ref
+    return {"dsn_package_device": name} if name else {}
 
 
 def _source_net_ids_at(raw_page: RawPage, location: tuple[int, int]) -> list[int]:
@@ -90,6 +194,25 @@ def _global_anchor(raw_page: RawPage, location: tuple[int, int]) -> GraphicInst 
     return None
 
 
+def _symbol_pin_metadata(symbol_pin: DsnSymbolPin | None) -> dict[str, str]:
+    if symbol_pin is None:
+        return {}
+    metadata = {
+        "dsn_symbol_pin_port_type": symbol_pin.port_type_name,
+        "dsn_symbol_pin_shape": str(symbol_pin.pin_shape),
+        "dsn_symbol_pin_start": f"{symbol_pin.start_x},{symbol_pin.start_y}",
+        "dsn_symbol_pin_hotpt": f"{symbol_pin.hotpt_x},{symbol_pin.hotpt_y}",
+        "dsn_symbol_pin_structure": (
+            "bus" if symbol_pin.structure_type == STRUCT_SYMBOL_PIN_BUS else "scalar"
+        ),
+    }
+    if symbol_pin.display_prop_count:
+        metadata["dsn_symbol_pin_display_props"] = str(symbol_pin.display_prop_count)
+    port_type = ORCAD_PORT_TYPES.get(symbol_pin.port_type)
+    set_pin_electrical(metadata, port_type.electrical if port_type is not None else None)
+    return metadata
+
+
 def _source_props(props: dict[str, str]) -> dict[str, str]:
     return dict(props)
 
@@ -97,6 +220,24 @@ def _source_props(props: dict[str, str]) -> dict[str, str]:
 # Title block prefix-pair names mapped onto typed TitleBlock fields; all raw
 # non-empty pairs still land in TitleBlock.metadata.
 _TITLE_BLOCK_PLACEHOLDERS = frozenset({"", "*", "~"})
+_TITLE_BLOCK_FIELD_BY_NAME = {
+    "approver": "approved_by",
+    "author": "author",
+    "cage code": "cage_code",
+    "check name": "checked_by",
+    "date": "date",
+    "designer": "drawn_by",
+    "designer name": "drawn_by",
+    "doc": "document_number",
+    "drawnby": "drawn_by",
+    "orgname": "organization",
+    "page count": "sheet_total",
+    "page number": "sheet_number",
+    "revcode": "revision",
+    "title": "title",
+}
+# When several source aliases target the same field, the first parsed
+# non-placeholder value wins; every raw alias remains available in metadata.
 
 
 def _title_value(value: str) -> str:
@@ -104,10 +245,16 @@ def _title_value(value: str) -> str:
     return "" if text in _TITLE_BLOCK_PLACEHOLDERS else text
 
 
-def _page_title_block(raw_page: RawPage) -> TitleBlock | None:
+def _page_title_block(raw_page: RawPage, ctx: ParseContext | None = None) -> TitleBlock | None:
     """The page's title block, from the first parsed title block record."""
     if not isinstance(raw_page, DsnSchematicPage) or not raw_page.title_blocks:
         return None
+    if len(raw_page.title_blocks) > 1 and ctx is not None:
+        ctx.warn(
+            "dsn_title_block",
+            f"{raw_page.name or 'unnamed'}: {len(raw_page.title_blocks)} title blocks on the page; "
+            "only the first is mapped",
+        )
     return _title_block(raw_page.title_blocks[0])
 
 
@@ -121,24 +268,10 @@ def _title_block(raw_block: RawTitleBlock) -> TitleBlock:
         if not typed_value:
             continue
         name_key = name.casefold()
-        if name_key == "title":
-            block.title = block.title or typed_value
-        elif name_key == "revcode":
-            block.revision = block.revision or typed_value
-        elif name_key == "date":
-            block.date = block.date or typed_value
-        elif name_key == "orgname":
-            block.organization = block.organization or typed_value
-        elif name_key == "author":
-            block.author = block.author or typed_value
-        elif name_key == "doc":
-            block.document_number = block.document_number or typed_value
-        elif name_key == "page number":
-            block.sheet_number = block.sheet_number or typed_value
-        elif name_key == "page count":
-            block.sheet_total = block.sheet_total or typed_value
-        elif name_key == "cage code":
-            block.cage_code = block.cage_code or typed_value
+        field_name = _TITLE_BLOCK_FIELD_BY_NAME.get(name_key)
+        if field_name is not None:
+            if not getattr(block, field_name):
+                setattr(block, field_name, typed_value)
         elif name_key.startswith("orgaddr") and name_key[7:].isdigit():
             address_lines.setdefault(int(name_key[7:]), typed_value)
     if address_lines:
@@ -221,6 +354,35 @@ def _graphic_net_name(graphic: GraphicInst, ctx: ParseContext | None, kind: str)
     return graphic.name
 
 
+def _warn_floating_graphic(
+    *,
+    graphic: GraphicInst,
+    kind: str,
+    location: tuple[int, int],
+    page_name: str,
+    hierarchy_name_keys: set[str],
+    ctx: ParseContext | None,
+) -> None:
+    """Diagnose a graphic that connects to neither a wire net nor a hierarchy name.
+
+    Ports (and most power symbols/off-page connectors) connect by net name
+    rather than a coincident wire, so a graphic whose net name matches a page
+    net or block sheet-pin name is hierarchy-wired, not floating. Only a name
+    that matches nothing is genuinely dangling.
+    """
+    if ctx is None:
+        return
+    net_name = _graphic_net_spelling(graphic)
+    if dsn_name_key(net_name) in hierarchy_name_keys:
+        return
+    category, label = _FLOATING_DIAGNOSTIC[kind]
+    ctx.warn(
+        category,
+        f"{page_name}: floating {label} {graphic.name!r} carrying net {net_name!r} "
+        f"at {location} matches no wire net or hierarchy name",
+    )
+
+
 def _graphic_sources(
     *,
     raw_page: RawPage,
@@ -231,6 +393,7 @@ def _graphic_sources(
     page_id: str,
     scope_id: ScopeId,
     kind: str,
+    hierarchy_name_keys: set[str],
     ctx: ParseContext | None = None,
 ) -> None:
     for index, graphic in enumerate(graphics):
@@ -260,19 +423,64 @@ def _graphic_sources(
             # anchor net; attach the symbol so its name applies.
             synthetic_net = synthetic_nets_by_location[location]
             net_targets.append((synthetic_net.id, synthetic_net, synthetic_net.net_id))
+        if not net_targets and kind != "off_page_connector":
+            # Ports and power symbols usually connect by name, not by a wire
+            # under the symbol: attach to the uniquely matching named page net
+            # so the source object and its net-name evidence survive.
+            # Off-page connectors stay excluded: their objects are merge-active
+            # in the resolver, and on the Maxome fixture a name-attached OPC
+            # joins nets that Capture's materialized page-net list keeps
+            # separate (WAKE vs VCOM_RX) via a wired OPC whose net attribution
+            # is still unproven; see the OPC connection-point follow-up issue.
+            net_name = _graphic_net_spelling(graphic)
+            if net_name:
+                net_name_key = dsn_name_key(net_name)
+                matching_net_ids = {
+                    entry.net_id
+                    for entry in raw_page.nets
+                    if entry.net_id not in _SENTINEL_NET_IDS
+                    and dsn_name_key(entry.name) == net_name_key
+                }
+                if len(matching_net_ids) == 1:
+                    net_id = matching_net_ids.pop()
+                    net_targets.append(
+                        (
+                            _local_net_id(page_id, net_id),
+                            _add_page_net_if_missing(
+                                page_nets_by_id=page_nets_by_id,
+                                page_source=page_source,
+                                page_id=page_id,
+                                scope_id=scope_id,
+                                net_id=net_id,
+                            ),
+                            net_id,
+                        )
+                    )
+        if not net_targets:
+            _warn_floating_graphic(
+                graphic=graphic,
+                kind=kind,
+                location=location,
+                page_name=page_source.name,
+                hierarchy_name_keys=hierarchy_name_keys,
+                ctx=ctx,
+            )
+            continue
         for ordinal, (local_net_id, page_net, net_id) in enumerate(net_targets):
             object_id = f"{page_id}:{kind}:{index}"
             if ordinal > 0:
                 object_id = f"{object_id}:{ordinal}"
             if kind == "port":
+                net_name = _graphic_net_name(graphic, ctx, kind)
                 port = DsnPort(
                     id=object_id,
                     scope_id=scope_id,
                     local_net_id=local_net_id,
                     source_net_id=net_id,
-                    name=graphic.name,
-                    name_key=dsn_name_key(graphic.name),
+                    name=net_name,
+                    name_key=dsn_name_key(net_name),
                     location=location,
+                    symbol=graphic.name,
                     props=_source_props(graphic.props),
                 )
                 page_source.ports.append(port)
@@ -310,10 +518,15 @@ def _graphic_sources(
 
 
 def _source_page(
-    raw_page: RawPage, raw: RawDesign, ctx: ParseContext | None = None
+    scope_plan: ScopePlan,
+    raw: RawDesign,
+    packages_by_key: PackageLookup,
+    ctx: ParseContext | None = None,
 ) -> DsnPageSource:
-    page_id = _page_id(raw_page)
-    scope_id = ScopeId(path=(_page_scope_name(raw_page),))
+    raw_page = scope_plan.raw_page
+    page_id = scope_plan.page_id
+    scope_id = scope_plan.scope_id
+    refdes_by_db_id = scope_plan.refdes_by_db_id
     page_source = DsnPageSource(
         id=page_id,
         name=raw_page.name,
@@ -325,8 +538,18 @@ def _source_page(
         globals=[],
         off_page_connectors=[],
         bus_entries=[],
-        title_block=_page_title_block(raw_page),
+        annotations=[note.text for note in raw_page.comment_texts if note.text],
+        title_block=_page_title_block(raw_page, ctx),
+        merge_domain=scope_plan.merge_domain,
+        repeated=scope_plan.repeated,
     )
+    # Names a port/power/off-page graphic can hierarchy-connect to when no wire
+    # sits at its location: page net names plus block sheet-pin names.
+    hierarchy_name_keys = {dsn_name_key(net.name) for net in raw_page.nets if net.name}
+    for block in raw_page.block_instances:
+        for sheet_pin in block.sheet_pins:
+            if sheet_pin.name:
+                hierarchy_name_keys.add(dsn_name_key(sheet_pin.name))
     page_nets_by_id: dict[int, DsnPageNet] = {}
     synthetic_nets_by_location: dict[tuple[int, int], DsnPageNet] = {}
     for raw_net in raw_page.nets:
@@ -374,6 +597,7 @@ def _source_page(
             is_bus=raw_wire.is_bus,
             color=raw_wire.color,
             db_id=raw_wire.db_id,
+            net_properties=raw_wire.net_properties,
         )
         page_source.wires.append(wire)
         page_net.wire_ids.append(wire.id)
@@ -391,13 +615,39 @@ def _source_page(
 
     for instance_index, raw_inst in enumerate(raw_page.instances):
         pkg = normalize_package_name(raw_inst.package_name)
-        component_source_id = f"{page_id}:component:{raw_inst.db_id or instance_index}"
+        component_source_id = dsn_component_source_id(
+            page_id,
+            raw_inst.db_id,
+            instance_index,
+        )
+        # Per-occurrence refdes for a repeated sheet (RFSoC DAC_ADC_CHANNEL);
+        # empty on singly-instantiated/flat pages, which keep the raw reference.
+        reference = refdes_by_db_id.get(raw_inst.db_id, raw_inst.reference)
+        if scope_plan.repeated and raw_inst.db_id and raw_inst.db_id not in refdes_by_db_id:
+            warn_optional(
+                ctx,
+                "dsn_occurrence_refdes_missing",
+                f"{scope_id}: instance db {raw_inst.db_id} ({raw_inst.reference!r}) has no "
+                "per-occurrence refdes in the Hierarchy stream; keeping the raw reference",
+            )
+        package = native_package_for_instance(raw_inst, packages_by_key, ctx)
+        package_device = (
+            native_package_device(raw_inst, package, ctx) if package is not None else None
+        )
         # Instance-level evidence shared by every pin of this placement.
         component_props = dict(raw_inst.props)
         component_props_list = raw_inst.props_list or tuple(component_props.items())
         component_x = float(raw_inst.loc_x)
         component_y = float(raw_inst.loc_y)
         for pin_index, raw_pin in enumerate(raw_inst.pin_connections):
+            pin_name = resolve_pin_name(
+                raw_inst.package_name,
+                raw_pin.pin_number,
+                raw.symbol_pin_names,
+                ctx,
+                raw_inst.reference,
+                raw_inst.pin_name_overrides,
+            )
             location = (raw_pin.pin_x, raw_pin.pin_y)
             source_net_id = _pin_source_net_id(
                 raw_page,
@@ -406,6 +656,7 @@ def _source_page(
                 location,
             )
             page_net: DsnPageNet | None = None
+            anchored = False
             if source_net_id is not None:
                 page_net = _add_page_net_if_missing(
                     page_nets_by_id=page_nets_by_id,
@@ -415,6 +666,7 @@ def _source_page(
                     net_id=source_net_id,
                 )
             elif (anchor := _global_anchor(raw_page, location)) is not None:
+                anchored = True
                 page_net = _synthetic_net_at(
                     synthetic_nets_by_location=synthetic_nets_by_location,
                     page_source=page_source,
@@ -422,34 +674,85 @@ def _source_page(
                     scope_id=scope_id,
                     location=(anchor.loc_x, anchor.loc_y),
                 )
-            elif ctx is not None:
-                ctx.warn(
-                    "dsn_netless_pin",
-                    f"{raw_inst.reference} pin {raw_pin.pin_number} has a sentinel "
-                    "net id and no wire or power symbol at its location; pin is netless",
+            # A native no-connect marker on a pin that resolves to no net is a
+            # designer-asserted NC; a marker on a wired or power-anchored pin is
+            # an ambiguity worth surfacing but never a no_connect.
+            is_netless = source_net_id is None and not anchored
+            marker_no_connect = raw_pin.has_no_connect_marker and is_netless
+            if ctx is not None:
+                if raw_pin.has_no_connect_marker and source_net_id is not None:
+                    ctx.warn(
+                        "dsn_marker_on_wired_pin",
+                        f"{raw_inst.reference} pin {raw_pin.pin_number} carries a no-connect "
+                        "marker but resolves to a net; marker ignored",
+                    )
+                elif raw_pin.has_no_connect_marker and anchored:
+                    ctx.warn(
+                        "dsn_marker_on_power_pin",
+                        f"{raw_inst.reference} pin {raw_pin.pin_number} carries a no-connect "
+                        "marker but is anchored to a power symbol; marker ignored",
+                    )
+                elif is_netless and not raw_pin.has_no_connect_marker:
+                    ctx.warn(
+                        "dsn_netless_pin",
+                        f"{raw_inst.reference} pin {raw_pin.pin_number} has a sentinel "
+                        "net id and no wire or power symbol at its location; pin is netless",
+                    )
+            pin_metadata = _symbol_pin_metadata(
+                resolve_symbol_pin(
+                    raw_inst.package_name,
+                    raw_pin.pin_number,
+                    raw.symbol_pins,
+                    pin_name,
+                    raw.symbol_pin_names,
                 )
+            )
+            pin_metadata.update(
+                _no_connect_pin_metadata(raw_pin.no_connect_metadata, marker_no_connect)
+            )
+            if raw_pin.package_pin_number:
+                # Sidecar (pstchip.dat) physical pin number; distinct from the
+                # native Packages/* dsn_package_pin so both can coexist.
+                pin_metadata["dsn_sidecar_package_pin"] = raw_pin.package_pin_number
+            pin_occurrence_metadata: dict[str, str] = {}
+            component_metadata: dict[str, str] = {}
+            # Typed instance identity for CIS variant targeting. Only set for a
+            # real persistent db_id (>0): a 0 db_id falls back to the instance
+            # index in the source id, which would collide with a real db_id ==
+            # that index, so it must never key variant resolution (A7).
+            if raw_inst.db_id > 0:
+                component_metadata["dsn_component_db_id"] = str(raw_inst.db_id)
+            if package is not None and package_device is not None:
+                component_metadata.update(_package_component_metadata(package))
+                pin_occurrence_metadata.update(_package_occurrence_metadata(package_device))
+                if package_pin := native_package_pin(raw_pin, package_device, raw_inst, ctx):
+                    native_pin_metadata = _package_pin_metadata(
+                        package_pin=package_pin,
+                        resolved_pin_name=pin_name,
+                    )
+                    pin_metadata.update(native_pin_metadata)
+                    # SQL exposes occurrence metadata, while callers read the
+                    # same logical pin evidence from Pin.metadata.
+                    pin_occurrence_metadata.update(native_pin_metadata)
             pin = DsnPinOccurrence(
                 id=f"{component_source_id}:pin:{pin_index}",
                 scope_id=scope_id,
                 local_net_id=page_net.id if page_net is not None else None,
                 source_net_id=source_net_id if source_net_id is not None else raw_pin.net_id,
                 component_source_id=component_source_id,
-                component_reference=raw_inst.reference,
+                component_reference=reference,
                 component_part=pkg,
                 pin_designator=raw_pin.pin_number,
-                pin_name=resolve_pin_name(
-                    raw_inst.package_name,
-                    raw_pin.pin_number,
-                    raw.symbol_pin_names,
-                    ctx,
-                    raw_inst.reference,
-                    raw_inst.pin_name_overrides,
-                ),
+                pin_name=pin_name,
                 location=location,
+                no_connect=raw_pin.no_connect or marker_no_connect,
                 component_props=component_props,
                 component_props_list=component_props_list,
+                pin_metadata=pin_metadata,
                 component_x=component_x,
                 component_y=component_y,
+                pin_occurrence_metadata=pin_occurrence_metadata,
+                component_metadata=component_metadata,
             )
             page_source.pin_occurrences.append(pin)
             if page_net is not None:
@@ -464,6 +767,8 @@ def _source_page(
         page_id=page_id,
         scope_id=scope_id,
         kind="port",
+        hierarchy_name_keys=hierarchy_name_keys,
+        ctx=ctx,
     )
     _graphic_sources(
         raw_page=raw_page,
@@ -474,6 +779,7 @@ def _source_page(
         page_id=page_id,
         scope_id=scope_id,
         kind="global",
+        hierarchy_name_keys=hierarchy_name_keys,
         ctx=ctx,
     )
     _graphic_sources(
@@ -485,18 +791,118 @@ def _source_page(
         page_id=page_id,
         scope_id=scope_id,
         kind="off_page_connector",
+        hierarchy_name_keys=hierarchy_name_keys,
         ctx=ctx,
     )
     return page_source
+
+
+# DsnStream 17.4-era JSON version fields mapped to stable metadata keys.
+_DESIGN_VERSION_KEYS = {
+    "InstalledVersionBase": "dsn_installed_version_base",
+    "InstalledVersionISR": "dsn_installed_version_isr",
+    "License": "dsn_license",
+    "InstallMode": "dsn_install_mode",
+}
+
+
+def _design_stream_metadata(raw: RawDesign) -> dict[str, str]:
+    """Design-level evidence from the typed DsnStream (GUID, time format, version)."""
+    stream = raw.dsn_stream
+    if stream is None:
+        return {}
+    metadata: dict[str, str] = {}
+    if stream.library_guid:
+        metadata["dsn_design_guid"] = stream.library_guid
+    if stream.time_format_index:
+        metadata["dsn_time_format_index"] = stream.time_format_index
+    for source_key, metadata_key in _DESIGN_VERSION_KEYS.items():
+        value = stream.version_info.get(source_key)
+        if value:
+            metadata[metadata_key] = value
+    return metadata
+
+
+def _library_header_metadata(raw: RawDesign) -> dict[str, str]:
+    header = raw.library_header
+    if header is None:
+        return {}
+    metadata = {
+        "dsn_library_version": f"{header.version_major}.{header.version_minor}",
+        "dsn_library_created_timestamp": str(header.created_timestamp),
+        "dsn_library_modified_timestamp": str(header.modified_timestamp),
+    }
+    if header.intro:
+        metadata["dsn_library_intro"] = header.intro
+    return metadata
+
+
+def _block_occurrences(
+    block_links: list[BlockLinkPlan],
+    local_net_ids: set[str],
+) -> list[DsnBlockOccurrence]:
+    """Public block-occurrence source objects driving E3 sheet-pin merging.
+
+    Each binding's ``parent_local_net_id`` is resolved against the parent page's
+    local nets (pre-created in ``_source_page``); bindings whose parent net is a
+    sentinel or otherwise absent are dropped so the resolver only unions real
+    nets.
+    """
+    occurrences: list[DsnBlockOccurrence] = []
+    for index, link in enumerate(block_links):
+        bindings: list[DsnBlockBinding] = []
+        for binding in link.bindings:
+            parent_local_net_id = _local_net_id(link.parent_page_id, binding.parent_net_id)
+            if binding.parent_net_id in _SENTINEL_NET_IDS:
+                continue
+            if parent_local_net_id not in local_net_ids:
+                continue
+            bindings.append(
+                DsnBlockBinding(
+                    sheet_pin_name=binding.sheet_pin_name,
+                    sheet_pin_name_key=dsn_name_key(binding.sheet_pin_name),
+                    port_type_name=binding.port_type_name,
+                    parent_net_id=binding.parent_net_id,
+                    parent_local_net_id=parent_local_net_id,
+                )
+            )
+        occurrences.append(
+            DsnBlockOccurrence(
+                id=f"block_occurrence:{index}",
+                parent_scope_id=link.parent_scope_id,
+                parent_page_id=link.parent_page_id,
+                block_reference=link.block_reference,
+                child_schematic=link.child_schematic,
+                child_scope_ids=link.child_scope_ids,
+                bindings=tuple(bindings),
+            )
+        )
+    return occurrences
 
 
 def dsn_to_source(
     raw: RawDesign, name: str = "", ctx: ParseContext | None = None
 ) -> DsnSourceDesign:
     """Extract OrCAD DSN-native source connectivity from already parsed records."""
+    packages_by_key = build_package_lookup(raw)
+    metadata = _library_header_metadata(raw)
+    metadata.update(_design_stream_metadata(raw))
+    drc_violations = _drc_violations(raw)
+    if drc_violations:
+        # Persisted OrCAD ERC/DRC violations surfaced as raw queryable evidence;
+        # not a suppression model — just what Capture stored on the page tail.
+        metadata["dsn_drc_violation_count"] = str(len(drc_violations))
+        metadata["dsn_drc_violations"] = json.dumps(drc_violations, separators=(",", ":"))
+    sheet_tree = build_sheet_tree(raw, ctx)
+    pages = [
+        _source_page(scope_plan, raw, packages_by_key, ctx) for scope_plan in sheet_tree.scopes
+    ]
+    local_net_ids = {net.id for page in pages for net in page.nets}
+    block_occurrences = _block_occurrences(sheet_tree.block_links, local_net_ids)
     return DsnSourceDesign(
         name=name,
-        pages=[_source_page(raw_page, raw, ctx) for raw_page in raw.pages],
+        pages=pages,
+        block_occurrences=block_occurrences,
         hierarchy_mappings=[
             DsnHierarchyMapping(
                 id=f"hierarchy:net:{index}",
@@ -522,6 +928,7 @@ def dsn_to_source(
             )
             for index, bundle in enumerate(raw.net_bundle_maps)
         ],
+        metadata=metadata,
     )
 
 

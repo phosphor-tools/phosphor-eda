@@ -35,6 +35,16 @@ class ParseIssue:
 E = TypeVar("E", bound=IntEnum)
 
 
+def warn_optional(ctx: ParseContext | None, category: str, message: str) -> None:
+    """Record a warning on *ctx* when one is present; a no-op otherwise.
+
+    Lets parsers thread an optional ParseContext without repeating the
+    ``if ctx is not None`` guard at every call site.
+    """
+    if ctx is not None:
+        ctx.warn(category, message)
+
+
 class ParseContext:
     """Accumulates warnings and errors during parsing.
 

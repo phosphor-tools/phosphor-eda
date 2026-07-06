@@ -1,8 +1,8 @@
 """Netlist construction from parsed OrCAD DSN designs."""
 
 from phosphor_eda.formats.common.diagnostics import ParseContext
-from phosphor_eda.formats.common.raw_models import NetlistEntry, ParsedDesign
 from phosphor_eda.formats.dsn.pins import resolve_pin_name
+from phosphor_eda.formats.dsn.raw_models import NetlistEntry, ParsedDesign
 
 
 def build_netlist(

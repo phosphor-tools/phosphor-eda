@@ -16,6 +16,26 @@ def dsn_name_key(name: str) -> str:
     return name.casefold()
 
 
+def dsn_page_id(page_name: str) -> str:
+    """Public source ID for a DSN schematic page."""
+    return f"page:{page_name or 'unnamed'}"
+
+
+def dsn_component_source_id(page_id: str, db_id: int, instance_index: int) -> str:
+    """Public source ID for a DSN placed component instance."""
+    return f"{page_id}:component:{db_id or instance_index}"
+
+
+def dsn_component_public_id(component_source_id: str) -> str:
+    """Public component ID for a DSN placed component instance."""
+    return f"dsn:component:{component_source_id}"
+
+
+def dsn_pin_public_id(component_source_id: str, pin_designator: str) -> str:
+    """Public pin ID for a DSN placed pin."""
+    return f"{dsn_component_public_id(component_source_id)}:pin:{pin_designator}"
+
+
 @dataclass(slots=True)
 class DsnWireAlias:
     id: str
@@ -44,6 +64,9 @@ class DsnWire:
     # Persistent wire dbid; min over a net cluster yields the stored
     # N##### autoname. 0 means the dbid was not parsed.
     db_id: int = 0
+    # Raw net-property evidence from the wire's prefix-chain pairs
+    # (CDS_PHYS_NET_NAME, DIFFERENTIAL_PAIR, VOLTAGE).
+    net_properties: tuple[tuple[str, str], ...] = ()
     kind: str = field(default="wire", init=False)
 
 
@@ -86,18 +109,29 @@ class DsnPinOccurrence:
     pin_designator: str
     pin_name: str
     location: DsnPoint
+    no_connect: bool = False
     # Instance-level evidence shared by all pins of a placed instance:
     # name/value properties (insertion-ordered as parsed) and placement
     # coordinates in raw DSN units.
     component_props: dict[str, str] = field(default_factory=dict)
     component_props_list: tuple[tuple[str, str], ...] = field(default_factory=tuple)
+    pin_metadata: dict[str, str] = field(default_factory=dict)
     component_x: float | None = None
     component_y: float | None = None
+    pin_occurrence_metadata: dict[str, str] = field(default_factory=dict)
+    component_metadata: dict[str, str] = field(default_factory=dict)
     kind: str = field(default="pin", init=False)
 
 
 @dataclass(slots=True)
 class DsnPort:
+    """A hierarchical port occurrence.
+
+    ``name`` is the net name the port carries (its net-name property), not the
+    graphic symbol name (``PORTLEFT-L``, ``PORTRIGHT-R``); the symbol name
+    lives in ``symbol``.
+    """
+
     id: str
     scope_id: ScopeId
     local_net_id: str
@@ -105,6 +139,7 @@ class DsnPort:
     name: str
     name_key: str
     location: DsnPoint
+    symbol: str = ""
     props: dict[str, str] = field(default_factory=dict)
     kind: str = field(default="port", init=False)
 
@@ -176,7 +211,50 @@ class DsnPageSource:
     globals: list[DsnGlobal]
     off_page_connectors: list[DsnOffPageConnector]
     bus_entries: list[DsnBusEntry] = field(default_factory=list)
+    # Free-text schematic notes (CommentText) placed on the page, in stream
+    # order — surfaced publicly as page annotations.
+    annotations: list[str] = field(default_factory=list)
     title_block: TitleBlock | None = None
+    # Cross-page net-name merge partition. Root and singly-instantiated pages
+    # share ``"root"`` (global name merge, as before); each repeated-sheet
+    # occurrence gets its own domain so identical child net names never merge
+    # across occurrences (finding H2).
+    merge_domain: str = "root"
+    # ``True`` for a page belonging to a child view instantiated more than once.
+    repeated: bool = False
+
+
+@dataclass(slots=True)
+class DsnBlockBinding:
+    """A hierarchical block sheet pin bound to a parent-page net.
+
+    ``sheet_pin_name`` is also the child page's port net name (the cross-sheet
+    merge key); ``parent_local_net_id`` is the parent page's local net the
+    block's T0x10 record binds this sheet pin to.
+    """
+
+    sheet_pin_name: str
+    sheet_pin_name_key: str
+    port_type_name: str
+    parent_net_id: int
+    parent_local_net_id: str
+
+
+@dataclass(slots=True)
+class DsnBlockOccurrence:
+    """One hierarchical block placement linking a parent page to child sheets.
+
+    Drives KiCad-style sheet-pin merging: each binding's parent net unions with
+    the matching-named port net in every ``child_scope_ids`` page (E3).
+    """
+
+    id: str
+    parent_scope_id: ScopeId
+    parent_page_id: str
+    block_reference: str
+    child_schematic: str
+    child_scope_ids: tuple[ScopeId, ...]
+    bindings: tuple[DsnBlockBinding, ...]
 
 
 @dataclass(slots=True)
@@ -193,3 +271,5 @@ class DsnSourceDesign:
     pages: list[DsnPageSource]
     hierarchy_mappings: list[DsnHierarchyMapping]
     net_bundles: list[DsnNetBundle] = field(default_factory=list)
+    block_occurrences: list[DsnBlockOccurrence] = field(default_factory=list)
+    metadata: dict[str, str] = field(default_factory=dict)

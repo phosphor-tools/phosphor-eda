@@ -6,18 +6,68 @@ https://github.com/Werni2A/OpenOrCadParser
 
 import struct
 
+from phosphor_eda.formats.dsn.errors import DsnFormatError
+
 PREAMBLE = b"\xff\xe4\x5c\x39"
 
 # Structure type IDs consumed by the parser (from OpenOrCadParser Enums/Structure.hpp).
+STRUCT_PART_CELL = 6
+STRUCT_DRAWN_INST = 12  # DrawnInst — hierarchical block placement (0x0c)
+STRUCT_PART_INST = 13  # PartInst — placed part instance (0x0d)
 STRUCT_WIRE_SCALAR = 20
 STRUCT_WIRE_BUS = 21
 STRUCT_PORT = 23
+STRUCT_LIBRARY_PART = 24
+STRUCT_SYMBOL_PIN_SCALAR = 26
+STRUCT_SYMBOL_PIN_BUS = 27
 STRUCT_BUS_ENTRY = 29
+STRUCT_PACKAGE = 31
+STRUCT_DEVICE = 32
 STRUCT_GLOBAL = 37
 STRUCT_OFF_PAGE_CONNECTOR = 38
 STRUCT_NET_GROUP = 103
+STRUCT_ERC_SYMBOL = 75
+STRUCT_ERC_OBJECT = 77
+STRUCT_DSN_STREAM = 4  # DsnStream design-settings root structure
+
+# Page-tail graphic instance structure types (StructGraphicInst subclasses).
+STRUCT_GRAPHIC_BOX = 55
+STRUCT_GRAPHIC_LINE = 56
+STRUCT_GRAPHIC_ARC = 57
+STRUCT_GRAPHIC_ELLIPSE = 58
+STRUCT_GRAPHIC_POLYGON = 59
+STRUCT_GRAPHIC_POLYLINE = 60
+STRUCT_GRAPHIC_COMMENT_TEXT = 61
+STRUCT_GRAPHIC_BITMAP = 62
+STRUCT_GRAPHIC_BEZIER = 88
+STRUCT_GRAPHIC_OLE_EMBED = 89
+
+# Primitive types carried inside a StructSthInPages0 wrapper.
+PRIM_RECT = 40
+PRIM_LINE = 41
+PRIM_ARC = 42
+PRIM_ELLIPSE = 43
+PRIM_POLYGON = 44
+PRIM_POLYLINE = 45
+PRIM_COMMENT_TEXT = 46
+PRIM_BITMAP = 47
+PRIM_BEZIER = 87
 
 PAGE_SETTINGS_SIZE = 156  # Fixed-size block
+
+# Windows-1252 leaves five byte values undefined; OrCAD text uses this codepage
+# (µ, ±, °, smart quotes) so decode as cp1252 and fall back to latin-1 for those
+# five bytes rather than emitting U+FFFD replacement characters.
+_CP1252_UNDEFINED = frozenset({0x81, 0x8D, 0x8F, 0x90, 0x9D})
+
+
+def decode_orcad_text(raw: bytes) -> str:
+    """Decode OrCAD binary text as cp1252, with latin-1 for undefined bytes."""
+    if _CP1252_UNDEFINED.isdisjoint(raw):
+        return raw.decode("cp1252")
+    return "".join(
+        chr(byte) if byte in _CP1252_UNDEFINED else bytes((byte,)).decode("cp1252") for byte in raw
+    )
 
 
 class BinaryReader:
@@ -61,28 +111,58 @@ class BinaryReader:
 
     def read_string_zero(self) -> str:
         end = self.data.index(b"\x00", self.pos)
-        s = self.data[self.pos : end].decode("ascii", errors="replace")
+        s = decode_orcad_text(self.data[self.pos : end])
         self.pos = end + 1
         return s
 
-    def read_string_len_zero(self) -> str:
+    def read_string_len_zero(
+        self, encoding: str | None = None, *, allow_missing_terminator: bool = False
+    ) -> str:
         """Read a length-prefixed null-terminated string.
 
         Format: [uint16 length] [length bytes of string] [0x00 null terminator]
         The length does NOT include the null terminator.
+
+        For a non-empty string the null terminator is verified: a length that
+        overshoots EOF or is not followed by ``0x00`` raises ``struct.error``
+        instead of silently returning truncated or mis-synced data. Callers
+        that legitimately probe an uncertain position must gate the read with
+        their own bounds check first. Formats whose terminator is genuinely
+        optional (the CIS VariantNames stream) pass
+        ``allow_missing_terminator=True`` after their own bounds check.
+
+        When *encoding* is ``None`` the bytes are decoded as OrCAD's cp1252
+        text; an explicit codec (e.g. ``"latin1"``) is used verbatim.
         """
         length = self.read_uint16()
         if length == 0:
-            # Still consume the null terminator
+            # Empty strings may or may not carry the trailing null; consume it
+            # when present without demanding it.
             if self.pos < len(self.data) and self.data[self.pos] == 0:
                 self.pos += 1
             return ""
-        raw = self.data[self.pos : self.pos + length]
-        self.pos += length
-        # Skip the null terminator
+        end = self.pos + length
+        if not allow_missing_terminator:
+            if end >= len(self.data):
+                msg = (
+                    f"length-prefixed string of {length} bytes at offset {self.pos} "
+                    f"overshoots stream end {len(self.data)}"
+                )
+                raise struct.error(msg)
+            if self.data[end] != 0:
+                msg = (
+                    f"length-prefixed string of {length} bytes at offset {self.pos} "
+                    f"is not null-terminated (found 0x{self.data[end]:02x})"
+                )
+                raise struct.error(msg)
+        raw = self.data[self.pos : end]
+        self.pos = end
+        # Consume the null terminator when present.
         if self.pos < len(self.data) and self.data[self.pos] == 0:
             self.pos += 1
-        return raw.decode("ascii", errors="replace")
+        if encoding is None:
+            return decode_orcad_text(raw)
+        return raw.decode(encoding, errors="replace")
 
     def at_preamble(self) -> bool:
         return self.data[self.pos : self.pos + 4] == PREAMBLE
@@ -174,3 +254,53 @@ class BinaryReader:
 
     def eof(self) -> bool:
         return self.pos >= len(self.data)
+
+
+# --- Generic structure skippers ---
+
+
+def skip_structure(r: BinaryReader) -> int:
+    """Skip a structure using prefix chain end_offset.
+
+    Returns the type_id of the skipped structure.
+    """
+    type_id, end_offset, _ = r.read_prefix_chain()
+    if end_offset > 0:
+        r.pos = end_offset
+    else:
+        r.try_read_preamble()
+    return type_id
+
+
+def skip_self_describing(r: BinaryReader) -> int:
+    """Skip a self-describing structure: [type:1][body_len:4][zero:4][body].
+
+    T0x34, T0x35, and similar structures use this format.
+    body_len is the byte count of the body AFTER the 9-byte header.
+
+    The declared length comes straight from the stream; older (PSD-era)
+    files carry layouts this parser misreads, producing absurd lengths.
+    Validate against the bytes that actually remain so those files fail
+    with a typed, located error instead of an IndexError far away.
+    """
+    offset = r.pos
+    type_id = r.read_uint8()
+    body_len = r.read_uint32()
+    r.skip(4)  # zero padding
+    remaining = len(r.data) - r.pos
+    if body_len > remaining:
+        msg = (
+            f"self-describing structure 0x{type_id:02x} at offset {offset} declares a "
+            f"{body_len}-byte body but only {remaining} bytes remain in the stream"
+        )
+        raise DsnFormatError(msg, offset=offset, type_id=type_id)
+    r.skip(body_len)  # skip the body
+    return type_id
+
+
+def skip_counted_self_describing(r: BinaryReader) -> int:
+    """Read a uint16 count, then skip that many self-describing structures."""
+    count = r.read_uint16()
+    for _ in range(count):
+        skip_self_describing(r)
+    return count

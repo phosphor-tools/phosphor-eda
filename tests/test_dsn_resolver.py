@@ -4,9 +4,13 @@ import pytest
 
 from phosphor_eda.domain.schematic import BusKind, Net, ScopeId
 from phosphor_eda.formats.common.diagnostics import ParseContext
-from phosphor_eda.formats.common.raw_models import (
+from phosphor_eda.formats.common.resolved_graph import ResolutionInputError
+from phosphor_eda.formats.dsn.raw_models import (
     DsnNetBundleMap,
     DsnNetBundleMember,
+    DsnPackage,
+    DsnPackageDevice,
+    DsnPackageDevicePin,
     GraphicInst,
     PageNetEntry,
     ParsedDesign,
@@ -14,7 +18,6 @@ from phosphor_eda.formats.common.raw_models import (
     PlacedInstance,
     SchematicPage,
 )
-from phosphor_eda.formats.common.resolved_graph import ResolutionInputError
 from phosphor_eda.formats.dsn.resolver import resolve_dsn_source
 from phosphor_eda.formats.dsn.source import (
     DsnBundleMember,
@@ -564,6 +567,107 @@ def test_dsn_to_design_routes_through_source_resolver() -> None:
     design = dsn_to_design(raw, name="Board")
 
     assert design.metadata["dsn_resolver"] == "source"
+
+
+def test_source_metadata_cannot_override_resolver_owned_keys() -> None:
+    clean_source = DsnSourceDesign(
+        name="Board",
+        pages=[],
+        hierarchy_mappings=[],
+        metadata={
+            "dsn_resolver": "spoofed",
+            "parse_issue_count": "999",
+        },
+    )
+
+    clean_design = resolve_dsn_source(clean_source)
+
+    assert clean_design.metadata["dsn_resolver"] == "source"
+    assert "parse_issue_count" not in clean_design.metadata
+
+    ctx = ParseContext()
+    ctx.warn("fixture_warning", "synthetic warning")
+    source = DsnSourceDesign(
+        name="Board",
+        pages=[],
+        hierarchy_mappings=[],
+        metadata={
+            "dsn_library_version": "3.2",
+            "dsn_resolver": "spoofed",
+            "parse_issue_count": "999",
+        },
+    )
+
+    design = resolve_dsn_source(source, ctx=ctx)
+
+    assert design.metadata["dsn_library_version"] == "3.2"
+    assert design.metadata["dsn_resolver"] == "source"
+    assert design.metadata["parse_issue_count"] == "1"
+
+
+def test_dsn_to_design_preserves_native_package_pin_evidence_as_metadata() -> None:
+    raw = ParsedDesign(
+        pages=[
+            SchematicPage(
+                name="Main",
+                nets=[PageNetEntry(name="SIG", net_id=1)],
+                instances=[
+                    PlacedInstance(
+                        package_name="SYNTH.Normal",
+                        source_package="SYNTH",
+                        db_id=100,
+                        reference="U1",
+                        pin_connections=[
+                            PinConnection(pin_number="1", pin_x=1, pin_y=1, net_id=1),
+                            PinConnection(pin_number="2", pin_x=2, pin_y=2, net_id=1),
+                        ],
+                    )
+                ],
+            )
+        ],
+        packages={
+            "Packages/SYNTH": DsnPackage(
+                stream_path="Packages/SYNTH",
+                name="SYNTH",
+                source_library="synthetic.olb",
+                devices=[
+                    DsnPackageDevice(
+                        refdes_suffix="SYNTH",
+                        pins=[
+                            DsnPackageDevicePin(
+                                order=0,
+                                package_pin="A1",
+                                group="5",
+                            ),
+                            DsnPackageDevicePin(
+                                order=1,
+                                package_pin="B2",
+                                ignored=True,
+                            ),
+                        ],
+                    )
+                ],
+            )
+        },
+        symbol_pin_names={"SYNTH": ["IN", "OUT"]},
+    )
+
+    design = dsn_to_design(raw, name="Board")
+
+    component = next(component for component in design.components if component.reference == "U1")
+    assert component.metadata["dsn_package_name"] == "SYNTH"
+    assert component.metadata["dsn_source_library"] == "synthetic.olb"
+    pin_by_designator = {pin.designator: pin for pin in component.pins}
+    assert set(pin_by_designator) == {"1", "2"}
+    first_pin = pin_by_designator["1"]
+    assert first_pin.id.endswith(":pin:1")
+    assert first_pin.metadata["dsn_symbol_pin_order"] == "0"
+    assert first_pin.metadata["dsn_package_pin"] == "A1"
+    assert first_pin.metadata["dsn_package_pin_name"] == "IN"
+    assert first_pin.metadata["dsn_pin_group"] == "5"
+    assert first_pin.metadata["dsn_pin_ignored"] == "false"
+    assert first_pin.occurrences[0].metadata["dsn_package_device"] == "SYNTH"
+    assert pin_by_designator["2"].metadata["dsn_pin_ignored"] == "true"
 
 
 def test_pin_occurrence_with_unknown_scope_fails_resolution() -> None:
