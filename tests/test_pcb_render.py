@@ -201,6 +201,73 @@ def test_per_highlight_stroke_applies_to_that_group_only() -> None:
     assert "#101010" not in component_group
 
 
+def test_mask_defs_exclude_drills_of_hidden_items() -> None:
+    """Mask defs punch holes only for rendered items: the documentation
+    preset hides vias, so via drills must not ride along in the masks (they
+    were most of the file on dense boards). Mounting-hole style ownerless
+    drills always punch."""
+    base = load_render_settings_json(
+        json.dumps({"extends": "phosphor:documentation", "debugAttributes": True})
+    )
+    settings = resolve_effective_settings(base, CliOverrides(side="front"))
+    svg = render_pcb_svg(_board(), settings).svg
+
+    # The through-hole pad is rendered, so its drill still punches.
+    assert "drill:pad:U1:1" in svg
+    # The via is not rendered by this preset; its drill is freight.
+    assert "drill:via:1" not in svg
+
+
+def test_mask_defs_keep_drills_of_rendered_vias() -> None:
+    base = load_render_settings_json(
+        json.dumps({"extends": "phosphor:design", "debugAttributes": True})
+    )
+    settings = resolve_effective_settings(base, CliOverrides(side="front"))
+    svg = render_pcb_svg(_board(), settings).svg
+    assert "drill:via:1" in svg
+
+
+def test_silk_mask_openings_scoped_to_silk_extent() -> None:
+    """Solder-mask openings clip silkscreen; openings nowhere near any
+    rendered silk are dead weight in the mask defs."""
+
+    def render_with_silk_line(y: float) -> str:
+        board = _board()
+        front_silk = next(layer for layer in board.layers if layer.name == "F.SilkS")
+        board.artwork = [
+            PcbArtwork(
+                id="silk:probe",
+                kind=PcbArtworkKind.LINE,
+                purpose=PcbArtworkPurpose.SILKSCREEN,
+                layer=front_silk,
+                data=PcbLine(4.0, y, 6.0, y, 0.12),
+                footprint=board.footprints[0],
+            )
+        ]
+        base = load_render_settings_json(
+            json.dumps({"extends": "phosphor:documentation", "debugAttributes": True})
+        )
+        settings = resolve_effective_settings(base, CliOverrides(side="front"))
+        return render_pcb_svg(board, settings).svg
+
+    # Silk far from the pad opening at (5, 5): the opening is dead weight.
+    assert 'data-purpose="solder_mask"' not in render_with_silk_line(9.0)
+    # Silk crossing the pad: its clipping mask must regain the opening.
+    assert 'data-purpose="solder_mask"' in render_with_silk_line(5.0)
+
+
+def test_path_coordinates_use_three_decimals() -> None:
+    """Board-mm path data is emitted at 1 µm precision; the fourth decimal
+    was pure file-size freight."""
+    import re
+
+    svg = render_pcb_svg(_board(), _design_settings()).svg
+    d_values = re.findall(r' d="([^"]+)"', svg)
+    assert d_values
+    assert not any(re.search(r"\d\.\d{4}", d) for d in d_values)
+    assert any(re.search(r"\d\.\d{3}\b", d) for d in d_values)
+
+
 def test_default_font_size_is_20pt() -> None:
     """No preset pins a font size, so every render inherits this default."""
     resolved = resolve_effective_settings(load_render_settings_json("{}"), CliOverrides())
@@ -281,7 +348,7 @@ def test_rotation_cli_override_wins() -> None:
 
 
 def test_render_svg_uses_typed_inventory_metadata() -> None:
-    svg = render_pcb_svg(_board(), _design_settings()).svg
+    svg = render_pcb_svg(_board(), _debug_attr_settings()).svg
 
     assert 'data-kind="pad"' in svg
     assert 'data-kind="via"' in svg
@@ -294,11 +361,37 @@ def test_render_svg_uses_typed_inventory_metadata() -> None:
     assert "display_role" not in svg
 
 
+def test_per_element_metadata_is_off_by_default() -> None:
+    """Per-primitive data-* attributes are debug freight (they dominate file
+    size); only group-level structure attrs are emitted by default."""
+    svg = render_pcb_svg(_board(), _design_settings()).svg
+
+    assert 'data-kind="pad"' not in svg
+    assert "data-source-id=" not in svg
+    assert "data-net-name=" not in svg
+    assert "data-footprint-lib=" not in svg
+    # Group-level structure attrs stay: they are cheap and load-bearing.
+    assert 'data-role="eda.copper.front"' in svg
+    assert "data-source-layers=" in svg
+
+
+def test_debug_attributes_parses_and_cli_default_is_off() -> None:
+    assert load_render_settings_json("{}").debug_attributes is False
+    assert load_render_settings_json('{"debugAttributes": true}').debug_attributes is True
+    with pytest.raises(ValueError, match="debugAttributes"):
+        _ = load_render_settings_json('{"debugAttributes": "yes"}')
+
+
+def _debug_attr_settings() -> RenderSettings:
+    base = load_render_settings_json('{"extends": "phosphor:design", "debugAttributes": true}')
+    return resolve_effective_settings(base, CliOverrides(side="front"))
+
+
 def test_render_traces_use_native_stroked_centerlines() -> None:
     """Width-bearing copper traces emit stroked centerlines, not polygons."""
     import re
 
-    svg = render_pcb_svg(_board(), _design_settings()).svg
+    svg = render_pcb_svg(_board(), _debug_attr_settings()).svg
 
     conductor_paths = re.findall(
         r'<path d="([^"]*)"[^>]*stroke-linecap: round[^>]*data-kind="conductor"', svg
@@ -314,7 +407,7 @@ def test_render_pads_use_native_arcs() -> None:
     """Circular pads render as two-arc native circles rather than polygons."""
     import re
 
-    svg = render_pcb_svg(_board(), _design_settings()).svg
+    svg = render_pcb_svg(_board(), _debug_attr_settings()).svg
     pad_paths = re.findall(r'<path d="([^"]*)"[^>]*data-kind="pad"', svg)
     assert pad_paths
     assert any(d.count(" A ") == 2 and d.endswith("Z") for d in pad_paths)

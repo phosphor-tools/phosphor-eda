@@ -651,7 +651,7 @@ def test_cli_render_supports_highlight_pad(tmp_path: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["-P", str(project), "pcb", "render", "--highlight-pad", "TP3.1"],
+        ["-P", str(project), "pcb", "render", "--highlight-pad", "TP3.1", "--debug-attributes"],
     )
 
     assert result.exit_code == 0, result.output
@@ -1238,6 +1238,7 @@ def test_cli_render_net_highlight_traverses_series_passives_via_schematic(
             "render",
             "-n",
             "/CSI/I2C_MUX_SCL",
+            "--debug-attributes",
         ],
     )
 
