@@ -14,6 +14,7 @@ import pytest
 
 from phosphor_eda.render.settings import (
     BUNDLED_PRESETS,
+    LayerSelectionRule,
     load_bundled_render_settings,
 )
 
@@ -62,10 +63,33 @@ def test_print_highlights_contrast_with_base_copper() -> None:
     assert base_fill != highlight_fill
 
 
-def test_documentation_preset_omits_conductors() -> None:
-    """The documentation preset shows pads, not trace routing."""
+def _documentation_copper_rules() -> list[LayerSelectionRule]:
     settings = load_bundled_render_settings("documentation")
-    copper_rules = [rule for rule in settings.source.layers if rule.match.role == "copper"]
-    assert copper_rules
-    for rule in copper_rules:
+    rules = [rule for rule in settings.source.layers if rule.match.role == "copper"]
+    assert rules, "documentation preset selects no copper layers"
+    return rules
+
+
+def test_documentation_preset_omits_conductors_and_vias() -> None:
+    """The documentation preset shows component pads, not routing or stitching."""
+    for rule in _documentation_copper_rules():
         assert "conductor" not in rule.item_kinds
+        assert "via" not in rule.item_kinds
+
+
+def test_documentation_preset_scopes_copper_to_active_side() -> None:
+    """Back-side SMD pads must not bleed into a front-view callout figure."""
+    for rule in _documentation_copper_rules():
+        assert rule.match.side == "active"
+
+
+def test_documentation_preset_excludes_passives() -> None:
+    """Passives are noise in callout figures; explicit highlights still render them."""
+    settings = load_bundled_render_settings("documentation")
+    assert set(settings.source.exclude_components) >= {"R*", "C*", "L*", "FB*"}
+
+
+def test_documentation_preset_disables_marker_rings() -> None:
+    """Rings overlap on fine-pitch headers; off until sizing is density-aware."""
+    settings = load_bundled_render_settings("documentation")
+    assert settings.tokens.get("highlight.marker.enabled") is not True
