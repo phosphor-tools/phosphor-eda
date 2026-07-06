@@ -972,3 +972,177 @@ def test_allegro_graphics_terminates_segment_chain_at_owner_ring() -> None:
     assert not any(
         diagnostic.code == "segment-owner-mismatch" for diagnostic in graphics.diagnostics
     )
+
+
+def test_allegro_graphics_skips_footprint_definition_owned_graphic_chains() -> None:
+    """0x14 chains parented by a footprint definition are unplaced symbol masters.
+
+    Their placed copies carry 0x2D instance parents; rendering the masters too
+    piles their local-coordinate line art onto the board origin.
+    """
+    source = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    silk_layer = PcbLayer(name="SILKSCREEN TOP", roles=(LayerRole.SILKSCREEN,))
+    layer_map = AllegroLayerMap(
+        layers=(silk_layer,),
+        stackup=None,
+        by_class_subclass={(0x09, 0x00): silk_layer},
+    )
+    footprint_def = AllegroRecord(
+        tag=0x2B, offset=0, end_offset=20, key=990_010_050, next_key=None, payload={}
+    )
+    graphic = AllegroRecord(
+        tag=0x14,
+        offset=20,
+        end_offset=40,
+        key=990_010_100,
+        next_key=None,
+        payload={
+            "layer_class_id": 0x09,
+            "layer_subclass_id": 0x00,
+            "parent_key": footprint_def.key or 0,
+            "segment_key": 990_010_101,
+        },
+    )
+    segment = AllegroRecord(
+        tag=0x15,
+        offset=40,
+        end_offset=60,
+        key=990_010_101,
+        next_key=None,
+        payload={
+            "parent_key": graphic.key or 0,
+            "width": 100,
+            "start_x": 0,
+            "start_y": 0,
+            "end_x": 1000,
+            "end_y": 0,
+        },
+    )
+    record_set = AllegroRecordSet(
+        header=source.header,
+        string_table=source.string_table,
+        records=(footprint_def, graphic, segment),
+        end_offset=segment.end_offset,
+    )
+
+    graphics = extract_allegro_graphics(record_set, layer_map)
+
+    assert graphics.artwork == ()
+
+
+def test_allegro_graphics_skips_footprint_definition_owned_rectangles() -> None:
+    """0x0E rectangles whose footprint_key targets a 0x2B definition are masters."""
+    source = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    silk_layer = PcbLayer(name="SILKSCREEN TOP", roles=(LayerRole.SILKSCREEN,))
+    layer_map = AllegroLayerMap(
+        layers=(silk_layer,),
+        stackup=None,
+        by_class_subclass={(0x09, 0x00): silk_layer},
+    )
+    footprint_def = AllegroRecord(
+        tag=0x2B, offset=0, end_offset=20, key=990_011_050, next_key=None, payload={}
+    )
+    rectangle = AllegroRecord(
+        tag=0x0E,
+        offset=20,
+        end_offset=60,
+        key=990_011_100,
+        next_key=None,
+        payload={
+            "layer_class_id": 0x09,
+            "layer_subclass_id": 0x00,
+            "footprint_key": footprint_def.key or 0,
+            "coords": (0, 0, 1000, 1000),
+        },
+    )
+    record_set = AllegroRecordSet(
+        header=source.header,
+        string_table=source.string_table,
+        records=(footprint_def, rectangle),
+        end_offset=rectangle.end_offset,
+    )
+
+    graphics = extract_allegro_graphics(record_set, layer_map)
+
+    assert graphics.artwork == ()
+
+
+def test_allegro_graphics_skips_footprint_definition_owned_texts() -> None:
+    """Text chains ring back to their owner; masters (0x2B terminator) are
+    unplaced symbol text and must not render at local coordinates."""
+    source = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    silk_layer = PcbLayer(name="SILKSCREEN TOP", roles=(LayerRole.SILKSCREEN,))
+    layer_map = AllegroLayerMap(
+        layers=(silk_layer,),
+        stackup=None,
+        by_class_subclass={(0x09, 0x00): silk_layer},
+    )
+    footprint_def = AllegroRecord(
+        tag=0x2B, offset=0, end_offset=20, key=990_012_050, next_key=None, payload={}
+    )
+    instance = AllegroRecord(
+        tag=0x2D, offset=20, end_offset=40, key=990_012_060, next_key=None, payload={}
+    )
+    string_master = AllegroRecord(
+        tag=0x31,
+        offset=40,
+        end_offset=60,
+        key=990_012_101,
+        next_key=None,
+        payload={"text": "24"},
+    )
+    master_text = AllegroRecord(
+        tag=0x30,
+        offset=60,
+        end_offset=80,
+        key=990_012_100,
+        next_key=footprint_def.key,
+        payload={
+            "layer_class_id": 0x09,
+            "layer_subclass_id": 0x00,
+            "string_graphic_key": string_master.key or 0,
+            "x": 0,
+            "y": 0,
+            "rotation_mdeg": 0,
+            "font_key": 0,
+            "text_alignment_code": 1,
+            "text_reversal_code": 0,
+        },
+    )
+    string_placed = AllegroRecord(
+        tag=0x31,
+        offset=80,
+        end_offset=100,
+        key=990_012_201,
+        next_key=None,
+        payload={"text": "R1"},
+    )
+    placed_text = AllegroRecord(
+        tag=0x30,
+        offset=100,
+        end_offset=120,
+        key=990_012_200,
+        next_key=instance.key,
+        payload={
+            "layer_class_id": 0x09,
+            "layer_subclass_id": 0x00,
+            "string_graphic_key": string_placed.key or 0,
+            "x": 1000,
+            "y": 1000,
+            "rotation_mdeg": 0,
+            "font_key": 0,
+            "text_alignment_code": 1,
+            "text_reversal_code": 0,
+        },
+    )
+    record_set = AllegroRecordSet(
+        header=source.header,
+        string_table=source.string_table,
+        records=(footprint_def, instance, string_master, master_text, string_placed, placed_text),
+        end_offset=placed_text.end_offset,
+    )
+
+    graphics = extract_allegro_graphics(record_set, layer_map)
+
+    texts = [primitive for primitive in graphics.artwork if isinstance(primitive.data, PcbText)]
+    assert [primitive.id for primitive in texts] == ["allegro:990012200"]

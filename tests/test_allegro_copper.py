@@ -203,7 +203,7 @@ def test_allegro_board_assembly_emits_copper_rectangles_as_regions() -> None:
         if conductor.kind is PcbConductorKind.COPPER_REGION
         and conductor.metadata.native_type == "copper_rectangle_region"
     ]
-    assert len(regions) == 11
+    assert len(regions) == 9
     region = next(conductor for conductor in regions if conductor.id == "allegro:644982744")
     assert region.net is None
     assert region.layer.has_role(LayerRole.COPPER)

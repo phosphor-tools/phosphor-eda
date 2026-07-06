@@ -3,8 +3,8 @@
     "serialize_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "tables": {
       "artwork": {
-        "rows": 20956,
-        "sha256": "4f599d20f66009d748b66b8dac7afbd1dca486890617a16727f5f1a36481cda2"
+        "rows": 19652,
+        "sha256": "0060602b4ce89ec2e29dadeb836c77723489d155513aba08cc33d914b69a0174"
       },
       "board": {
         "rows": 1,

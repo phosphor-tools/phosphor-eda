@@ -23,6 +23,7 @@ from phosphor_eda.formats.allegro.graphics import (
     flash_symbol_keys,
     graphic_segment_primitives,
     line_or_arc_primitive,
+    owned_by_footprint_definition,
     owned_segment_chain,
     record_layer,
     record_metadata,
@@ -78,7 +79,7 @@ def extract_allegro_copper(
             record_set, graph, layer_map, diagnostics, frame=frame, net_items=net_items
         ),
         *shape_fills,
-        *_rectangle_region_conductors(record_set, layer_map, diagnostics, frame=frame),
+        *_rectangle_region_conductors(record_set, graph, layer_map, diagnostics, frame=frame),
         *_graphic_segment_conductors(record_set, graph, layer_map, diagnostics, frame=frame),
     ]
     return AllegroCopper(
@@ -271,6 +272,7 @@ def _shape_pours_and_fills(
 
 def _rectangle_region_conductors(
     record_set: AllegroRecordSet,
+    graph: AllegroObjectGraph,
     layer_map: AllegroLayerMap,
     diagnostics: list[AllegroRecordDiagnostic],
     *,
@@ -279,6 +281,8 @@ def _rectangle_region_conductors(
     conductors: list[AllegroConductorPrimitive] = []
     for record in record_set.records:
         if record.tag not in {0x0E, 0x24} or record.key is None:
+            continue
+        if owned_by_footprint_definition(graph, payload_int(record, "footprint_key")):
             continue
         if _copper_layer(record, layer_map, diagnostics, require_etch=False) is None:
             continue

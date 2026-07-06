@@ -87,6 +87,7 @@ def extract_allegro_graphics(
     artwork: list[AllegroGraphicPrimitive] = []
     keepouts: list[AllegroGraphicPrimitive] = []
     shape_owned_void_keys = _shape_owned_void_keys(record_set, graph)
+    master_text_keys = _footprint_master_text_keys(record_set, graph)
     text_params = _text_parameter_table(record_set)
     version = record_set.header.version if record_set.header is not None else None
     text_size_ceiling = _text_size_ceiling(record_set, frame, version)
@@ -98,6 +99,8 @@ def extract_allegro_graphics(
             diagnostics.append(drc_marker_diagnostic(record))
             continue
         if record.tag in {0x0E, 0x24}:
+            if owned_by_footprint_definition(graph, payload_int(record, "footprint_key")):
+                continue
             rectangle = rectangle_primitive(
                 record,
                 frame=frame,
@@ -127,6 +130,8 @@ def extract_allegro_graphics(
                 keepouts.append(keepout)
             continue
         if record.tag == 0x30:
+            if record.key in master_text_keys:
+                continue
             text = _text_primitive(
                 record,
                 graph=graph,
@@ -156,6 +161,8 @@ def extract_allegro_graphics(
                     artwork.append(shape)
             continue
         if record.tag != 0x14:
+            continue
+        if owned_by_footprint_definition(graph, payload_int(record, "parent_key")):
             continue
         layer = record_layer(record, layer_map)
         if layer is None:
@@ -451,6 +458,57 @@ def flash_symbol_keys(record_set: AllegroRecordSet) -> frozenset[int]:
                 if isinstance(component, AllegroPadstackComponent) and component.string_key:
                     keys.add(component.string_key)
     return frozenset(keys)
+
+
+def _footprint_master_text_keys(
+    record_set: AllegroRecordSet, graph: AllegroObjectGraph
+) -> frozenset[int]:
+    """Keys of 0x30 text wrappers whose chain rings back to a 0x2B definition.
+
+    Text wrappers carry no owner field; ownership is recovered from the ring
+    terminator of the ``next_key`` chain they sit on. Chain membership is
+    shared, so every wrapper on a chain gets its terminator's classification.
+    """
+    terminator_is_master: dict[int, bool] = {}
+    masters: set[int] = set()
+    for record in record_set.records:
+        if record.tag != 0x30 or record.key is None or record.key in terminator_is_master:
+            continue
+        chain: list[int] = []
+        seen: set[int] = set()
+        current = record
+        is_master = False
+        while current.tag == 0x30:
+            if current.key is None or current.key in seen:
+                break
+            if current.key in terminator_is_master:
+                is_master = terminator_is_master[current.key]
+                break
+            seen.add(current.key)
+            chain.append(current.key)
+            next_key = current.next_key or 0
+            terminator = graph.by_key.get(next_key)
+            if terminator is None or next_key == 0:
+                break
+            if terminator.tag != 0x30:
+                is_master = terminator.tag == 0x2B
+                break
+            current = terminator
+        for key in chain:
+            terminator_is_master[key] = is_master
+            if is_master:
+                masters.add(key)
+    return frozenset(masters)
+
+
+def owned_by_footprint_definition(graph: AllegroObjectGraph, owner_key: int) -> bool:
+    """True when *owner_key* resolves to a 0x2B footprint definition.
+
+    Definition-owned records are unplaced symbol masters in local
+    coordinates; their placed copies carry 0x2D instance parents.
+    """
+    owner = graph.by_key.get(owner_key)
+    return owner is not None and owner.tag == 0x2B
 
 
 def closed_path_from_segment_chain(
