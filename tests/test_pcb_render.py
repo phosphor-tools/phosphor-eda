@@ -68,6 +68,115 @@ def test_render_result_no_warnings_on_clean_render() -> None:
     assert result.warnings == ()
 
 
+def test_front_view_has_no_board_view_transform() -> None:
+    svg = render_pcb_svg(_board(), _design_settings()).svg
+    assert 'class="board-view"' not in svg
+
+
+def test_back_view_mirrors_board_geometry() -> None:
+    """Back view mirrors the board about its bbox center, matching the
+    rendered-view mapping annotation placement already assumes."""
+    import re
+
+    svg = render_pcb_svg(_board(), _design_settings(side="back")).svg
+
+    match = re.search(r'<g class="board-view" transform="([^"]+)"', svg)
+    assert match is not None
+    # Board bbox is (0, 0, 12, 10): mirror is x' = 12 - x.
+    assert match.group(1) == "translate(12.0000 0) scale(-1 1)"
+
+
+def test_back_view_wraps_highlight_groups_in_board_view() -> None:
+    svg = render_pcb_svg(
+        _board(),
+        _design_settings(side="back", highlight_nets=("VCC",)),
+    ).svg
+    before_highlight, _, after_highlight = svg.partition('class="highlight-overlay"')
+    assert 'class="board-view"' in before_highlight
+    assert "</g>" in after_highlight
+
+
+def test_rotation_90_rotates_view_and_swaps_aspect() -> None:
+    """rotation: 90 rotates the board clockwise and swaps the view extents."""
+    import re
+
+    base = load_render_settings_json('{"extends": "phosphor:design", "rotation": 90}')
+    settings = resolve_effective_settings(base, CliOverrides(side="front"))
+    svg = render_pcb_svg(_board(), settings).svg
+
+    match = re.search(r'<svg[^>]* width="(\d+)" height="(\d+)" viewBox="([^"]+)"', svg)
+    assert match is not None
+    width_px, height_px = int(match.group(1)), int(match.group(2))
+    vb = [float(value) for value in match.group(3).split()]
+    # 12x10 board rotated 90° is 10 wide and 12 tall, plus the 2mm padding.
+    assert vb[2] == pytest.approx(14.0)
+    assert vb[3] == pytest.approx(16.0)
+    assert height_px == int(width_px * vb[3] / vb[2])
+    # Rotation turns about the board center (6, 5).
+    assert '<g class="board-view" transform="rotate(90 6.0000 5.0000)"' in svg
+
+
+def test_rotation_composes_after_back_mirror() -> None:
+    base = load_render_settings_json('{"extends": "phosphor:design", "rotation": 180}')
+    settings = resolve_effective_settings(base, CliOverrides(side="back"))
+    svg = render_pcb_svg(_board(), settings).svg
+    assert 'transform="rotate(180 6.0000 5.0000) translate(12.0000 0) scale(-1 1)"' in svg
+
+
+def test_side_margin_label_text_aligns_to_pill_edge() -> None:
+    """Start/end-anchored side-margin text begins at the pill's text inset,
+    not the pill center, so long labels stay inside the pill and viewBox."""
+    import re
+
+    from phosphor_eda.render.annotations import parse_annotations, resolve_annotations
+
+    base = load_render_settings_json(
+        json.dumps(
+            {
+                "extends": "phosphor:documentation",
+                "annotations": {
+                    "pointers": [{"target": "U1.1", "label": "Pin 1", "position": "right"}]
+                },
+            }
+        )
+    )
+    settings = resolve_effective_settings(base, CliOverrides(side="front"))
+    board = _board()
+    annotations = resolve_annotations(
+        parse_annotations(settings.annotations),
+        board,
+        settings.side,
+        settings.width,
+        settings.font_size,
+    )
+    svg = render_pcb_svg(board, settings, annotations=annotations).svg
+
+    pill = re.search(r'<rect x="([\d.]+)"[^>]*width="[\d.]+"[^>]*class="annotation-pill"', svg)
+    text = re.search(r'<text x="([\d.]+)"[^>]*text-anchor="start"', svg)
+    assert pill is not None
+    assert text is not None
+    assert float(text.group(1)) == pytest.approx(float(pill.group(1)) + 6.0)
+
+
+def test_rotation_setting_parses() -> None:
+    assert load_render_settings_json("{}").rotation == 0
+    assert load_render_settings_json('{"rotation": 270}').rotation == 270
+
+
+@pytest.mark.parametrize(
+    "document", ['{"rotation": 45}', '{"rotation": "90"}', '{"rotation": true}']
+)
+def test_rotation_setting_rejects_invalid_values(document: str) -> None:
+    with pytest.raises(ValueError, match="rotation"):
+        _ = load_render_settings_json(document)
+
+
+def test_rotation_cli_override_wins() -> None:
+    base = load_render_settings_json('{"rotation": 90}')
+    settings = resolve_effective_settings(base, CliOverrides(side="front", rotation=180))
+    assert settings.rotation == 180
+
+
 def test_render_svg_uses_typed_inventory_metadata() -> None:
     svg = render_pcb_svg(_board(), _design_settings()).svg
 
@@ -442,7 +551,10 @@ def _marker_paths(svg: str) -> list[str]:
 
 
 def test_pad_highlight_draws_marker_ring_when_enabled() -> None:
-    settings = _documentation_settings(highlights=(HighlightSpec(pad="U1.1"),))
+    settings = _documentation_settings(
+        highlights=(HighlightSpec(pad="U1.1"),),
+        tokens={"highlight.marker.enabled": True},
+    )
     svg = render_pcb_svg(_board(), settings).svg
 
     markers = _marker_paths(svg)
@@ -455,7 +567,7 @@ def test_marker_ring_enforces_minimum_screen_diameter() -> None:
 
     settings = _documentation_settings(
         highlights=(HighlightSpec(pad="U1.1"),),
-        tokens={"highlight.marker.minDiameterPx": 200},
+        tokens={"highlight.marker.enabled": True, "highlight.marker.minDiameterPx": 200},
     )
     svg = render_pcb_svg(_board(), settings).svg
 
@@ -474,6 +586,7 @@ def test_marker_ring_enforces_minimum_screen_diameter() -> None:
 def test_marker_ring_absent_for_net_and_component_highlights() -> None:
     settings = _documentation_settings(
         highlights=(HighlightSpec(net="VCC"), HighlightSpec(component="U1")),
+        tokens={"highlight.marker.enabled": True},
     )
     svg = render_pcb_svg(_board(), settings).svg
     assert not _marker_paths(svg)
@@ -492,6 +605,7 @@ def test_marker_ring_disabled_in_realistic_preset() -> None:
 def test_marker_ring_uses_highlight_color() -> None:
     settings = _documentation_settings(
         highlights=(HighlightSpec(pad="U1.1", color="#00aa11"),),
+        tokens={"highlight.marker.enabled": True},
     )
     svg = render_pcb_svg(_board(), settings).svg
     (marker,) = _marker_paths(svg)

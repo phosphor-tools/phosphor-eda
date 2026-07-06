@@ -16,6 +16,7 @@ from phosphor_eda.render.modes import (
 from phosphor_eda.render.primitives import PaintMode, SvgPrimitive, union_bounds
 from phosphor_eda.render.profiler import profile_span
 from phosphor_eda.render.tokens import ResolvedStyle, VisualRole
+from phosphor_eda.render.view import board_view_transform, rendered_view_board_bbox
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -83,6 +84,9 @@ class DerivedRenderPlan:
     custom_css: str = ""
     background: str = ""
     dim_scrim: DimScrim | None = None
+    # SVG transform mapping board geometry into the rendered view (back-side
+    # mirror and/or rotation); "" for the identity front view.
+    board_view_transform: str = ""
 
 
 def build_derived_render_plan(
@@ -103,7 +107,9 @@ def build_derived_render_plan(
     if board_bbox is None:
         msg = "cannot render an empty board: no board profile and no pads to bound the view"
         raise ValueError(msg)
-    bx0, by0, bx1, by1 = board_bbox
+    # The viewBox frames the rendered view: rotation swaps the board extents.
+    view_bbox = rendered_view_board_bbox(board_bbox, settings.rotation)
+    bx0, by0, bx1, by1 = view_bbox
     pad_mm = 2.0
     vb_x = bx0 - pad_mm
     vb_y = by0 - pad_mm
@@ -181,6 +187,7 @@ def build_derived_render_plan(
         custom_css=settings.custom_css,
         background=_resolved_background(settings),
         dim_scrim=_dim_scrim_for_settings(settings, highlight_groups),
+        board_view_transform=board_view_transform(board_bbox, side, settings.rotation),
     )
 
 

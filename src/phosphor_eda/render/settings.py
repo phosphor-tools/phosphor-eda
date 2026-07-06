@@ -14,6 +14,7 @@ from phosphor_eda.domain.pcb import LayerRole, PcbArtworkKind, PcbConductorKind
 from phosphor_eda.render.inventory import InventoryItemKind, InventoryPurpose
 
 RENDER_MODES = ("eda", "realistic")
+VIEW_ROTATIONS = (0, 90, 180, 270)
 SOURCE_LAYER_ROLES = tuple(role.value for role in LayerRole)
 SOURCE_LAYER_SIDES = ("front", "back", "inner", "active", "")
 SOURCE_ITEM_KINDS = tuple(kind.value for kind in InventoryItemKind)
@@ -120,6 +121,7 @@ class RenderSettings:
 
     render_mode: RenderMode = "eda"
     side: str = ""
+    rotation: int = 0
     width: int = 0
     font_size: float = 0.0
     background: str = ""
@@ -150,6 +152,7 @@ class CliOverrides:
     """
 
     side: str | None = None
+    rotation: int | None = None
     width: int | None = None
     font_size: float | None = None
     custom_css: str | None = None
@@ -169,6 +172,7 @@ def resolve_effective_settings(
     CSS.
     """
     side = overrides.side or base.side or DEFAULT_SIDE
+    rotation = overrides.rotation if overrides.rotation is not None else base.rotation
     width = overrides.width or base.width or DEFAULT_WIDTH
     font_size = overrides.font_size or base.font_size or DEFAULT_FONT_SIZE
     background = base.background or DEFAULT_BACKGROUND
@@ -192,6 +196,7 @@ def resolve_effective_settings(
     return replace(
         base,
         side=side,
+        rotation=rotation,
         width=width,
         font_size=font_size,
         background=background,
@@ -269,6 +274,14 @@ def render_settings_schema() -> dict[str, object]:
             "side": {
                 "type": "string",
                 "enum": ["front", "back"],
+            },
+            "rotation": {
+                "type": "integer",
+                "enum": list(VIEW_ROTATIONS),
+                "description": (
+                    "Clockwise view rotation in degrees, applied after the "
+                    "back-side mirror. Annotation labels stay upright."
+                ),
             },
             "width": {
                 "type": "integer",
@@ -475,6 +488,19 @@ def parse_render_settings(data: dict[str, object]) -> RenderSettings:
             raise ValueError(msg)
         side = raw_side
 
+    rotation = 0
+    if "rotation" in data:
+        raw_rotation = data["rotation"]
+        if (
+            not isinstance(raw_rotation, int)
+            or isinstance(raw_rotation, bool)
+            or raw_rotation not in VIEW_ROTATIONS
+        ):
+            allowed = ", ".join(str(value) for value in VIEW_ROTATIONS)
+            msg = f"rotation must be one of {allowed}, got {raw_rotation!r}"
+            raise ValueError(msg)
+        rotation = raw_rotation
+
     width = 0
     if "width" in data:
         raw_width = data["width"]
@@ -542,6 +568,7 @@ def parse_render_settings(data: dict[str, object]) -> RenderSettings:
     return RenderSettings(
         render_mode=render_mode,
         side=side,
+        rotation=rotation,
         width=width,
         font_size=font_size,
         background=background,

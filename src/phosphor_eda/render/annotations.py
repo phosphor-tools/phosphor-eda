@@ -22,18 +22,20 @@ from phosphor_eda.render.annotation_placement import (
     auto_assign_margin,
     compute_connector,
     hint_to_margin,
-    measure_label,
-    measure_legend,
     px_scale,
     solve_margin_placement,
     text_anchor_for_margin,
-    to_rendered_view_bbox,
-    to_rendered_view_x,
 )
 from phosphor_eda.render.annotation_spec import (
     AnnotationSpec,
     LegendEntry,
     parse_annotations,
+)
+from phosphor_eda.render.label_metrics import measure_label, measure_legend
+from phosphor_eda.render.view import (
+    rendered_view_board_bbox,
+    to_rendered_view_bbox,
+    to_rendered_view_point,
 )
 
 if TYPE_CHECKING:
@@ -253,6 +255,7 @@ def resolve_annotations(
     side: str,
     width_px: int = 800,
     font_size: float = ANNOTATION_FONT_PX,
+    rotation: int = 0,
 ) -> ResolvedAnnotations:
     """Resolve annotation spec to concrete pixel-space coordinates.
 
@@ -261,27 +264,34 @@ def resolve_annotations(
     physical dimensions.  The renderer applies
     ``transform="scale(px_scale)"`` to map back to the SVG viewBox.
 
+    Targets are mapped into rendered-view coordinates (back-side mirror,
+    then clockwise ``rotation``) before placement, so labels are laid out
+    against the final picture and stay upright.
+
     ``content_bbox`` is returned in board mm for viewBox expansion.
     """
     board_bbox = board.bbox()
     if board_bbox is None:
         msg = "cannot resolve annotations for an empty board: no geometry to bound the view"
         raise ValueError(msg)
-    scale = px_scale(board_bbox, width_px)
+    view_bbox = rendered_view_board_bbox(board_bbox, rotation)
+    scale = px_scale(view_bbox, width_px)
     warnings: list[str] = []
 
-    # Board bbox in pixel space for the placement engine
+    # Rendered-view board bbox in pixel space for the placement engine
     px_board_bbox = (
-        board_bbox[0] / scale,
-        board_bbox[1] / scale,
-        board_bbox[2] / scale,
-        board_bbox[3] / scale,
+        view_bbox[0] / scale,
+        view_bbox[1] / scale,
+        view_bbox[2] / scale,
+        view_bbox[3] / scale,
     )
 
     bounds = _Bounds()
     pending: list[_PendingPlacement] = []
 
-    resolved_boxes = _resolve_boxes(spec, board, board_bbox, side, scale, font_size, warnings)
+    resolved_boxes = _resolve_boxes(
+        spec, board, board_bbox, side, rotation, scale, font_size, warnings
+    )
     for i, box in enumerate(resolved_boxes):
         box_spec = spec.boxes[i]
         if box_spec.label:
@@ -296,7 +306,7 @@ def resolve_annotations(
                 attach=lambda callout, box=box: setattr(box, "callout", callout),
             )
 
-    resolved_pointers = _resolve_pointers(spec, board, board_bbox, side, scale, warnings)
+    resolved_pointers = _resolve_pointers(spec, board, board_bbox, side, rotation, scale, warnings)
     for i, pointer in enumerate(resolved_pointers):
         ptr_spec = spec.pointers[i]
         if ptr_spec.label:
@@ -310,7 +320,7 @@ def resolve_annotations(
                 attach=lambda callout, ptr=pointer: setattr(ptr, "callout", callout),
             )
 
-    resolved_labels, label_targets = _resolve_labels(spec, board, board_bbox, side, scale)
+    resolved_labels, label_targets = _resolve_labels(spec, board, board_bbox, side, rotation, scale)
     for i, label in enumerate(resolved_labels):
         label_spec = spec.labels[i]
         if label_spec.content:
@@ -325,7 +335,7 @@ def resolve_annotations(
                 attach=lambda callout, lbl=label: setattr(lbl, "callout", callout),
             )
 
-    resolved_legend = _resolve_legend(spec, board_bbox, px_board_bbox, scale, font_size, pending)
+    resolved_legend = _resolve_legend(spec, view_bbox, px_board_bbox, scale, font_size, pending)
 
     # Solve placement for all queued labels at once (global non-overlap).
     placed = solve_margin_placement(
@@ -357,6 +367,7 @@ def _resolve_boxes(
     board: Board,
     board_bbox: tuple[float, float, float, float],
     side: str,
+    rotation: int,
     scale: float,
     font_size: float,
     warnings: list[str],
@@ -370,7 +381,7 @@ def _resolve_boxes(
         max_y = float("-inf")
         for ref in box_spec.targets:
             _center, bbox = resolve_component_target(ref, board)
-            bx1, by1, bx2, by2 = to_rendered_view_bbox(bbox, board_bbox, side)
+            bx1, by1, bx2, by2 = to_rendered_view_bbox(bbox, board_bbox, side, rotation)
             min_x = min(min_x, bx1 / scale)
             min_y = min(min_y, by1 / scale)
             max_x = max(max_x, bx2 / scale)
@@ -398,6 +409,7 @@ def _resolve_pointers(
     board: Board,
     board_bbox: tuple[float, float, float, float],
     side: str,
+    rotation: int,
     scale: float,
     warnings: list[str],
 ) -> list[ResolvedPointer]:
@@ -411,8 +423,9 @@ def _resolve_pointers(
                 tx_mm, ty_mm = center
         else:
             tx_mm, ty_mm = resolve_net_target(ptr_spec.target_net, ptr_spec.target_near, board)
-        tx = to_rendered_view_x(tx_mm, board_bbox, side) / scale
-        ty = ty_mm / scale
+        view_x, view_y = to_rendered_view_point(tx_mm, ty_mm, board_bbox, side, rotation)
+        tx = view_x / scale
+        ty = view_y / scale
         _warn_unparseable_color(ptr_spec.color, f"pointer {i}", warnings)
         pointers.append(
             ResolvedPointer(
@@ -429,6 +442,7 @@ def _resolve_labels(
     board: Board,
     board_bbox: tuple[float, float, float, float],
     side: str,
+    rotation: int,
     scale: float,
 ) -> tuple[list[ResolvedLabel], list[tuple[float, float]]]:
     labels: list[ResolvedLabel] = []
@@ -436,8 +450,11 @@ def _resolve_labels(
     for label_spec in spec.labels:
         if label_spec.target:
             center, _bbox = resolve_component_target(label_spec.target, board)
-            tx = to_rendered_view_x(center[0], board_bbox, side) / scale
-            ty = center[1] / scale
+            view_x, view_y = to_rendered_view_point(
+                center[0], center[1], board_bbox, side, rotation
+            )
+            tx = view_x / scale
+            ty = view_y / scale
         else:
             tx = (board_bbox[0] + board_bbox[2]) / 2 / scale
             ty = (board_bbox[1] + board_bbox[3]) / 2 / scale
@@ -448,7 +465,7 @@ def _resolve_labels(
 
 def _resolve_legend(
     spec: AnnotationSpec,
-    board_bbox: tuple[float, float, float, float],
+    view_bbox: tuple[float, float, float, float],
     px_board_bbox: tuple[float, float, float, float],
     scale: float,
     font_size: float,
@@ -460,8 +477,8 @@ def _resolve_legend(
     legend_width, legend_height = measure_legend(spec.legend, font_size)
     legend_margin = hint_to_margin(spec.legend.position)
     if not legend_margin:
-        bw = board_bbox[2] - board_bbox[0]
-        bh = board_bbox[3] - board_bbox[1]
+        bw = view_bbox[2] - view_bbox[0]
+        bh = view_bbox[3] - view_bbox[1]
         legend_margin = "bottom" if bw >= bh else "right"
 
     pbx1, pby1, pbx2, pby2 = px_board_bbox
