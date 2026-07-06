@@ -15,6 +15,13 @@ from __future__ import annotations
 
 VIEW_ROTATIONS = (0, 90, 180, 270)
 
+# Display space: annotation sizes are defined for the image viewed at a
+# standard content-column width (a typical document viewer on a 1080p
+# screen), independent of the render width and board dimensions. Sizes in
+# points use the CSS 96 dpi convention (1 pt = 4/3 px) at that width.
+DISPLAY_CONTENT_WIDTH_PX = 1000.0
+DISPLAY_PX_PER_PT = 4.0 / 3.0
+
 
 def to_rendered_view_x(
     x_mm: float,

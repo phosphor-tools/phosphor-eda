@@ -16,7 +16,12 @@ from phosphor_eda.render.modes import (
 from phosphor_eda.render.primitives import PaintMode, SvgPrimitive, union_bounds
 from phosphor_eda.render.profiler import profile_span
 from phosphor_eda.render.tokens import ResolvedStyle, VisualRole
-from phosphor_eda.render.view import board_view_transform, rendered_view_board_bbox
+from phosphor_eda.render.view import (
+    DISPLAY_CONTENT_WIDTH_PX,
+    DISPLAY_PX_PER_PT,
+    board_view_transform,
+    rendered_view_board_bbox,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -172,7 +177,9 @@ def build_derived_render_plan(
             net_expansions=net_expansions,
             profiler=profiler,
         )
-    px_per_mm = width_px / vb_w if vb_w > 0 else 1.0
+    # Marker sizes are screen-relative: anchored to the standard display
+    # width, not the raster width.
+    px_per_mm = DISPLAY_CONTENT_WIDTH_PX / vb_w if vb_w > 0 else 1.0
     highlight_groups = _append_pad_marker_rings(settings, highlight_groups, px_per_mm)
 
     return DerivedRenderPlan(
@@ -191,8 +198,9 @@ def build_derived_render_plan(
     )
 
 
-_MARKER_DEFAULT_MIN_DIAMETER_PX = 28.0
-_MARKER_DEFAULT_STROKE_WIDTH_PX = 2.5
+# Marker sizes in points (screen-relative; see render/view.py).
+_MARKER_DEFAULT_MIN_DIAMETER_PT = 21.0
+_MARKER_DEFAULT_STROKE_WIDTH_PT = 2.0
 _MARKER_DEFAULT_COLOR = "#ff8a00"
 # Ring radius relative to the pad's half extent, so the ring clears the pad.
 _MARKER_PAD_CLEARANCE = 1.6
@@ -211,14 +219,16 @@ def _append_pad_marker_rings(
     enabled = _token_bool(settings.tokens, "highlight.marker.enabled")
     if not enabled:
         return groups
-    min_diameter_token = _token_float(settings.tokens, "highlight.marker.minDiameterPx")
-    min_diameter_px = (
-        min_diameter_token if min_diameter_token is not None else _MARKER_DEFAULT_MIN_DIAMETER_PX
+    min_diameter_token = _token_float(settings.tokens, "highlight.marker.minDiameterPt")
+    min_diameter_pt = (
+        min_diameter_token if min_diameter_token is not None else _MARKER_DEFAULT_MIN_DIAMETER_PT
     )
-    stroke_width_token = _token_float(settings.tokens, "highlight.marker.strokeWidthPx")
-    stroke_width_px = (
-        stroke_width_token if stroke_width_token is not None else _MARKER_DEFAULT_STROKE_WIDTH_PX
+    min_diameter_px = min_diameter_pt * DISPLAY_PX_PER_PT
+    stroke_width_token = _token_float(settings.tokens, "highlight.marker.strokeWidthPt")
+    stroke_width_pt = (
+        stroke_width_token if stroke_width_token is not None else _MARKER_DEFAULT_STROKE_WIDTH_PT
     )
+    stroke_width_px = stroke_width_pt * DISPLAY_PX_PER_PT
 
     result: list[HighlightGroup] = []
     for group in groups:
@@ -316,16 +326,22 @@ def annotation_style_for_settings(settings: RenderSettings) -> AnnotationStyle:
     label = AnnotationLabelStyle(
         fill=_token_str(tokens, "annotation.label.fill"),
         text_halo=_token_str(tokens, "annotation.label.textHalo"),
-        text_halo_width_px=_token_float(tokens, "annotation.label.textHaloWidthPx"),
+        text_halo_width_px=_token_pt_as_px(tokens, "annotation.label.textHaloWidthPt"),
         font_weight=_token_css_value(tokens, "annotation.label.fontWeight"),
         pill_visible=_token_bool(tokens, "annotation.label.pillVisible"),
     )
     connector = AnnotationConnectorStyle(
         stroke=_token_str(tokens, "annotation.connector.stroke"),
-        stroke_width_px=_token_float(tokens, "annotation.connector.strokeWidthPx"),
+        stroke_width_px=_token_pt_as_px(tokens, "annotation.connector.strokeWidthPt"),
         dot_visible=_token_bool(tokens, "annotation.connector.dotVisible"),
     )
     return AnnotationStyle(label=label, connector=connector)
+
+
+def _token_pt_as_px(tokens: TokenMap, key: str) -> float | None:
+    """Read a point-denominated token as display pixels (CSS 96 dpi)."""
+    value = _token_float(tokens, key)
+    return value * DISPLAY_PX_PER_PT if value is not None else None
 
 
 def _token_str(tokens: TokenMap, key: str) -> str | None:

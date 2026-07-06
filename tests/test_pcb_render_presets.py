@@ -89,7 +89,25 @@ def test_documentation_preset_excludes_passives() -> None:
     assert set(settings.source.exclude_components) >= {"R*", "C*", "L*", "FB*"}
 
 
-def test_documentation_preset_disables_marker_rings() -> None:
-    """Rings overlap on fine-pitch headers; off until sizing is density-aware."""
-    settings = load_bundled_render_settings("documentation")
+@pytest.mark.parametrize("name", BUNDLED_PRESETS)
+def test_no_preset_pins_the_annotation_font_size(name: str) -> None:
+    """Presets inherit the global point-size default so it stays consistent."""
+    settings = load_bundled_render_settings(name)
+    assert settings.font_size == 0.0
+
+
+@pytest.mark.parametrize("name", BUNDLED_PRESETS)
+def test_every_preset_uses_auto_dimming(name: str) -> None:
+    """Highlight-driven dimming is the engine default; presets don't override
+    it so highlighted renders pop consistently across styles."""
+    settings = load_bundled_render_settings(name)
+    assert settings.dimming.mode == "auto"
+
+
+@pytest.mark.parametrize("name", BUNDLED_PRESETS)
+def test_no_preset_enables_marker_rings(name: str) -> None:
+    """Rings overlap on fine-pitch headers and are rarely needed; they stay
+    opt-in via the highlight.marker.enabled token until sizing is
+    density-aware."""
+    settings = load_bundled_render_settings(name)
     assert settings.tokens.get("highlight.marker.enabled") is not True

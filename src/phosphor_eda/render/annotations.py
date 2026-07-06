@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from phosphor_eda.render.annotation_placement import (
-    ANNOTATION_FONT_PX,
+    ANNOTATION_FONT_PT,
     BOX_PAD_PX,
     LEGEND_GAP_PX,
     MARGIN_GAP_PX,
@@ -33,6 +33,8 @@ from phosphor_eda.render.annotation_spec import (
 )
 from phosphor_eda.render.label_metrics import measure_label, measure_legend
 from phosphor_eda.render.view import (
+    DISPLAY_CONTENT_WIDTH_PX,
+    DISPLAY_PX_PER_PT,
     rendered_view_board_bbox,
     to_rendered_view_bbox,
     to_rendered_view_point,
@@ -44,7 +46,7 @@ if TYPE_CHECKING:
     from phosphor_eda.domain.pcb import Board
 
 __all__ = [
-    "ANNOTATION_FONT_PX",
+    "ANNOTATION_FONT_PT",
     "AnnotationSpec",
     "ResolvedAnnotations",
     "ResolvedBox",
@@ -253,15 +255,17 @@ def resolve_annotations(
     spec: AnnotationSpec,
     board: Board,
     side: str,
-    width_px: int = 800,
-    font_size: float = ANNOTATION_FONT_PX,
+    font_size_pt: float = ANNOTATION_FONT_PT,
     rotation: int = 0,
 ) -> ResolvedAnnotations:
     """Resolve annotation spec to concrete pixel-space coordinates.
 
     Board-mm targets are converted to display pixel space so that all
     annotation sizes (fonts, padding, margins) are independent of board
-    physical dimensions.  The renderer applies
+    physical dimensions.  The pixel space is the image viewed at the
+    standard display width (``DISPLAY_CONTENT_WIDTH_PX``), independent of
+    the render width; ``font_size_pt`` is converted to pixels with the CSS
+    96 dpi convention.  The renderer applies
     ``transform="scale(px_scale)"`` to map back to the SVG viewBox.
 
     Targets are mapped into rendered-view coordinates (back-side mirror,
@@ -275,7 +279,8 @@ def resolve_annotations(
         msg = "cannot resolve annotations for an empty board: no geometry to bound the view"
         raise ValueError(msg)
     view_bbox = rendered_view_board_bbox(board_bbox, rotation)
-    scale = px_scale(view_bbox, width_px)
+    scale = px_scale(view_bbox, DISPLAY_CONTENT_WIDTH_PX)
+    font_size = font_size_pt * DISPLAY_PX_PER_PT
     warnings: list[str] = []
 
     # Rendered-view board bbox in pixel space for the placement engine

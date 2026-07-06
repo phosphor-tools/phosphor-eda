@@ -15,7 +15,8 @@ from ortools.sat.python import cp_model
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-ANNOTATION_FONT_PX = 10.0
+# Default annotation font size in points (screen-relative; see render/view.py).
+ANNOTATION_FONT_PT = 20.0
 
 # Margin gap between board edge and label column (pixels)
 MARGIN_GAP_PX = 16.0
@@ -32,7 +33,7 @@ BOX_PAD_PX = 6.0
 
 def px_scale(
     board_bbox: tuple[float, float, float, float],
-    width_px: int,
+    width_px: float,
 ) -> float:
     """Compute the board-mm-to-pixel scale factor.
 

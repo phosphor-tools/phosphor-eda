@@ -60,8 +60,7 @@
     "annotation.connector.stroke": "#1a1a1a",
     "annotation.label.pillVisible": false,
     "annotation.label.textHalo": "#ffffff",
-    "annotation.label.textHaloWidthPx": 4,
-    "annotation.label.fontWeight": 650,
-    "highlight.marker.enabled": true
+    "annotation.label.textHaloWidthPt": 3,
+    "annotation.label.fontWeight": 650
   }
 }

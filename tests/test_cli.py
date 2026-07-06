@@ -594,10 +594,11 @@ def test_cli_render_settings_schema_outputs_json_without_file() -> None:
     assert "theme" not in schema["properties"]
     assert "font_size" not in schema["properties"]
     assert "font_size_px" not in schema["properties"]
+    assert "fontSizePx" not in schema["properties"]
     assert "include" not in schema["properties"]
     assert "highlight_behavior" not in schema["properties"]
     assert "style_rules" not in schema["properties"]
-    assert "fontSizePx" in schema["properties"]
+    assert "fontSizePt" in schema["properties"]
     assert "source" in schema["properties"]
     assert "tokens" in schema["properties"]
     assert "pad" in json.dumps(schema["properties"]["highlights"])
@@ -972,7 +973,7 @@ def test_cli_render_settings_font_size_sets_annotation_size(tmp_path: Path) -> N
     project = _write_swd_project(tmp_path)
     settings = {
         "extends": "phosphor:realistic",
-        "fontSizePx": 24,
+        "fontSizePt": 24,
         "annotations": {
             "pointers": [{"target": "TP3", "label": "SWD"}],
         },
@@ -998,14 +999,14 @@ def test_cli_render_settings_font_size_sets_annotation_size(tmp_path: Path) -> N
 
     assert result.exit_code == 0, result.output
     svg = out_file.read_text()
-    assert "font-size: 24.0px" in svg
+    assert "font-size: 32.0px" in svg
 
 
 def test_cli_render_settings_accepts_packaged_v2_settings(tmp_path: Path) -> None:
     project = _write_swd_project(tmp_path)
     settings = {
         "extends": "phosphor:documentation",
-        "fontSizePx": 64,
+        "fontSizePt": 64,
         "annotations": {
             "pointers": [{"target": "TP3.1", "label": "SWD"}],
         },
@@ -1039,7 +1040,7 @@ def test_cli_font_size_overrides_render_settings(tmp_path: Path) -> None:
     project = _write_swd_project(tmp_path)
     settings = {
         "extends": "phosphor:realistic",
-        "fontSizePx": 12,
+        "fontSizePt": 12,
         "annotations": {
             "pointers": [{"target": "TP3", "label": "SWD"}],
         },
@@ -1067,8 +1068,8 @@ def test_cli_font_size_overrides_render_settings(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     svg = out_file.read_text()
-    assert "font-size: 24.0px" in svg
-    assert "font-size: 12.0px" not in svg
+    assert "font-size: 32.0px" in svg
+    assert "font-size: 16.0px" not in svg
 
 
 def test_cli_render_settings_from_stdin(tmp_path: Path) -> None:
