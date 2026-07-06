@@ -92,6 +92,8 @@ class DerivedRenderPlan:
     # SVG transform mapping board geometry into the rendered view (back-side
     # mirror and/or rotation); "" for the identity front view.
     board_view_transform: str = ""
+    # Emit per-element data-* provenance attributes (debugging/CSS targeting).
+    debug_attributes: bool = False
 
 
 def build_derived_render_plan(
@@ -195,6 +197,7 @@ def build_derived_render_plan(
         background=_resolved_background(settings),
         dim_scrim=_dim_scrim_for_settings(settings, highlight_groups),
         board_view_transform=board_view_transform(board_bbox, side, settings.rotation),
+        debug_attributes=settings.debug_attributes,
     )
 
 

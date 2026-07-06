@@ -14,7 +14,7 @@ def test_round_drill_is_native_circle() -> None:
     assert render.stroke_width is None
     assert render.d.count(" A ") == 2
     assert render.d.endswith("Z")
-    assert render.d.startswith("M 1.4000 2.0000")
+    assert render.d.startswith("M 1.400 2.000")
 
 
 def test_horizontal_slot_is_stroked_centerline() -> None:
@@ -26,7 +26,7 @@ def test_horizontal_slot_is_stroked_centerline() -> None:
     assert render is not None
     assert render.stroke_width == 1.0
     assert " A " not in render.d
-    assert render.d == "M -1.0000 0.0000 L 1.0000 0.0000"
+    assert render.d == "M -1.000 0.000 L 1.000 0.000"
 
 
 def test_rotated_slot_bakes_rotation_into_endpoints() -> None:

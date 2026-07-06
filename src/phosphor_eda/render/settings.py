@@ -139,6 +139,7 @@ class RenderSettings:
     width: int = 0
     font_size: float = 0.0
     background: str = ""
+    debug_attributes: bool = False
     source: SourceSelection = field(default_factory=SourceSelection)
     tokens: TokenMap = field(default_factory=dict)
     dimming: DimmingSettings = field(default_factory=DimmingSettings)
@@ -171,6 +172,7 @@ class CliOverrides:
     width: int | None = None
     font_size: float | None = None
     custom_css: str | None = None
+    debug_attributes: bool | None = None
     highlights: tuple[HighlightSpec, ...] = ()
 
 
@@ -188,6 +190,11 @@ def resolve_effective_settings(
     """
     side = overrides.side or base.side or DEFAULT_SIDE
     rotation = overrides.rotation if overrides.rotation is not None else base.rotation
+    debug_attributes = (
+        overrides.debug_attributes
+        if overrides.debug_attributes is not None
+        else base.debug_attributes
+    )
     width = overrides.width or base.width or DEFAULT_WIDTH
     font_size = overrides.font_size or base.font_size or DEFAULT_FONT_SIZE
     background = base.background or DEFAULT_BACKGROUND
@@ -215,6 +222,7 @@ def resolve_effective_settings(
         width=width,
         font_size=font_size,
         background=background,
+        debug_attributes=debug_attributes,
         highlights=highlights,
         custom_css=custom_css,
     )
@@ -310,6 +318,15 @@ def render_settings_schema() -> dict[str, object]:
                     "Annotation label font size in points, as seen when the "
                     "image is viewed at a standard content-column width "
                     "(~1000 px). Independent of render width and board size."
+                ),
+            },
+            "debugAttributes": {
+                "type": "boolean",
+                "description": (
+                    "Emit per-element data-* provenance attributes "
+                    "(component/net/pad identity on every path) for CSS "
+                    "targeting and debugging. Off by default: they multiply "
+                    "file size several-fold."
                 ),
             },
             "background": {
@@ -540,6 +557,14 @@ def parse_render_settings(data: dict[str, object]) -> RenderSettings:
     if "fontSizePt" in data:
         font_size = _parse_font_size(data["fontSizePt"], "fontSizePt")
 
+    debug_attributes = False
+    if "debugAttributes" in data:
+        raw_debug = data["debugAttributes"]
+        if not isinstance(raw_debug, bool):
+            msg = f"debugAttributes must be a boolean, got {raw_debug!r}"
+            raise ValueError(msg)
+        debug_attributes = raw_debug
+
     background = ""
     if "background" in data:
         raw_background = data["background"]
@@ -599,6 +624,7 @@ def parse_render_settings(data: dict[str, object]) -> RenderSettings:
         width=width,
         font_size=font_size,
         background=background,
+        debug_attributes=debug_attributes,
         source=source,
         tokens=tokens,
         dimming=dimming,
