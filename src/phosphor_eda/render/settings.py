@@ -12,9 +12,9 @@ from typing import Literal, TypeGuard, cast
 
 from phosphor_eda.domain.pcb import LayerRole, PcbArtworkKind, PcbConductorKind
 from phosphor_eda.render.inventory import InventoryItemKind, InventoryPurpose
+from phosphor_eda.render.view import VIEW_ROTATIONS
 
 RENDER_MODES = ("eda", "realistic")
-VIEW_ROTATIONS = (0, 90, 180, 270)
 SOURCE_LAYER_ROLES = tuple(role.value for role in LayerRole)
 SOURCE_LAYER_SIDES = ("front", "back", "inner", "active", "")
 SOURCE_ITEM_KINDS = tuple(kind.value for kind in InventoryItemKind)
