@@ -12,7 +12,7 @@ from phosphor_eda.formats.dsn.raw_models import (
     PlacedInstance,
     Wire,
 )
-from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
+from phosphor_eda.formats.dsn.to_schematic import dsn_to_design, dsn_to_source
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 PICOW_DSN = FIXTURES / "dsn/raspberry-pi-pico-w/RPI-PICOW-R2.DSN"
@@ -90,6 +90,20 @@ def test_floating_port_matching_page_net_name_is_hierarchy_wired() -> None:
     ctx = ParseContext()
     _ = dsn_to_design(ParsedDesign(pages=[page]), ctx=ctx)
     assert not any(issue.category == "dsn_floating_port" for issue in ctx.issues)
+
+
+def test_port_matching_page_net_name_attaches_to_that_net() -> None:
+    """A hierarchy-wired port keeps its source object on the named page net
+    instead of being silently dropped after the floating-warn suppression."""
+    hierarchy_port = GraphicInst(
+        name="PORTLEFT-L", loc_x=500, loc_y=500, props={"_net_name": "SIG"}
+    )
+    page = _wire_page("Main", ports=[hierarchy_port])
+    source = dsn_to_source(ParsedDesign(pages=[page]), ctx=ParseContext())
+    page_source = source.pages[0]
+    assert [port.name for port in page_source.ports] == ["SIG"]
+    sig_net = next(net for net in page_source.nets if net.name == "SIG")
+    assert sig_net.port_ids == [page_source.ports[0].id]
 
 
 def test_extra_title_blocks_warn() -> None:
