@@ -74,6 +74,13 @@ def render_pcb_svg_from_derived_plan(
 
     clip_ids_by_signature: dict[_LayerClipSignature, str] = {}
     mask_ids_by_signature: dict[_LayerMaskSignature, str] = {}
+    # Board geometry (base layers and highlight overlays) is authored in
+    # board coordinates and mapped into the rendered view by this transform.
+    # The dim scrim and annotations are already in view space and stay
+    # outside the transformed groups.
+    view_transform = plan.board_view_transform
+    if view_transform:
+        svg.group_start(attrs={"class": "board-view", "transform": view_transform})
     _render_derived_layers(
         svg,
         plan.base_layers,
@@ -82,6 +89,8 @@ def render_pcb_svg_from_derived_plan(
         clip_ids_by_signature=clip_ids_by_signature,
         mask_ids_by_signature=mask_ids_by_signature,
     )
+    if view_transform:
+        svg.group_end()
     if plan.dim_scrim is not None:
         svg.raw(
             _view_box_rect(
@@ -91,6 +100,8 @@ def render_pcb_svg_from_derived_plan(
                 opacity=plan.dim_scrim.opacity,
             )
         )
+    if view_transform and plan.highlight_groups:
+        svg.group_start(attrs={"class": "board-view", "transform": view_transform})
     for group in plan.highlight_groups:
         svg.group_start(attrs={"class": "highlight-overlay", "data-highlight-target": group.target})
         _render_derived_layers(
@@ -101,6 +112,8 @@ def render_pcb_svg_from_derived_plan(
             clip_ids_by_signature=clip_ids_by_signature,
             mask_ids_by_signature=mask_ids_by_signature,
         )
+        svg.group_end()
+    if view_transform and plan.highlight_groups:
         svg.group_end()
 
     if plan.annotations is not None:

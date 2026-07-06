@@ -21,7 +21,6 @@ from phosphor_eda.domain.pcb import (
 from phosphor_eda.render.annotation_placement import (
     auto_assign_margin,
     compute_connector,
-    measure_label,
 )
 from phosphor_eda.render.annotation_spec import (
     AnnotationSpec,
@@ -40,6 +39,7 @@ from phosphor_eda.render.annotations import (
     resolve_net_target,
     resolve_pad_target,
 )
+from phosphor_eda.render.label_metrics import measure_label
 
 # ---------------------------------------------------------------------------
 # Synthetic board fixture
@@ -607,8 +607,8 @@ class TestResolveAnnotations:
             pointers=[PointerSpec(target="U1.1", label="Pin 1")],
             labels=[],
         )
-        front = resolve_annotations(spec, board, "front", width_px=800)
-        back = resolve_annotations(spec, board, "back", width_px=800)
+        front = resolve_annotations(spec, board, "front")
+        back = resolve_annotations(spec, board, "back")
 
         front_ptr = front.pointers[0]
         back_ptr = back.pointers[0]
@@ -624,11 +624,62 @@ class TestResolveAnnotations:
             pointers=[PointerSpec(target="U1.1", label="Pin 1", position="right")],
             labels=[],
         )
-        resolved = resolve_annotations(spec, board, "back", width_px=800)
+        resolved = resolve_annotations(spec, board, "back")
         ptr = resolved.pointers[0]
 
         assert ptr.callout is not None
         assert ptr.callout.x > ptr.target_x
+
+    def test_font_size_points_convert_to_display_px(self, board: Board) -> None:
+        """Points use the CSS 96 dpi convention (1 pt = 4/3 px) at the
+        standard display width; px_scale is anchored to that width, not the
+        render width."""
+        spec = AnnotationSpec(boxes=[], pointers=[], labels=[])
+        resolved = resolve_annotations(spec, board, "front", font_size_pt=12)
+
+        assert resolved.font_size == pytest.approx(16.0)
+        # Board is 40 mm wide; the standard display width is 1000 px.
+        assert resolved.px_scale == pytest.approx(40.0 / 1000)
+
+    def test_rotation_90_maps_pointer_target_clockwise(self, board: Board) -> None:
+        """Rotation turns targets clockwise about the board center (20, 10)."""
+        spec = AnnotationSpec(
+            boxes=[],
+            pointers=[PointerSpec(target="U1.1", label="Pin 1")],
+            labels=[],
+        )
+        resolved = resolve_annotations(spec, board, "front", rotation=90)
+        ptr = resolved.pointers[0]
+        s = resolved.px_scale
+
+        # Pad U1.1 is at (10, 10): rotating 90° cw about (20, 10) lands at (20, 0).
+        assert ptr.target_x * s == pytest.approx(20.0)
+        assert ptr.target_y * s == pytest.approx(0.0)
+
+    def test_rotation_90_scales_to_rotated_view_width(self, board: Board) -> None:
+        """px_scale derives from the rotated view width (the board height)."""
+        spec = AnnotationSpec(boxes=[], pointers=[], labels=[])
+        unrotated = resolve_annotations(spec, board, "front")
+        rotated = resolve_annotations(spec, board, "front", rotation=90)
+
+        # Board is 40x20 mm; the standard display width is 1000 px.
+        assert unrotated.px_scale == pytest.approx(40.0 / 1000)
+        assert rotated.px_scale == pytest.approx(20.0 / 1000)
+
+    def test_rotation_composes_with_back_mirror(self, board: Board) -> None:
+        """Back-side targets mirror first, then rotate."""
+        spec = AnnotationSpec(
+            boxes=[],
+            pointers=[PointerSpec(target="U1.1", label="Pin 1")],
+            labels=[],
+        )
+        resolved = resolve_annotations(spec, board, "back", rotation=90)
+        ptr = resolved.pointers[0]
+        s = resolved.px_scale
+
+        # Pad (10, 10) mirrors to (30, 10), then rotates 90° cw to (20, 20).
+        assert ptr.target_x * s == pytest.approx(20.0)
+        assert ptr.target_y * s == pytest.approx(20.0)
 
     def test_back_side_pointer_target_uses_rendered_pad_location(self, board: Board) -> None:
         """Back-side connector endpoints point to the mirrored rendered pad location."""
@@ -637,7 +688,7 @@ class TestResolveAnnotations:
             pointers=[PointerSpec(target="U1.1", label="Pin 1", position="right")],
             labels=[],
         )
-        resolved = resolve_annotations(spec, board, "back", width_px=800)
+        resolved = resolve_annotations(spec, board, "back")
         ptr = resolved.pointers[0]
 
         assert ptr.target_x * resolved.px_scale == pytest.approx(30.0)

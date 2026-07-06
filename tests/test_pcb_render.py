@@ -68,6 +68,218 @@ def test_render_result_no_warnings_on_clean_render() -> None:
     assert result.warnings == ()
 
 
+def test_front_view_has_no_board_view_transform() -> None:
+    svg = render_pcb_svg(_board(), _design_settings()).svg
+    assert 'class="board-view"' not in svg
+
+
+def test_back_view_mirrors_board_geometry() -> None:
+    """Back view mirrors the board about its bbox center, matching the
+    rendered-view mapping annotation placement already assumes."""
+    import re
+
+    svg = render_pcb_svg(_board(), _design_settings(side="back")).svg
+
+    match = re.search(r'<g class="board-view" transform="([^"]+)"', svg)
+    assert match is not None
+    # Board bbox is (0, 0, 12, 10): mirror is x' = 12 - x.
+    assert match.group(1) == "translate(12.0000 0) scale(-1 1)"
+
+
+def test_back_view_wraps_highlight_groups_in_board_view() -> None:
+    svg = render_pcb_svg(
+        _board(),
+        _design_settings(side="back", highlight_nets=("VCC",)),
+    ).svg
+    before_highlight, _, after_highlight = svg.partition('class="highlight-overlay"')
+    assert 'class="board-view"' in before_highlight
+    assert "</g>" in after_highlight
+
+
+def test_rotation_90_rotates_view_and_swaps_aspect() -> None:
+    """rotation: 90 rotates the board clockwise and swaps the view extents."""
+    import re
+
+    base = load_render_settings_json('{"extends": "phosphor:design", "rotation": 90}')
+    settings = resolve_effective_settings(base, CliOverrides(side="front"))
+    svg = render_pcb_svg(_board(), settings).svg
+
+    match = re.search(r'<svg[^>]* width="(\d+)" height="(\d+)" viewBox="([^"]+)"', svg)
+    assert match is not None
+    width_px, height_px = int(match.group(1)), int(match.group(2))
+    vb = [float(value) for value in match.group(3).split()]
+    # 12x10 board rotated 90° is 10 wide and 12 tall, plus the 2mm padding.
+    assert vb[2] == pytest.approx(14.0)
+    assert vb[3] == pytest.approx(16.0)
+    assert height_px == int(width_px * vb[3] / vb[2])
+    # Rotation turns about the board center (6, 5).
+    assert '<g class="board-view" transform="rotate(90 6.0000 5.0000)"' in svg
+
+
+def test_rotation_composes_after_back_mirror() -> None:
+    base = load_render_settings_json('{"extends": "phosphor:design", "rotation": 180}')
+    settings = resolve_effective_settings(base, CliOverrides(side="back"))
+    svg = render_pcb_svg(_board(), settings).svg
+    assert 'transform="rotate(180 6.0000 5.0000) translate(12.0000 0) scale(-1 1)"' in svg
+
+
+def test_side_margin_label_text_aligns_to_pill_edge() -> None:
+    """Start/end-anchored side-margin text begins at the pill's text inset,
+    not the pill center, so long labels stay inside the pill and viewBox."""
+    import re
+
+    from phosphor_eda.render.annotations import parse_annotations, resolve_annotations
+
+    base = load_render_settings_json(
+        json.dumps(
+            {
+                "extends": "phosphor:documentation",
+                "annotations": {
+                    "pointers": [{"target": "U1.1", "label": "Pin 1", "position": "right"}]
+                },
+            }
+        )
+    )
+    settings = resolve_effective_settings(base, CliOverrides(side="front"))
+    board = _board()
+    annotations = resolve_annotations(
+        parse_annotations(settings.annotations),
+        board,
+        settings.side,
+        settings.width,
+        settings.font_size,
+    )
+    svg = render_pcb_svg(board, settings, annotations=annotations).svg
+
+    pill = re.search(r'<rect x="([\d.]+)"[^>]*width="[\d.]+"[^>]*class="annotation-pill"', svg)
+    text = re.search(r'<text x="([\d.]+)"[^>]*text-anchor="start"', svg)
+    assert pill is not None
+    assert text is not None
+    assert float(text.group(1)) == pytest.approx(float(pill.group(1)) + 6.0)
+
+
+def test_highlight_stroke_parses() -> None:
+    settings = load_render_settings_json(
+        json.dumps({"highlights": [{"pad": "U1.1", "stroke": "#000000", "strokeWidthMm": 0.15}]})
+    )
+    (highlight,) = settings.highlights
+    assert highlight.stroke == "#000000"
+    assert highlight.stroke_width_mm == 0.15
+
+
+@pytest.mark.parametrize("value", [0, -1, "0.2", float("nan")])
+def test_highlight_stroke_width_rejects_invalid_values(value: object) -> None:
+    with pytest.raises(ValueError, match="strokeWidthMm"):
+        _ = load_render_settings_json(
+            json.dumps({"highlights": [{"pad": "U1.1", "strokeWidthMm": value}]})
+        )
+
+
+def test_per_highlight_stroke_applies_to_that_group_only() -> None:
+    """A highlight's stroke/strokeWidthMm outline it without touching other
+    highlight groups, so callout pins can carry outlines a dimmer secondary
+    highlight lacks."""
+    base = load_render_settings_json(
+        json.dumps(
+            {
+                "extends": "phosphor:documentation",
+                "highlights": [
+                    {"component": "U1"},
+                    {"pad": "U1.1", "stroke": "#101010", "strokeWidthMm": 0.2},
+                ],
+            }
+        )
+    )
+    settings = resolve_effective_settings(base, CliOverrides(side="front"))
+    svg = render_pcb_svg(_board(), settings).svg
+
+    component_group = svg.split('data-highlight-target="component:U1"')[1].split(
+        "data-highlight-target="
+    )[0]
+    pad_group = svg.split('data-highlight-target="pad:U1.1"')[1]
+    assert "#101010" in pad_group
+    assert "#101010" not in component_group
+
+
+def test_default_font_size_is_20pt() -> None:
+    """No preset pins a font size, so every render inherits this default."""
+    resolved = resolve_effective_settings(load_render_settings_json("{}"), CliOverrides())
+    assert resolved.font_size == 20.0
+
+
+def test_font_size_pt_parses_and_px_is_rejected() -> None:
+    assert load_render_settings_json('{"fontSizePt": 12}').font_size == 12.0
+    with pytest.raises(ValueError, match="fontSizePt"):
+        _ = load_render_settings_json('{"fontSizePx": 40}')
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "annotation.label.textHaloWidthPx",
+        "annotation.connector.strokeWidthPx",
+        "highlight.marker.minDiameterPx",
+        "highlight.marker.strokeWidthPx",
+    ],
+)
+def test_px_annotation_tokens_are_rejected_with_migration(token: str) -> None:
+    with pytest.raises(ValueError, match="Pt"):
+        _ = load_render_settings_json(json.dumps({"tokens": {token: 1}}))
+
+
+def test_annotation_markup_is_render_width_independent() -> None:
+    """Annotation sizes are anchored to the standard display width, so the
+    raster width setting must not change annotation geometry or font size."""
+    import re
+
+    from phosphor_eda.render.annotations import parse_annotations, resolve_annotations
+
+    def annotations_group(width: int) -> str:
+        base = load_render_settings_json(
+            json.dumps(
+                {
+                    "extends": "phosphor:documentation",
+                    "width": width,
+                    "annotations": {"pointers": [{"target": "U1.1", "label": "Pin 1"}]},
+                }
+            )
+        )
+        settings = resolve_effective_settings(base, CliOverrides(side="front"))
+        board = _board()
+        annotations = resolve_annotations(
+            parse_annotations(settings.annotations),
+            board,
+            settings.side,
+            font_size_pt=settings.font_size,
+            rotation=settings.rotation,
+        )
+        svg = render_pcb_svg(board, settings, annotations=annotations).svg
+        match = re.search(r'<g transform="scale\([^)]*\)" class="annotations">.*?</g>', svg, re.S)
+        assert match is not None
+        return match.group(0)
+
+    assert annotations_group(800) == annotations_group(3000)
+
+
+def test_rotation_setting_parses() -> None:
+    assert load_render_settings_json("{}").rotation == 0
+    assert load_render_settings_json('{"rotation": 270}').rotation == 270
+
+
+@pytest.mark.parametrize(
+    "document", ['{"rotation": 45}', '{"rotation": "90"}', '{"rotation": true}']
+)
+def test_rotation_setting_rejects_invalid_values(document: str) -> None:
+    with pytest.raises(ValueError, match="rotation"):
+        _ = load_render_settings_json(document)
+
+
+def test_rotation_cli_override_wins() -> None:
+    base = load_render_settings_json('{"rotation": 90}')
+    settings = resolve_effective_settings(base, CliOverrides(side="front", rotation=180))
+    assert settings.rotation == 180
+
+
 def test_render_svg_uses_typed_inventory_metadata() -> None:
     svg = render_pcb_svg(_board(), _design_settings()).svg
 
@@ -419,7 +631,8 @@ _REJECTED_SETTINGS_DOCUMENTS: list[dict[str, object]] = [
     {"renderMode": "sketch"},
     {"side": "left"},
     {"width": 0},
-    {"fontSizePx": 0},
+    {"fontSizePx": 40},
+    {"fontSizePt": 0},
 ]
 
 
@@ -442,7 +655,10 @@ def _marker_paths(svg: str) -> list[str]:
 
 
 def test_pad_highlight_draws_marker_ring_when_enabled() -> None:
-    settings = _documentation_settings(highlights=(HighlightSpec(pad="U1.1"),))
+    settings = _documentation_settings(
+        highlights=(HighlightSpec(pad="U1.1"),),
+        tokens={"highlight.marker.enabled": True},
+    )
     svg = render_pcb_svg(_board(), settings).svg
 
     markers = _marker_paths(svg)
@@ -455,7 +671,7 @@ def test_marker_ring_enforces_minimum_screen_diameter() -> None:
 
     settings = _documentation_settings(
         highlights=(HighlightSpec(pad="U1.1"),),
-        tokens={"highlight.marker.minDiameterPx": 200},
+        tokens={"highlight.marker.enabled": True, "highlight.marker.minDiameterPt": 150},
     )
     svg = render_pcb_svg(_board(), settings).svg
 
@@ -464,8 +680,9 @@ def test_marker_ring_enforces_minimum_screen_diameter() -> None:
     assert radii
     view_box = re.search(r'viewBox="[\d.\-]+ [\d.\-]+ ([\d.]+)', svg)
     assert view_box is not None
-    px_per_mm = float(re.search(r'width="(\d+)"', svg).group(1)) / float(view_box.group(1))
-    assert radii[0] * px_per_mm >= 100  # half of minDiameterPx
+    # Marker sizes are anchored to the 1000 px standard display width.
+    px_per_mm = 1000.0 / float(view_box.group(1))
+    assert radii[0] * px_per_mm >= 100.0  # half of minDiameterPt in display px
 
     # The ring must not collapse to the pad's own size when the minimum is large.
     assert radii[0] > 1.0
@@ -474,6 +691,7 @@ def test_marker_ring_enforces_minimum_screen_diameter() -> None:
 def test_marker_ring_absent_for_net_and_component_highlights() -> None:
     settings = _documentation_settings(
         highlights=(HighlightSpec(net="VCC"), HighlightSpec(component="U1")),
+        tokens={"highlight.marker.enabled": True},
     )
     svg = render_pcb_svg(_board(), settings).svg
     assert not _marker_paths(svg)
@@ -492,6 +710,7 @@ def test_marker_ring_disabled_in_realistic_preset() -> None:
 def test_marker_ring_uses_highlight_color() -> None:
     settings = _documentation_settings(
         highlights=(HighlightSpec(pad="U1.1", color="#00aa11"),),
+        tokens={"highlight.marker.enabled": True},
     )
     svg = render_pcb_svg(_board(), settings).svg
     (marker,) = _marker_paths(svg)
@@ -678,18 +897,19 @@ def test_annotation_style_tokens_resolve_typed() -> None:
     settings = RenderSettings(
         tokens={
             "annotation.label.fill": "#fff",
-            "annotation.label.textHaloWidthPx": 3,
+            "annotation.label.textHaloWidthPt": 3,
             "annotation.label.pillVisible": False,
             "annotation.connector.stroke": "#0f0",
-            "annotation.connector.strokeWidthPx": 1.5,
+            "annotation.connector.strokeWidthPt": 1.5,
         }
     )
     style = annotation_style_for_settings(settings)
     assert style.label.fill == "#fff"
-    assert style.label.text_halo_width_px == 3.0
+    # Point tokens resolve to display px at 96 dpi (1 pt = 4/3 px).
+    assert style.label.text_halo_width_px == pytest.approx(4.0)
     assert style.label.pill_visible is False
     assert style.connector.stroke == "#0f0"
-    assert style.connector.stroke_width_px == 1.5
+    assert style.connector.stroke_width_px == pytest.approx(2.0)
 
 
 def test_annotation_style_rejects_wrong_token_type() -> None:

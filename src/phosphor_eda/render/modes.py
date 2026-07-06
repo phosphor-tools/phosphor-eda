@@ -251,6 +251,8 @@ def build_highlight_layers(
             settings,
             namespace="highlight",
             highlight_color=highlight.color,
+            highlight_stroke=highlight.stroke,
+            highlight_stroke_width_mm=highlight.stroke_width_mm,
             board_mask=board_mask,
             silkscreen_masks=silkscreen_masks,
             profiler=profiler,
@@ -266,6 +268,8 @@ def _group_inventory_layers(
     *,
     namespace: str,
     highlight_color: str = "",
+    highlight_stroke: str = "",
+    highlight_stroke_width_mm: float = 0.0,
     board_mask: LayerMask | None = None,
     silkscreen_masks: dict[str, LayerMask] | None = None,
     profiler: RenderProfiler | None = None,
@@ -291,6 +295,8 @@ def _group_inventory_layers(
             settings.tokens,
             role,
             highlight_color=highlight_color,
+            highlight_stroke=highlight_stroke,
+            highlight_stroke_width_mm=highlight_stroke_width_mm,
             eda_layer_order=_copper_order(inventory, key.source_layer_name),
         )
         layers.append(

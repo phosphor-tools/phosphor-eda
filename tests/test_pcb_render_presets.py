@@ -14,6 +14,7 @@ import pytest
 
 from phosphor_eda.render.settings import (
     BUNDLED_PRESETS,
+    LayerSelectionRule,
     load_bundled_render_settings,
 )
 
@@ -62,10 +63,51 @@ def test_print_highlights_contrast_with_base_copper() -> None:
     assert base_fill != highlight_fill
 
 
-def test_documentation_preset_omits_conductors() -> None:
-    """The documentation preset shows pads, not trace routing."""
+def _documentation_copper_rules() -> list[LayerSelectionRule]:
     settings = load_bundled_render_settings("documentation")
-    copper_rules = [rule for rule in settings.source.layers if rule.match.role == "copper"]
-    assert copper_rules
-    for rule in copper_rules:
+    rules = [rule for rule in settings.source.layers if rule.match.role == "copper"]
+    assert rules, "documentation preset selects no copper layers"
+    return rules
+
+
+def test_documentation_preset_omits_conductors_and_vias() -> None:
+    """The documentation preset shows component pads, not routing or stitching."""
+    for rule in _documentation_copper_rules():
         assert "conductor" not in rule.item_kinds
+        assert "via" not in rule.item_kinds
+
+
+def test_documentation_preset_scopes_copper_to_active_side() -> None:
+    """Back-side SMD pads must not bleed into a front-view callout figure."""
+    for rule in _documentation_copper_rules():
+        assert rule.match.side == "active"
+
+
+def test_documentation_preset_excludes_passives() -> None:
+    """Passives are noise in callout figures; explicit highlights still render them."""
+    settings = load_bundled_render_settings("documentation")
+    assert set(settings.source.exclude_components) >= {"R*", "C*", "L*", "FB*"}
+
+
+@pytest.mark.parametrize("name", BUNDLED_PRESETS)
+def test_no_preset_pins_the_annotation_font_size(name: str) -> None:
+    """Presets inherit the global point-size default so it stays consistent."""
+    settings = load_bundled_render_settings(name)
+    assert settings.font_size == 0.0
+
+
+@pytest.mark.parametrize("name", BUNDLED_PRESETS)
+def test_every_preset_uses_auto_dimming(name: str) -> None:
+    """Highlight-driven dimming is the engine default; presets don't override
+    it so highlighted renders pop consistently across styles."""
+    settings = load_bundled_render_settings(name)
+    assert settings.dimming.mode == "auto"
+
+
+@pytest.mark.parametrize("name", BUNDLED_PRESETS)
+def test_no_preset_enables_marker_rings(name: str) -> None:
+    """Rings overlap on fine-pitch headers and are rarely needed; they stay
+    opt-in via the highlight.marker.enabled token until sizing is
+    density-aware."""
+    settings = load_bundled_render_settings(name)
+    assert settings.tokens.get("highlight.marker.enabled") is not True

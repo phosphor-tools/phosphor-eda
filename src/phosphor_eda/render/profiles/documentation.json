@@ -1,18 +1,14 @@
 {
   "renderMode": "eda",
-  "fontSizePx": 40,
-  "dimming": {
-    "mode": "off"
-  },
   "source": {
     "layers": [
       {
         "match": {
-          "role": "copper"
+          "role": "copper",
+          "side": "active"
         },
         "itemKinds": [
-          "pad",
-          "via"
+          "pad"
         ],
         "purposes": [
           "copper"
@@ -36,24 +32,30 @@
           "board_profile"
         ]
       }
+    ],
+    "excludeComponents": [
+      "R*",
+      "C*",
+      "L*",
+      "FB*"
     ]
   },
   "tokens": {
-    "eda.copper.front.fill": "#b8b8b8",
-    "eda.copper.back.fill": "#b8b8b8",
-    "eda.copper.inner.default.fill": "#cccccc",
-    "eda.silkscreen.front.fill": "#666666",
-    "eda.silkscreen.back.fill": "#666666",
+    "eda.copper.front.fill": "#c2b7a6",
+    "eda.copper.back.fill": "#c2b7a6",
+    "eda.copper.inner.default.fill": "#d3cabc",
+    "eda.silkscreen.front.fill": "#c2b7a6",
+    "eda.silkscreen.back.fill": "#c2b7a6",
     "eda.edge.stroke": "#444444",
-    "eda.edge.strokeWidthMm": 0.15,
-    "highlight.layer.default.fill": "#cc0000",
+    "eda.edge.strokeWidthMm": 0.25,
+    "highlight.layer.default.fill": "#c00000",
     "highlight.layer.default.opacity": 1,
     "annotation.label.pillVisible": false,
     "annotation.connector.dotVisible": false,
     "annotation.connector.stroke": "#333333",
     "annotation.label.textHalo": "#ffffff",
-    "annotation.label.textHaloWidthPx": 4,
-    "annotation.label.fontWeight": 650,
-    "highlight.marker.enabled": true
+    "annotation.label.textHaloWidthPt": 3,
+    "annotation.label.fontWeight": 700,
+    "annotation.connector.strokeWidthPt": 2
   }
 }
