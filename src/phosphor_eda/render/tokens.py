@@ -135,9 +135,15 @@ def resolve_layer_style(
     role: VisualRole,
     *,
     highlight_color: str = "",
+    highlight_stroke: str = "",
+    highlight_stroke_width_mm: float = 0.0,
     eda_layer_order: int | None = None,
 ) -> ResolvedStyle:
-    """Resolve paint style tokens for a visual layer role."""
+    """Resolve paint style tokens for a visual layer role.
+
+    Per-highlight overrides (``highlight_color``, ``highlight_stroke``,
+    ``highlight_stroke_width_mm``) win over token-resolved values.
+    """
     style_values: dict[str, object] = {}
     if highlight_color:
         style_values["fill"] = highlight_color
@@ -161,6 +167,11 @@ def resolve_layer_style(
             default_value = _resolve_default_value(tokens, role, prop, eda_layer_order)
             if default_value is not None:
                 style_values[prop] = default_value
+
+    if highlight_stroke:
+        style_values["stroke"] = highlight_stroke
+    if highlight_stroke_width_mm > 0:
+        style_values["strokeWidthMm"] = highlight_stroke_width_mm
 
     return ResolvedStyle(
         fill=_as_optional_string(style_values.get("fill"), "fill"),

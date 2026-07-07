@@ -1,7 +1,7 @@
 {
-  "bytes": 16610089,
-  "sha256": "f3d80e161c7528a96eb20f06bb17aa3daf330197bc6259dbc3e65fd2f1d89f2b",
-  "path_count": 35372,
-  "arc_commands": 38242,
-  "line_commands": 107874
+  "bytes": 6026603,
+  "sha256": "5f89c384cfded32d5c8a2f8dd94e56e14e9ed9afedec8890c7e9055734c7311c",
+  "path_count": 30626,
+  "arc_commands": 30922,
+  "line_commands": 100411
 }

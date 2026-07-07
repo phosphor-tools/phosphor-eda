@@ -32,9 +32,11 @@ from phosphor_eda.render.settings import (
 _BACK_SILK = PcbLayer("B.SilkS", (LayerRole.SILKSCREEN, LayerRole.BACK), number=34)
 
 
-def _design_settings(*, side: str = "front") -> RenderSettings:
+def _design_settings(*, side: str = "front", debug_attributes: bool = False) -> RenderSettings:
     base = load_render_settings_json('{"extends": "phosphor:design"}')
-    return resolve_effective_settings(base, CliOverrides(side=side))
+    return resolve_effective_settings(
+        base, CliOverrides(side=side, debug_attributes=debug_attributes or None)
+    )
 
 
 def _render_with_text(text: PcbText, *, layer: PcbLayer, side: str = "front") -> str:
@@ -73,7 +75,7 @@ def test_designator_renders_as_literal_selectable_text() -> None:
 
 def test_text_carries_data_attributes() -> None:
     board = build_render_test_board()
-    svg = render_pcb_svg(board, _design_settings()).svg
+    svg = render_pcb_svg(board, _design_settings(debug_attributes=True)).svg
     match = re.search(r"<text[^>]*>U1</text>", svg)
     assert match is not None
     element = match.group(0)

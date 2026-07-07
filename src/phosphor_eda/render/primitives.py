@@ -169,7 +169,7 @@ def inventory_item_to_svg_primitive(
         tags=item.tags,
         data=data,
         style=shape.style,
-        bbox=_bounds_for_item(item),
+        bbox=inventory_item_bounds(item),
         paint=shape.paint,
         stroke_width=shape.stroke_width,
         stroke_linecap=shape.stroke_linecap,
@@ -231,7 +231,7 @@ def _geometry_bounds(geometry: BaseGeometry | None) -> Bounds | None:
     return (float(min_x), float(min_y), float(max_x), float(max_y))
 
 
-def _bounds_for_item(item: InventoryItem) -> Bounds | None:
+def inventory_item_bounds(item: InventoryItem) -> Bounds | None:
     """Real-geometry bounds for an inventory item.
 
     Mirrors the geometry sources used by :func:`_shape_render_for_item` so mask/clip
@@ -599,7 +599,7 @@ def _board_profile_item_shape(item: InventoryItem) -> _ShapeRender:
 
 
 def _line_path_d(line: PcbLine) -> str:
-    return f"M {line.start_x:.4f} {line.start_y:.4f} L {line.end_x:.4f} {line.end_y:.4f}"
+    return f"M {line.start_x:.3f} {line.start_y:.3f} L {line.end_x:.3f} {line.end_y:.3f}"
 
 
 def _arc_path_d(arc: PcbArc) -> str:
@@ -626,9 +626,9 @@ def _arc_path_d(arc: PcbArc) -> str:
     large_arc = 1 if abs(sweep) > 180.0 else 0
     sweep_flag = 1 if sweep > 0.0 else 0
     return (
-        f"M {arc.start_x:.4f} {arc.start_y:.4f} "
-        f"A {radius:.4f} {radius:.4f} 0 {large_arc} {sweep_flag} "
-        f"{arc.end_x:.4f} {arc.end_y:.4f}"
+        f"M {arc.start_x:.3f} {arc.start_y:.3f} "
+        f"A {radius:.3f} {radius:.3f} 0 {large_arc} {sweep_flag} "
+        f"{arc.end_x:.3f} {arc.end_y:.3f}"
     )
 
 
@@ -636,8 +636,8 @@ def _closed_point_pairs_to_svg_path_d(points: tuple[tuple[float, float], ...]) -
     if len(points) < 3:
         return ""
     first = points[0]
-    commands = [f"M {first[0]:.4f} {first[1]:.4f}"]
-    commands.extend(f"L {x:.4f} {y:.4f}" for x, y in points[1:])
+    commands = [f"M {first[0]:.3f} {first[1]:.3f}"]
+    commands.extend(f"L {x:.3f} {y:.3f}" for x, y in points[1:])
     commands.append("Z")
     return " ".join(commands)
 
@@ -680,8 +680,8 @@ def _line_string_to_svg_path_d(line: LineString) -> str:
     coords = [(float(x), float(y)) for x, y, *_ in line.coords]
     if len(coords) < 2:
         return ""
-    commands = [f"M {coords[0][0]:.4f} {coords[0][1]:.4f}"]
-    commands.extend(f"L {x:.4f} {y:.4f}" for x, y in coords[1:])
+    commands = [f"M {coords[0][0]:.3f} {coords[0][1]:.3f}"]
+    commands.extend(f"L {x:.3f} {y:.3f}" for x, y in coords[1:])
     return " ".join(commands)
 
 
@@ -715,8 +715,15 @@ def solder_mask_opening_primitives(
     inventory: PcbRenderInventory,
     *,
     side: str,
+    near_bboxes: tuple[tuple[float, float, float, float], ...] | None = None,
 ) -> tuple[SvgPrimitive, ...]:
-    """Return source-derived solder-mask openings."""
+    """Return source-derived solder-mask openings.
+
+    ``near_bboxes`` scopes the result to openings whose item bbox comes
+    within ``_NEAR_BBOX_MARGIN_MM`` of any given bbox — used by silkscreen
+    clipping masks, where openings nowhere near rendered silk are dead
+    weight. ``None`` keeps every opening (the realistic mask surface).
+    """
     primitives: list[SvgPrimitive] = []
     explicit_sources: set[tuple[InventoryItemKind, str, str]] = set()
     for item in inventory.items:
@@ -727,7 +734,7 @@ def solder_mask_opening_primitives(
             explicit_sources.add((item.item_kind, _mask_source_id(item), side))
         else:
             primitive = None
-        if primitive is not None:
+        if primitive is not None and _bbox_near_any(primitive.bbox, near_bboxes):
             primitives.append(primitive)
     for item in inventory.items:
         if item.item_kind != InventoryItemKind.PAD:
@@ -735,9 +742,30 @@ def solder_mask_opening_primitives(
         if (item.item_kind, _mask_source_id(item), side) in explicit_sources:
             continue
         primitive = pad_solder_mask_opening_primitive(item, side=side)
-        if primitive is not None:
+        if primitive is not None and _bbox_near_any(primitive.bbox, near_bboxes):
             primitives.append(primitive)
     return tuple(primitives)
+
+
+# Slack around silk bboxes when scoping mask openings: covers silk stroke
+# width and mask expansion, which item bboxes may not include.
+_NEAR_BBOX_MARGIN_MM = 0.5
+
+
+def _bbox_near_any(
+    bbox: tuple[float, float, float, float] | None,
+    near_bboxes: tuple[tuple[float, float, float, float], ...] | None,
+) -> bool:
+    if near_bboxes is None:
+        return True
+    if bbox is None:
+        return True
+    x1, y1, x2, y2 = bbox
+    margin = _NEAR_BBOX_MARGIN_MM
+    for nx1, ny1, nx2, ny2 in near_bboxes:
+        if x1 <= nx2 + margin and nx1 - margin <= x2 and y1 <= ny2 + margin and ny1 - margin <= y2:
+            return True
+    return False
 
 
 def _mask_source_id(item: InventoryItem) -> str:

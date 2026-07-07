@@ -42,6 +42,7 @@ def render_pcb_svg_from_derived_plan(
 ) -> str:
     """Serialize a derived-layer render plan to SVG."""
     svg = Svg()
+    debug = plan.debug_attributes
     view_box = plan.view_box
     svg_open = (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{plan.width_px}" '
@@ -75,6 +76,13 @@ def render_pcb_svg_from_derived_plan(
 
     clip_ids_by_signature: dict[_LayerClipSignature, str] = {}
     mask_ids_by_signature: dict[_LayerMaskSignature, str] = {}
+    # Board geometry (base layers and highlight overlays) is authored in
+    # board coordinates and mapped into the rendered view by this transform.
+    # The dim scrim and annotations are already in view space and stay
+    # outside the transformed groups.
+    view_transform = plan.board_view_transform
+    if view_transform:
+        svg.group_start(attrs={"class": "board-view", "transform": view_transform})
     _render_derived_layers(
         svg,
         plan.base_layers,
@@ -82,7 +90,10 @@ def render_pcb_svg_from_derived_plan(
         group="base",
         clip_ids_by_signature=clip_ids_by_signature,
         mask_ids_by_signature=mask_ids_by_signature,
+        debug=debug,
     )
+    if view_transform:
+        svg.group_end()
     if plan.dim_scrim is not None:
         svg.raw(
             _view_box_rect(
@@ -92,6 +103,8 @@ def render_pcb_svg_from_derived_plan(
                 opacity=plan.dim_scrim.opacity,
             )
         )
+    if view_transform and plan.highlight_groups:
+        svg.group_start(attrs={"class": "board-view", "transform": view_transform})
     for group in plan.highlight_groups:
         svg.group_start(attrs={"class": "highlight-overlay", "data-highlight-target": group.target})
         _render_derived_layers(
@@ -101,7 +114,10 @@ def render_pcb_svg_from_derived_plan(
             group="highlight",
             clip_ids_by_signature=clip_ids_by_signature,
             mask_ids_by_signature=mask_ids_by_signature,
+            debug=debug,
         )
+        svg.group_end()
+    if view_transform and plan.highlight_groups:
         svg.group_end()
 
     if plan.annotations is not None:
@@ -183,6 +199,7 @@ def _render_derived_layers(
     group: str,
     clip_ids_by_signature: dict[_LayerClipSignature, str],
     mask_ids_by_signature: dict[_LayerMaskSignature, str],
+    debug: bool = False,
 ) -> None:
     for layer in layers:
         if not layer.primitives:
@@ -213,6 +230,7 @@ def _render_derived_layers(
                 clip_id,
                 clip,
                 already_rendered=clip_already_rendered,
+                debug=debug,
             )
         if mask is not None:
             _render_layer_mask(
@@ -220,6 +238,7 @@ def _render_derived_layers(
                 mask_id,
                 mask,
                 already_rendered=mask_already_rendered,
+                debug=debug,
             )
         if profiler is not None:
             profiler.metric(
@@ -240,9 +259,12 @@ def _render_derived_layers(
         svg.group_start(attrs=attrs)
         for primitive in layer.primitives:
             if primitive.text is not None:
-                _render_text_primitive(svg, layer.style, primitive, primitive.text)
+                _render_text_primitive(svg, layer.style, primitive, primitive.text, debug=debug)
             else:
-                svg.path(primitive.d, attrs=_derived_layer_path_attrs(layer.style, primitive))
+                svg.path(
+                    primitive.d,
+                    attrs=_derived_layer_path_attrs(layer.style, primitive, debug=debug),
+                )
         svg.group_end()
 
 
@@ -284,6 +306,8 @@ def _render_text_primitive(
     style: ResolvedStyle | None,
     primitive: SvgPrimitive,
     text: SvgText,
+    *,
+    debug: bool = False,
 ) -> None:
     """Emit a board-text primitive as a native ``<text>`` element."""
     attrs: dict[str, str] = {
@@ -299,7 +323,8 @@ def _render_text_primitive(
     transform = _text_transform(text)
     if transform:
         attrs["transform"] = transform
-    attrs.update(_primitive_metadata_attrs(primitive))
+    if debug:
+        attrs.update(_primitive_metadata_attrs(primitive))
     svg.raw(f"<text{fmt_attrs(attrs)}>{xml_escape(text.content)}</text>")
 
 
@@ -333,6 +358,7 @@ def _render_layer_clip(
     clip: LayerClip,
     *,
     already_rendered: bool,
+    debug: bool = False,
 ) -> None:
     if already_rendered:
         return
@@ -340,7 +366,7 @@ def _render_layer_clip(
         return
     svg.raw(f'<defs><clipPath id="{xml_escape(clip_id)}" clipPathUnits="userSpaceOnUse">')
     for primitive in clip.board:
-        svg.path(primitive.d, attrs=_layer_clip_path_attrs(primitive))
+        svg.path(primitive.d, attrs=_layer_clip_path_attrs(primitive, debug=debug))
     svg.raw("</clipPath></defs>")
 
 
@@ -350,6 +376,7 @@ def _render_layer_mask(
     mask: LayerMask,
     *,
     already_rendered: bool,
+    debug: bool = False,
 ) -> None:
     if already_rendered:
         return
@@ -372,9 +399,9 @@ def _render_layer_mask(
     )
     svg.raw(f"<defs><mask {mask_attrs}>")
     for primitive in mask.board:
-        svg.path(primitive.d, attrs=_layer_mask_path_attrs(primitive, fill="white"))
+        svg.path(primitive.d, attrs=_layer_mask_path_attrs(primitive, fill="white", debug=debug))
     for primitive in (*mask.drills, *mask.openings):
-        svg.path(primitive.d, attrs=_layer_mask_path_attrs(primitive, fill="black"))
+        svg.path(primitive.d, attrs=_layer_mask_path_attrs(primitive, fill="black", debug=debug))
     svg.raw("</mask></defs>")
 
 
@@ -417,6 +444,8 @@ def _derived_layer_group_attrs(layer: DerivedLayer) -> dict[str, str]:
 def _derived_layer_path_attrs(
     style: ResolvedStyle | None,
     primitive: SvgPrimitive,
+    *,
+    debug: bool = False,
 ) -> dict[str, str]:
     if primitive.paint is PaintMode.STROKE:
         attrs = _stroke_primitive_style_attrs(style, primitive)
@@ -424,7 +453,8 @@ def _derived_layer_path_attrs(
         attrs = _resolved_path_style_svg_attrs(style)
         attrs["fill-rule"] = "evenodd"
     attrs.update(primitive.style)
-    attrs.update(_primitive_metadata_attrs(primitive))
+    if debug:
+        attrs.update(_primitive_metadata_attrs(primitive))
     return attrs
 
 
@@ -456,7 +486,9 @@ def _stroke_paint(style: ResolvedStyle | None) -> str | None:
     return style.fill
 
 
-def _layer_mask_path_attrs(primitive: SvgPrimitive, *, fill: str) -> dict[str, str]:
+def _layer_mask_path_attrs(
+    primitive: SvgPrimitive, *, fill: str, debug: bool = False
+) -> dict[str, str]:
     if primitive.paint is PaintMode.STROKE:
         attrs = {"fill": "none", "stroke": fill}
         # Floor to a hairline so a widthless mask stroke never falls through to
@@ -467,13 +499,15 @@ def _layer_mask_path_attrs(primitive: SvgPrimitive, *, fill: str) -> dict[str, s
             attrs["stroke-linecap"] = primitive.stroke_linecap
     else:
         attrs = {"fill": fill, "fill-rule": "evenodd"}
-    attrs.update(_primitive_metadata_attrs(primitive))
+    if debug:
+        attrs.update(_primitive_metadata_attrs(primitive))
     return attrs
 
 
-def _layer_clip_path_attrs(primitive: SvgPrimitive) -> dict[str, str]:
+def _layer_clip_path_attrs(primitive: SvgPrimitive, *, debug: bool = False) -> dict[str, str]:
     attrs = {"fill-rule": "evenodd"}
-    attrs.update(_primitive_metadata_attrs(primitive))
+    if debug:
+        attrs.update(_primitive_metadata_attrs(primitive))
     return attrs
 
 

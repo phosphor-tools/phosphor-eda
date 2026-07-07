@@ -79,9 +79,9 @@ def circle_path_d(cx: float, cy: float, radius: float, *, clockwise: bool = Fals
         return ""
     sweep = 1 if clockwise else 0
     return (
-        f"M {cx + radius:.4f} {cy:.4f} "
-        f"A {radius:.4f} {radius:.4f} 0 1 {sweep} {cx - radius:.4f} {cy:.4f} "
-        f"A {radius:.4f} {radius:.4f} 0 1 {sweep} {cx + radius:.4f} {cy:.4f} Z"
+        f"M {cx + radius:.3f} {cy:.3f} "
+        f"A {radius:.3f} {radius:.3f} 0 1 {sweep} {cx - radius:.3f} {cy:.3f} "
+        f"A {radius:.3f} {radius:.3f} 0 1 {sweep} {cx + radius:.3f} {cy:.3f} Z"
     )
 
 
@@ -98,8 +98,8 @@ def rect_path_d(cx: float, cy: float, w: float, h: float, rotation: float = 0.0)
         (cx - hw, cy + hh),
     )
     rotated = [_rotate_point(x, y, cx, cy, rotation) for x, y in corners]
-    commands = [f"M {rotated[0][0]:.4f} {rotated[0][1]:.4f}"]
-    commands.extend(f"L {x:.4f} {y:.4f}" for x, y in rotated[1:])
+    commands = [f"M {rotated[0][0]:.3f} {rotated[0][1]:.3f}"]
+    commands.extend(f"L {x:.3f} {y:.3f}" for x, y in rotated[1:])
     commands.append("Z")
     return " ".join(commands)
 
@@ -174,11 +174,11 @@ def oval_path_d(cx: float, cy: float, w: float, h: float, rotation: float = 0.0)
         p_bl = (cx - half, cy + radius)
         pts = [_rotate_point(x, y, cx, cy, rotation) for x, y in (p_tl, p_tr, p_br, p_bl)]
         return (
-            f"M {pts[0][0]:.4f} {pts[0][1]:.4f} "
-            f"L {pts[1][0]:.4f} {pts[1][1]:.4f} "
-            f"A {radius:.4f} {radius:.4f} 0 0 0 {pts[2][0]:.4f} {pts[2][1]:.4f} "
-            f"L {pts[3][0]:.4f} {pts[3][1]:.4f} "
-            f"A {radius:.4f} {radius:.4f} 0 0 0 {pts[0][0]:.4f} {pts[0][1]:.4f} Z"
+            f"M {pts[0][0]:.3f} {pts[0][1]:.3f} "
+            f"L {pts[1][0]:.3f} {pts[1][1]:.3f} "
+            f"A {radius:.3f} {radius:.3f} 0 0 0 {pts[2][0]:.3f} {pts[2][1]:.3f} "
+            f"L {pts[3][0]:.3f} {pts[3][1]:.3f} "
+            f"A {radius:.3f} {radius:.3f} 0 0 0 {pts[0][0]:.3f} {pts[0][1]:.3f} Z"
         )
     radius = w / 2.0
     half = (h - w) / 2.0
@@ -189,11 +189,11 @@ def oval_path_d(cx: float, cy: float, w: float, h: float, rotation: float = 0.0)
     p_tr = (cx + radius, cy - half)
     pts = [_rotate_point(x, y, cx, cy, rotation) for x, y in (p_tl, p_bl, p_br, p_tr)]
     return (
-        f"M {pts[0][0]:.4f} {pts[0][1]:.4f} "
-        f"L {pts[1][0]:.4f} {pts[1][1]:.4f} "
-        f"A {radius:.4f} {radius:.4f} 0 0 0 {pts[2][0]:.4f} {pts[2][1]:.4f} "
-        f"L {pts[3][0]:.4f} {pts[3][1]:.4f} "
-        f"A {radius:.4f} {radius:.4f} 0 0 0 {pts[0][0]:.4f} {pts[0][1]:.4f} Z"
+        f"M {pts[0][0]:.3f} {pts[0][1]:.3f} "
+        f"L {pts[1][0]:.3f} {pts[1][1]:.3f} "
+        f"A {radius:.3f} {radius:.3f} 0 0 0 {pts[2][0]:.3f} {pts[2][1]:.3f} "
+        f"L {pts[3][0]:.3f} {pts[3][1]:.3f} "
+        f"A {radius:.3f} {radius:.3f} 0 0 0 {pts[0][0]:.3f} {pts[0][1]:.3f} Z"
     )
 
 
@@ -225,9 +225,9 @@ def roundrect_path_d(
     for op, x, y in raw:
         rx, ry = _rotate_point(x, y, cx, cy, rotation)
         if op == "A":
-            commands.append(f"A {radius:.4f} {radius:.4f} 0 0 1 {rx:.4f} {ry:.4f}")
+            commands.append(f"A {radius:.3f} {radius:.3f} 0 0 1 {rx:.3f} {ry:.3f}")
         else:
-            commands.append(f"{op} {rx:.4f} {ry:.4f}")
+            commands.append(f"{op} {rx:.3f} {ry:.3f}")
     commands.append("Z")
     return " ".join(commands)
 
@@ -336,8 +336,8 @@ def _ring_to_path_d(coords: CoordinateSequence) -> str:
         return ""
     if points[0] == points[-1]:
         points = points[:-1]
-    commands = [f"M {points[0][0]:.4f} {points[0][1]:.4f}"]
-    commands.extend(f"L {x:.4f} {y:.4f}" for x, y in points[1:])
+    commands = [f"M {points[0][0]:.3f} {points[0][1]:.3f}"]
+    commands.extend(f"L {x:.3f} {y:.3f}" for x, y in points[1:])
     commands.append("Z")
     return " ".join(commands)
 

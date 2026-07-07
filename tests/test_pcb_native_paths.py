@@ -38,7 +38,7 @@ def test_circle_path_is_two_arcs_closed() -> None:
     d = circle_path_d(10.0, 20.0, 5.0)
     assert d.count(" A ") == 2
     assert d.endswith("Z")
-    assert d.startswith("M 15.0000 20.0000")
+    assert d.startswith("M 15.000 20.000")
 
 
 def test_circle_path_degenerate_radius_empty() -> None:
@@ -61,10 +61,10 @@ def test_rect_path_unrotated_corners() -> None:
     assert d.endswith("Z")
     assert " A " not in d
     # Four distinct corners at +/- half-extents.
-    assert "M -2.0000 -1.0000" in d
-    assert "L 2.0000 -1.0000" in d
-    assert "L 2.0000 1.0000" in d
-    assert "L -2.0000 1.0000" in d
+    assert "M -2.000 -1.000" in d
+    assert "L 2.000 -1.000" in d
+    assert "L 2.000 1.000" in d
+    assert "L -2.000 1.000" in d
 
 
 def test_rect_path_rotation_baked_into_coordinates() -> None:
@@ -84,7 +84,7 @@ def test_oval_path_horizontal_capsule_structure() -> None:
     assert d.count(" A ") == 2
     assert d.endswith("Z")
     # Cap radius is half the minor axis.
-    assert "A 1.0000 1.0000" in d
+    assert "A 1.000 1.000" in d
 
 
 def test_oval_path_square_falls_back_to_circle() -> None:
@@ -96,7 +96,7 @@ def test_roundrect_path_has_four_arcs_and_four_lines() -> None:
     assert d.count(" A ") == 4
     assert d.count(" L ") == 4
     assert d.endswith("Z")
-    assert "A 1.5000 1.5000" in d
+    assert "A 1.500 1.500" in d
 
 
 def test_roundrect_zero_radius_is_plain_rect() -> None:
@@ -108,7 +108,7 @@ def test_roundrect_zero_radius_is_plain_rect() -> None:
 def test_roundrect_radius_clamped_to_half_extent() -> None:
     # Corner radius larger than half the short side is clamped.
     d = roundrect_path_d(0.0, 0.0, 4.0, 2.0, corner_radius=5.0)
-    assert "A 1.0000 1.0000" in d
+    assert "A 1.000 1.000" in d
 
 
 def _pad(shape: str, *, roundrect_rratio: float = 0.0) -> PcbPad:
@@ -134,7 +134,7 @@ def test_pad_path_expansion_overrides_dimensions() -> None:
     base = pad_path_d(_pad("rect"))
     expanded = pad_path_d(_pad("rect"), width=6.0, height=4.0)
     assert base != expanded
-    assert "M -3.0000 -2.0000" in expanded
+    assert "M -3.000 -2.000" in expanded
 
 
 def test_custom_pad_concatenates_subpaths() -> None:
@@ -172,8 +172,8 @@ def test_custom_pad_annular_circle_uses_opposite_windings() -> None:
     # radius is the stroke centerline: outer ring at r=2.25 keeps the default
     # winding; inner ring at r=1.75 is reversed so the hole survives
     # fill-rule="nonzero".
-    assert "M 2.2500 0.0000" in d
-    assert "M 1.7500 0.0000" in d
+    assert "M 2.250 0.000" in d
+    assert "M 1.750 0.000" in d
     assert " 0 1 0 " in d
     assert " 0 1 1 " in d
 

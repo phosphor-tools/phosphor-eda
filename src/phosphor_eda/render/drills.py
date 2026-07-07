@@ -58,7 +58,7 @@ def drill_render(drill: PcbDrill) -> DrillRender | None:
     if not math.isclose(drill.rotation % 360.0, 0.0):
         start = _rotate_about(start, (drill.x, drill.y), drill.rotation)
         end = _rotate_about(end, (drill.x, drill.y), drill.rotation)
-    d = f"M {start[0]:.4f} {start[1]:.4f} L {end[0]:.4f} {end[1]:.4f}"
+    d = f"M {start[0]:.3f} {start[1]:.3f} L {end[0]:.3f} {end[1]:.3f}"
     return DrillRender(d=d, stroke_width=slot_width)
 
 

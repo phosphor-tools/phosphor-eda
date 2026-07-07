@@ -17,6 +17,7 @@ from phosphor_eda.geometry.text_metrics import (
     HTML_TAG_RE,
     baseline_center_offset,
 )
+from phosphor_eda.render.label_metrics import LABEL_PAD_H_PX
 
 if TYPE_CHECKING:
     from phosphor_eda.render.annotations import (
@@ -238,11 +239,17 @@ def _render_pill_label(
         attrs={"class": css_class, "style": f"fill: {color}"},
     )
 
-    # Render text lines centered in the pill
+    # Render text lines in the pill: the text x tracks the anchor so
+    # start/end-aligned side-margin labels stay inside the pill.
     lines = _split_label_lines(text)
     line_height = font_size * 1.2
     total_text_h = len(lines) * line_height
-    cx = x + width / 2
+    if text_anchor == "start":
+        cx = x + LABEL_PAD_H_PX
+    elif text_anchor == "end":
+        cx = x + width - LABEL_PAD_H_PX
+    else:
+        cx = x + width / 2
     center_y = y + height / 2
     start_y = center_y - total_text_h / 2 + line_height / 2 + baseline_center_offset() * font_size
 

@@ -423,6 +423,39 @@ def _graphic_sources(
             # anchor net; attach the symbol so its name applies.
             synthetic_net = synthetic_nets_by_location[location]
             net_targets.append((synthetic_net.id, synthetic_net, synthetic_net.net_id))
+        if not net_targets and kind != "off_page_connector":
+            # Ports and power symbols usually connect by name, not by a wire
+            # under the symbol: attach to the uniquely matching named page net
+            # so the source object and its net-name evidence survive.
+            # Off-page connectors stay excluded: their objects are merge-active
+            # in the resolver, and on the Maxome fixture a name-attached OPC
+            # joins nets that Capture's materialized page-net list keeps
+            # separate (WAKE vs VCOM_RX) via a wired OPC whose net attribution
+            # is still unproven; see the OPC connection-point follow-up issue.
+            net_name = _graphic_net_spelling(graphic)
+            if net_name:
+                net_name_key = dsn_name_key(net_name)
+                matching_net_ids = {
+                    entry.net_id
+                    for entry in raw_page.nets
+                    if entry.net_id not in _SENTINEL_NET_IDS
+                    and dsn_name_key(entry.name) == net_name_key
+                }
+                if len(matching_net_ids) == 1:
+                    net_id = matching_net_ids.pop()
+                    net_targets.append(
+                        (
+                            _local_net_id(page_id, net_id),
+                            _add_page_net_if_missing(
+                                page_nets_by_id=page_nets_by_id,
+                                page_source=page_source,
+                                page_id=page_id,
+                                scope_id=scope_id,
+                                net_id=net_id,
+                            ),
+                            net_id,
+                        )
+                    )
         if not net_targets:
             _warn_floating_graphic(
                 graphic=graphic,

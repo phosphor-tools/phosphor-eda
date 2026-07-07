@@ -6,7 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from phosphor_eda.domain.pcb import LayerRole
+from phosphor_eda.domain.pcb import LayerRole, PcbDrill
 from phosphor_eda.query.selectors import resolve_string_selectors, selector_matches
 from phosphor_eda.render.inventory import (
     InventoryItem,
@@ -20,6 +20,7 @@ from phosphor_eda.render.primitives import (
     LayerMask,
     SvgPrimitive,
     drill_to_svg_primitive,
+    inventory_item_bounds,
     inventory_item_to_svg_primitive,
     layer_function_for_item,
     solder_mask_opening_primitives,
@@ -99,8 +100,11 @@ def build_eda_layers(
     )
     if profiler is not None:
         profiler.metric("eda.selected_items", count=len(selected))
-    board_mask = _board_layer_mask(inventory)
-    silkscreen_masks = _silkscreen_layer_masks(inventory, settings.side)
+    rendered_ids = _rendered_source_ids(selected)
+    board_mask = _board_layer_mask(inventory, rendered_ids)
+    silkscreen_masks = _silkscreen_layer_masks(
+        inventory, settings.side, rendered_ids, _silk_bboxes_by_side(selected)
+    )
     return _group_inventory_layers(
         inventory,
         selected,
@@ -126,7 +130,7 @@ def build_realistic_layers(
         settings.source.exclude_components,
     )
     board_primitives = _board_primitives(inventory)
-    drill_primitives = _drill_primitives(inventory)
+    drill_primitives = _drill_primitives(inventory, _rendered_source_ids(selected))
     mask_openings = solder_mask_opening_primitives(inventory, side=side)
     board_clip = LayerClip(board=board_primitives) if board_primitives else None
     copper_items = tuple(
@@ -234,9 +238,7 @@ def build_highlight_layers(
     names electrically continuous with it (schematic-bridged closure); a net
     highlight matches any name in its group.
     """
-    groups: list[HighlightGroup] = []
-    board_mask = _board_layer_mask(inventory)
-    silkscreen_masks = _silkscreen_layer_masks(inventory, settings.side)
+    selections: list[tuple[HighlightSpec, tuple[InventoryItem, ...]]] = []
     for highlight in settings.highlights:
         net_names = _highlight_net_names(highlight, net_expansions)
         selected = tuple(
@@ -245,12 +247,24 @@ def build_highlight_layers(
         if not selected:
             warn(f"Highlight target not found: {_highlight_target(highlight)}")
             continue
+        selections.append((highlight, selected))
+
+    groups: list[HighlightGroup] = []
+    all_selected = tuple(item for _, items in selections for item in items)
+    rendered_ids = _rendered_source_ids(all_selected)
+    board_mask = _board_layer_mask(inventory, rendered_ids)
+    silkscreen_masks = _silkscreen_layer_masks(
+        inventory, settings.side, rendered_ids, _silk_bboxes_by_side(all_selected)
+    )
+    for highlight, selected in selections:
         layers = _group_inventory_layers(
             inventory,
             selected,
             settings,
             namespace="highlight",
             highlight_color=highlight.color,
+            highlight_stroke=highlight.stroke,
+            highlight_stroke_width_mm=highlight.stroke_width_mm,
             board_mask=board_mask,
             silkscreen_masks=silkscreen_masks,
             profiler=profiler,
@@ -266,6 +280,8 @@ def _group_inventory_layers(
     *,
     namespace: str,
     highlight_color: str = "",
+    highlight_stroke: str = "",
+    highlight_stroke_width_mm: float = 0.0,
     board_mask: LayerMask | None = None,
     silkscreen_masks: dict[str, LayerMask] | None = None,
     profiler: RenderProfiler | None = None,
@@ -291,6 +307,8 @@ def _group_inventory_layers(
             settings.tokens,
             role,
             highlight_color=highlight_color,
+            highlight_stroke=highlight_stroke,
+            highlight_stroke_width_mm=highlight_stroke_width_mm,
             eda_layer_order=_copper_order(inventory, key.source_layer_name),
         )
         layers.append(
@@ -375,34 +393,82 @@ def _is_silkscreen_projection_item(item: InventoryItem) -> bool:
     return item.layer is not None and item.layer.has_role(LayerRole.SILKSCREEN)
 
 
-def _drill_primitives(inventory: PcbRenderInventory) -> tuple[SvgPrimitive, ...]:
-    return _primitives_for_items(
-        tuple(item for item in inventory.items if item.item_kind == InventoryItemKind.DRILL)
+def _drill_primitives(
+    inventory: PcbRenderInventory,
+    rendered_source_ids: frozenset[int] | None = None,
+) -> tuple[SvgPrimitive, ...]:
+    """Drill primitives, optionally scoped to drills whose owner is rendered.
+
+    A drill punches masks only when its owner pad/via is itself rendered;
+    ownerless drills (mounting holes) always punch. Unscoped (None) keeps
+    every drill — used when drills are selected as visible content.
+    """
+    drill_items = tuple(
+        item for item in inventory.items if item.item_kind == InventoryItemKind.DRILL
     )
+    if rendered_source_ids is not None:
+        drill_items = tuple(
+            item
+            for item in drill_items
+            if not isinstance(item.source, PcbDrill)
+            or item.source.owner is None
+            or id(item.source.owner) in rendered_source_ids
+        )
+    return _primitives_for_items(drill_items)
 
 
-def _board_layer_mask(inventory: PcbRenderInventory) -> LayerMask | None:
+def _rendered_source_ids(selected: Iterable[InventoryItem]) -> frozenset[int]:
+    return frozenset(id(item.source) for item in selected)
+
+
+def _silk_bboxes_by_side(
+    selected: Iterable[InventoryItem],
+) -> dict[str, tuple[tuple[float, float, float, float], ...]]:
+    """Bounding boxes of rendered silkscreen-projection items, per side."""
+    bboxes: dict[str, list[tuple[float, float, float, float]]] = {}
+    for item in selected:
+        if not _is_silkscreen_projection_item(item):
+            continue
+        bbox = item.bbox if item.bbox is not None else inventory_item_bounds(item)
+        if bbox is None or item.layer is None:
+            continue
+        bboxes.setdefault(item.layer.side, []).append(bbox)
+    return {side: tuple(values) for side, values in bboxes.items()}
+
+
+def _board_layer_mask(
+    inventory: PcbRenderInventory,
+    rendered_source_ids: frozenset[int] | None = None,
+) -> LayerMask | None:
     board = _board_primitives(inventory)
     if not board:
         return None
-    return LayerMask(board=board, drills=_drill_primitives(inventory))
+    return LayerMask(board=board, drills=_drill_primitives(inventory, rendered_source_ids))
 
 
 def _silkscreen_layer_masks(
     inventory: PcbRenderInventory,
     active_side: str,
+    rendered_source_ids: frozenset[int] | None = None,
+    silk_bboxes_by_side: dict[str, tuple[tuple[float, float, float, float], ...]] | None = None,
 ) -> dict[str, LayerMask]:
     board = _board_primitives(inventory)
     if not board:
         return {}
-    drills = _drill_primitives(inventory)
+    drills = _drill_primitives(inventory, rendered_source_ids)
     sides = {layer.side for layer in (item.layer for item in inventory.items) if layer is not None}
     sides.update(side for side in ("front", "back", active_side) if side)
     return {
         side: LayerMask(
             board=board,
             drills=drills,
-            openings=solder_mask_opening_primitives(inventory, side=side),
+            openings=solder_mask_opening_primitives(
+                inventory,
+                side=side,
+                near_bboxes=(
+                    None if silk_bboxes_by_side is None else silk_bboxes_by_side.get(side, ())
+                ),
+            ),
         )
         for side in sides
         if side

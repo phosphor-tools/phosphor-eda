@@ -12,6 +12,7 @@ from typing import Literal, TypeGuard, cast
 
 from phosphor_eda.domain.pcb import LayerRole, PcbArtworkKind, PcbConductorKind
 from phosphor_eda.render.inventory import InventoryItemKind, InventoryPurpose
+from phosphor_eda.render.view import VIEW_ROTATIONS
 
 RENDER_MODES = ("eda", "realistic")
 SOURCE_LAYER_ROLES = tuple(role.value for role in LayerRole)
@@ -52,19 +53,31 @@ MAX_CUSTOM_CSS_LENGTH = 100_000
 # stale settings file fails with a clear migration message.
 _REMOVED_KEYS: dict[str, str] = {
     "theme": "use extends instead",
-    "font_size": "use fontSizePx",
-    "font_size_px": "use fontSizePx",
+    "font_size": "use fontSizePt",
+    "font_size_px": "use fontSizePt",
+    "fontSizePx": "use fontSizePt (points at the standard display width)",
     "include": "use source layer selection",
     "highlight_behavior": "use dimming and highlight tokens",
     "style_rules": "use semantic tokens",
     "exclude_component_prefixes": "use source.excludeComponents",
 }
 
+# Token names that changed unit from display pixels to points; map each to
+# its replacement so a stale settings file fails with a clear message.
+_REMOVED_TOKENS: dict[str, str] = {
+    "annotation.label.textHaloWidthPx": "annotation.label.textHaloWidthPt",
+    "annotation.connector.strokeWidthPx": "annotation.connector.strokeWidthPt",
+    "highlight.marker.minDiameterPx": "highlight.marker.minDiameterPt",
+    "highlight.marker.strokeWidthPx": "highlight.marker.strokeWidthPt",
+}
+
 
 @dataclass
 class HighlightSpec:
-    """A single net, component, or pad to highlight, with an optional color.
+    """A single net, component, or pad to highlight, with optional styling.
 
+    ``color`` overrides the highlight fill; ``stroke``/``stroke_width_mm``
+    outline this highlight's artwork so it reads over other highlights.
     Net highlights follow the signal through series passives by default
     (schematic-bridged closure); ``exact`` restricts the match to the named
     net only.
@@ -74,6 +87,8 @@ class HighlightSpec:
     component: str = ""
     pad: str = ""
     color: str = ""
+    stroke: str = ""
+    stroke_width_mm: float = 0.0
     exact: bool = False
 
 
@@ -120,9 +135,11 @@ class RenderSettings:
 
     render_mode: RenderMode = "eda"
     side: str = ""
+    rotation: int = 0
     width: int = 0
     font_size: float = 0.0
     background: str = ""
+    debug_attributes: bool = False
     source: SourceSelection = field(default_factory=SourceSelection)
     tokens: TokenMap = field(default_factory=dict)
     dimming: DimmingSettings = field(default_factory=DimmingSettings)
@@ -133,7 +150,8 @@ class RenderSettings:
 
 DEFAULT_SIDE = "front"
 DEFAULT_WIDTH = 800
-DEFAULT_FONT_SIZE = 10.0
+# Annotation font size in points (screen-relative; see render/view.py).
+DEFAULT_FONT_SIZE = 20.0
 DEFAULT_BACKGROUND = "#ffffff"
 
 # Upper bound on a CSS color value for the canvas background.
@@ -150,9 +168,11 @@ class CliOverrides:
     """
 
     side: str | None = None
+    rotation: int | None = None
     width: int | None = None
     font_size: float | None = None
     custom_css: str | None = None
+    debug_attributes: bool | None = None
     highlights: tuple[HighlightSpec, ...] = ()
 
 
@@ -169,6 +189,12 @@ def resolve_effective_settings(
     CSS.
     """
     side = overrides.side or base.side or DEFAULT_SIDE
+    rotation = overrides.rotation if overrides.rotation is not None else base.rotation
+    debug_attributes = (
+        overrides.debug_attributes
+        if overrides.debug_attributes is not None
+        else base.debug_attributes
+    )
     width = overrides.width or base.width or DEFAULT_WIDTH
     font_size = overrides.font_size or base.font_size or DEFAULT_FONT_SIZE
     background = base.background or DEFAULT_BACKGROUND
@@ -192,9 +218,11 @@ def resolve_effective_settings(
     return replace(
         base,
         side=side,
+        rotation=rotation,
         width=width,
         font_size=font_size,
         background=background,
+        debug_attributes=debug_attributes,
         highlights=highlights,
         custom_css=custom_css,
     )
@@ -270,15 +298,36 @@ def render_settings_schema() -> dict[str, object]:
                 "type": "string",
                 "enum": ["front", "back"],
             },
+            "rotation": {
+                "type": "integer",
+                "enum": list(VIEW_ROTATIONS),
+                "description": (
+                    "Clockwise view rotation in degrees, applied after the "
+                    "back-side mirror. Annotation labels stay upright."
+                ),
+            },
             "width": {
                 "type": "integer",
                 "minimum": 1,
             },
-            "fontSizePx": {
+            "fontSizePt": {
                 "type": "number",
                 "minimum": 1,
                 "maximum": 500,
-                "description": "Annotation label font size in display pixels.",
+                "description": (
+                    "Annotation label font size in points, as seen when the "
+                    "image is viewed at a standard content-column width "
+                    "(~1000 px). Independent of render width and board size."
+                ),
+            },
+            "debugAttributes": {
+                "type": "boolean",
+                "description": (
+                    "Emit per-element data-* provenance attributes "
+                    "(component/net/pad identity on every path) for CSS "
+                    "targeting and debugging. Off by default: they multiply "
+                    "file size several-fold."
+                ),
             },
             "background": {
                 "type": "string",
@@ -384,6 +433,15 @@ def render_settings_schema() -> dict[str, object]:
                             "pattern": r"^[^.]+\..+$",
                         },
                         "color": {"type": "string"},
+                        "stroke": {
+                            "type": "string",
+                            "description": "Outline color for this highlight's artwork.",
+                        },
+                        "strokeWidthMm": {
+                            "type": "number",
+                            "exclusiveMinimum": 0,
+                            "description": "Outline width in board mm.",
+                        },
                         "exact": {
                             "type": "boolean",
                             "description": (
@@ -416,8 +474,7 @@ def render_settings_schema() -> dict[str, object]:
             {
                 "extends": "phosphor:documentation",
                 "renderMode": "eda",
-                "width": 3000,
-                "fontSizePx": 40,
+                "fontSizePt": 12,
                 "source": {
                     "layers": [
                         {"match": {"role": "copper"}, "visible": True},
@@ -475,6 +532,19 @@ def parse_render_settings(data: dict[str, object]) -> RenderSettings:
             raise ValueError(msg)
         side = raw_side
 
+    rotation = 0
+    if "rotation" in data:
+        raw_rotation = data["rotation"]
+        if (
+            not isinstance(raw_rotation, int)
+            or isinstance(raw_rotation, bool)
+            or raw_rotation not in VIEW_ROTATIONS
+        ):
+            allowed = ", ".join(str(value) for value in VIEW_ROTATIONS)
+            msg = f"rotation must be one of {allowed}, got {raw_rotation!r}"
+            raise ValueError(msg)
+        rotation = raw_rotation
+
     width = 0
     if "width" in data:
         raw_width = data["width"]
@@ -484,8 +554,16 @@ def parse_render_settings(data: dict[str, object]) -> RenderSettings:
         width = raw_width
 
     font_size = 0.0
-    if "fontSizePx" in data:
-        font_size = _parse_font_size(data["fontSizePx"], "fontSizePx")
+    if "fontSizePt" in data:
+        font_size = _parse_font_size(data["fontSizePt"], "fontSizePt")
+
+    debug_attributes = False
+    if "debugAttributes" in data:
+        raw_debug = data["debugAttributes"]
+        if not isinstance(raw_debug, bool):
+            msg = f"debugAttributes must be a boolean, got {raw_debug!r}"
+            raise ValueError(msg)
+        debug_attributes = raw_debug
 
     background = ""
     if "background" in data:
@@ -542,9 +620,11 @@ def parse_render_settings(data: dict[str, object]) -> RenderSettings:
     return RenderSettings(
         render_mode=render_mode,
         side=side,
+        rotation=rotation,
         width=width,
         font_size=font_size,
         background=background,
+        debug_attributes=debug_attributes,
         source=source,
         tokens=tokens,
         dimming=dimming,
@@ -685,6 +765,9 @@ def _parse_tokens(raw_tokens: object) -> TokenMap:
 
     tokens: TokenMap = {}
     for key, value in raw_tokens.items():
+        if key in _REMOVED_TOKENS:
+            msg = f"token {key!r} is no longer supported; use {_REMOVED_TOKENS[key]!r} (points)"
+            raise ValueError(msg)
         if not _DOT_TOKEN_RE.fullmatch(key) and not _NATIVE_LAYER_TOKEN_RE.fullmatch(key):
             msg = f"tokens key must be a dot token or native layer token, got {key!r}"
             raise ValueError(msg)
@@ -738,10 +821,22 @@ def _parse_highlight(item: object, index: int) -> HighlightSpec:
     if not is_json_dict(item):
         msg = f"highlights[{index}] must be an object"
         raise ValueError(msg)
-    for field_name in ("net", "component", "pad", "color"):
+    for field_name in ("net", "component", "pad", "color", "stroke"):
         if field_name in item and not isinstance(item[field_name], str):
             msg = f"highlights[{index}].{field_name} must be a string"
             raise ValueError(msg)
+    stroke_width_mm = 0.0
+    if "strokeWidthMm" in item:
+        raw_width = item["strokeWidthMm"]
+        if (
+            not isinstance(raw_width, int | float)
+            or isinstance(raw_width, bool)
+            or not math.isfinite(raw_width)
+            or raw_width <= 0
+        ):
+            msg = f"highlights[{index}].strokeWidthMm must be a positive number, got {raw_width!r}"
+            raise ValueError(msg)
+        stroke_width_mm = float(raw_width)
     exact = item.get("exact", False)
     if not isinstance(exact, bool):
         msg = f"highlights[{index}].exact must be a boolean"
@@ -759,7 +854,16 @@ def _parse_highlight(item: object, index: int) -> HighlightSpec:
         msg = f"highlights[{index}].pad must be '<component>.<pad>', got {pad!r}"
         raise ValueError(msg)
     color = str(item.get("color", ""))
-    return HighlightSpec(net=net, component=component, pad=pad, color=color, exact=exact)
+    stroke = str(item.get("stroke", ""))
+    return HighlightSpec(
+        net=net,
+        component=component,
+        pad=pad,
+        color=color,
+        stroke=stroke,
+        stroke_width_mm=stroke_width_mm,
+        exact=exact,
+    )
 
 
 def _load_render_settings_file_data(path: Path, stack: list[str]) -> dict[str, object]:

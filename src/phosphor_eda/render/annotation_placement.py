@@ -12,14 +12,11 @@ from typing import TYPE_CHECKING
 
 from ortools.sat.python import cp_model
 
-from phosphor_eda.geometry.text_metrics import measure_text
-
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from phosphor_eda.render.annotation_spec import LegendSpec
-
-ANNOTATION_FONT_PX = 10.0
+# Default annotation font size in points (screen-relative; see render/view.py).
+ANNOTATION_FONT_PT = 20.0
 
 # Margin gap between board edge and label column (pixels)
 MARGIN_GAP_PX = 16.0
@@ -30,17 +27,13 @@ LEGEND_GAP_PX = 10.0
 # Minimum gap between labels in the same margin (pixels)
 _LABEL_SPACING_PX = 12.0
 
-# Label pill padding (as multiples of font size)
-_PAD_H_PX = 6.0  # horizontal padding on each side (pixels)
-_PAD_V_PX = 4.0  # vertical padding on each side (pixels)
-
 # Box padding around target components (pixels)
 BOX_PAD_PX = 6.0
 
 
 def px_scale(
     board_bbox: tuple[float, float, float, float],
-    width_px: int,
+    width_px: float,
 ) -> float:
     """Compute the board-mm-to-pixel scale factor.
 
@@ -50,40 +43,6 @@ def px_scale(
     """
     bw = board_bbox[2] - board_bbox[0]
     return bw / width_px if width_px > 0 else 1.0
-
-
-def to_rendered_view_x(
-    x_mm: float,
-    board_bbox: tuple[float, float, float, float],
-    side: str,
-) -> float:
-    """Convert a physical board x-coordinate to rendered-view x-coordinate."""
-    if side == "back":
-        return board_bbox[0] + board_bbox[2] - x_mm
-    return x_mm
-
-
-def to_rendered_view_bbox(
-    bbox: tuple[float, float, float, float],
-    board_bbox: tuple[float, float, float, float],
-    side: str,
-) -> tuple[float, float, float, float]:
-    """Convert a physical board bbox to rendered-view coordinates."""
-    x1, y1, x2, y2 = bbox
-    rx1 = to_rendered_view_x(x2, board_bbox, side)
-    rx2 = to_rendered_view_x(x1, board_bbox, side)
-    return (min(rx1, rx2), y1, max(rx1, rx2), y2)
-
-
-def measure_label(text: str, font_size: float) -> tuple[float, float]:
-    """Measure a label pill including padding.
-
-    Returns (width, height) in the same units as ``font_size``.
-    """
-    if not text:
-        return (0.0, 0.0)
-    tw, th = measure_text(text, font_size)
-    return (tw + 2 * _PAD_H_PX, th + 2 * _PAD_V_PX)
 
 
 # ---------------------------------------------------------------------------
@@ -430,44 +389,3 @@ def compute_connector(
         (end_x, route_y),
         (end_x, end_y),
     ]
-
-
-# ---------------------------------------------------------------------------
-# Legend measurement
-# ---------------------------------------------------------------------------
-
-
-def measure_legend(
-    spec: LegendSpec,
-    font_size: float,
-) -> tuple[float, float]:
-    """Compute legend box size from title and entries.
-
-    Returns (width, height) in the same units as ``font_size``.
-    """
-    title_w = 0.0
-    title_h = 0.0
-    if spec.title:
-        tw, th = measure_text(spec.title, font_size * 0.85)
-        title_w = tw
-        title_h = th + font_size * 0.3  # gap below title
-
-    swatch_size = font_size * 0.8
-    swatch_gap = font_size * 0.4
-    entry_gap = font_size * 0.2
-    max_entry_w = 0.0
-    total_entry_h = 0.0
-    for i, entry in enumerate(spec.entries):
-        ew, eh = measure_text(entry.label, font_size)
-        row_w = (swatch_size + swatch_gap + ew) if entry.color else ew
-        max_entry_w = max(max_entry_w, row_w)
-        total_entry_h += max(eh, swatch_size)
-        if i > 0:
-            total_entry_h += entry_gap
-
-    pad_h = font_size * 0.6
-    pad_v = font_size * 0.5
-    width = max(title_w, max_entry_w) + 2 * pad_h
-    height = title_h + total_entry_h + 2 * pad_v
-
-    return (width, height)

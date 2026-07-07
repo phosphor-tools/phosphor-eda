@@ -132,8 +132,11 @@ def resolve_symbol_pin(
     """Resolve a structured Cache symbol pin using OrCAD's display pin number."""
     symbol_name = normalize_package_name(package_name)
     pins = symbol_pins.get(symbol_name, [])
-    if symbol_pin_names is not None and not symbol_pins_align(
-        symbol_pin_names.get(symbol_name, []),
+    # Alignment against legacy names only applies when legacy names exist for
+    # the symbol; a structured-only symbol has nothing to disagree with.
+    legacy_pin_names = None if symbol_pin_names is None else symbol_pin_names.get(symbol_name)
+    if legacy_pin_names is not None and not symbol_pins_align(
+        legacy_pin_names,
         pins,
     ):
         return None
@@ -141,6 +144,8 @@ def resolve_symbol_pin(
     if pin_index is None:
         return None
     pin = pins[pin_index]
-    if expected_pin_name and _normalized_pin_name(pin.name) != expected_pin_name:
+    if expected_pin_name and _normalized_pin_name(pin.name) != _normalized_pin_name(
+        expected_pin_name
+    ):
         return None
     return pin

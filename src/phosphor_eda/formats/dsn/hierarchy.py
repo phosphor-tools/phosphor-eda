@@ -240,6 +240,11 @@ def _read_entry(
         msg = f"expected hierarchy entry 0x42, got 0x{type_id:02x} at offset {r.pos}"
         raise ValueError(msg)
     if end_offset > 0:
+        # A corrupt end offset at or before the cursor would rewind the
+        # entry loops and stall without ever raising into the fallback.
+        if end_offset < r.pos:
+            msg = f"hierarchy entry end offset {end_offset} rewinds before offset {r.pos}"
+            raise ValueError(msg)
         r.pos = end_offset
     else:
         r.try_read_preamble()

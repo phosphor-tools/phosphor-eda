@@ -62,9 +62,16 @@ ALLEGRO_MANIFEST = GOLDENS / "opencellular-breakout.design.front.manifest.json"
 _UPDATE = os.environ.get("PHOSPHOR_UPDATE_GOLDENS") == "1"
 
 
-def _design_front_svg(board_path: Path, parse: Callable[[Path], Board]) -> str:
+def _design_front_svg(
+    board_path: Path,
+    parse: Callable[[Path], Board],
+    *,
+    debug_attributes: bool = False,
+) -> str:
     base = load_render_settings_json('{"extends": "phosphor:design"}')
-    settings = resolve_effective_settings(base, CliOverrides(side="front"))
+    settings = resolve_effective_settings(
+        base, CliOverrides(side="front", debug_attributes=debug_attributes or None)
+    )
     return render_pcb_svg(parse(board_path), settings).svg
 
 
@@ -135,7 +142,13 @@ def test_allegro_breakout_design_manifest(allegro_svg: str) -> None:
 
 
 def test_kicad_render_preserves_core_data_attrs(kicad_svg: str) -> None:
-    """Core data-* attributes must survive the native-primitive migration."""
+    """Per-element data-* attributes are opt-in debug output; group-level
+    structure attrs are always present."""
+    assert "data-role=" in kicad_svg
+    assert "data-source-layers=" in kicad_svg
+    assert "data-kind=" not in kicad_svg
+
+    debug_svg = _design_front_svg(KICAD_FIXTURE, parse_kicad_pcb, debug_attributes=True)
     for attr in (
         "data-kind=",
         "data-role=",
@@ -143,4 +156,4 @@ def test_kicad_render_preserves_core_data_attrs(kicad_svg: str) -> None:
         "data-source-layer=",
         "data-purpose=",
     ):
-        assert attr in kicad_svg, f"missing {attr} in KiCad render"
+        assert attr in debug_svg, f"missing {attr} in debug KiCad render"
