@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from phosphor_eda.formats.allegro import parse_allegro_pcb
 from phosphor_eda.formats.altium.pcb_parser import parse_altium_pcb
 from phosphor_eda.formats.kicad.board import parse_kicad_pcb
 from phosphor_eda.render.api import render_pcb_svg
@@ -48,9 +49,15 @@ GOLDENS = Path(__file__).resolve().parent / "goldens"
 
 KICAD_FIXTURE = FIXTURES / "swd_switch.kicad_pcb"
 ALTIUM_FIXTURE = FIXTURES / "altium/pi-mx8/PCB/PiMX8MP_r0.3.PcbDoc"
+ALLEGRO_FIXTURE = (
+    FIXTURES
+    / "orcad/opencellular-breakout/allegro/OpenCellular/electronics/breakout/board"
+    / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
+)
 
 KICAD_GOLDEN = GOLDENS / "swd_switch.design.front.svg"
 ALTIUM_MANIFEST = GOLDENS / "pi-mx8.design.front.manifest.json"
+ALLEGRO_MANIFEST = GOLDENS / "opencellular-breakout.design.front.manifest.json"
 
 _UPDATE = os.environ.get("PHOSPHOR_UPDATE_GOLDENS") == "1"
 
@@ -117,12 +124,21 @@ def altium_svg() -> str:
     return _design_front_svg(ALTIUM_FIXTURE, parse_altium_pcb)
 
 
+@pytest.fixture(scope="module")
+def allegro_svg() -> str:
+    return _design_front_svg(ALLEGRO_FIXTURE, parse_allegro_pcb)
+
+
 def test_kicad_design_golden(kicad_svg: str) -> None:
     _assert_text_golden(kicad_svg, KICAD_GOLDEN)
 
 
 def test_altium_design_manifest(altium_svg: str) -> None:
     _assert_manifest_golden(altium_svg, ALTIUM_MANIFEST)
+
+
+def test_allegro_breakout_design_manifest(allegro_svg: str) -> None:
+    _assert_manifest_golden(allegro_svg, ALLEGRO_MANIFEST)
 
 
 def test_kicad_render_preserves_core_data_attrs(kicad_svg: str) -> None:

@@ -23,6 +23,7 @@ from phosphor_eda.domain.pcb import (
     LayerRole,
     PcbArc,
     PcbCircle,
+    PcbClosedPath,
     PcbDimension,
     PcbDrill,
     PcbDrillShape,
@@ -40,6 +41,7 @@ from phosphor_eda.domain.pcb import (
 )
 from phosphor_eda.formats.common.electrical import ELECTRICAL_KEY
 from phosphor_eda.geometry.pcb_geometry import (
+    MIN_STROKE_WIDTH_MM,
     arc_center_from_three_points,
     arc_sweep_angle,
     arc_to_polyline,
@@ -48,7 +50,7 @@ from phosphor_eda.geometry.pcb_geometry import (
     footprint_bbox_polygon,
     footprint_side,
     pad_polygon,
-    polygon_geometry,
+    polygon_shape_geometry,
     segment_geometry,
     trace_arc_geometry,
     via_geometry,
@@ -80,7 +82,13 @@ if TYPE_CHECKING:
         PcbNet,
         PcbPour,
     )
-    from phosphor_eda.domain.project import DesignRule, NetClass, Project, ProjectDocument
+    from phosphor_eda.domain.project import (
+        DesignRule,
+        DiffPair,
+        NetClass,
+        Project,
+        ProjectDocument,
+    )
     from phosphor_eda.domain.schematic import (
         Bus,
         Component,
@@ -200,12 +208,14 @@ def _shape_geometry(payload: PcbShape) -> BaseGeometry | None:
             )
         )
     if isinstance(payload, PcbPolygon):
-        return polygon_geometry(payload)
+        return polygon_shape_geometry(payload)
+    if isinstance(payload, PcbClosedPath):
+        return closed_path_geometry(payload)
     if isinstance(payload, PcbCircle):
         outer = Point(payload.cx, payload.cy).buffer(payload.radius, quad_segs=_QUAD_SEGS_CIRCLE)
         if payload.fill:
             return outer
-        return outer.boundary.buffer(max(payload.width, 0.01) / 2.0)
+        return outer.boundary.buffer(max(payload.width, MIN_STROKE_WIDTH_MM) / 2.0)
     if isinstance(payload, PcbText):
         return text_outline_geometry(payload)
     if isinstance(payload, PcbDimension):
@@ -241,7 +251,7 @@ def _line_artwork_wkbs(lines: list[PcbLine]) -> list[bytes | None]:
 
 
 def _profile_shape_geometry(
-    payload: PcbLine | PcbArc | PcbCircle | PcbPolygon,
+    payload: PcbLine | PcbArc | PcbCircle | PcbPolygon | PcbClosedPath,
 ) -> BaseGeometry | None:
     if isinstance(payload, PcbLine):
         return LineString(((payload.start_x, payload.start_y), (payload.end_x, payload.end_y)))
@@ -845,6 +855,7 @@ _NET_CLASSES: TableSpec[NetClass] = TableSpec(
         col("via_drill_mm", "DOUBLE", lambda nc: _null_if_unset(nc.via_drill_mm)),
         col("diff_pair_width_mm", "DOUBLE", lambda nc: _null_if_unset(nc.diff_pair_width_mm)),
         col("diff_pair_gap_mm", "DOUBLE", lambda nc: _null_if_unset(nc.diff_pair_gap_mm)),
+        col("properties", "JSON", lambda nc: _json_or_null(nc.properties)),
     ),
 )
 
@@ -869,6 +880,17 @@ _DESIGN_RULES: TableSpec[DesignRule] = TableSpec(
         col("min_value_mm", "DOUBLE", lambda rule: rule.min_value_mm),
         col("max_value_mm", "DOUBLE", lambda rule: rule.max_value_mm),
         col("preferred_value_mm", "DOUBLE", lambda rule: rule.preferred_value_mm),
+        col("properties", "JSON", lambda rule: _json_or_null(rule.properties)),
+    ),
+)
+
+_DIFF_PAIRS: TableSpec[DiffPair] = TableSpec(
+    "diff_pairs",
+    (
+        col("name", "VARCHAR", lambda pair: pair.name),
+        col("positive_net", "VARCHAR", lambda pair: pair.positive_net),
+        col("negative_net", "VARCHAR", lambda pair: pair.negative_net),
+        col("properties", "JSON", lambda pair: _json_or_null(pair.properties)),
     ),
 )
 
@@ -1327,6 +1349,7 @@ _ORDERED_SPECS = (
     _NET_CLASSES,
     _NET_CLASS_MEMBERS,
     _DESIGN_RULES,
+    _DIFF_PAIRS,
     _COMPONENTS,
     _COMPONENT_PARAMETERS,
     _COMPONENT_FOOTPRINTS,
@@ -1418,6 +1441,7 @@ def load_database(project: Project) -> duckdb.DuckDBPyConnection:
 
     _load_net_classes(con, project)
     _load_design_rules(con, project)
+    _load_diff_pairs(con, project)
 
     if project.schematic:
         _load_pages(con, project.schematic)
@@ -1701,6 +1725,10 @@ def _load_net_classes(con: duckdb.DuckDBPyConnection, project: Project) -> None:
 
 def _load_design_rules(con: duckdb.DuckDBPyConnection, project: Project) -> None:
     _DESIGN_RULES.bulk_insert(con, project.design_rules)
+
+
+def _load_diff_pairs(con: duckdb.DuckDBPyConnection, project: Project) -> None:
+    _DIFF_PAIRS.bulk_insert(con, project.diff_pairs)
 
 
 def _load_project_documents(con: duckdb.DuckDBPyConnection, project: Project) -> None:

@@ -31,9 +31,41 @@ from phosphor_eda.domain.pcb import (
     PcbPour,
     PcbVia,
     PcbViaType,
+    artwork_purpose_for_layer,
     copper_layers,
 )
 from phosphor_eda.domain.pcb_builder import PcbBuilder, PcbBuildError
+
+
+def _layer(*roles: LayerRole) -> PcbLayer:
+    return PcbLayer(name="L", roles=roles)
+
+
+def test_artwork_purpose_for_layer_returns_none_without_a_layer() -> None:
+    assert artwork_purpose_for_layer(None) is None
+
+
+def test_artwork_purpose_for_layer_returns_none_for_unmapped_role() -> None:
+    assert artwork_purpose_for_layer(_layer(LayerRole.UNKNOWN)) is None
+
+
+def test_artwork_purpose_for_layer_maps_single_roles() -> None:
+    assert artwork_purpose_for_layer(_layer(LayerRole.COPPER)) is PcbArtworkPurpose.COPPER
+    assert artwork_purpose_for_layer(_layer(LayerRole.KEEPOUT)) is PcbArtworkPurpose.KEEPOUT
+    assert artwork_purpose_for_layer(_layer(LayerRole.SILKSCREEN)) is PcbArtworkPurpose.SILKSCREEN
+    assert artwork_purpose_for_layer(_layer(LayerRole.COMMENT)) is PcbArtworkPurpose.USER
+
+
+def test_artwork_purpose_for_layer_prioritises_text_roles_over_silkscreen() -> None:
+    layer = _layer(LayerRole.DESIGNATOR, LayerRole.SILKSCREEN)
+    assert artwork_purpose_for_layer(layer) is PcbArtworkPurpose.DESIGNATOR
+
+
+def test_artwork_purpose_for_layer_prefers_mechanical_over_user() -> None:
+    # Reconciliation: KiCad ranked MECHANICAL above USER, Allegro the reverse.
+    # The unified table keeps the more specific MECHANICAL.
+    layer = _layer(LayerRole.MECHANICAL, LayerRole.USER)
+    assert artwork_purpose_for_layer(layer) is PcbArtworkPurpose.MECHANICAL
 
 
 def test_pcb_domain_has_typed_collections_without_generic_geometry_api() -> None:
@@ -186,7 +218,7 @@ def test_pcb_builder_rejects_pour_with_degenerate_boundary() -> None:
     builder = PcbBuilder("bad-pour")
     builder.add_layer(layer)
     pour = PcbPour(id="pour:1", boundary=_degenerate_boundary(), layers=(layer,))
-    with pytest.raises(PcbBuildError, match="at least 3 points"):
+    with pytest.raises(PcbBuildError, match="at least 3 segments"):
         builder.add_pour_object(pour, source="pour:1")
 
 
@@ -195,8 +227,22 @@ def test_pcb_builder_rejects_keepout_with_degenerate_boundary() -> None:
     builder = PcbBuilder("bad-keepout")
     builder.add_layer(layer)
     keepout = PcbKeepout(id="keepout:1", boundary=_degenerate_boundary(), layers=(layer,))
-    with pytest.raises(PcbBuildError, match="at least 3 points"):
+    with pytest.raises(PcbBuildError, match="at least 3 segments"):
         builder.add_keepout_object(keepout, source="keepout:1")
+
+
+def test_pcb_builder_rejects_single_arc_boundary() -> None:
+    # A single arc segment carries curvature but cannot enclose area on its
+    # own; a real circle is two complementary half-arcs.
+    layer = PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT))
+    builder = PcbBuilder("bad-arc")
+    builder.add_layer(layer)
+    single_arc = PcbClosedPath(
+        segments=(PcbPathSegment(PcbPathSegmentKind.ARC, 1.0, 0.0, 1.0, 0.0, mid_x=-1.0),)
+    )
+    pour = PcbPour(id="pour:arc", boundary=single_arc, layers=(layer,))
+    with pytest.raises(PcbBuildError, match="at least 2 segments"):
+        builder.add_pour_object(pour, source="pour:arc")
 
 
 def test_pcb_builder_rejects_unresolved_and_selector_references() -> None:

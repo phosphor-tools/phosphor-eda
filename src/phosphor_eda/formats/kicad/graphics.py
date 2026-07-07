@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 import sexpdata
 
 from phosphor_eda.domain.pcb import (
-    LayerRole,
     PcbArc,
     PcbArtworkKind,
     PcbArtworkPurpose,
@@ -17,6 +16,7 @@ from phosphor_eda.domain.pcb import (
     PcbModel3D,
     PcbPolygon,
     PcbText,
+    artwork_purpose_for_layer,
     extend_shape_bounds,
 )
 from phosphor_eda.formats.kicad import pcb_common, sexp
@@ -39,20 +39,6 @@ def fill_flag(item: SExpNode) -> bool:
     return fill_node is not None and sexp.val(fill_node) == "solid"
 
 
-# Layer-role → artwork-purpose, in priority order (first matching role wins).
-_ARTWORK_PURPOSE_BY_ROLE: tuple[tuple[LayerRole, PcbArtworkPurpose], ...] = (
-    (LayerRole.SILKSCREEN, PcbArtworkPurpose.SILKSCREEN),
-    (LayerRole.COURTYARD, PcbArtworkPurpose.COURTYARD),
-    (LayerRole.FABRICATION, PcbArtworkPurpose.FABRICATION),
-    (LayerRole.ASSEMBLY, PcbArtworkPurpose.ASSEMBLY),
-    (LayerRole.SOLDER_MASK, PcbArtworkPurpose.SOLDER_MASK),
-    (LayerRole.SOLDER_PASTE, PcbArtworkPurpose.SOLDER_PASTE),
-    (LayerRole.DIMENSION, PcbArtworkPurpose.DIMENSION),
-    (LayerRole.MECHANICAL, PcbArtworkPurpose.MECHANICAL),
-    (LayerRole.USER, PcbArtworkPurpose.USER),
-    (LayerRole.COMMENT, PcbArtworkPurpose.USER),
-)
-
 # Footprint-text kinds mapped to their artwork purpose (empty kind falls through).
 _TEXT_KIND_PURPOSES: dict[str, PcbArtworkPurpose] = {
     "reference": PcbArtworkPurpose.DESIGNATOR,
@@ -70,12 +56,7 @@ def artwork_purpose(
         return PcbArtworkPurpose.COMPONENT_BODY
     if text_kind:
         return _TEXT_KIND_PURPOSES.get(text_kind, PcbArtworkPurpose.USER_TEXT)
-    if layer is None:
-        return PcbArtworkPurpose.UNKNOWN
-    for role, purpose in _ARTWORK_PURPOSE_BY_ROLE:
-        if layer.has_role(role):
-            return purpose
-    return PcbArtworkPurpose.UNKNOWN
+    return artwork_purpose_for_layer(layer) or PcbArtworkPurpose.UNKNOWN
 
 
 def graphic_payload(
@@ -115,7 +96,7 @@ def graphic_payload(
             pcb_common.maybe_transform(point, transform)
             for point in ((sx, sy), (ex, sy), (ex, ey), (sx, ey))
         ]
-        return PcbPolygon(points)
+        return PcbPolygon(points, width=stroke_width(item), fill=fill_flag(item))
     if tag.endswith("_poly") or tag == "gr_poly":
         pts_node = sexp.find(item, "pts")
         if not pts_node:
@@ -124,7 +105,9 @@ def graphic_payload(
             pcb_common.maybe_transform(pcb_common.xy(xy_node), transform)
             for xy_node in sexp.find_all(pts_node, "xy")
         ]
-        return PcbPolygon(points) if points else None
+        return (
+            PcbPolygon(points, width=stroke_width(item), fill=fill_flag(item)) if points else None
+        )
     return None
 
 

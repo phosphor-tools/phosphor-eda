@@ -1,0 +1,1019 @@
+"""Assemble decoded Allegro source records into the PCB domain model."""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+from phosphor_eda.domain.pcb import (
+    Board,
+    LayerRole,
+    PcbBoardProfile,
+    PcbConductor,
+    PcbDrill,
+    PcbFootprint,
+    PcbFootprintMetadata,
+    PcbLayer,
+    PcbMetadata,
+    PcbNet,
+    PcbObjectMetadata,
+    PcbPad,
+    PcbPour,
+    PcbVia,
+    PcbViaType,
+)
+from phosphor_eda.domain.pcb_builder import PcbBuilder
+from phosphor_eda.formats.allegro.constants import allegro_unit_to_mm
+from phosphor_eda.formats.allegro.convert import (
+    artwork_from_primitive,
+    conductor_from_primitive,
+    keepout_from_primitive,
+    pour_from_primitive,
+    profile_element_from_primitive,
+)
+from phosphor_eda.formats.allegro.coords import BoardFrame
+from phosphor_eda.formats.allegro.copper import extract_allegro_copper
+from phosphor_eda.formats.allegro.diagnostics import build_diagnostic
+from phosphor_eda.formats.allegro.graph import AllegroObjectGraph, build_allegro_object_graph
+from phosphor_eda.formats.allegro.graphics import extract_allegro_graphics
+from phosphor_eda.formats.allegro.layers import build_allegro_layers
+from phosphor_eda.formats.allegro.padstacks import (
+    AllegroExpandedPadstack,
+    expand_allegro_padstack,
+    place_custom_shapes,
+)
+from phosphor_eda.formats.allegro.records import AllegroRecordDiagnostic, payload_int
+from phosphor_eda.formats.allegro.sidecars import (
+    add_sidecar_board_metadata,
+    package_symbol_metadata,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+    from pathlib import Path
+
+    from phosphor_eda.formats.allegro.layers import AllegroLayerMap
+    from phosphor_eda.formats.allegro.primitives import AllegroCopper, AllegroGraphics
+    from phosphor_eda.formats.allegro.records import AllegroRecord, AllegroRecordSet
+    from phosphor_eda.formats.allegro.sidecars import AllegroSidecarSet
+
+_REFDES_RE = re.compile(r"^[A-Z]+[A-Z0-9]*\d+[A-Z0-9]*$", re.IGNORECASE)
+_PAD_RECORD_TAGS = frozenset({0x32})
+_FOOTPRINT_INSTANCE_TAGS = frozenset({0x2D})
+_DIAG_COMPONENT_PAD_CHAIN_CYCLE = "component-pad-chain-cycle"
+_DIAG_FOOTPRINT_PAD_CHAIN_CYCLE = "footprint-pad-chain-cycle"
+_DIAG_UNRESOLVED_COMPONENT_PAD = "unresolved-component-pad"
+_DIAG_UNRESOLVED_FOOTPRINT_PAD = "unresolved-footprint-pad"
+_DIAG_UNRESOLVED_FOOTPRINT_INSTANCE = "unresolved-footprint-instance"
+_DIAG_UNRESOLVED_FOOTPRINT_INSTANCE_CHAIN = "unresolved-footprint-instance-chain"
+_DIAG_UNRESOLVED_PAD_DEFINITION = "unresolved-pad-definition"
+_DIAG_UNRESOLVED_PAD_PADSTACK = "unresolved-pad-padstack"
+_DIAG_UNRESOLVED_VIA_PADSTACK = "unresolved-via-padstack"
+_DIAG_UNSUPPORTED_VIA_WITHOUT_DRILL = "unsupported-via-without-drill"
+_BOARD_ASSEMBLY_DIAGNOSTIC_CODES = {
+    _DIAG_COMPONENT_PAD_CHAIN_CYCLE,
+    _DIAG_FOOTPRINT_PAD_CHAIN_CYCLE,
+    _DIAG_UNRESOLVED_COMPONENT_PAD,
+    _DIAG_UNRESOLVED_FOOTPRINT_PAD,
+    _DIAG_UNRESOLVED_FOOTPRINT_INSTANCE,
+    _DIAG_UNRESOLVED_FOOTPRINT_INSTANCE_CHAIN,
+    _DIAG_UNRESOLVED_PAD_DEFINITION,
+    _DIAG_UNRESOLVED_PAD_PADSTACK,
+    _DIAG_UNRESOLVED_VIA_PADSTACK,
+    _DIAG_UNSUPPORTED_VIA_WITHOUT_DRILL,
+}
+_DIAGNOSTIC_PROVENANCE_LIMIT = 128
+
+
+@dataclass(frozen=True)
+class _FootprintSource:
+    record: AllegroRecord
+    package_name: str
+
+
+def build_allegro_board(
+    record_set: AllegroRecordSet,
+    *,
+    name: str = "Allegro Board",
+    require_board_profile: bool = False,
+    sidecars: AllegroSidecarSet | None = None,
+) -> Board:
+    layer_map = build_allegro_layers(record_set)
+    graph = build_allegro_object_graph(record_set)
+    graphics = extract_allegro_graphics(record_set, layer_map)
+    unit_to_mm = _unit_to_mm(record_set)
+    frame = BoardFrame(unit_to_mm)
+    builder = PcbBuilder(
+        name,
+        metadata=PcbMetadata(
+            source_format="allegro",
+            native_type="board",
+            properties={
+                "allegro_version": record_set.header.version.value if record_set.header else "",
+            },
+        ),
+    )
+    for layer in layer_map.layers:
+        builder.add_layer(layer, source=_source("layer", None))
+    copper_layers = tuple(layer for layer in builder.layers if layer.has_role(LayerRole.COPPER))
+
+    nets_by_key = _add_nets(builder, record_set)
+    build_diagnostics: list[AllegroRecordDiagnostic] = []
+    matched_padstack_sidecars: set[Path] = set()
+    padstacks = _padstacks(
+        record_set,
+        unit_to_mm,
+        graph=graph,
+        sidecars=sidecars,
+        matched_sidecars=matched_padstack_sidecars,
+        diagnostics=build_diagnostics,
+    )
+    text_by_wrapper = _text_by_wrapper(record_set)
+    pad_definitions = {
+        record.key: record
+        for record in record_set.records
+        if record.tag == 0x0D and record.key is not None
+    }
+    footprint_sources = _footprint_sources(record_set, graph, diagnostics=build_diagnostics)
+    matched_package_sidecars: set[Path] = set()
+    footprints_by_instance_key = _add_footprints(
+        builder,
+        record_set,
+        footprint_sources=footprint_sources,
+        frame=frame,
+        text_by_wrapper=text_by_wrapper,
+        sidecars=sidecars,
+        matched_sidecars=matched_package_sidecars,
+        diagnostics=build_diagnostics,
+    )
+
+    added_pad_keys = _add_component_pads(
+        builder,
+        record_set,
+        graph=graph,
+        footprints_by_instance_key=footprints_by_instance_key,
+        pad_definitions=pad_definitions,
+        padstacks=padstacks,
+        nets_by_key=nets_by_key,
+        frame=frame,
+        copper_layers=copper_layers,
+        text_by_wrapper=text_by_wrapper,
+        diagnostics=build_diagnostics,
+    )
+
+    _add_footprint_mechanical_pads(
+        builder,
+        graph=graph,
+        footprints_by_instance_key=footprints_by_instance_key,
+        added_pad_keys=added_pad_keys,
+        pad_definitions=pad_definitions,
+        padstacks=padstacks,
+        nets_by_key=nets_by_key,
+        frame=frame,
+        copper_layers=copper_layers,
+        text_by_wrapper=text_by_wrapper,
+        diagnostics=build_diagnostics,
+    )
+
+    _add_vias(
+        builder,
+        record_set,
+        padstacks=padstacks,
+        nets_by_key=nets_by_key,
+        frame=frame,
+        copper_layers=copper_layers,
+        diagnostics=build_diagnostics,
+    )
+    copper = _add_conductors(
+        builder,
+        record_set,
+        layer_map=layer_map,
+        graph=graph,
+        nets_by_key=nets_by_key,
+        footprints_by_instance_key=footprints_by_instance_key,
+    )
+    _add_graphics(builder, graphics, include_copper_artwork=False)
+    diagnostic_count = (
+        len(layer_map.diagnostics)
+        + len(graphics.diagnostics)
+        + len(copper.diagnostics)
+        + len(build_diagnostics)
+    )
+    if diagnostic_count:
+        builder.metadata.properties["parse_diagnostic_count"] = str(diagnostic_count)
+        _add_parse_diagnostic_metadata(
+            builder,
+            (
+                *layer_map.diagnostics,
+                *graphics.diagnostics,
+                *copper.diagnostics,
+                *build_diagnostics,
+            ),
+        )
+    add_sidecar_board_metadata(
+        builder,
+        sidecars,
+        matched_padstack_sidecars=matched_padstack_sidecars,
+        matched_package_sidecars=matched_package_sidecars,
+    )
+
+    board = builder.build(require_board_profile=require_board_profile)
+    board.stackup = layer_map.stackup
+    return board
+
+
+def build_allegro_graphics_board(record_set: AllegroRecordSet, *, name: str) -> Board:
+    """Assemble the PR04 graphics subset into a strict PCB ``Board``."""
+    layer_map = build_allegro_layers(record_set)
+    graphics = extract_allegro_graphics(record_set, layer_map)
+    metadata = PcbMetadata(source_format="allegro")
+    diagnostic_count = len(layer_map.diagnostics) + len(graphics.diagnostics)
+    if diagnostic_count:
+        metadata.properties["parse_diagnostic_count"] = str(diagnostic_count)
+        _add_parse_diagnostic_properties(
+            metadata.properties,
+            (*layer_map.diagnostics, *graphics.diagnostics),
+        )
+
+    builder = PcbBuilder(name, metadata=metadata)
+    for layer in layer_map.layers:
+        builder.add_layer(layer, source="allegro layers")
+
+    _add_graphics(builder, graphics, include_copper_artwork=True)
+
+    board = builder.build(require_board_profile=True)
+    board.stackup = layer_map.stackup
+    return board
+
+
+def _add_nets(builder: PcbBuilder, record_set: AllegroRecordSet) -> dict[int, PcbNet]:
+    by_key: dict[int, PcbNet] = {}
+    string_table = _strings(record_set)
+    next_number = 1
+    for record in record_set.records:
+        if record.tag != 0x1B or record.key is None:
+            continue
+        native_name = _string(string_table, payload_int(record, "net_name_key"))
+        name = native_name or f"NET_{record.key}"
+        net = builder.add_net(
+            PcbNet(
+                number=next_number,
+                name=name,
+                metadata=PcbMetadata(
+                    source_format="allegro",
+                    native_type="net",
+                    native_id=str(record.key),
+                    properties={
+                        "native_name_string_key": str(payload_int(record, "net_name_key")),
+                        "native_assignment_key": str(payload_int(record, "assignment_key")),
+                    },
+                ),
+            ),
+            source=_source("net", record),
+        )
+        by_key[record.key] = net
+        next_number += 1
+    for record in record_set.records:
+        if record.tag != 0x04 or record.key is None:
+            continue
+        net = by_key.get(payload_int(record, "net_key"))
+        if net is not None:
+            by_key[record.key] = net
+    return by_key
+
+
+def _padstacks(
+    record_set: AllegroRecordSet,
+    unit_to_mm: float,
+    *,
+    graph: AllegroObjectGraph,
+    sidecars: AllegroSidecarSet | None = None,
+    matched_sidecars: set[Path] | None = None,
+    diagnostics: list[AllegroRecordDiagnostic] | None = None,
+) -> dict[int, AllegroExpandedPadstack]:
+    string_table = _strings(record_set)
+    sidecars_by_name = sidecars.padstacks_by_name if sidecars is not None else {}
+    result: dict[int, AllegroExpandedPadstack] = {}
+    for record in record_set.records:
+        if record.tag != 0x1C or record.key is None:
+            continue
+        padstack_name = _string(string_table, payload_int(record, "pad_name_key"))
+        if not padstack_name:
+            padstack_name = f"PADSTACK_{record.key}"
+        sidecar = sidecars_by_name.get(padstack_name.casefold())
+        if sidecar is not None and matched_sidecars is not None:
+            matched_sidecars.add(sidecar.path)
+        result[record.key] = expand_allegro_padstack(
+            record,
+            name=padstack_name,
+            unit_to_mm=unit_to_mm,
+            sidecar=sidecar,
+            graph=graph,
+            diagnostics=diagnostics,
+        )
+    return result
+
+
+def _footprint_sources(
+    record_set: AllegroRecordSet,
+    graph: AllegroObjectGraph,
+    *,
+    diagnostics: list[AllegroRecordDiagnostic],
+) -> dict[int, _FootprintSource]:
+    string_table = _strings(record_set)
+    result: dict[int, _FootprintSource] = {}
+    for definition in (record for record in record_set.records if record.tag == 0x2B):
+        package_name = _string(string_table, payload_int(definition, "footprint_name_key"))
+        if not package_name:
+            package_name = f"PACKAGE_{definition.key or 'unknown'}"
+        walk = graph.walk_key_chain(
+            head_key=payload_int(definition, "first_instance_key"),
+            owner_key=definition.key,
+            expected_tags=_FOOTPRINT_INSTANCE_TAGS,
+        )
+        for diagnostic in walk.diagnostics:
+            diagnostics.append(
+                build_diagnostic(
+                    definition,
+                    code=_DIAG_UNRESOLVED_FOOTPRINT_INSTANCE_CHAIN,
+                    message=(
+                        f"footprint definition record {definition.key} has degraded "
+                        f"instance chain: {diagnostic.message}"
+                    ),
+                    reference_key=diagnostic.reference_key,
+                )
+            )
+        for instance in walk.records:
+            if instance.key is not None:
+                result[instance.key] = _FootprintSource(
+                    record=definition,
+                    package_name=package_name,
+                )
+    return result
+
+
+def _next_component_pad_key(record: AllegroRecord) -> int:
+    return payload_int(record, "next_in_component_key")
+
+
+def _next_footprint_pad_key(record: AllegroRecord) -> int:
+    return payload_int(record, "next_in_footprint_key")
+
+
+def _append_pad_chain_diagnostics(
+    diagnostics: list[AllegroRecordDiagnostic],
+    walk_diagnostics: tuple[AllegroRecordDiagnostic, ...],
+    *,
+    owner: AllegroRecord,
+    owner_kind: str,
+    cycle_code: str,
+    unresolved_code: str,
+) -> None:
+    for diagnostic in walk_diagnostics:
+        if diagnostic.code == "linked-list-cycle":
+            code = cycle_code
+            message = (
+                f"{owner_kind} record {owner.key} repeats pad record "
+                f"{diagnostic.reference_key} in its native pad chain"
+            )
+        else:
+            code = unresolved_code
+            message = (
+                f"{owner_kind} record {owner.key} references missing pad "
+                f"record {diagnostic.reference_key}"
+            )
+        diagnostics.append(
+            build_diagnostic(
+                owner, code=code, message=message, reference_key=diagnostic.reference_key
+            )
+        )
+
+
+def _add_footprints(
+    builder: PcbBuilder,
+    record_set: AllegroRecordSet,
+    *,
+    footprint_sources: Mapping[int, _FootprintSource],
+    frame: BoardFrame,
+    text_by_wrapper: Mapping[int, str],
+    sidecars: AllegroSidecarSet | None = None,
+    matched_sidecars: set[Path] | None = None,
+    diagnostics: list[AllegroRecordDiagnostic],
+) -> dict[int, PcbFootprint]:
+    string_table = _strings(record_set)
+    copper_front = _front_copper(builder.layers)
+    copper_back = _back_copper(builder.layers)
+    package_symbols_by_name = sidecars.package_symbols_by_name if sidecars is not None else {}
+    used_refs: set[str] = set()
+    result: dict[int, PcbFootprint] = {}
+    for component in (record for record in record_set.records if record.tag == 0x07):
+        instance_key = payload_int(component, "footprint_instance_key")
+        instance = record_set.by_key.get(instance_key)
+        if instance is None or instance.tag != 0x2D:
+            diagnostics.append(
+                build_diagnostic(
+                    component,
+                    code=_DIAG_UNRESOLVED_FOOTPRINT_INSTANCE,
+                    message=(
+                        f"component record {component.key} references missing footprint "
+                        f"instance {instance_key}"
+                    ),
+                    reference_key=instance_key,
+                )
+            )
+            continue
+        package = footprint_sources.get(instance_key)
+        refdes = _string(string_table, payload_int(component, "refdes_string_key"))
+        if not _looks_like_refdes(refdes):
+            text = text_by_wrapper.get(payload_int(instance, "text_key"), "")
+            refdes = text if _looks_like_refdes(text) else ""
+        if not refdes:
+            refdes = f"REF_{component.key or instance_key}"
+        refdes = _unique_ref(refdes, used_refs)
+        side = payload_int(instance, "placement_side")
+        layer = copper_back if side == 1 else copper_front
+        package_name = package.package_name if package else ""
+        footprint_metadata = {
+            "native_component_instance_key": str(component.key or ""),
+            "native_refdes_string_key": str(payload_int(component, "refdes_string_key")),
+            "native_placement_side": str(side),
+        }
+        if package_name:
+            package_sidecar = package_symbols_by_name.get(package_name.casefold())
+            if package_sidecar is not None:
+                if matched_sidecars is not None:
+                    matched_sidecars.add(package_sidecar.path)
+                footprint_metadata.update(package_symbol_metadata(package_sidecar))
+        footprint = builder.add_footprint(
+            PcbFootprint(
+                reference=refdes,
+                footprint_lib=package_name,
+                x=frame.x(payload_int(instance, "coord_x")),
+                y=frame.y(payload_int(instance, "coord_y")),
+                rotation=payload_int(instance, "rotation_mdeg") / 1000.0,
+                layer=layer,
+                metadata=PcbFootprintMetadata(
+                    source_format="allegro",
+                    native_type="footprint_instance",
+                    native_id=str(instance.key),
+                    source_designator=refdes,
+                    source_footprint_library=package_name,
+                    properties=footprint_metadata,
+                ),
+            ),
+            source=_source("footprint", instance),
+        )
+        result[instance_key] = footprint
+    return result
+
+
+def _add_component_pads(
+    builder: PcbBuilder,
+    record_set: AllegroRecordSet,
+    *,
+    graph: AllegroObjectGraph,
+    footprints_by_instance_key: Mapping[int, PcbFootprint],
+    pad_definitions: Mapping[int, AllegroRecord],
+    padstacks: Mapping[int, AllegroExpandedPadstack],
+    nets_by_key: Mapping[int, PcbNet],
+    frame: BoardFrame,
+    copper_layers: tuple[PcbLayer, ...],
+    text_by_wrapper: Mapping[int, str],
+    diagnostics: list[AllegroRecordDiagnostic],
+) -> set[int]:
+    """Place electrical pin pads threaded on each component's pad chain.
+
+    Returns the set of pad record keys placed here so the footprint-instance
+    mechanical-pad pass can skip pads already added.
+    """
+    added_pad_keys: set[int] = set()
+    for component in (record for record in record_set.records if record.tag == 0x07):
+        footprint_key = payload_int(component, "footprint_instance_key")
+        footprint = footprints_by_instance_key.get(footprint_key)
+        if footprint is None:
+            continue
+        walk = graph.walk_key_chain(
+            head_key=payload_int(component, "first_pad_key"),
+            owner_key=component.key,
+            expected_tags=_PAD_RECORD_TAGS,
+            next_key_of=_next_component_pad_key,
+        )
+        _append_pad_chain_diagnostics(
+            diagnostics,
+            walk.diagnostics,
+            owner=component,
+            owner_kind="component",
+            cycle_code=_DIAG_COMPONENT_PAD_CHAIN_CYCLE,
+            unresolved_code=_DIAG_UNRESOLVED_COMPONENT_PAD,
+        )
+        for pad_record in walk.records:
+            _add_pad(
+                builder,
+                pad_record,
+                footprint=footprint,
+                pad_definitions=pad_definitions,
+                padstacks=padstacks,
+                nets_by_key=nets_by_key,
+                frame=frame,
+                copper_layers=copper_layers,
+                text_by_wrapper=text_by_wrapper,
+                diagnostics=diagnostics,
+            )
+            if pad_record.key is not None:
+                added_pad_keys.add(pad_record.key)
+    return added_pad_keys
+
+
+def _add_footprint_mechanical_pads(
+    builder: PcbBuilder,
+    *,
+    graph: AllegroObjectGraph,
+    footprints_by_instance_key: Mapping[int, PcbFootprint],
+    added_pad_keys: set[int],
+    pad_definitions: Mapping[int, AllegroRecord],
+    padstacks: Mapping[int, AllegroExpandedPadstack],
+    nets_by_key: Mapping[int, PcbNet],
+    frame: BoardFrame,
+    copper_layers: tuple[PcbLayer, ...],
+    text_by_wrapper: Mapping[int, str],
+    diagnostics: list[AllegroRecordDiagnostic],
+) -> None:
+    """Add mechanical/NPTH pads carried on each footprint instance's own chain.
+
+    The component pad chain (``next_in_component_key``) only threads electrical
+    pins. Mounting posts and other NPTH pads hang off the footprint instance's
+    native chain instead: the 0x2D record's ``first_pad_key`` followed via each
+    0x32 pad's ``next_in_footprint_key``, ringing back to the 0x2D key. Pads
+    already placed via the component chain are skipped by record key.
+    """
+    for instance_key, footprint in footprints_by_instance_key.items():
+        instance = graph.by_key.get(instance_key)
+        if instance is None or instance.tag != 0x2D:
+            continue
+        walk = graph.walk_key_chain(
+            head_key=payload_int(instance, "first_pad_key"),
+            owner_key=instance_key,
+            expected_tags=_PAD_RECORD_TAGS,
+            next_key_of=_next_footprint_pad_key,
+        )
+        _append_pad_chain_diagnostics(
+            diagnostics,
+            walk.diagnostics,
+            owner=instance,
+            owner_kind="footprint instance",
+            cycle_code=_DIAG_FOOTPRINT_PAD_CHAIN_CYCLE,
+            unresolved_code=_DIAG_UNRESOLVED_FOOTPRINT_PAD,
+        )
+        for pad_record in walk.records:
+            if pad_record.key is None or pad_record.key in added_pad_keys:
+                continue
+            _add_pad(
+                builder,
+                pad_record,
+                footprint=footprint,
+                pad_definitions=pad_definitions,
+                padstacks=padstacks,
+                nets_by_key=nets_by_key,
+                frame=frame,
+                copper_layers=copper_layers,
+                text_by_wrapper=text_by_wrapper,
+                diagnostics=diagnostics,
+            )
+            added_pad_keys.add(pad_record.key)
+
+
+def _add_pad(
+    builder: PcbBuilder,
+    record: AllegroRecord,
+    *,
+    footprint: PcbFootprint,
+    pad_definitions: Mapping[int, AllegroRecord],
+    padstacks: Mapping[int, AllegroExpandedPadstack],
+    nets_by_key: Mapping[int, PcbNet],
+    frame: BoardFrame,
+    copper_layers: tuple[PcbLayer, ...],
+    text_by_wrapper: Mapping[int, str],
+    diagnostics: list[AllegroRecordDiagnostic],
+) -> None:
+    pad_definition = pad_definitions.get(payload_int(record, "pad_definition_key"))
+    if pad_definition is None:
+        diagnostics.append(
+            build_diagnostic(
+                record,
+                code=_DIAG_UNRESOLVED_PAD_DEFINITION,
+                message=(
+                    f"pad record {record.key} references missing pad definition "
+                    f"{payload_int(record, 'pad_definition_key')}"
+                ),
+                reference_key=payload_int(record, "pad_definition_key"),
+            )
+        )
+        return
+    padstack = padstacks.get(payload_int(pad_definition, "padstack_key"))
+    if padstack is None:
+        diagnostics.append(
+            build_diagnostic(
+                pad_definition,
+                code=_DIAG_UNRESOLVED_PAD_PADSTACK,
+                message=(
+                    f"pad definition record {pad_definition.key} references missing "
+                    f"padstack {payload_int(pad_definition, 'padstack_key')}"
+                ),
+                reference_key=payload_int(pad_definition, "padstack_key"),
+            )
+        )
+        return
+    layers = _pad_layers(copper_layers, footprint, padstack)
+    drill = (
+        _add_drill(
+            builder,
+            record,
+            padstack,
+            layers,
+            frame,
+            owner_prefix="pad",
+        )
+        if _has_drill(padstack)
+        else None
+    )
+    metadata = _object_metadata(
+        record,
+        "placed_pad",
+        {
+            **padstack.metadata,
+            "native_pad_definition_key": str(pad_definition.key or ""),
+            "native_parent_footprint_key": str(payload_int(record, "parent_footprint_key")),
+        },
+    )
+    x = _record_center_x(record, frame)
+    y = _record_center_y(record, frame)
+    rotation = footprint.rotation % 360.0
+    builder.add_pad_object(
+        PcbPad(
+            id=f"pad-{record.key}",
+            number=_pad_number(record, text_by_wrapper),
+            x=x,
+            y=y,
+            stack=padstack.stack,
+            pad_type=padstack.pad_type,
+            layers=layers,
+            net=nets_by_key.get(payload_int(record, "net_key")),
+            footprint=footprint,
+            drill=drill,
+            rotation=rotation,
+            custom_shapes=place_custom_shapes(padstack, x, y, rotation),
+            metadata=metadata,
+        ),
+        source=_source("pad", record),
+    )
+
+
+def _add_vias(
+    builder: PcbBuilder,
+    record_set: AllegroRecordSet,
+    *,
+    padstacks: Mapping[int, AllegroExpandedPadstack],
+    nets_by_key: Mapping[int, PcbNet],
+    frame: BoardFrame,
+    copper_layers: tuple[PcbLayer, ...],
+    diagnostics: list[AllegroRecordDiagnostic],
+) -> None:
+    for record in record_set.records:
+        if record.tag != 0x33:
+            continue
+        padstack = padstacks.get(payload_int(record, "padstack_key"))
+        if padstack is None:
+            diagnostics.append(
+                build_diagnostic(
+                    record,
+                    code=_DIAG_UNRESOLVED_VIA_PADSTACK,
+                    message=(
+                        f"via record {record.key} references missing padstack "
+                        f"{payload_int(record, 'padstack_key')}"
+                    ),
+                    reference_key=payload_int(record, "padstack_key"),
+                )
+            )
+            continue
+        if not _has_drill(padstack):
+            diagnostics.append(
+                build_diagnostic(
+                    record,
+                    code=_DIAG_UNSUPPORTED_VIA_WITHOUT_DRILL,
+                    message=(
+                        f"via record {record.key} references padstack "
+                        f"{payload_int(record, 'padstack_key')} without drill geometry"
+                    ),
+                    reference_key=payload_int(record, "padstack_key"),
+                )
+            )
+            continue
+        drill = _add_drill(
+            builder,
+            record,
+            padstack,
+            copper_layers,
+            frame,
+            owner_prefix="via",
+        )
+        metadata = _object_metadata(record, "via", padstack.metadata)
+        _enrich_via_metadata(metadata, record)
+        builder.add_via_object(
+            PcbVia(
+                id=f"via-{record.key}",
+                x=frame.x(payload_int(record, "coord_x")),
+                y=frame.y(payload_int(record, "coord_y")),
+                stack=padstack.stack,
+                layers=copper_layers,
+                drill=drill,
+                net=nets_by_key.get(payload_int(record, "net_key")),
+                # No blind/buried span field exists in the analyzed corpus
+                # (V16.5/16.6); every fixture via is through. Blind/buried
+                # support needs new fixture evidence, so keep THROUGH rather
+                # than guess a span encoding.
+                via_type=PcbViaType.THROUGH,
+                metadata=metadata,
+            ),
+            source=_source("via", record),
+        )
+
+
+def _enrich_via_metadata(metadata: PcbObjectMetadata, record: AllegroRecord) -> None:
+    """Attach the confirmed 0x33 tail (rotation, label ref) as via properties.
+
+    Only V16.x records carry the parsed tail; on V17.2+ the fields are absent
+    (the tail layout is unverified) so nothing is surfaced.
+    """
+    if "rotation_mdeg" in record.payload:
+        rotation = (payload_int(record, "rotation_mdeg") / 1000.0) % 360.0
+        metadata.properties["via_rotation_deg"] = f"{rotation:g}"
+    label_key = payload_int(record, "label_key")
+    if label_key:
+        # A text-wrapper key (not a direct string-table id); surface the raw
+        # reference so a downstream consumer can resolve the label text.
+        metadata.properties["via_label_key"] = str(label_key)
+
+
+def _add_conductors(
+    builder: PcbBuilder,
+    record_set: AllegroRecordSet,
+    *,
+    layer_map: AllegroLayerMap,
+    graph: AllegroObjectGraph,
+    nets_by_key: Mapping[int, PcbNet],
+    footprints_by_instance_key: Mapping[int, PcbFootprint],
+) -> AllegroCopper:
+    copper = extract_allegro_copper(record_set, layer_map, graph)
+    pours_by_id: dict[str, PcbPour] = {}
+    pour_fills: dict[str, list[PcbConductor]] = {}
+    for primitive in copper.pours:
+        pour = builder.add_pour_object(
+            pour_from_primitive(
+                primitive,
+                nets_by_key=nets_by_key,
+            ),
+            source=primitive.id,
+        )
+        pours_by_id[pour.id] = pour
+    for primitive in copper.conductors:
+        conductor = builder.add_conductor_object(
+            conductor_from_primitive(
+                primitive,
+                nets_by_key=nets_by_key,
+                footprints_by_instance_key=footprints_by_instance_key,
+                pours_by_id=pours_by_id,
+            ),
+            source=primitive.id,
+        )
+        if conductor.pour is not None:
+            pour_fills.setdefault(conductor.pour.id, []).append(conductor)
+    for pour in pours_by_id.values():
+        pour.fills = tuple(pour_fills.get(pour.id, ()))
+    return copper
+
+
+def _add_graphics(
+    builder: PcbBuilder,
+    graphics: AllegroGraphics,
+    *,
+    include_copper_artwork: bool,
+) -> None:
+    profile_elements = tuple(
+        profile_element_from_primitive(primitive) for primitive in graphics.board_profile
+    )
+    if profile_elements or include_copper_artwork:
+        builder.set_board_profile(
+            PcbBoardProfile(elements=profile_elements),
+            source="allegro profile",
+        )
+
+    for primitive in graphics.artwork:
+        if (
+            not include_copper_artwork
+            and primitive.layer is not None
+            and primitive.layer.has_role(LayerRole.COPPER)
+        ):
+            # Copper-layer graphics are emitted as conductors in the full board
+            # path; adding them as artwork would double-count manufactured copper.
+            continue
+        builder.add_artwork_object(artwork_from_primitive(primitive), source=primitive.id)
+    for primitive in graphics.keepouts:
+        builder.add_keepout_object(keepout_from_primitive(primitive), source=primitive.id)
+
+
+def _add_drill(
+    builder: PcbBuilder,
+    record: AllegroRecord,
+    padstack: AllegroExpandedPadstack,
+    layers: tuple[PcbLayer, ...],
+    frame: BoardFrame,
+    *,
+    owner_prefix: str,
+) -> PcbDrill:
+    drill = PcbDrill(
+        id=f"{owner_prefix}-drill-{record.key}",
+        x=_record_center_x(record, frame),
+        y=_record_center_y(record, frame),
+        diameter=_drill_diameter(padstack),
+        shape=padstack.drill_shape,
+        plating=padstack.plating,
+        width=padstack.drill_width,
+        height=padstack.drill_height,
+        layers=layers,
+        metadata=_object_metadata(record, f"{owner_prefix}_drill", padstack.metadata),
+    )
+    return builder.add_drill_object(drill, source=_source("drill", record))
+
+
+def _pad_layers(
+    copper_layers: tuple[PcbLayer, ...],
+    footprint: PcbFootprint,
+    padstack: AllegroExpandedPadstack,
+) -> tuple[PcbLayer, ...]:
+    if _has_drill(padstack):
+        return copper_layers
+    return (footprint.layer,)
+
+
+def _has_drill(padstack: AllegroExpandedPadstack) -> bool:
+    return (
+        padstack.drill_diameter > 0.0 or padstack.drill_width > 0.0 or padstack.drill_height > 0.0
+    )
+
+
+def _drill_diameter(padstack: AllegroExpandedPadstack) -> float:
+    if padstack.drill_diameter > 0.0:
+        return padstack.drill_diameter
+    return max(padstack.drill_width, padstack.drill_height)
+
+
+def _front_copper(layers: list[PcbLayer]) -> PcbLayer:
+    for layer in layers:
+        if layer.has_role(LayerRole.COPPER) and layer.has_role(LayerRole.FRONT):
+            return layer
+    return layers[0]
+
+
+def _back_copper(layers: list[PcbLayer]) -> PcbLayer:
+    for layer in layers:
+        if layer.has_role(LayerRole.COPPER) and layer.has_role(LayerRole.BACK):
+            return layer
+    return _front_copper(layers)
+
+
+def _unit_to_mm(record_set: AllegroRecordSet) -> float:
+    if record_set.header is None:
+        return 1.0
+    return allegro_unit_to_mm(record_set.header.board_units, record_set.header.unit_divisor)
+
+
+def _text_by_wrapper(record_set: AllegroRecordSet) -> dict[int, str]:
+    text_records = {
+        record.key: str(record.payload.get("text", ""))
+        for record in record_set.records
+        if record.tag == 0x31 and record.key is not None
+    }
+    result: dict[int, str] = {}
+    for record in record_set.records:
+        if record.tag != 0x30 or record.key is None:
+            continue
+        text = text_records.get(payload_int(record, "string_graphic_key"), "")
+        if text:
+            result[record.key] = text
+    return result
+
+
+def _strings(record_set: AllegroRecordSet) -> Mapping[int, str]:
+    return record_set.string_table.by_id if record_set.string_table is not None else {}
+
+
+def _string(string_table: Mapping[int, str], key: int) -> str:
+    return string_table.get(key, "") if key else ""
+
+
+def _record_center_x(record: AllegroRecord, frame: BoardFrame) -> float:
+    coord_2_x = record.payload.get("coord_2_x")
+    if isinstance(coord_2_x, int):
+        return (payload_int(record, "coord_x") + coord_2_x) * frame.unit_to_mm / 2.0
+    return frame.x(payload_int(record, "coord_x"))
+
+
+def _record_center_y(record: AllegroRecord, frame: BoardFrame) -> float:
+    coord_2_y = record.payload.get("coord_2_y")
+    if isinstance(coord_2_y, int):
+        return -((payload_int(record, "coord_y") + coord_2_y) * frame.unit_to_mm / 2.0)
+    return frame.y(payload_int(record, "coord_y"))
+
+
+def _pad_number(record: AllegroRecord, text_by_wrapper: Mapping[int, str]) -> str:
+    text = text_by_wrapper.get(payload_int(record, "name_text_key"), "")
+    if text:
+        return text
+    return str(record.key or "")
+
+
+def _object_metadata(
+    record: AllegroRecord, native_type: str, properties: Mapping[str, str]
+) -> PcbObjectMetadata:
+    return PcbObjectMetadata(
+        source_format="allegro",
+        native_type=native_type,
+        native_id=str(record.key or ""),
+        source_collection=f"record_0x{record.tag:02X}",
+        native_layer_id=_native_layer_id(record),
+        properties=dict(properties),
+    )
+
+
+def _add_parse_diagnostic_metadata(
+    builder: PcbBuilder, diagnostics: tuple[AllegroRecordDiagnostic, ...]
+) -> None:
+    _add_parse_diagnostic_properties(builder.metadata.properties, diagnostics)
+
+
+def _add_parse_diagnostic_properties(
+    properties: dict[str, str], diagnostics: tuple[AllegroRecordDiagnostic, ...]
+) -> None:
+    codes = sorted({diagnostic.code for diagnostic in diagnostics})
+    # Codes summarize all parser diagnostics; keys are limited to board-assembly
+    # degradation paths so DRC marker floods cannot bloat board metadata.
+    provenance_diagnostics = tuple(
+        diagnostic
+        for diagnostic in diagnostics
+        if diagnostic.code in _BOARD_ASSEMBLY_DIAGNOSTIC_CODES
+    )
+    keys = sorted(
+        {diagnostic.key for diagnostic in provenance_diagnostics if diagnostic.key is not None}
+    )
+    reference_keys = sorted(
+        {
+            diagnostic.reference_key
+            for diagnostic in provenance_diagnostics
+            if diagnostic.reference_key is not None
+        }
+    )
+    if codes:
+        properties["parse_diagnostic_codes"] = ";".join(codes)
+    if keys:
+        clipped_keys = keys[:_DIAGNOSTIC_PROVENANCE_LIMIT]
+        properties["parse_diagnostic_keys"] = ";".join(str(key) for key in clipped_keys)
+        overflow_count = len(keys) - len(clipped_keys)
+        if overflow_count:
+            properties["parse_diagnostic_key_overflow_count"] = str(overflow_count)
+    if reference_keys:
+        clipped_reference_keys = reference_keys[:_DIAGNOSTIC_PROVENANCE_LIMIT]
+        properties["parse_diagnostic_reference_keys"] = ";".join(
+            str(key) for key in clipped_reference_keys
+        )
+        overflow_count = len(reference_keys) - len(clipped_reference_keys)
+        if overflow_count:
+            properties["parse_diagnostic_reference_key_overflow_count"] = str(overflow_count)
+
+
+def _native_layer_id(record: AllegroRecord) -> str:
+    class_id = payload_int(record, "layer_class_id")
+    subclass_id = payload_int(record, "layer_subclass_id")
+    if class_id == 0 and subclass_id == 0:
+        return ""
+    return f"{class_id}:{subclass_id}"
+
+
+def _looks_like_refdes(value: str) -> bool:
+    return bool(_REFDES_RE.match(value.strip()))
+
+
+def _unique_ref(refdes: str, used_refs: set[str]) -> str:
+    candidate = refdes
+    suffix = 2
+    while candidate.upper() in used_refs:
+        candidate = f"{refdes}_{suffix}"
+        suffix += 1
+    used_refs.add(candidate.upper())
+    return candidate
+
+
+def _source(kind: str, record: AllegroRecord | None) -> str:
+    if record is None:
+        return f"allegro:{kind}"
+    return f"allegro:{kind}:0x{record.tag:02X}:{record.key or 'unkeyed'}"

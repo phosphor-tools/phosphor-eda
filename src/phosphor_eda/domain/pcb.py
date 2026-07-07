@@ -241,6 +241,15 @@ class PcbArc:
 
 @dataclass
 class PcbCircle:
+    """A circle or annular ring.
+
+    ``radius`` is the canonical **centerline** radius (matching PcbLine/PcbArc
+    stroke semantics): a filled circle is a disc of that radius, and an
+    unfilled stroked circle paints an annulus spanning ``radius +/- width/2``.
+    Parsers that carry an outer radius must subtract ``width/2`` before
+    building a PcbCircle.
+    """
+
     cx: float
     cy: float
     radius: float
@@ -252,6 +261,8 @@ class PcbCircle:
 class PcbPolygon:
     points: list[tuple[float, float]]
     holes: list[list[tuple[float, float]]] = field(default_factory=list)
+    width: float = 0.0
+    fill: bool = True
 
 
 @dataclass
@@ -288,7 +299,9 @@ class PcbModel3D:
     cache_key: str = ""
 
 
-PcbShape = PcbLine | PcbArc | PcbCircle | PcbPolygon | PcbText | PcbDimension | PcbModel3D
+PcbShape = (
+    PcbLine | PcbArc | PcbCircle | PcbPolygon | PcbClosedPath | PcbText | PcbDimension | PcbModel3D
+)
 
 
 class PcbPadType(StrEnum):
@@ -352,6 +365,53 @@ class PcbArtworkPurpose(StrEnum):
     USER = "user"
     KEEPOUT = "keepout"
     UNKNOWN = "unknown"
+
+
+# Layer-role → artwork-purpose, in priority order (first matching role wins).
+# This is the single domain mapping every parser consults to classify an
+# authored graphic from the semantic role of the layer it lives on. Formats
+# keep their own pre/post handling (KiCad footprint-text kinds and 3D model
+# bodies, Allegro's text fallback) and use this table only for the layer-role
+# step.
+#
+# The order reconciles the per-format tables that preceded it. Text roles
+# (DESIGNATOR/VALUE) lead — Allegro carries dedicated RefDes/Value layers,
+# while KiCad resolves those from text_kind so its layers never hold them.
+# MECHANICAL precedes USER as the more specific role (KiCad's order; Allegro
+# previously had them reversed). COPPER/KEEPOUT trail the documentation roles
+# so a graphic that also carries silkscreen/fab/etc. keeps that more specific
+# purpose.
+_ARTWORK_PURPOSE_BY_ROLE: tuple[tuple[LayerRole, PcbArtworkPurpose], ...] = (
+    (LayerRole.DESIGNATOR, PcbArtworkPurpose.DESIGNATOR),
+    (LayerRole.VALUE, PcbArtworkPurpose.VALUE),
+    (LayerRole.SILKSCREEN, PcbArtworkPurpose.SILKSCREEN),
+    (LayerRole.COURTYARD, PcbArtworkPurpose.COURTYARD),
+    (LayerRole.FABRICATION, PcbArtworkPurpose.FABRICATION),
+    (LayerRole.ASSEMBLY, PcbArtworkPurpose.ASSEMBLY),
+    (LayerRole.SOLDER_MASK, PcbArtworkPurpose.SOLDER_MASK),
+    (LayerRole.SOLDER_PASTE, PcbArtworkPurpose.SOLDER_PASTE),
+    (LayerRole.DIMENSION, PcbArtworkPurpose.DIMENSION),
+    (LayerRole.KEEPOUT, PcbArtworkPurpose.KEEPOUT),
+    (LayerRole.COPPER, PcbArtworkPurpose.COPPER),
+    (LayerRole.MECHANICAL, PcbArtworkPurpose.MECHANICAL),
+    (LayerRole.USER, PcbArtworkPurpose.USER),
+    (LayerRole.COMMENT, PcbArtworkPurpose.USER),
+)
+
+
+def artwork_purpose_for_layer(layer: PcbLayer | None) -> PcbArtworkPurpose | None:
+    """Classify an authored graphic's purpose from its layer's roles.
+
+    Returns the first purpose whose role the layer carries, in priority order,
+    or ``None`` when the layer is absent or carries no mapped role. Callers
+    apply their own format-specific fallback for the ``None`` case.
+    """
+    if layer is None:
+        return None
+    for role, purpose in _ARTWORK_PURPOSE_BY_ROLE:
+        if layer.has_role(role):
+            return purpose
+    return None
 
 
 @dataclass
@@ -642,7 +702,7 @@ class PcbConductor:
     id: str
     kind: PcbConductorKind
     layer: PcbLayer
-    data: PcbLine | PcbArc | PcbCircle | PcbPolygon
+    data: PcbLine | PcbArc | PcbCircle | PcbPolygon | PcbClosedPath
     net: PcbNet | None = None
     footprint: PcbFootprint | None = None
     pour: PcbPour | None = None
@@ -667,7 +727,7 @@ class PcbBoardProfileElement:
     id: str
     kind: PcbArtworkKind
     layer: PcbLayer | None
-    data: PcbLine | PcbArc | PcbCircle | PcbPolygon
+    data: PcbLine | PcbArc | PcbCircle | PcbPolygon | PcbClosedPath
     is_cutout: bool = False
     metadata: PcbObjectMetadata = field(default_factory=PcbObjectMetadata)
 
@@ -884,11 +944,21 @@ def extend_shape_bounds(xs: list[float], ys: list[float], shape: object) -> None
         xs.extend([shape.start_x, shape.mid_x, shape.end_x])
         ys.extend([shape.start_y, shape.mid_y, shape.end_y])
     elif isinstance(shape, PcbCircle):
-        xs.extend([shape.cx - shape.radius, shape.cx + shape.radius])
-        ys.extend([shape.cy - shape.radius, shape.cy + shape.radius])
+        # radius is the stroke centerline; an unfilled ring paints out to
+        # radius + width/2.
+        extent = shape.radius + (0.0 if shape.fill else shape.width / 2.0)
+        xs.extend([shape.cx - extent, shape.cx + extent])
+        ys.extend([shape.cy - extent, shape.cy + extent])
     elif isinstance(shape, PcbPolygon):
         xs.extend(x for x, _y in shape.points)
         ys.extend(y for _x, y in shape.points)
+    elif isinstance(shape, PcbClosedPath):
+        for segment in shape.segments:
+            xs.extend([segment.start_x, segment.end_x])
+            ys.extend([segment.start_y, segment.end_y])
+            if segment.kind is PcbPathSegmentKind.ARC:
+                xs.append(segment.mid_x)
+                ys.append(segment.mid_y)
 
 
 # Endpoint-match tolerance for "a trace connects here" checks (mm).
@@ -955,7 +1025,9 @@ def _endpoint_connected_layers(item: PcbPad | PcbVia, board: Board, span: list[s
     return touched
 
 
-def _endpoint_touches(shape: PcbLine | PcbArc | PcbCircle | PcbPolygon, x: float, y: float) -> bool:
+def _endpoint_touches(
+    shape: PcbLine | PcbArc | PcbCircle | PcbPolygon | PcbClosedPath, x: float, y: float
+) -> bool:
     if isinstance(shape, PcbLine | PcbArc):
         return (
             abs(shape.start_x - x) <= _COPPER_TOUCH_TOLERANCE

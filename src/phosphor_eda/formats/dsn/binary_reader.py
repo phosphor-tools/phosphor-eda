@@ -77,40 +77,49 @@ class BinaryReader:
         self.name = name
 
     def read_uint8(self) -> int:
+        self._require(1)
         val = self.data[self.pos]
         self.pos += 1
         return val
 
     def read_int16(self) -> int:
+        self._require(2)
         val = struct.unpack_from("<h", self.data, self.pos)[0]
         self.pos += 2
         return val
 
     def read_uint16(self) -> int:
+        self._require(2)
         val = struct.unpack_from("<H", self.data, self.pos)[0]
         self.pos += 2
         return val
 
     def read_int32(self) -> int:
+        self._require(4)
         val = struct.unpack_from("<i", self.data, self.pos)[0]
         self.pos += 4
         return val
 
     def read_uint32(self) -> int:
+        self._require(4)
         val = struct.unpack_from("<I", self.data, self.pos)[0]
         self.pos += 4
         return val
 
     def read_bytes(self, n: int) -> bytes:
+        self._require(n)
         result = self.data[self.pos : self.pos + n]
         self.pos += n
         return result
 
     def skip(self, n: int) -> None:
+        self._require(n)
         self.pos += n
 
     def read_string_zero(self) -> str:
-        end = self.data.index(b"\x00", self.pos)
+        end = self.data.find(b"\x00", self.pos)
+        if end < 0:
+            raise self._format_error("unterminated null-terminated string")
         s = decode_orcad_text(self.data[self.pos : end])
         self.pos = end + 1
         return s
@@ -254,6 +263,16 @@ class BinaryReader:
 
     def eof(self) -> bool:
         return self.pos >= len(self.data)
+
+    def _require(self, n: int) -> None:
+        if n < 0:
+            raise self._format_error(f"negative read length {n}")
+        if self.pos + n > len(self.data):
+            raise self._format_error(f"read of {n} bytes exceeds stream length {len(self.data)}")
+
+    def _format_error(self, message: str) -> DsnFormatError:
+        source = self.name or "<bytes>"
+        return DsnFormatError(f"{source}: {message}", offset=self.pos, type_id=-1)
 
 
 # --- Generic structure skippers ---

@@ -605,6 +605,25 @@ def test_source_metadata_cannot_override_resolver_owned_keys() -> None:
     assert design.metadata["parse_issue_count"] == "1"
 
 
+def test_pin_occurrence_metadata_cannot_override_resolver_owned_keys() -> None:
+    scope = _scope("Main")
+    pin = _pin("Main", scope, 7, "U1")
+    pin.pin_occurrence_metadata = {
+        "dsn_source_net_id": "spoofed",
+        "dsn_local_net_id": "spoofed",
+        "custom": "kept",
+    }
+
+    design = resolve_dsn_source(
+        _source([_page("Main", scope, [_net("Main", scope, 7, "SIG")], pins=[pin])])
+    )
+
+    occurrence = design.components[0].pins[0].occurrences[0]
+    assert occurrence.metadata["custom"] == "kept"
+    assert occurrence.metadata["dsn_source_net_id"] == "7"
+    assert occurrence.metadata["dsn_local_net_id"] == "page:Main:net:7"
+
+
 def test_dsn_to_design_preserves_native_package_pin_evidence_as_metadata() -> None:
     raw = ParsedDesign(
         pages=[

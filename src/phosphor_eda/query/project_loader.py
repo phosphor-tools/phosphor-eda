@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.variant_materializer import materialize_project_variant
+from phosphor_eda.formats.allegro import parse_allegro_pcb
 from phosphor_eda.formats.altium.pcb_parser import parse_altium_pcb
 from phosphor_eda.formats.altium.project_loader import (
     load_altium_project,
@@ -80,11 +81,16 @@ def _load_altium_pcb(path: Path) -> Board:
     return parse_altium_pcb(path)
 
 
+def _load_allegro_pcb(path: Path) -> Board:
+    return parse_allegro_pcb(path)
+
+
 def _load_prjpcb(path: Path) -> Board:
     return parse_altium_pcb(resolve_prjpcb_pcbdoc(path))
 
 
 _PCB_LOADERS: dict[str, Callable[[Path], Board]] = {
+    ".brd": _load_allegro_pcb,
     ".kicad_pcb": _load_kicad_pcb,
     ".pcbdoc": _load_altium_pcb,
     ".prjpcb": _load_prjpcb,

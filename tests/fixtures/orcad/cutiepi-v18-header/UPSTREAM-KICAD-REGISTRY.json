@@ -1,0 +1,12 @@
+{
+  "CutiePi_V2_3_dbd18": {
+    "url": "https://github.com/cutiepi-io/cutiepi-board",
+    "license": "BSD-3-Clause",
+    "description": "CutiePi 2.3, up-revved with DB Doctor 18",
+    "formatVersion": "18.0",
+    "header": {
+      "comment": "This one appears to be reading only 1264 bytes",
+      "skip": true
+    }
+  }
+}

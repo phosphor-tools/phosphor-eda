@@ -720,6 +720,7 @@
 <path d="M 98.202 63.300 A 0.127 0.127 0 1 0 97.948 63.300 A 0.127 0.127 0 1 0 98.202 63.300 Z" fill="black" fill-rule="evenodd"/>
 <path d="M 116.727 63.700 A 0.127 0.127 0 1 0 116.473 63.700 A 0.127 0.127 0 1 0 116.727 63.700 Z" fill="black" fill-rule="evenodd"/>
 <path d="M 120.200 59.000 A 3.200 3.200 0 1 0 113.800 59.000 A 3.200 3.200 0 1 0 120.200 59.000 Z" fill="black" fill-rule="evenodd"/>
+<path d="M 98.200 59.000 A 3.200 3.200 0 1 0 91.800 59.000 A 3.200 3.200 0 1 0 98.200 59.000 Z" fill="black" fill-rule="evenodd"/>
 <path d="M 120.000 72.500 A 1.500 1.500 0 1 0 117.000 72.500 A 1.500 1.500 0 1 0 120.000 72.500 Z" fill="black" fill-rule="evenodd"/>
 <path d="M 95.000 64.500 A 1.500 1.500 0 1 0 92.000 64.500 A 1.500 1.500 0 1 0 95.000 64.500 Z" fill="black" fill-rule="evenodd"/>
 <path d="M 120.000 68.500 A 1.500 1.500 0 1 0 117.000 68.500 A 1.500 1.500 0 1 0 120.000 68.500 Z" fill="black" fill-rule="evenodd"/>
@@ -752,11 +753,11 @@
 <path d="M 95.554 62.700 A 0.254 0.254 0 1 0 95.046 62.700 A 0.254 0.254 0 1 0 95.554 62.700 Z" fill="black" fill-rule="evenodd"/>
 </mask></defs>
 <g data-role="eda.silkscreen.back" data-source-layers="B.SilkS" data-source-layer="B.SilkS" style="opacity: 1.0000" mask="url(#layer-mask-base-1-eda-silkscreen-back-B-SilkS)">
-<path d="M 120.250 72.500 A 1.750 1.750 0 1 0 116.750 72.500 A 1.750 1.750 0 1 0 120.250 72.500 Z" style="fill: #ffff00; stroke: none" fill-rule="evenodd"/>
-<path d="M 95.250 64.500 A 1.750 1.750 0 1 0 91.750 64.500 A 1.750 1.750 0 1 0 95.250 64.500 Z" style="fill: #ffff00; stroke: none" fill-rule="evenodd"/>
-<path d="M 120.250 68.500 A 1.750 1.750 0 1 0 116.750 68.500 A 1.750 1.750 0 1 0 120.250 68.500 Z" style="fill: #ffff00; stroke: none" fill-rule="evenodd"/>
-<path d="M 95.250 72.500 A 1.750 1.750 0 1 0 91.750 72.500 A 1.750 1.750 0 1 0 95.250 72.500 Z" style="fill: #ffff00; stroke: none" fill-rule="evenodd"/>
-<path d="M 95.250 68.500 A 1.750 1.750 0 1 0 91.750 68.500 A 1.750 1.750 0 1 0 95.250 68.500 Z" style="fill: #ffff00; stroke: none" fill-rule="evenodd"/>
+<path d="M 120.250 72.500 A 1.750 1.750 0 1 0 116.750 72.500 A 1.750 1.750 0 1 0 120.250 72.500 Z" style="fill: none; stroke: #ffff00; stroke-width: 0.1200; stroke-linecap: round"/>
+<path d="M 95.250 64.500 A 1.750 1.750 0 1 0 91.750 64.500 A 1.750 1.750 0 1 0 95.250 64.500 Z" style="fill: none; stroke: #ffff00; stroke-width: 0.1200; stroke-linecap: round"/>
+<path d="M 120.250 68.500 A 1.750 1.750 0 1 0 116.750 68.500 A 1.750 1.750 0 1 0 120.250 68.500 Z" style="fill: none; stroke: #ffff00; stroke-width: 0.1200; stroke-linecap: round"/>
+<path d="M 95.250 72.500 A 1.750 1.750 0 1 0 91.750 72.500 A 1.750 1.750 0 1 0 95.250 72.500 Z" style="fill: none; stroke: #ffff00; stroke-width: 0.1200; stroke-linecap: round"/>
+<path d="M 95.250 68.500 A 1.750 1.750 0 1 0 91.750 68.500 A 1.750 1.750 0 1 0 95.250 68.500 Z" style="fill: none; stroke: #ffff00; stroke-width: 0.1200; stroke-linecap: round"/>
 <path d="M 97.300 70.500 L 96.750 70.500" style="fill: none; stroke: #ffff00; stroke-width: 0.1500; stroke-linecap: round"/>
 <path d="M 114.550 71.250 L 115.100 71.250" style="fill: none; stroke: #ffff00; stroke-width: 0.1500; stroke-linecap: round"/>
 <path d="M 95.950 69.800 L 95.700 69.550" style="fill: none; stroke: #ffff00; stroke-width: 0.1500; stroke-linecap: round"/>
@@ -863,6 +864,7 @@ VCC</text>
 <path d="M 106.333 69.850 L 106.107 69.850 A 0.037 0.037 0 0 1 106.070 69.813 L 106.070 69.087 A 0.037 0.037 0 0 1 106.107 69.050 L 106.333 69.050 A 0.037 0.037 0 0 1 106.370 69.087 L 106.370 69.813 A 0.037 0.037 0 0 1 106.333 69.850 Z" fill="black" fill-rule="evenodd"/>
 <path d="M 105.833 69.850 L 105.607 69.850 A 0.037 0.037 0 0 1 105.570 69.813 L 105.570 69.087 A 0.037 0.037 0 0 1 105.607 69.050 L 105.833 69.050 A 0.037 0.037 0 0 1 105.870 69.087 L 105.870 69.813 A 0.037 0.037 0 0 1 105.833 69.850 Z" fill="black" fill-rule="evenodd"/>
 <path d="M 105.333 69.850 L 105.107 69.850 A 0.037 0.037 0 0 1 105.070 69.813 L 105.070 69.087 A 0.037 0.037 0 0 1 105.107 69.050 L 105.333 69.050 A 0.037 0.037 0 0 1 105.370 69.087 L 105.370 69.813 A 0.037 0.037 0 0 1 105.333 69.850 Z" fill="black" fill-rule="evenodd"/>
+<path d="M 106.833 72.950 L 106.607 72.950 A 0.037 0.037 0 0 1 106.570 72.913 L 106.570 72.187 A 0.037 0.037 0 0 1 106.607 72.150 L 106.833 72.150 A 0.037 0.037 0 0 1 106.870 72.187 L 106.870 72.913 A 0.037 0.037 0 0 1 106.833 72.950 Z" fill="black" fill-rule="evenodd"/>
 <path d="M 110.833 69.850 L 110.607 69.850 A 0.037 0.037 0 0 1 110.570 69.813 L 110.570 69.087 A 0.037 0.037 0 0 1 110.607 69.050 L 110.833 69.050 A 0.037 0.037 0 0 1 110.870 69.087 L 110.870 69.813 A 0.037 0.037 0 0 1 110.833 69.850 Z" fill="black" fill-rule="evenodd"/>
 <path d="M 110.333 69.850 L 110.107 69.850 A 0.037 0.037 0 0 1 110.070 69.813 L 110.070 69.087 A 0.037 0.037 0 0 1 110.107 69.050 L 110.333 69.050 A 0.037 0.037 0 0 1 110.370 69.087 L 110.370 69.813 A 0.037 0.037 0 0 1 110.333 69.850 Z" fill="black" fill-rule="evenodd"/>
 <path d="M 110.833 72.950 L 110.607 72.950 A 0.037 0.037 0 0 1 110.570 72.913 L 110.570 72.187 A 0.037 0.037 0 0 1 110.607 72.150 L 110.833 72.150 A 0.037 0.037 0 0 1 110.870 72.187 L 110.870 72.913 A 0.037 0.037 0 0 1 110.833 72.950 Z" fill="black" fill-rule="evenodd"/>
@@ -880,6 +882,7 @@ VCC</text>
 <path d="M 110.350 67.410 L 109.930 67.410 A 0.070 0.070 0 0 1 109.860 67.340 L 109.860 66.860 A 0.070 0.070 0 0 1 109.930 66.790 L 110.350 66.790 A 0.070 0.070 0 0 1 110.420 66.860 L 110.420 67.340 A 0.070 0.070 0 0 1 110.350 67.410 Z" fill="black" fill-rule="evenodd"/>
 <path d="M 102.833 69.850 L 102.607 69.850 A 0.037 0.037 0 0 1 102.570 69.813 L 102.570 69.087 A 0.037 0.037 0 0 1 102.607 69.050 L 102.833 69.050 A 0.037 0.037 0 0 1 102.870 69.087 L 102.870 69.813 A 0.037 0.037 0 0 1 102.833 69.850 Z" fill="black" fill-rule="evenodd"/>
 <path d="M 102.333 69.850 L 102.107 69.850 A 0.037 0.037 0 0 1 102.070 69.813 L 102.070 69.087 A 0.037 0.037 0 0 1 102.107 69.050 L 102.333 69.050 A 0.037 0.037 0 0 1 102.370 69.087 L 102.370 69.813 A 0.037 0.037 0 0 1 102.333 69.850 Z" fill="black" fill-rule="evenodd"/>
+<path d="M 102.833 72.950 L 102.607 72.950 A 0.037 0.037 0 0 1 102.570 72.913 L 102.570 72.187 A 0.037 0.037 0 0 1 102.607 72.150 L 102.833 72.150 A 0.037 0.037 0 0 1 102.870 72.187 L 102.870 72.913 A 0.037 0.037 0 0 1 102.833 72.950 Z" fill="black" fill-rule="evenodd"/>
 <path d="M 102.790 73.490 L 103.210 73.490 A 0.070 0.070 0 0 1 103.280 73.560 L 103.280 74.040 A 0.070 0.070 0 0 1 103.210 74.110 L 102.790 74.110 A 0.070 0.070 0 0 1 102.720 74.040 L 102.720 73.560 A 0.070 0.070 0 0 1 102.790 73.490 Z" fill="black" fill-rule="evenodd"/>
 <path d="M 103.750 73.490 L 104.170 73.490 A 0.070 0.070 0 0 1 104.240 73.560 L 104.240 74.040 A 0.070 0.070 0 0 1 104.170 74.110 L 103.750 74.110 A 0.070 0.070 0 0 1 103.680 74.040 L 103.680 73.560 A 0.070 0.070 0 0 1 103.750 73.490 Z" fill="black" fill-rule="evenodd"/>
 <path d="M 96.184 63.055 L 97.306 63.055 A 0.044 0.044 0 0 1 97.350 63.099 L 97.350 63.601 A 0.044 0.044 0 0 1 97.306 63.645 L 96.184 63.645 A 0.044 0.044 0 0 1 96.140 63.601 L 96.140 63.099 A 0.044 0.044 0 0 1 96.184 63.055 Z" fill="black" fill-rule="evenodd"/>
@@ -895,6 +898,7 @@ VCC</text>
 <path d="M 109.877 65.780 L 110.282 65.780 A 0.068 0.068 0 0 1 110.350 65.847 L 110.350 66.352 A 0.068 0.068 0 0 1 110.282 66.420 L 109.877 66.420 A 0.068 0.068 0 0 1 109.810 66.352 L 109.810 65.847 A 0.068 0.068 0 0 1 109.877 65.780 Z" fill="black" fill-rule="evenodd"/>
 <path d="M 110.898 65.780 L 111.303 65.780 A 0.068 0.068 0 0 1 111.370 65.847 L 111.370 66.352 A 0.068 0.068 0 0 1 111.303 66.420 L 110.898 66.420 A 0.068 0.068 0 0 1 110.830 66.352 L 110.830 65.847 A 0.068 0.068 0 0 1 110.898 65.780 Z" fill="black" fill-rule="evenodd"/>
 <path d="M 101.088 63.700 L 102.713 63.700 A 0.188 0.188 0 0 1 102.900 63.888 L 102.900 65.013 A 0.188 0.188 0 0 1 102.713 65.200 L 101.088 65.200 A 0.188 0.188 0 0 1 100.900 65.013 L 100.900 63.888 A 0.188 0.188 0 0 1 101.088 63.700 Z" fill="black" fill-rule="evenodd"/>
+<path d="M 109.287 63.700 L 110.912 63.700 A 0.188 0.188 0 0 1 111.100 63.888 L 111.100 65.013 A 0.188 0.188 0 0 1 110.912 65.200 L 109.287 65.200 A 0.188 0.188 0 0 1 109.100 65.013 L 109.100 63.888 A 0.188 0.188 0 0 1 109.287 63.700 Z" fill="black" fill-rule="evenodd"/>
 <path d="M 111.323 63.120 L 110.918 63.120 A 0.068 0.068 0 0 1 110.850 63.052 L 110.850 62.547 A 0.068 0.068 0 0 1 110.918 62.480 L 111.323 62.480 A 0.068 0.068 0 0 1 111.390 62.547 L 111.390 63.052 A 0.068 0.068 0 0 1 111.323 63.120 Z" fill="black" fill-rule="evenodd"/>
 <path d="M 110.302 63.120 L 109.897 63.120 A 0.068 0.068 0 0 1 109.830 63.052 L 109.830 62.547 A 0.068 0.068 0 0 1 109.897 62.480 L 110.302 62.480 A 0.068 0.068 0 0 1 110.370 62.547 L 110.370 63.052 A 0.068 0.068 0 0 1 110.302 63.120 Z" fill="black" fill-rule="evenodd"/>
 <path d="M 117.140 72.410 L 117.140 71.670 L 119.930 71.670 L 119.930 72.410 Z" fill="black" fill-rule="evenodd"/>
@@ -949,7 +953,7 @@ VCC</text>
 <path d="M 111.070 69.200 L 111.070 68.900" style="fill: none; stroke: #ffffff; stroke-width: 0.1200; stroke-linecap: round"/>
 <path d="M 119.425 65.470 L 118.175 65.470" style="fill: none; stroke: #ffffff; stroke-width: 0.1270; stroke-linecap: round"/>
 <path d="M 118.175 63.130 L 119.425 63.130" style="fill: none; stroke: #ffffff; stroke-width: 0.1270; stroke-linecap: round"/>
-<path d="M 117.400 63.000 A 0.100 0.100 0 1 0 117.200 63.000 A 0.100 0.100 0 1 0 117.400 63.000 Z" style="fill: #ffffff; stroke: none" fill-rule="evenodd"/>
+<path d="M 117.400 63.000 A 0.100 0.100 0 1 0 117.200 63.000 A 0.100 0.100 0 1 0 117.400 63.000 Z" style="fill: none; stroke: #ffffff; stroke-width: 0.2000; stroke-linecap: round"/>
 <path d="M 114.000 65.760 L 114.800 65.760" style="fill: none; stroke: #ffffff; stroke-width: 0.1200; stroke-linecap: round"/>
 <path d="M 114.000 65.760 L 113.200 65.760" style="fill: none; stroke: #ffffff; stroke-width: 0.1200; stroke-linecap: round"/>
 <path d="M 114.000 62.640 L 112.200 62.640" style="fill: none; stroke: #ffffff; stroke-width: 0.1200; stroke-linecap: round"/>
@@ -1018,10 +1022,10 @@ VCC</text>
 <path d="M 114.850 59.000 A 0.250 0.250 0 1 0 114.350 59.000 A 0.250 0.250 0 1 0 114.850 59.000 Z" style="fill: none; stroke: #202020; stroke-width: 0.0600" fill-rule="evenodd"/>
 <path d="M 117.250 61.400 A 0.250 0.250 0 1 0 116.750 61.400 A 0.250 0.250 0 1 0 117.250 61.400 Z" style="fill: none; stroke: #202020; stroke-width: 0.0600" fill-rule="evenodd"/>
 <path d="M 115.553 57.303 A 0.250 0.250 0 1 0 115.053 57.303 A 0.250 0.250 0 1 0 115.553 57.303 Z" style="fill: none; stroke: #202020; stroke-width: 0.0600" fill-rule="evenodd"/>
-<path d="M 100.390 60.800 L 100.390 60.200" style="fill: none; stroke: none; stroke-width: 0.6000; stroke-linecap: round"/>
-<path d="M 111.630 60.800 L 111.630 60.200" style="fill: none; stroke: none; stroke-width: 0.6000; stroke-linecap: round"/>
-<path d="M 100.390 57.000 L 100.390 56.000" style="fill: none; stroke: none; stroke-width: 0.6000; stroke-linecap: round"/>
-<path d="M 111.630 57.000 L 111.630 56.000" style="fill: none; stroke: none; stroke-width: 0.6000; stroke-linecap: round"/>
+<path d="M 100.390 60.800 L 100.390 60.200" style="fill: none; stroke: #202020; stroke-width: 0.6000; stroke-linecap: round"/>
+<path d="M 111.630 60.800 L 111.630 60.200" style="fill: none; stroke: #202020; stroke-width: 0.6000; stroke-linecap: round"/>
+<path d="M 100.390 57.000 L 100.390 56.000" style="fill: none; stroke: #202020; stroke-width: 0.6000; stroke-linecap: round"/>
+<path d="M 111.630 57.000 L 111.630 56.000" style="fill: none; stroke: #202020; stroke-width: 0.6000; stroke-linecap: round"/>
 <path d="M 97.650 59.000 A 0.250 0.250 0 1 0 97.150 59.000 A 0.250 0.250 0 1 0 97.650 59.000 Z" style="fill: none; stroke: #202020; stroke-width: 0.0600" fill-rule="evenodd"/>
 <path d="M 92.850 59.000 A 0.250 0.250 0 1 0 92.350 59.000 A 0.250 0.250 0 1 0 92.850 59.000 Z" style="fill: none; stroke: #202020; stroke-width: 0.0600" fill-rule="evenodd"/>
 <path d="M 96.947 60.697 A 0.250 0.250 0 1 0 96.447 60.697 A 0.250 0.250 0 1 0 96.947 60.697 Z" style="fill: none; stroke: #202020; stroke-width: 0.0600" fill-rule="evenodd"/>

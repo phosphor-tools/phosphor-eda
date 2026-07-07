@@ -203,11 +203,12 @@ def _arc_shape_payload(
     end_deg: float,
 ) -> tuple[ParsedShapeKind, PcbArc | PcbCircle]:
     if is_full_circle_arc(start_deg, end_deg):
-        # Altium stores the radius at the stroke centerline. Unfilled PcbCircle
-        # payloads use the outer radius plus width to describe the annulus.
+        # Altium's arc radius is the stroke centerline, matching PcbCircle's
+        # canonical centerline convention -- store it directly (the annulus
+        # spans radius +/- width/2).
         return (
             ParsedShapeKind.CIRCLE,
-            PcbCircle(cx, -cy_orig, radius + width / 2.0, width, fill=False),
+            PcbCircle(cx, -cy_orig, radius, width, fill=False),
         )
 
     sx, sy, mx, my, ex, ey = arc_to_three_point(cx, cy_orig, radius, start_deg, end_deg)

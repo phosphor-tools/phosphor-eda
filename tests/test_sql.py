@@ -58,6 +58,7 @@ from phosphor_eda.domain.variants import (
     VariantTarget,
     VariantTargetKind,
 )
+from phosphor_eda.formats.allegro import load_allegro_pcb_project
 from phosphor_eda.formats.dsn.parser import parse_dsn
 from phosphor_eda.formats.dsn.raw_models import (
     DsnPackage,
@@ -80,6 +81,11 @@ SWD_SWITCH_PCB = FIXTURES / "swd_switch.kicad_pcb"
 ORANGECRAB_PRO = FIXTURES / "kicad-orangecrab/OrangeCrab.kicad_pro"
 PI_MX8_PRJPCB = FIXTURES / "altium/pi-mx8/PiMX8MP_r0.3_release.PrjPcb"
 JETSON_ORIN_PRO = FIXTURES / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pro"
+ALLEGRO_BREAKOUT_BRD = (
+    FIXTURES
+    / "orcad/opencellular-breakout/allegro/OpenCellular/electronics/breakout/board"
+    / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -574,6 +580,7 @@ def constructed_db() -> Iterator[duckdb.DuckDBPyConnection]:
                 via_diameter_mm=0.5,
                 via_drill_mm=0.25,
                 members=["SYNC"],
+                properties={"source_format": "constructed"},
             )
         ],
         design_rules=[
@@ -583,9 +590,17 @@ def constructed_db() -> Iterator[duckdb.DuckDBPyConnection]:
                 priority=1,
                 scope1="InNetClass('TIMING')",
                 min_value_mm=0.15,
+                properties={"source_format": "constructed"},
             )
         ],
-        diff_pairs=[DiffPair(name="USB", positive_net="USB_P", negative_net="USB_N")],
+        diff_pairs=[
+            DiffPair(
+                name="USB",
+                positive_net="USB_P",
+                negative_net="USB_N",
+                properties={"source_format": "constructed"},
+            )
+        ],
     )
     con = load_database(project)
     try:
@@ -1184,7 +1199,7 @@ class TestConstructedSchematicSql:
     ) -> None:
         net_class_rows = constructed_db.execute(
             """
-            SELECT name, clearance_mm, trace_width_mm, via_diameter_mm, via_drill_mm
+            SELECT name, clearance_mm, trace_width_mm, via_diameter_mm, via_drill_mm, properties
             FROM net_classes
             ORDER BY name
             """
@@ -1194,8 +1209,15 @@ class TestConstructedSchematicSql:
         ).fetchall()
         design_rule_rows = constructed_db.execute(
             """
-            SELECT name, kind, priority, scope1, min_value_mm
+            SELECT name, kind, priority, scope1, min_value_mm, properties
             FROM design_rules
+            ORDER BY name
+            """
+        ).fetchall()
+        diff_pair_rows = constructed_db.execute(
+            """
+            SELECT name, positive_net, negative_net, properties
+            FROM diff_pairs
             ORDER BY name
             """
         ).fetchall()
@@ -1203,11 +1225,21 @@ class TestConstructedSchematicSql:
             "SELECT name, net_class FROM nets WHERE net_id = 'net:sync'"
         ).fetchone()
 
-        assert net_class_rows == [("TIMING", 0.15, 0.2, 0.5, 0.25)]
+        assert net_class_rows == [
+            ("TIMING", 0.15, 0.2, 0.5, 0.25, '{"source_format":"constructed"}')
+        ]
         assert member_rows == [("SYNC", "TIMING")]
         assert design_rule_rows == [
-            ("Timing clearance", "clearance", 1, "InNetClass('TIMING')", 0.15)
+            (
+                "Timing clearance",
+                "clearance",
+                1,
+                "InNetClass('TIMING')",
+                0.15,
+                '{"source_format":"constructed"}',
+            )
         ]
+        assert diff_pair_rows == [("USB", "USB_P", "USB_N", '{"source_format":"constructed"}')]
         assert net_row == ("SYNC", "TIMING")
 
     def test_page_annotations_are_loaded(self, constructed_db: duckdb.DuckDBPyConnection) -> None:
@@ -1551,6 +1583,16 @@ def altium_db() -> Iterator[duckdb.DuckDBPyConnection]:
         con.close()
 
 
+@pytest.fixture(scope="module")
+def allegro_db() -> Iterator[duckdb.DuckDBPyConnection]:
+    project = load_allegro_pcb_project(ALLEGRO_BREAKOUT_BRD)
+    con = load_database(project)
+    try:
+        yield con
+    finally:
+        con.close()
+
+
 class TestFootprints:
     def test_count(self, db: duckdb.DuckDBPyConnection) -> None:
         assert _count(db, "SELECT count(*) FROM footprints") == 28
@@ -1737,6 +1779,57 @@ def test_altium_typed_tables_are_populated(altium_db: duckdb.DuckDBPyConnection)
     assert _count(altium_db, "SELECT count(*) FROM net_classes") > 0
     assert _count(altium_db, "SELECT count(*) FROM design_rules") > 0
     assert _count(altium_db, "SELECT count(*) FROM nets WHERE net_class IS NOT NULL") > 0
+
+
+def test_allegro_breakout_typed_tables_are_populated(
+    allegro_db: duckdb.DuckDBPyConnection,
+) -> None:
+    assert _count(allegro_db, "SELECT count(*) FROM boards") == 1
+    assert _count(allegro_db, "SELECT count(*) FROM layers") == 186
+    assert _count(allegro_db, "SELECT count(*) FROM footprints") == 68
+    assert _count(allegro_db, "SELECT count(*) FROM pads") == 364
+    assert _count(allegro_db, "SELECT count(*) FROM vias") == 178
+    assert _count(allegro_db, "SELECT count(*) FROM drills") == 288
+    assert _count(allegro_db, "SELECT count(*) FROM conductors") == 1619
+    assert _count(allegro_db, "SELECT count(*) FROM artwork") == 19652
+    assert _count(allegro_db, "SELECT count(*) FROM board_profile") == 4
+    assert _count(allegro_db, "SELECT count(*) FROM keepouts") == 0
+
+
+def test_allegro_breakout_sql_views_read_typed_board_collections(
+    allegro_db: duckdb.DuckDBPyConnection,
+) -> None:
+    route_count = _count(
+        allegro_db,
+        "SELECT count(*) FROM net_routes WHERE trace_length_mm > 0",
+    )
+    width_violation_count = _count(allegro_db, "SELECT count(*) FROM width_violations")
+    drill_histogram_rows = allegro_db.execute(
+        """
+        SELECT round(drill_mm, 4), source, count
+        FROM drill_histogram
+        ORDER BY drill_mm, source
+        """
+    ).fetchall()
+
+    assert route_count == 65
+    assert width_violation_count == 33
+    assert drill_histogram_rows == [
+        (0.3048, "via", 178),
+        (0.7, "pad", 5),
+        (0.889, "pad", 16),
+        (0.9, "pad", 12),
+        (0.92, "pad", 4),
+        (1.0, "pad", 4),
+        (1.016, "pad", 48),
+        (1.25, "pad", 3),
+        (1.3, "pad", 4),
+        (1.4, "pad", 4),
+        (1.75, "pad", 1),
+        (2.286, "pad", 3),
+        (2.3, "pad", 2),
+        (4.5, "pad", 4),
+    ]
 
 
 # ---------------------------------------------------------------------------

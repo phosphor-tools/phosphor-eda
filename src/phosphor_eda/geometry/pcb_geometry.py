@@ -13,7 +13,14 @@ from shapely import GeometryCollection, LineString, MultiPolygon, Point, Polygon
 from shapely.affinity import rotate
 from shapely.ops import unary_union
 
-from phosphor_eda.domain.pcb import PcbArc, PcbCircle, PcbLine, PcbPathSegmentKind, PcbPolygon
+from phosphor_eda.domain.pcb import (
+    PcbArc,
+    PcbCircle,
+    PcbClosedPath,
+    PcbLine,
+    PcbPathSegmentKind,
+    PcbPolygon,
+)
 from phosphor_eda.geometry.shapely_ops import normalize_geometry, robust_polygonize
 
 if TYPE_CHECKING:
@@ -22,7 +29,6 @@ if TYPE_CHECKING:
 
     from phosphor_eda.domain.pcb import (
         PcbBoardProfile,
-        PcbClosedPath,
         PcbFootprint,
         PcbPad,
         PcbVia,
@@ -31,6 +37,13 @@ if TYPE_CHECKING:
 PAD_CURVE_QUAD_SEGS = 12
 PAD_ROUNDRECT_QUAD_SEGS = 8
 VIA_DRILL_QUAD_SEGS = 8
+
+# Minimum painted width for a zero/None-width stroke. A hairline outline still
+# occupies physical area on the board, so both the SVG stroke and the SQL
+# geometry floor to this width rather than vanishing (SVG) or filling the whole
+# enclosed region (SQL). Lives here so geometry, the SQL loader, and the
+# renderer all share one value without the renderer leaking into geometry.
+MIN_STROKE_WIDTH_MM = 0.05
 
 
 def _box(min_x: float, min_y: float, max_x: float, max_y: float) -> Polygon:
@@ -89,6 +102,60 @@ def rect_path_d(cx: float, cy: float, w: float, h: float, rotation: float = 0.0)
     commands.extend(f"L {x:.3f} {y:.3f}" for x, y in rotated[1:])
     commands.append("Z")
     return " ".join(commands)
+
+
+# Corner-chamfer fraction for a regular octagon inscribed in its bounding box:
+# the axis vertex sits at (half-extent * OCTAGON_CHAMFER) from the box corner.
+OCTAGON_CHAMFER = math.sqrt(2.0) - 1.0
+
+
+def _octagon_corners(cx: float, cy: float, w: float, h: float) -> tuple[tuple[float, float], ...]:
+    """Regular octagon vertices inscribed in the ``w``x``h`` box about (cx, cy)."""
+    hw = w / 2.0
+    hh = h / 2.0
+    kx = hw * OCTAGON_CHAMFER
+    ky = hh * OCTAGON_CHAMFER
+    return (
+        (cx + hw, cy - ky),
+        (cx + kx, cy - hh),
+        (cx - kx, cy - hh),
+        (cx - hw, cy - ky),
+        (cx - hw, cy + ky),
+        (cx - kx, cy + hh),
+        (cx + kx, cy + hh),
+        (cx + hw, cy + ky),
+    )
+
+
+def _diamond_corners(cx: float, cy: float, w: float, h: float) -> tuple[tuple[float, float], ...]:
+    """Rhombus vertices at the ``w``x``h`` box edge midpoints about (cx, cy)."""
+    hw = w / 2.0
+    hh = h / 2.0
+    return ((cx + hw, cy), (cx, cy - hh), (cx - hw, cy), (cx, cy + hh))
+
+
+def _rotated_polygon_path_d(
+    cx: float, cy: float, corners: tuple[tuple[float, float], ...], rotation: float
+) -> str:
+    rotated = [_rotate_point(x, y, cx, cy, rotation) for x, y in corners]
+    commands = [f"M {rotated[0][0]:.4f} {rotated[0][1]:.4f}"]
+    commands.extend(f"L {x:.4f} {y:.4f}" for x, y in rotated[1:])
+    commands.append("Z")
+    return " ".join(commands)
+
+
+def octagon_path_d(cx: float, cy: float, w: float, h: float, rotation: float = 0.0) -> str:
+    """Exact SVG path for a regular octagon inscribed in the ``w``x``h`` box."""
+    if w <= 0.0 or h <= 0.0:
+        return ""
+    return _rotated_polygon_path_d(cx, cy, _octagon_corners(cx, cy, w, h), rotation)
+
+
+def diamond_path_d(cx: float, cy: float, w: float, h: float, rotation: float = 0.0) -> str:
+    """Exact SVG path for a diamond (rhombus) inscribed in the ``w``x``h`` box."""
+    if w <= 0.0 or h <= 0.0:
+        return ""
+    return _rotated_polygon_path_d(cx, cy, _diamond_corners(cx, cy, w, h), rotation)
 
 
 def oval_path_d(cx: float, cy: float, w: float, h: float, rotation: float = 0.0) -> str:
@@ -188,6 +255,10 @@ def pad_path_d(pad: PcbPad, *, width: float | None = None, height: float | None 
     if pad.shape == "roundrect":
         corner_radius = min(w, h) * pad.roundrect_rratio / 2.0
         return roundrect_path_d(cx, cy, w, h, corner_radius, pad.rotation)
+    if pad.shape == "octagon":
+        return octagon_path_d(cx, cy, w, h, pad.rotation)
+    if pad.shape == "diamond":
+        return diamond_path_d(cx, cy, w, h, pad.rotation)
     return rect_path_d(cx, cy, w, h, pad.rotation)
 
 
@@ -220,8 +291,10 @@ def _custom_pad_shape_path_d(shape: PcbLine | PcbArc | PcbCircle | PcbPolygon) -
     if isinstance(shape, PcbCircle):
         if shape.fill or shape.width <= 0.0:
             return circle_path_d(shape.cx, shape.cy, shape.radius)
-        inner_radius = max(shape.radius - shape.width, 0.0)
-        outer = circle_path_d(shape.cx, shape.cy, shape.radius)
+        # radius is the stroke centerline: the annulus spans radius +/- width/2.
+        outer_radius = shape.radius + shape.width / 2.0
+        inner_radius = max(shape.radius - shape.width / 2.0, 0.0)
+        outer = circle_path_d(shape.cx, shape.cy, outer_radius)
         if inner_radius <= 0.0:
             return outer
         return f"{outer} {circle_path_d(shape.cx, shape.cy, inner_radius, clockwise=True)}"
@@ -341,6 +414,17 @@ def pad_polygon(
             geom = rotate(geom, -pad.rotation, origin=(cx, cy))
         return geom
 
+    if pad.shape in ("octagon", "diamond"):
+        corners = (
+            _octagon_corners(cx, cy, w, h)
+            if pad.shape == "octagon"
+            else _diamond_corners(cx, cy, w, h)
+        )
+        geom: BaseGeometry = Polygon(corners)
+        if pad.rotation != 0.0:
+            geom = rotate(geom, -pad.rotation, origin=(cx, cy))
+        return geom
+
     # Default: rectangle (also handles "rect" and "custom" as bounding box)
     rect = _box(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
     if pad.rotation != 0.0:
@@ -372,14 +456,17 @@ def _custom_pad_shape_geometry(
             )
         ).buffer(shape.width / 2.0, cap_style="round")
     if isinstance(shape, PcbCircle):
-        outer = Point(shape.cx, shape.cy).buffer(shape.radius, quad_segs=PAD_CURVE_QUAD_SEGS)
         if shape.fill or shape.width <= 0.0:
-            return outer
-        inner_radius = max(shape.radius - shape.width, 0.0)
+            return Point(shape.cx, shape.cy).buffer(shape.radius, quad_segs=PAD_CURVE_QUAD_SEGS)
+        # radius is the stroke centerline: the annulus spans radius +/- width/2.
+        outer = Point(shape.cx, shape.cy).buffer(
+            shape.radius + shape.width / 2.0, quad_segs=PAD_CURVE_QUAD_SEGS
+        )
+        inner_radius = max(shape.radius - shape.width / 2.0, 0.0)
         if inner_radius <= 0.0:
             return outer
         return outer.difference(Point(shape.cx, shape.cy).buffer(inner_radius))
-    return polygon_geometry(shape)
+    return polygon_shape_geometry(shape)
 
 
 # ---------------------------------------------------------------------------
@@ -549,19 +636,63 @@ def polygon_geometry(poly: PcbPolygon) -> BaseGeometry:
     return normalize_geometry(Polygon(poly.points, holes=holes or None))
 
 
-def closed_path_geometry(path: PcbClosedPath) -> Polygon | None:
-    """Convert a closed PCB path to a Shapely Polygon, or None if degenerate."""
+def polygon_shape_geometry(poly: PcbPolygon) -> BaseGeometry:
+    """Return the physical filled area for a polygon payload.
+
+    ``polygon_geometry`` intentionally returns the enclosed region for consumers
+    such as board-profile assembly.  This helper applies PCB paint semantics:
+    unfilled polygons describe a stroked closed outline.
+    """
+    geometry = polygon_geometry(poly)
+    if poly.fill or geometry.is_empty:
+        return geometry
+    # Stroke the drawn rings rather than the normalized region's boundary: a
+    # self-intersecting outline normalizes to a GeometryCollection (whose
+    # boundary is undefined), but the painted stroke still follows the rings
+    # as authored. A zero-width outline still paints a hairline ring (matching
+    # the SVG hairline), not the full enclosed region.
+    stroke_width = max(poly.width, MIN_STROKE_WIDTH_MM)
+    outlines = [
+        LineString([*ring, ring[0]]).buffer(
+            stroke_width / 2.0, cap_style="round", join_style="round"
+        )
+        for ring in (poly.points, *poly.holes)
+        if len(ring) >= 2
+    ]
+    return normalize_geometry(unary_union(outlines))
+
+
+def closed_path_geometry(path: PcbClosedPath) -> Polygon | MultiPolygon | None:
+    """Convert a closed PCB path to normalized Shapely geometry.
+
+    Returns ``None`` for degenerate paths. A self-intersecting boundary
+    normalizes to its valid repair (possibly a ``MultiPolygon``) — never raw
+    invalid geometry, which corrupts WKB and SVG serialization downstream.
+    """
     boundary = _closed_path_points(path)
     if len(boundary) < 3:
         return None
     holes = [
         hole_points for hole in path.holes if len(hole_points := _closed_path_points(hole)) >= 3
     ]
-    geometry = Polygon(boundary, holes=holes or None)
-    normalized = normalize_geometry(geometry)
-    if not normalized.is_empty and isinstance(normalized, Polygon):
+    normalized = normalize_geometry(Polygon(boundary, holes=holes or None))
+    if normalized.is_empty:
+        return None
+    if isinstance(normalized, Polygon | MultiPolygon):
         return normalized
-    return geometry
+    # A repair can yield a collection with linework alongside the area; keep
+    # the polygonal parts only.
+    parts = [
+        geom
+        for geom in getattr(normalized, "geoms", ())
+        if isinstance(geom, Polygon | MultiPolygon) and not geom.is_empty
+    ]
+    if not parts:
+        return None
+    merged = normalize_geometry(unary_union(parts))
+    if merged.is_empty or not isinstance(merged, Polygon | MultiPolygon):
+        return None
+    return merged
 
 
 def _closed_path_points(path: PcbClosedPath) -> list[tuple[float, float]]:
@@ -636,6 +767,15 @@ def board_outline_polygon(profile: PcbBoardProfile) -> Polygon | MultiPolygon | 
                 cutouts.append(ring)
             else:
                 solids.append(ring)
+
+        elif isinstance(item.data, PcbClosedPath):
+            polygon = closed_path_geometry(item.data)
+            if polygon is None or polygon.is_empty:
+                continue
+            if item.is_cutout:
+                cutouts.append(polygon)
+            else:
+                solids.append(polygon)
 
         else:
             # Repairing a self-intersecting outline can yield a MultiPolygon;

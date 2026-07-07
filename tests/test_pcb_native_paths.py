@@ -13,6 +13,8 @@ import pytest
 from phosphor_eda.domain.pcb import PadStack, PcbCircle, PcbLine, PcbPad, PcbPadType
 from phosphor_eda.geometry.pcb_geometry import (
     circle_path_d,
+    diamond_path_d,
+    octagon_path_d,
     oval_path_d,
     pad_path_d,
     rect_path_d,
@@ -167,10 +169,11 @@ def test_custom_pad_annular_circle_uses_opposite_windings() -> None:
         custom_shapes=(PcbCircle(cx=0.0, cy=0.0, radius=2.0, width=0.5, fill=False),),
     )
     d = pad_path_d(pad)
-    # Outer ring at r=2 keeps the default winding; inner ring at r=1.5 is
-    # reversed so the hole survives fill-rule="nonzero".
-    assert "M 2.000 0.000" in d
-    assert "M 1.500 0.000" in d
+    # radius is the stroke centerline: outer ring at r=2.25 keeps the default
+    # winding; inner ring at r=1.75 is reversed so the hole survives
+    # fill-rule="nonzero".
+    assert "M 2.250 0.000" in d
+    assert "M 1.750 0.000" in d
     assert " 0 1 0 " in d
     assert " 0 1 1 " in d
 
@@ -193,6 +196,33 @@ def test_custom_pad_path_honors_dimension_overrides() -> None:
     assert max(_coords(expanded)) == pytest.approx(1.5, abs=0.01)
 
 
-@pytest.mark.parametrize("shape", ["circle", "rect", "oval", "roundrect"])
+@pytest.mark.parametrize("shape", ["circle", "rect", "oval", "roundrect", "octagon", "diamond"])
 def test_pad_path_nonempty(shape: str) -> None:
     assert pad_path_d(_pad(shape, roundrect_rratio=0.25)) != ""
+
+
+def test_octagon_path_has_eight_vertices_within_box() -> None:
+    d = octagon_path_d(0.0, 0.0, 4.0, 2.0)
+    # M + 7 L + Z closes an 8-vertex polygon with no arcs.
+    assert d.count("L ") == 7
+    assert " A " not in d
+    coords = _coords(d)
+    xs = coords[0::2]
+    ys = coords[1::2]
+    assert max(abs(x) for x in xs) == pytest.approx(2.0)
+    assert max(abs(y) for y in ys) == pytest.approx(1.0)
+
+
+def test_diamond_path_has_four_vertices_at_edge_midpoints() -> None:
+    d = diamond_path_d(0.0, 0.0, 4.0, 2.0)
+    assert d.count("L ") == 3
+    assert " A " not in d
+    # Vertices sit on the axes at the box edge midpoints.
+    assert "M 2.0000 0.0000" in d
+    assert "L 0.0000 -1.0000" in d
+
+
+def test_pad_path_octagon_and_diamond_not_rectangles() -> None:
+    assert octagon_path_d(0.0, 0.0, 4.0, 2.0) == pad_path_d(_pad("octagon"))
+    assert diamond_path_d(0.0, 0.0, 4.0, 2.0) == pad_path_d(_pad("diamond"))
+    assert pad_path_d(_pad("octagon")) != pad_path_d(_pad("rect"))

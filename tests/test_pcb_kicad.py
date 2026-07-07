@@ -332,6 +332,19 @@ def padstack_board() -> Board:
     return parse_kicad_pcb(PADSTACK_FIXTURE)
 
 
+def test_kicad_rect_preserves_polygon_paint_semantics(padstack_board: Board) -> None:
+    assert padstack_board.board_profile is not None
+    rect_payload: PcbPolygon | None = None
+    for element in padstack_board.board_profile.elements:
+        if isinstance(element.data, PcbPolygon):
+            rect_payload = element.data
+            break
+
+    assert rect_payload is not None
+    assert rect_payload.width == 0.1
+    assert rect_payload.fill is False
+
+
 def test_kicad_pad_padstack_front_inner_back(padstack_board: Board) -> None:
     pad = next(item for item in padstack_board.pads if item.number == "1")
     stack = pad.stack

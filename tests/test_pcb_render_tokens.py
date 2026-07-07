@@ -211,7 +211,7 @@ def test_highlight_token_overrides_code_default() -> None:
         ("covered_copper", ResolvedStyle(fill="#145222", opacity=0.6)),
         ("exposed_substrate", ResolvedStyle(fill="#b58b55")),
         ("exposed_copper", ResolvedStyle(fill="#b87333", opacity=0.9)),
-        ("silkscreen", ResolvedStyle(fill="#ffffff")),
+        ("silkscreen", ResolvedStyle(fill="#ffffff", stroke_width_mm=0.08)),
     ],
 )
 def test_realistic_functions_have_code_defaults(function: str, expected: ResolvedStyle) -> None:
