@@ -158,17 +158,17 @@ def _shape_pours_and_fills(
     }
     flash_keys = flash_symbol_keys(record_set)
     for shape in (record for record in record_set.records if record.tag == 0x28):
+        if shape.key is None:
+            # Without a stable key the pour/fill IDs would collide on
+            # "allegro:None:pour" and overwrite earlier pours downstream.
+            continue
         owner = graph.by_key.get(payload_int(shape, "owner_key"))
         if owner is not None and owner.tag == 0x2B:
             # Owned by a footprint definition: package-symbol pad geometry in
             # local footprint coordinates, not board-level copper. Flash-symbol
             # shapes surface through padstacks; anything else is dropped and
             # must say so.
-            if (
-                payload_int(shape, "layer_class_id") == _CLASS_ETCH
-                and shape.key is not None
-                and shape.key not in flash_keys
-            ):
+            if payload_int(shape, "layer_class_id") == _CLASS_ETCH and shape.key not in flash_keys:
                 diagnostics.append(
                     drop_diagnostic(
                         shape,
@@ -180,7 +180,7 @@ def _shape_pours_and_fills(
                     )
                 )
             continue
-        item = assigned_shapes.get(shape.key) if shape.key is not None else None
+        item = assigned_shapes.get(shape.key)
         net_key = None if item is None else item.net_key
         assignment_key = None if item is None else item.assignment.key
         if net_key is None and owner is not None and owner.tag == 0x04:
