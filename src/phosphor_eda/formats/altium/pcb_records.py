@@ -560,6 +560,7 @@ class RegionRecord:
     Header layout (22 bytes):
       [0]     layer     u8
       [3:5]   net       u16
+      [5:7]   polygon   u16
       [7:9]   component u16
       [14:16] holecount u16
       [18:22] prop_len  u32
@@ -567,6 +568,7 @@ class RegionRecord:
 
     layer: int
     net: int
+    polygon: int
     component: int
     holecount: int
     properties: dict[str, str]
@@ -586,6 +588,7 @@ class RegionRecord:
 
         layer = body[0]
         net = u16(body, 3)
+        polygon = u16(body, 5)
         component = u16(body, 7)
         holecount = u16(body, 14)
 
@@ -634,6 +637,7 @@ class RegionRecord:
         return cls(
             layer=layer,
             net=net,
+            polygon=polygon,
             component=component,
             holecount=holecount,
             properties=props,
@@ -673,6 +677,7 @@ class ShapeBasedRegionRecord:
 
     layer: int
     net: int
+    polygon: int
     component: int
     holecount: int
     properties: dict[str, str]
@@ -692,6 +697,7 @@ class ShapeBasedRegionRecord:
 
         layer = body[0]
         net = u16(body, 3)
+        polygon = u16(body, 5)
         component = u16(body, 7)
         holecount = u16(body, 14)
 
@@ -758,6 +764,7 @@ class ShapeBasedRegionRecord:
         return cls(
             layer=layer,
             net=net,
+            polygon=polygon,
             component=component,
             holecount=holecount,
             properties=props,

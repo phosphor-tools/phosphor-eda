@@ -1211,14 +1211,15 @@ def _region_primitive(
     the vertex-decoding step (raw f64 pairs vs arc-linearized extended
     vertices) differ, and those are handled by the callers.
     """
-    polygon_index = int(region.properties.get("polygonindex", "-1") or "-1")
+    polygon_property_index = int(region.properties.get("polygonindex", "-1") or "-1")
+    polygon_index = polygon_property_index if polygon_property_index >= 0 else region.polygon
     subpolygon_index = int(region.properties.get("subpolyindex", "-1") or "-1")
-    pour_id = resolve_pour_id(pour_id_map or {}, polygon_index, subpolygon_index)
+    pour_id = resolve_pour_id(pour_id_map or {}, polygon_index)
 
     # Net resolution: use direct net if assigned, otherwise inherit from pour.
     if resolved_num in COPPER_LAYERS:
         if region.net == NET_UNCONNECTED and pour_net_map:
-            net_num = resolve_pour_net(pour_net_map, polygon_index, subpolygon_index)
+            net_num = resolve_pour_net(pour_net_map, polygon_index)
         else:
             net_num = altium_net_number(region.net)
     else:
@@ -1273,7 +1274,8 @@ def parse_regions(
     paste openings, etc.) have net_number 0.
 
     When pour_net_map is provided, regions with net=0xFFFF (inherit) and
-    a valid subpolyindex will inherit the net from their parent polygon pour.
+    a valid polygon reference will inherit the net from their parent polygon
+    pour.
     """
     records = read_binary_records(data, ctx, source="Regions6/Data")
     polygons: list[ParsedPrimitive] = []
@@ -1340,7 +1342,7 @@ def parse_shape_based_regions(
 
     Net inheritance matches ``parse_regions``: a copper region carrying the
     unconnected sentinel (net == 0xFFFF) inherits the net of its parent polygon
-    pour via the (sub)polygon index.
+    pour via the text or binary polygon index.
     """
     records = read_binary_records(data, ctx, source="ShapeBasedRegions6/Data")
     polygons: list[ParsedPrimitive] = []
