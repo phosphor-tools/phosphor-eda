@@ -38,13 +38,13 @@ def _frame(rec_type: int, body: bytes) -> bytes:
     return bytes([rec_type]) + _pack_u32(len(body)) + body
 
 
-def _region_body(net: int, props: bytes) -> bytes:
+def _region_body(net: int, props: bytes, *, polygon: int = 0xFFFF) -> bytes:
     """A Regions6 record body on layer 1 (Top copper) with three f64 vertices."""
     body = bytearray()
     body.append(1)  # layer
     body.extend(b"\x00\x00")  # 1-2
     body.extend(_pack_u16(net))  # 3-4
-    body.extend(b"\x00\x00")  # 5-6
+    body.extend(_pack_u16(polygon))  # 5-6 polygon
     body.extend(_pack_u16(0xFFFF))  # 7-8 component (none)
     body.extend(b"\x00\x00\x00\x00\x00\x00")  # 9-14
     body[14:16] = _pack_u16(0)  # holecount
@@ -59,13 +59,13 @@ def _region_body(net: int, props: bytes) -> bytes:
     return bytes(body)
 
 
-def _shape_region_body(net: int, props: bytes) -> bytes:
+def _shape_region_body(net: int, props: bytes, *, polygon: int = 0xFFFF) -> bytes:
     """A ShapeBasedRegions6 record body on layer 1 with three extended vertices."""
     body = bytearray()
     body.append(1)  # layer
     body.extend(b"\x00\x00")  # 1-2
     body.extend(_pack_u16(net))  # 3-4
-    body.extend(b"\x00\x00")  # 5-6
+    body.extend(_pack_u16(polygon))  # 5-6 polygon
     body.extend(_pack_u16(0xFFFF))  # 7-8 component (none)
     body.extend(b"\x00\x00\x00\x00\x00\x00")  # 9-14
     body[14:16] = _pack_u16(0)  # holecount
@@ -90,7 +90,7 @@ def _layer_map() -> dict[int, PcbLayer]:
 
 
 def _nets() -> dict[int, PcbNet]:
-    return {7: PcbNet(number=7, name="GND")}
+    return {7: PcbNet(number=7, name="GND"), 8: PcbNet(number=8, name="VCC")}
 
 
 _PROPS_INHERIT = b"|POLYGONINDEX=2|SUBPOLYINDEX=5\x00"
@@ -100,22 +100,82 @@ def test_regions_inherit_pour_net_when_unconnected() -> None:
     ctx = ParseContext()
     stream = _frame(11, _region_body(_NET_UNCONNECTED, _PROPS_INHERIT))
     result = parse_regions(
-        stream, _nets(), _layer_map(), ctx, pour_id_map={5: "pour:1"}, pour_net_map={5: 7}
+        stream, _nets(), _layer_map(), ctx, pour_id_map={2: "pour:1"}, pour_net_map={2: 7}
     )
     assert len(result) == 1
     assert result[0].net_number == 7
     assert result[0].net_name == "GND"
+    assert result[0].pour_id == "pour:1"
+
+
+def test_regions_inherit_pour_net_from_binary_polygon_when_property_missing() -> None:
+    ctx = ParseContext()
+    stream = _frame(11, _region_body(_NET_UNCONNECTED, b"|SUBPOLYINDEX=5\x00", polygon=2))
+    result = parse_regions(
+        stream,
+        _nets(),
+        _layer_map(),
+        ctx,
+        pour_id_map={2: "pour:1", 5: "wrong-pour"},
+        pour_net_map={2: 7, 5: 8},
+    )
+    assert len(result) == 1
+    assert result[0].net_number == 7
+    assert result[0].net_name == "GND"
+    assert result[0].pour_id == "pour:1"
+
+
+def test_regions_do_not_inherit_from_subpolygon_index() -> None:
+    ctx = ParseContext()
+    stream = _frame(11, _region_body(_NET_UNCONNECTED, b"|SUBPOLYINDEX=5\x00"))
+    result = parse_regions(
+        stream, _nets(), _layer_map(), ctx, pour_id_map={5: "wrong-pour"}, pour_net_map={5: 7}
+    )
+    assert len(result) == 1
+    assert result[0].net_number == 0
+    assert result[0].net_name == ""
+    assert result[0].pour_id == ""
 
 
 def test_shape_based_regions_inherit_pour_net_when_unconnected() -> None:
     ctx = ParseContext()
     stream = _frame(11, _shape_region_body(_NET_UNCONNECTED, _PROPS_INHERIT))
     result = parse_shape_based_regions(
-        stream, _nets(), _layer_map(), ctx, pour_id_map={5: "pour:1"}, pour_net_map={5: 7}
+        stream, _nets(), _layer_map(), ctx, pour_id_map={2: "pour:1"}, pour_net_map={2: 7}
     )
     assert len(result) == 1
     assert result[0].net_number == 7, "shape-based region should inherit the pour's net"
     assert result[0].net_name == "GND"
+    assert result[0].pour_id == "pour:1"
+
+
+def test_shape_based_regions_inherit_pour_net_from_binary_polygon_when_property_missing() -> None:
+    ctx = ParseContext()
+    stream = _frame(11, _shape_region_body(_NET_UNCONNECTED, b"|SUBPOLYINDEX=5\x00", polygon=2))
+    result = parse_shape_based_regions(
+        stream,
+        _nets(),
+        _layer_map(),
+        ctx,
+        pour_id_map={2: "pour:1", 5: "wrong-pour"},
+        pour_net_map={2: 7, 5: 8},
+    )
+    assert len(result) == 1
+    assert result[0].net_number == 7
+    assert result[0].net_name == "GND"
+    assert result[0].pour_id == "pour:1"
+
+
+def test_shape_based_regions_do_not_inherit_from_subpolygon_index() -> None:
+    ctx = ParseContext()
+    stream = _frame(11, _shape_region_body(_NET_UNCONNECTED, b"|SUBPOLYINDEX=5\x00"))
+    result = parse_shape_based_regions(
+        stream, _nets(), _layer_map(), ctx, pour_id_map={5: "wrong-pour"}, pour_net_map={5: 7}
+    )
+    assert len(result) == 1
+    assert result[0].net_number == 0
+    assert result[0].net_name == ""
+    assert result[0].pour_id == ""
 
 
 def test_shape_based_regions_keep_direct_net() -> None:
@@ -127,7 +187,7 @@ def test_shape_based_regions_keep_direct_net() -> None:
     ctx = ParseContext()
     stream = _frame(11, _shape_region_body(7, _PROPS_INHERIT))
     result = parse_shape_based_regions(
-        stream, _nets(), _layer_map(), ctx, pour_id_map={5: "pour:1"}, pour_net_map={5: 7}
+        stream, _nets(), _layer_map(), ctx, pour_id_map={2: "pour:1"}, pour_net_map={2: 7}
     )
     assert len(result) == 1
     assert result[0].net_number == 8

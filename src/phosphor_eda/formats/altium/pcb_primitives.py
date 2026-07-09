@@ -373,21 +373,19 @@ def keepout_metadata(
 
 def resolve_pour_id(
     pour_id_map: dict[int, str],
-    *indexes: int | None,
+    index: int | None,
 ) -> str:
-    for index in indexes:
-        if index is not None and index >= 0 and index != _POLYGON_NONE and index in pour_id_map:
-            return pour_id_map[index]
+    if index is not None and index >= 0 and index != _POLYGON_NONE and index in pour_id_map:
+        return pour_id_map[index]
     return ""
 
 
 def resolve_pour_net(
     pour_net_map: dict[int, int] | None,
-    *indexes: int | None,
+    index: int | None,
 ) -> int:
     if pour_net_map is None:
         return 0
-    for index in indexes:
-        if index is not None and index >= 0 and index != _POLYGON_NONE and index in pour_net_map:
-            return pour_net_map[index]
+    if index is not None and index >= 0 and index != _POLYGON_NONE and index in pour_net_map:
+        return pour_net_map[index]
     return 0
