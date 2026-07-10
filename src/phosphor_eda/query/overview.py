@@ -44,7 +44,7 @@ def format_project_overview(project: Project) -> str:
 
     if project.boards:
         sections.append(_boards_section(project.boards))
-        stackup_section = _stackup_section(project.boards)
+        stackup_section = format_stackup_section(project.boards)
         if stackup_section:
             sections.append(stackup_section)
 
@@ -254,7 +254,14 @@ def _board_stackup_summary(board: Board) -> str:
     return ", ".join(parts)
 
 
-def _stackup_section(boards: list[Board]) -> str:
+def format_stackup_section(boards: list[Board]) -> str:
+    """Render the physical stackup table shared by ``overview`` and ``pcb stackup``.
+
+    Iterates each board's ``stackup.layers`` (the physical construction), so
+    placeholder layer slots that only exist in the layer-slot inventory are
+    naturally excluded. Returns an empty string when no board carries stackup
+    metadata.
+    """
     lines = ["Stackup"]
     found = False
 

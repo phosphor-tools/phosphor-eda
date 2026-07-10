@@ -28,6 +28,7 @@ from phosphor_eda.render.api import RenderResult
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 DSN_PATH = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
 PCB_PATH = FIXTURES / "swd_switch.kicad_pcb"
+PI_MX8_PRJPCB = FIXTURES / "altium/pi-mx8/PiMX8MP_r0.3_release.PrjPcb"
 
 
 def _write_opj(path: Path, dsn_path: Path = DSN_PATH) -> Path:
@@ -1351,4 +1352,78 @@ def test_cli_corrupt_pcb_reports_one_line_error(tmp_path: Path) -> None:
 
     assert result.exit_code == 1
     assert "failed to parse" in result.output
+    assert "Traceback" not in result.output
+
+
+# ---- pcb stackup CLI tests ----
+
+
+def _overview_stackup_section(overview_output: str) -> str:
+    """Extract the ``Stackup`` block from ``overview`` output.
+
+    Overview joins its sections with a blank line, so the stackup block is the
+    element that starts with the ``Stackup`` heading.
+    """
+    for section in overview_output.split("\n\n"):
+        if section.startswith("Stackup\n"):
+            return section
+    return ""
+
+
+def test_cli_pcb_stackup_matches_overview_and_lists_physical_layers() -> None:
+    runner = CliRunner()
+    stackup_result = runner.invoke(main, ["-P", str(PI_MX8_PRJPCB), "pcb", "stackup"])
+    assert stackup_result.exit_code == 0, stackup_result.output
+
+    overview_result = runner.invoke(main, ["-P", str(PI_MX8_PRJPCB), "overview"])
+    assert overview_result.exit_code == 0, overview_result.output
+
+    section = _overview_stackup_section(overview_result.output)
+    assert section, "overview should contain a Stackup section"
+    # The real invariant: pcb stackup reproduces overview's stackup section.
+    assert stackup_result.output.strip() == section.strip()
+
+    output = stackup_result.output
+    # Physical layers appear top to bottom.
+    assert (
+        output.index("Top Solder")
+        < output.index("Top Layer")
+        < output.index("Bottom Layer")
+        < output.index("Bottom Solder")
+    )
+    # Placeholder layer slots (layer-slot inventory, not the physical stackup)
+    # are filtered out.
+    assert "Mid-Layer" not in output
+    assert "Internal Plane" not in output
+    # Total board thickness is reported.
+    assert "mm total" in output
+
+
+def test_cli_pcb_stackup_without_board_reports_graceful_error(tmp_path: Path) -> None:
+    opj = _write_opj(tmp_path / "project.opj")
+    runner = CliRunner()
+    result = runner.invoke(main, ["-P", str(opj), "pcb", "stackup"])
+
+    assert result.exit_code != 0
+    assert "no renderable PCB board" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_cli_pcb_stackup_board_without_stackup_metadata_reports_graceful_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_path = tmp_path / "no_stackup.kicad_pro"
+    project_path.write_text("{}", encoding="utf-8")
+    board = _empty_board("No Stackup Board", project_path)
+    monkeypatch.setattr(
+        cli_module,
+        "load_project",
+        lambda _path, **_kwargs: Project(name="No Stackup", boards=[board]),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["-P", str(project_path), "pcb", "stackup"])
+
+    assert result.exit_code != 0
+    assert "no stackup metadata" in result.output
     assert "Traceback" not in result.output
