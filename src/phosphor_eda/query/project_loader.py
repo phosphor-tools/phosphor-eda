@@ -6,6 +6,7 @@ with the corresponding parser package.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.pcb import PcbBuildError
@@ -92,25 +93,41 @@ def _load_prjpcb(path: Path) -> Board:
     return parse_altium_pcb(resolve_prjpcb_pcbdoc(path))
 
 
-_PCB_LOADERS: dict[str, Callable[[Path], Board]] = {
-    ".brd": _load_allegro_pcb,
-    ".kicad_pcb": _load_kicad_pcb,
-    ".pcbdoc": _load_altium_pcb,
-    ".prjpcb": _load_prjpcb,
+@dataclass(frozen=True)
+class _PcbBackend:
+    """A PCB layout backend: its loader and its format name."""
+
+    loader: Callable[[Path], Board]
+    format: str
+
+
+_PCB_BACKENDS: dict[str, _PcbBackend] = {
+    ".brd": _PcbBackend(_load_allegro_pcb, "allegro"),
+    ".kicad_pcb": _PcbBackend(_load_kicad_pcb, "kicad"),
+    ".pcbdoc": _PcbBackend(_load_altium_pcb, "altium"),
+    ".prjpcb": _PcbBackend(_load_prjpcb, "altium"),
 }
 
-PCB_EXTENSIONS: frozenset[str] = frozenset(_PCB_LOADERS)
+PCB_EXTENSIONS: frozenset[str] = frozenset(_PCB_BACKENDS)
 PROJECT_EXTENSIONS: frozenset[str] = frozenset({".kicad_pro", ".prjpcb", ".opj"})
+
+
+def _pcb_backend_for(ext: str) -> _PcbBackend:
+    backend = _PCB_BACKENDS.get(ext)
+    if backend is None:
+        supported = ", ".join(sorted(PCB_EXTENSIONS))
+        raise ValueError(f"Unsupported PCB format: '{ext}'. Supported: {supported}")
+    return backend
 
 
 def load_pcb(path: Path) -> Board:
     """Parse a PCB layout file into a Board."""
-    ext = path.suffix.lower()
-    loader = _PCB_LOADERS.get(ext)
-    if loader is None:
-        supported = ", ".join(sorted(PCB_EXTENSIONS))
-        raise ValueError(f"Unsupported PCB format: '{path.suffix}'. Supported: {supported}")
-    return loader(path)
+    return _pcb_backend_for(path.suffix.lower()).loader(path)
+
+
+def pcb_format_for(ext: str) -> str:
+    """Return the PCB backend format name for a lowercased file extension."""
+    return _pcb_backend_for(ext).format
 
 
 def load_project(

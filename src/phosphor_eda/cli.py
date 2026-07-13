@@ -27,6 +27,7 @@ from phosphor_eda.query.project_loader import (
     PROJECT_EXTENSIONS,
     load_pcb,
     load_project,
+    pcb_format_for,
 )
 from phosphor_eda.query.query import (
     filter_buses as filter_bus_objects,
@@ -57,14 +58,6 @@ if TYPE_CHECKING:
     from phosphor_eda.render.annotations import ResolvedAnnotations
     from phosphor_eda.render.profiler import RenderProfiler
     from phosphor_eda.render.settings import RenderSettings
-
-_PCB_FORMAT_BY_EXTENSION = {
-    ".brd": "allegro",
-    ".kicad_pcb": "kicad",
-    ".pcbdoc": "altium",
-    ".prjpcb": "altium",
-}
-
 
 class _HasId(Protocol):
     id: str
@@ -184,7 +177,7 @@ def _load_render_project_or_die(source_path: Path | None) -> "Project":
                 name=board.name or source_path.stem,
                 metadata=ProjectMetadata(
                     name=board.name or source_path.stem,
-                    format=_PCB_FORMAT_BY_EXTENSION[ext],
+                    format=pcb_format_for(ext),
                     source_paths=[str(source_path)],
                 ),
                 boards=[board],
