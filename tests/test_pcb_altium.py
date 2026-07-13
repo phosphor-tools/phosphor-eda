@@ -22,6 +22,7 @@ from phosphor_eda.domain.pcb import (
     PcbPadType,
     PcbPolygon,
 )
+from phosphor_eda.formats.altium.enums import AltiumLayer
 from phosphor_eda.formats.altium.pcb_build import build_pcb_from_parsed_primitives
 from phosphor_eda.formats.altium.pcb_layers import (
     build_layer_map,
@@ -37,7 +38,6 @@ from phosphor_eda.formats.altium.pcb_primitives import (
     int_to_mm,
     parse_mil,
 )
-from phosphor_eda.formats.altium.enums import AltiumLayer
 from phosphor_eda.formats.altium.pcb_streams import (
     arc_to_three_point,
     parse_board6_outline,
