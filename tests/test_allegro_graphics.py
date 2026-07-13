@@ -409,6 +409,47 @@ def test_allegro_graphics_preserves_keepout_arc_segments() -> None:
     assert not any("approximated" in diagnostic.code for diagnostic in graphics.diagnostics)
 
 
+def test_allegro_graphics_drops_definition_owned_0x24_rectangle() -> None:
+    # A 0x24 rectangle stores its owner as parent_key (not footprint_key). One
+    # owned by a 0x2B footprint definition is an unplaced master in local
+    # coordinates and must not leak into board artwork; a placed one stays.
+    source = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    layer_map = build_allegro_layers(source)
+    definition = AllegroRecord(
+        tag=0x2B, offset=0, end_offset=4, key=900001, next_key=None, payload={}
+    )
+
+    def _rectangle(key: int, parent_key: int) -> AllegroRecord:
+        return AllegroRecord(
+            tag=0x24,
+            offset=key,
+            end_offset=key + 20,
+            key=key,
+            next_key=None,
+            payload={
+                "layer_class_id": 4,
+                "layer_subclass_id": 13,
+                "coords": (0, 0, 1000, 2000),
+                "parent_key": parent_key,
+            },
+        )
+
+    owned = _rectangle(900002, parent_key=900001)
+    placed = _rectangle(900003, parent_key=0)
+    record_set = AllegroRecordSet(
+        header=source.header,
+        string_table=source.string_table,
+        records=(definition, owned, placed),
+        end_offset=placed.end_offset,
+    )
+
+    graphics = extract_allegro_graphics(record_set, layer_map)
+
+    ids = {primitive.id for primitive in (*graphics.artwork, *graphics.board_profile)}
+    assert "allegro:900002" not in ids
+    assert "allegro:900003" in ids
+
+
 def test_allegro_graphics_extracts_rectangle_artwork() -> None:
     record_set = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
     layer_map = build_allegro_layers(record_set)
