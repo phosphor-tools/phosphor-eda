@@ -11,15 +11,13 @@ The fixture `kicad-mirrored-pins/mirrored.kicad_sch` is hand-written; its
 label positions were validated against the same kicad-cli oracle.
 """
 
-from pathlib import Path
-
 import pytest
+from fixture_paths import FIXTURES
 
 from phosphor_eda.formats.kicad.lib_symbols import transform_pin
 from phosphor_eda.formats.kicad.resolver import resolve_kicad_source
 from phosphor_eda.formats.kicad.to_schematic import kicad_to_source
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
 MIRRORED = FIXTURES / "kicad-mirrored-pins" / "mirrored.kicad_sch"
 
 # (lib_x, lib_y, rot, mirror) -> screen offset from anchor, per kicad-cli.

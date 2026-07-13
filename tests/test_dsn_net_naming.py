@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 from dsn_oracle_helpers import compare_net_names, compare_schematic_net_names
+from fixture_paths import FIXTURES, UPSTREAM_FIXTURES
 
 from phosphor_eda.domain.schematic import Net, NetNameKind, ScopeId
 from phosphor_eda.formats.common.diagnostics import ParseContext
@@ -47,8 +48,6 @@ from phosphor_eda.formats.dsn.source import (
 from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
 from phosphor_eda.query.project_loader import load_project
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 PICO_DSN = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
 PICO_W_DSN = FIXTURES / "dsn/raspberry-pi-pico-w/RPI-PICOW-R2.DSN"
 CMIO_DSN = FIXTURES / "dsn/raspberry-pi-cmio/RPI-CMIO-V3_0-PUBLIC.DSN"

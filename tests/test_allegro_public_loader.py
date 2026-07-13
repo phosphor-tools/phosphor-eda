@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
+from fixture_paths import UPSTREAM_FIXTURES
 
 from phosphor_eda.domain.pcb import PcbBuildError
 from phosphor_eda.formats.allegro import parse_allegro_pcb
@@ -13,8 +12,6 @@ from phosphor_eda.formats.allegro.records import AllegroRecordSet
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.query.project_loader import PCB_EXTENSIONS, load_pcb
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 BREAKOUT_BOARD = (
     UPSTREAM_FIXTURES
     / "opencellular/electronics/breakout"

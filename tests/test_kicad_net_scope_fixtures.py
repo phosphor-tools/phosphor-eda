@@ -1,12 +1,11 @@
 """KiCad fixture regressions for resolved net scope behavior."""
 
-from pathlib import Path
+from fixture_paths import FIXTURES
 
 from phosphor_eda.domain.schematic import Net
 from phosphor_eda.formats.kicad.resolver import resolve_kicad_source
 from phosphor_eda.formats.kicad.to_schematic import kicad_to_source
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
 HIERARCHY_ROOT = FIXTURES / "kicad-hierarchy" / "root.kicad_sch"
 REPEATED_ROOT = FIXTURES / "kicad-repeated-sheet" / "root.kicad_sch"
 NET_SCOPE_ROOT = FIXTURES / "kicad-net-scope" / "root.kicad_sch"

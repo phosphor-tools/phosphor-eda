@@ -5,6 +5,7 @@ from pathlib import Path
 
 import olefile
 import pytest
+from fixture_paths import UPSTREAM_FIXTURES
 
 import phosphor_eda.formats.dsn.parser as dsn_parser
 from phosphor_eda.formats.common.diagnostics import ParseContext
@@ -28,8 +29,6 @@ from phosphor_eda.formats.dsn.parser import (
 from phosphor_eda.formats.dsn.raw_models import DsnView
 from phosphor_eda.formats.dsn.views import parse_view_schematic, warn_repeated_sheet_identity
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 SYNC_DSN = (
     UPSTREAM_FIXTURES
     / "opencellular/electronics/sync/schematics/dsn"

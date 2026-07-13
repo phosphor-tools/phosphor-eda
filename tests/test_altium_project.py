@@ -1,14 +1,12 @@
 """Tests for Altium .PrjPcb project parser."""
 
 import textwrap
-from pathlib import Path
 
 import pytest
+from fixture_paths import UPSTREAM_FIXTURES
 
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode, parse_prjpcb, parse_prjpcb_file
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 QFSAE_PRJPCB = UPSTREAM_FIXTURES / "qfsae-pcb/Debugger/Debugger.PrjPcb"
 
 

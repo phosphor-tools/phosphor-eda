@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from collections import Counter
-from pathlib import Path
 
 import pytest
+from fixture_paths import FIXTURES
 from test_allegro_fixture_inventory import (
     EXTERNAL_ALLEGRO_CORPUS,
     EXTERNAL_KICAD_ALLEGRO_FIXTURES,
@@ -15,8 +15,6 @@ from phosphor_eda.formats.allegro.errors import (
     AllegroUnsupportedVersionError,
 )
 from phosphor_eda.formats.allegro.parser import parse_allegro_header
-
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 @pytest.mark.allegro_corpus

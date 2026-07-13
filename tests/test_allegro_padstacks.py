@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from pathlib import Path
 from types import MappingProxyType
 
 import pytest
+from fixture_paths import UPSTREAM_FIXTURES
 
 from phosphor_eda.domain.pcb import PcbDrillPlating, PcbPadType
 from phosphor_eda.formats.allegro.graph import build_allegro_object_graph
@@ -22,8 +22,6 @@ from phosphor_eda.formats.allegro.records import (
     AllegroRecordSet,
 )
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 BREAKOUT_BOARD = (
     UPSTREAM_FIXTURES
     / "opencellular/electronics/breakout"

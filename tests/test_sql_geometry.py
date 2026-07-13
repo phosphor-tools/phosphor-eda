@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import math
-from pathlib import Path
 
 import pytest
+from fixture_paths import FIXTURES, UPSTREAM_FIXTURES
 from shapely import MultiPolygon, Polygon
 
 from phosphor_eda.domain.pcb import (
@@ -35,8 +35,6 @@ from phosphor_eda.geometry.pcb_geometry import (
     via_geometry,
 )
 
-FIXTURES = Path(__file__).parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 SWD_SWITCH_PCB = UPSTREAM_FIXTURES / "debugotron/hw/swd_switch/swd_switch.kicad_pcb"
 ORANGECRAB_PCB = FIXTURES / "kicad-orangecrab/OrangeCrab.kicad_pcb"
 PI_MX8_PCB = (

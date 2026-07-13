@@ -4,7 +4,7 @@ Verifies that the parser/converter record non-fatal issues on a
 ParseContext instead of printing to stdout or swallowing them.
 """
 
-from pathlib import Path
+from fixture_paths import FIXTURES
 
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.dsn.netlist import build_netlist
@@ -17,7 +17,6 @@ from phosphor_eda.formats.dsn.raw_models import (
 )
 from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
 DSN_FILE = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
 
 

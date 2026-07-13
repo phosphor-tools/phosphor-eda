@@ -1,8 +1,7 @@
 """KiCad component enrichment: parameters, links, dnp, title blocks."""
 
-from pathlib import Path
-
 import pytest
+from fixture_paths import FIXTURES, UPSTREAM_FIXTURES
 
 from phosphor_eda.domain.schematic import (
     DnpSource,
@@ -15,8 +14,6 @@ from phosphor_eda.domain.schematic import (
 from phosphor_eda.formats.kicad import kicad_to_design
 from phosphor_eda.query.format import format_component_detail
 
-FIXTURES = Path(__file__).parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 ETHERNET_SCH = UPSTREAM_FIXTURES / "jetson-orin" / "ethernet.kicad_sch"
 CSI_SCH = UPSTREAM_FIXTURES / "jetson-orin" / "csi.kicad_sch"
 ORANGECRAB_SCH = FIXTURES / "kicad-orangecrab" / "OrangeCrab.kicad_sch"

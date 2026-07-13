@@ -1,6 +1,6 @@
 """Tests for DSN -> schematic domain model conversion."""
 
-from pathlib import Path
+from fixture_paths import FIXTURES
 
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.dsn.parser import DsnSchematicPage, RawTitleBlock, parse_dsn
@@ -14,7 +14,6 @@ from phosphor_eda.formats.dsn.raw_models import (
 )
 from phosphor_eda.formats.dsn.to_schematic import dsn_to_design, dsn_to_source
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
 PICOW_DSN = FIXTURES / "dsn/raspberry-pi-pico-w/RPI-PICOW-R2.DSN"
 
 

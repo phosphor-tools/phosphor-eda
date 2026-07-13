@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
-
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
+from fixture_paths import UPSTREAM_FIXTURES
 
 OPENCELLULAR_BREAKOUT_ROOT = UPSTREAM_FIXTURES / "opencellular/electronics/breakout"
 OPENCELLULAR_BREAKOUT_IPC356 = (

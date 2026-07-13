@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from pathlib import Path
 
 from conftest import build_render_test_board as _board
+from fixture_paths import FIXTURES
 
 from phosphor_eda.formats.kicad.board import parse_kicad_pcb
 from phosphor_eda.render.inventory import build_inventory
@@ -20,8 +20,6 @@ from phosphor_eda.render.settings import (
     SourceSelection,
     load_render_settings_json,
 )
-
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
 def test_layer_mask_bounds_from_real_geometry_not_path_pairing() -> None:

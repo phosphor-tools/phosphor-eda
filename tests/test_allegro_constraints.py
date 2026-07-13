@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+from fixture_paths import UPSTREAM_FIXTURES
 
 from phosphor_eda.formats.allegro.constants import AllegroBoardUnits, AllegroVersion
 from phosphor_eda.formats.allegro.constraints import extract_allegro_constraints
@@ -8,8 +8,6 @@ from phosphor_eda.formats.allegro.parser import parse_allegro_records
 from phosphor_eda.formats.allegro.project_loader import load_allegro_pcb_project
 from phosphor_eda.formats.allegro.records import AllegroHeader, AllegroRecord, AllegroRecordSet
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 BREAKOUT_BOARD = (
     UPSTREAM_FIXTURES
     / "opencellular/electronics/breakout"

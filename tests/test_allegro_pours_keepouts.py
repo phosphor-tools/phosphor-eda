@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+from fixture_paths import UPSTREAM_FIXTURES
 
 from phosphor_eda.domain.pcb import (
     LayerRole,
@@ -15,8 +15,6 @@ from phosphor_eda.formats.allegro.layers import build_allegro_layers
 from phosphor_eda.formats.allegro.parser import parse_allegro_records
 from phosphor_eda.formats.allegro.records import AllegroRecord, AllegroRecordSet
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 LAUNCHXL_BOARD = (
     UPSTREAM_FIXTURES
     / "cp-smartgarden"

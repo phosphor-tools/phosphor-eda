@@ -3,14 +3,12 @@
 from pathlib import Path
 
 import pytest
+from fixture_paths import FIXTURES, UPSTREAM_FIXTURES
 
 from phosphor_eda.domain.pcb import Board
 from phosphor_eda.domain.project import Project
 from phosphor_eda.formats.altium.pcb_project import AltiumEnrichment
 from phosphor_eda.query.project_loader import load_project
-
-FIXTURES = Path(__file__).parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 
 JETSON_ORIN_PRO = UPSTREAM_FIXTURES / "jetson-orin" / "jetson-orin-baseboard.kicad_pro"
 ORANGECRAB_PRO = FIXTURES / "kicad-orangecrab" / "OrangeCrab.kicad_pro"

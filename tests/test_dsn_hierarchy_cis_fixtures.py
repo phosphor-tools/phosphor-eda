@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Literal
 
 import olefile
 import pytest
+from fixture_paths import FIXTURES, UPSTREAM_FIXTURES
 
 from phosphor_eda.domain.variants import VariantField, VariantTargetKind
 from phosphor_eda.formats.common.diagnostics import ParseContext
@@ -48,8 +49,6 @@ from phosphor_eda.formats.dsn.to_schematic import dsn_to_design, dsn_to_source
 if TYPE_CHECKING:
     from phosphor_eda.domain.schematic import Component, Net
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 OPENCELLULAR_BREAKOUT_ROOT = UPSTREAM_FIXTURES / "opencellular/electronics/breakout"
 OPENCELLULAR_BREAKOUT_DSN = OPENCELLULAR_BREAKOUT_ROOT / "schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.DSN"
 OPENCELLULAR_SYNC_ROOT = UPSTREAM_FIXTURES / "opencellular/electronics/sync"

@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from fixture_paths import UPSTREAM_FIXTURES
 
 from phosphor_eda.formats.allegro import parse_allegro_pcb
 from phosphor_eda.formats.altium.pcb_parser import parse_altium_pcb
@@ -44,8 +45,6 @@ if TYPE_CHECKING:
 
     from phosphor_eda.domain.pcb import Board
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 GOLDENS = Path(__file__).resolve().parent / "goldens"
 
 KICAD_FIXTURE = UPSTREAM_FIXTURES / "debugotron/hw/swd_switch/swd_switch.kicad_pcb"

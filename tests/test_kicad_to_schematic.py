@@ -1,14 +1,11 @@
 """Tests for KiCad schematic parser."""
 
-from pathlib import Path
-
 import pytest
+from fixture_paths import UPSTREAM_FIXTURES
 
 from phosphor_eda.domain.schematic import Schematic
 from phosphor_eda.query.validate import Severity, validate_design
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 MINIMAL_SCH = UPSTREAM_FIXTURES / "rp2040-minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_sch"
 
 

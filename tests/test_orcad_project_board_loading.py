@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
+
+from fixture_paths import FIXTURES, UPSTREAM_FIXTURES
 
 from phosphor_eda.domain.project import DocumentKind
 from phosphor_eda.query.project_loader import load_project
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
+if TYPE_CHECKING:
+    from pathlib import Path
+
 DSN_FILE = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
 OPENCELLULAR_BREAKOUT = UPSTREAM_FIXTURES / "opencellular/electronics/breakout"
 OPENCELLULAR_BREAKOUT_BOARD = OPENCELLULAR_BREAKOUT / "board/OC_CONNECT-1_BREAKOUT_LIFE-3.brd"

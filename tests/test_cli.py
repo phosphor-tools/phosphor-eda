@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
+from fixture_paths import FIXTURES, UPSTREAM_FIXTURES
 
 import phosphor_eda.cli as cli_module
 from phosphor_eda.cli import main
@@ -25,8 +26,6 @@ from phosphor_eda.domain.schematic import Bus, BusKind, Component, Net, Page, Pi
 from phosphor_eda.formats.altium.pcb_project import AltiumEnrichment
 from phosphor_eda.render.api import RenderResult
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 DSN_PATH = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
 PCB_PATH = UPSTREAM_FIXTURES / "debugotron/hw/swd_switch/swd_switch.kicad_pcb"
 PI_MX8_PRJPCB = (

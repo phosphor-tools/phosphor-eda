@@ -1,8 +1,7 @@
 """Tests for the Altium .PcbDoc parser."""
 
-from pathlib import Path
-
 import pytest
+from fixture_paths import FIXTURES, UPSTREAM_FIXTURES
 from pcb_layer_helpers import make_pcb_layer
 
 from phosphor_eda.domain.pcb import (
@@ -47,8 +46,6 @@ from phosphor_eda.formats.altium.pcb_streams import (
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.render.inventory import InventoryItemKind, InventoryPurpose, build_inventory
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 PI_MX8_PCBDOC = (
     UPSTREAM_FIXTURES / "pi-mx8/01_Electronics/PiMX8MP_r0.3_release/PCB/PiMX8MP_r0.3.PcbDoc"
 )

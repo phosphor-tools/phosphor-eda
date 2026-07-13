@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 import pytest
+from fixture_paths import UPSTREAM_FIXTURES
 
 from phosphor_eda.formats.allegro import parser as allegro_parser
 from phosphor_eda.formats.allegro.binary import BoundedBinaryReader
@@ -18,8 +19,6 @@ from phosphor_eda.formats.allegro.parser import (
     parse_allegro_string_table,
 )
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 CORPUS_ROOT = Path(os.environ.get("PHOSPHOR_EDA_CORPUS_ROOT", "__external_corpus_missing__"))
 EXTERNAL_KICAD_ALLEGRO_FIXTURES = CORPUS_ROOT / "kicad/qa/data/pcbnew/plugins/allegro"
 PRE_V18_BOARD_UNITS_OFFSET = 0x180

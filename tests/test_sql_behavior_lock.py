@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from fixture_paths import FIXTURES, UPSTREAM_FIXTURES
 
 from phosphor_eda.formats.allegro import load_allegro_pcb_project
 from phosphor_eda.query.format import serialize_design
@@ -42,8 +43,6 @@ if TYPE_CHECKING:
 
     from phosphor_eda.domain.project import Project
 
-FIXTURES = Path(__file__).parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 GOLDEN = Path(__file__).parent / "goldens" / "sql_behavior_lock.json"
 
 _UPDATE = os.environ.get("PHOSPHOR_UPDATE_GOLDENS") == "1"

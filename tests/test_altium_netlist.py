@@ -1,11 +1,9 @@
 """Tests for Altium net resolution via the resolved Schematic."""
 
-from pathlib import Path
+from fixture_paths import UPSTREAM_FIXTURES
 
 from phosphor_eda.formats.altium.to_schematic import altium_to_design
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 MCU_SCHDOC = UPSTREAM_FIXTURES / "qfsae-pcb/Debugger/MCU.SchDoc"
 
 

@@ -8,12 +8,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from fixture_paths import FIXTURES, UPSTREAM_FIXTURES
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 CORPUS_ROOT = Path(os.environ.get("PHOSPHOR_EDA_CORPUS_ROOT", "__external_corpus_missing__"))
 EXTERNAL_ALLEGRO_CORPUS = CORPUS_ROOT / "designs/allegro"
 EXTERNAL_KICAD_ALLEGRO_FIXTURES = CORPUS_ROOT / "kicad/qa/data/pcbnew/plugins/allegro"
