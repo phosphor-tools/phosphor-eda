@@ -81,7 +81,7 @@ def _canon_value(table: str, column: str, value: object, *, is_geometry: bool) -
     if isinstance(value, float):
         return f"{value:.6f}"
     if isinstance(value, str):
-        return repr(value.replace(FIXTURES.as_posix(), "<fixtures>"))
+        return repr(_strip_fixture_roots(value))
     return repr(value)
 
 
@@ -104,18 +104,32 @@ def _canon_geojson_value(value: object) -> object:
     return value
 
 
+def _strip_fixture_roots(value: str) -> str:
+    """Replace absolute fixture roots with stable tokens.
+
+    Anchoring both ``tests/fixtures`` and ``tests/upstream`` keeps the golden
+    independent of the absolute checkout path, so it matches in every worktree
+    and in CI rather than only where it was regenerated.
+    """
+    return value.replace(UPSTREAM_FIXTURES.resolve().as_posix(), "<upstream>").replace(
+        FIXTURES.resolve().as_posix(), "<fixtures>"
+    )
+
+
 def _canon_fixture_path(value: str) -> str:
     path = Path(value)
     if not path.is_absolute():
         path = (Path.cwd() / path).resolve()
-    try:
-        return path.relative_to(FIXTURES.resolve()).as_posix()
-    except ValueError:
-        return value
+    for root in (FIXTURES.resolve(), UPSTREAM_FIXTURES.resolve()):
+        try:
+            return path.relative_to(root).as_posix()
+        except ValueError:
+            continue
+    return value
 
 
 def _canon_serialized(value: str) -> str:
-    return value.replace(FIXTURES.as_posix(), "<fixtures>")
+    return _strip_fixture_roots(value)
 
 
 def _table_select_expressions(table: str) -> list[tuple[str, str, bool]]:
