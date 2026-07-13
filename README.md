@@ -1,7 +1,7 @@
 # phosphor-eda
 
-`phosphor-eda` parses and queries electronic design projects from Altium, KiCad, Eagle,
-Cadence Allegro/OrCAD, and related EDA formats.
+Python tools for parsing, inspecting, and querying electronic design projects from Altium,
+KiCad, Eagle, and Cadence Allegro/OrCAD.
 
 ## Installation
 
@@ -9,18 +9,21 @@ Cadence Allegro/OrCAD, and related EDA formats.
 pip install phosphor-eda
 ```
 
-The Python package is imported as `phosphor_eda`, and the command-line interface is available as
-`phosphor-eda`.
+Import the package as `phosphor_eda` or run `phosphor-eda --help`.
 
 ## Development
 
-The project requires Python 3.13 or newer and uses [uv](https://docs.astral.sh/uv/) for dependency
-and environment management.
+The project requires Python 3.13 or newer and uses [uv](https://docs.astral.sh/uv/).
 
 ```shell
-git submodule update --init --depth 1
+git submodule update --init --depth 1 --jobs 8
 uv sync --locked
 uv run pytest
 ```
 
 The repositories under `tests/upstream/` are external fixture projects managed as Git submodules.
+
+## License
+
+phosphor-eda is licensed under the [Mozilla Public License 2.0](LICENSE). Third-party fixtures
+retain their own licenses.

@@ -3,6 +3,8 @@ name = "phosphor-eda"
 version = "0.2.0rc12"
 description = "Electronic CAD file processing utilities"
 readme = "README.md"
+license = "MPL-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.13"
 dependencies = [
     "click>=8.1",
