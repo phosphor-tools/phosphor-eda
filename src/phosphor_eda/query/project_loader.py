@@ -8,8 +8,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from phosphor_eda.domain.pcb import PcbBuildError
+from phosphor_eda.domain.project import DocumentKind
 from phosphor_eda.domain.variant_materializer import materialize_project_variant
-from phosphor_eda.formats.allegro import parse_allegro_pcb
+from phosphor_eda.formats.allegro import load_allegro_pcb_project, parse_allegro_pcb
+from phosphor_eda.formats.allegro.errors import AllegroParseError
 from phosphor_eda.formats.altium.pcb_parser import parse_altium_pcb
 from phosphor_eda.formats.altium.project_loader import (
     load_altium_project,
@@ -30,7 +33,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from phosphor_eda.domain.pcb import Board
-    from phosphor_eda.domain.project import Project
+    from phosphor_eda.domain.project import Project, ProjectDocument
     from phosphor_eda.domain.schematic import Schematic
 
 
@@ -125,6 +128,7 @@ def load_project(
         project = load_altium_project(path)
     elif ext == ".opj":
         project = load_orcad_project(path)
+        _attach_orcad_boards(project)
     else:
         supported = ", ".join(sorted(PROJECT_EXTENSIONS))
         raise ValueError(
@@ -135,6 +139,72 @@ def load_project(
     _fill_metadata_from_title_block(project)
     materialize_project_variant(project, variant_name=variant_name, base_variant=base_variant)
     return project
+
+
+def _attach_orcad_boards(project: Project) -> None:
+    """Load paired Allegro boards referenced by an OrCAD project manifest.
+
+    OrCAD projects pair an OrCAD schematic with an Allegro ``.brd`` layout of a
+    different format. This composition lives above both backends; parse failures
+    stay per-document diagnostics rather than discarding the schematic project.
+    """
+    loaded_paths: set[str] = set()
+    for doc in project.documents:
+        if doc.kind is not DocumentKind.PCB:
+            continue
+        resolved_path = doc.metadata.get("resolved_path")
+        if not resolved_path:
+            _record_board_document_error(
+                doc,
+                "board path is not local to the OPJ project",
+                category="board_path",
+            )
+            continue
+        if not doc.exists:
+            _record_board_document_error(
+                doc,
+                f"missing board file: {resolved_path}",
+                category="missing_board",
+            )
+            continue
+        if resolved_path in loaded_paths:
+            doc.parsed = True
+            continue
+        try:
+            board_project = load_allegro_pcb_project(resolved_path)
+        except (AllegroParseError, OSError, PcbBuildError) as exc:
+            _record_board_document_error(doc, exc, category=_board_error_category(exc))
+            continue
+        loaded_paths.add(resolved_path)
+        doc.parsed = True
+        project.boards.extend(board_project.boards)
+        project.net_classes.extend(board_project.net_classes)
+        project.design_rules.extend(board_project.design_rules)
+        project.diff_pairs.extend(board_project.diff_pairs)
+
+
+def _record_board_document_error(
+    doc: ProjectDocument,
+    error: Exception | str,
+    *,
+    category: str,
+) -> None:
+    message = str(error)
+    doc.metadata["parse_error"] = message
+    doc.metadata["parse_error_category"] = category
+    if isinstance(error, AllegroParseError):
+        if error.offset is not None:
+            doc.metadata["parse_error_offset"] = str(error.offset)
+        doc.metadata["parse_error_code"] = error.code
+    doc.metadata["parse_issue_count"] = "1"
+
+
+def _board_error_category(error: Exception) -> str:
+    if isinstance(error, AllegroParseError):
+        return "allegro_parse"
+    if isinstance(error, PcbBuildError):
+        return "pcb_build"
+    return "board_io"
 
 
 def _fill_metadata_from_title_block(project: Project) -> None:
