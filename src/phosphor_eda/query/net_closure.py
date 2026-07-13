@@ -16,12 +16,15 @@ the same invariant ECO sync relies on:
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import TYPE_CHECKING
 
 from phosphor_eda.query.classify import is_power_net
 from phosphor_eda.query.trace import trace_from_net
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from phosphor_eda.domain.pcb import Board
     from phosphor_eda.domain.schematic import Net, Pin, Schematic
 
@@ -76,7 +79,19 @@ def connected_pcb_net_names(
     return frozenset(names)
 
 
+def _ambiguous_references(references: Iterable[str]) -> frozenset[str]:
+    """Upper-cased references shared by more than one instance.
+
+    Mirrors ``format._component_reference_is_ambiguous``: a logical reference
+    carried by several instances cannot be bridged by (reference, number), so
+    the ref+number key is excluded rather than resolved to an arbitrary one.
+    """
+    counts = Counter(reference.upper() for reference in references)
+    return frozenset(reference for reference, count in counts.items() if count > 1)
+
+
 def _pcb_pad_keys_on_net(board: Board, net_name: str) -> set[tuple[str, str]]:
+    ambiguous = _ambiguous_references(footprint.reference for footprint in board.footprints)
     return {
         (pad.footprint.reference.upper(), pad.number.upper())
         for pad in board.pads
@@ -84,20 +99,27 @@ def _pcb_pad_keys_on_net(board: Board, net_name: str) -> set[tuple[str, str]]:
         and pad.net.name == net_name
         and pad.footprint is not None
         and pad.number
+        and pad.footprint.reference.upper() not in ambiguous
     }
 
 
 def _pcb_net_names_by_pad_key(board: Board) -> dict[tuple[str, str], str]:
+    ambiguous = _ambiguous_references(footprint.reference for footprint in board.footprints)
     return {
         (pad.footprint.reference.upper(), pad.number.upper()): pad.net.name
         for pad in board.pads
-        if pad.net is not None and pad.footprint is not None and pad.number
+        if pad.net is not None
+        and pad.footprint is not None
+        and pad.number
+        and pad.footprint.reference.upper() not in ambiguous
     }
 
 
 def _schematic_pins_by_ref_and_number(schematic: Schematic) -> dict[tuple[str, str], Pin]:
+    ambiguous = _ambiguous_references(component.reference for component in schematic.components)
     return {
         (component.reference.upper(), pin.designator.upper()): pin
         for component in schematic.components
+        if component.reference.upper() not in ambiguous
         for pin in component.pins
     }
