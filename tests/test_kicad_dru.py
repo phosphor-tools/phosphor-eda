@@ -6,9 +6,7 @@ import pytest
 
 from phosphor_eda.formats.kicad.dru_parser import parse_kicad_dru
 
-FIXTURE = (
-    Path(__file__).parent / "fixtures" / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_dru"
-)
+FIXTURE = Path(__file__).parent / "upstream" / "jetson-orin" / "jetson-orin-baseboard.kicad_dru"
 
 pytestmark = pytest.mark.skipif(not FIXTURE.exists(), reason="Fixture not available")
 

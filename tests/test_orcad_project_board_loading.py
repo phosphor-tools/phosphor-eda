@@ -6,12 +6,10 @@ from phosphor_eda.domain.project import DocumentKind
 from phosphor_eda.query.project_loader import load_project
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 DSN_FILE = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
-OPENCELLULAR_BREAKOUT = FIXTURES / "orcad/opencellular-breakout"
-OPENCELLULAR_BREAKOUT_BOARD = (
-    OPENCELLULAR_BREAKOUT
-    / "allegro/OpenCellular/electronics/breakout/board/OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
-)
+OPENCELLULAR_BREAKOUT = UPSTREAM_FIXTURES / "opencellular/electronics/breakout"
+OPENCELLULAR_BREAKOUT_BOARD = OPENCELLULAR_BREAKOUT / "board/OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
 
 
 def test_orcad_project_loads_resolved_allegro_board_document(tmp_path: Path) -> None:

@@ -20,12 +20,13 @@ from phosphor_eda.formats.dsn.source import DsnPageSource, DsnPinOccurrence, Dsn
 from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 PICO_DSN = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
 PICOW_DSN = FIXTURES / "dsn/raspberry-pi-pico-w/RPI-PICOW-R2.DSN"
 CMIO_DSN = FIXTURES / "dsn/raspberry-pi-cmio/RPI-CMIO-V3_0-PUBLIC.DSN"
 CP_SMARTGARDEN_DSN = (
-    FIXTURES
-    / "orcad/cp-smartgarden-launchxl-cc1310/Document/Hardware/mcu/swrc319/Cadence"
+    UPSTREAM_FIXTURES
+    / "cp-smartgarden/Document/Hardware/mcu/swrc319/Cadence"
     / "LAUNCHXL-CC1310.DSN"
 )
 NXP_MR_NAVQ95_T1S_DSN = os.environ.get("PHOSPHOR_ORCAD_NXP_MR_NAVQ95_T1S_DSN")

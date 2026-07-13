@@ -10,19 +10,14 @@ from phosphor_eda.formats.allegro.oracle import (
 from phosphor_eda.formats.allegro.parser import parse_allegro_records
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 BREAKOUT_BOARD = (
-    FIXTURES
-    / "orcad"
-    / "opencellular-breakout"
-    / "allegro/OpenCellular/electronics/breakout/board"
+    UPSTREAM_FIXTURES
+    / "opencellular/electronics/breakout"
+    / "board"
     / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
 )
-BREAKOUT_NETLIST = (
-    FIXTURES
-    / "orcad"
-    / "opencellular-breakout"
-    / "orcad/OpenCellular/electronics/breakout/schematic/Netlist"
-)
+BREAKOUT_NETLIST = UPSTREAM_FIXTURES / "opencellular/electronics/breakout" / "schematic/Netlist"
 
 
 def test_packaged_netlist_comparison_reports_board_component_net_and_pin_counts() -> None:

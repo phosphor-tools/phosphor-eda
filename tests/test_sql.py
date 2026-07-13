@@ -76,14 +76,17 @@ from phosphor_eda.query.project_loader import load_project
 from phosphor_eda.query.sql import load_database
 
 FIXTURES = Path(__file__).parent / "fixtures"
-RFSOC_DSN = FIXTURES / "orcad/rfsoc-frontend/RFMC_Frontend/RFMC_FRONTEND_V1_00.DSN"
-SWD_SWITCH_PCB = FIXTURES / "swd_switch.kicad_pcb"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
+RFSOC_DSN = UPSTREAM_FIXTURES / "rfsoc-frontend/RFMC_Frontend/RFMC_FRONTEND_V1_00.DSN"
+SWD_SWITCH_PCB = UPSTREAM_FIXTURES / "debugotron/hw/swd_switch/swd_switch.kicad_pcb"
 ORANGECRAB_PRO = FIXTURES / "kicad-orangecrab/OrangeCrab.kicad_pro"
-PI_MX8_PRJPCB = FIXTURES / "altium/pi-mx8/PiMX8MP_r0.3_release.PrjPcb"
-JETSON_ORIN_PRO = FIXTURES / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pro"
+PI_MX8_PRJPCB = (
+    UPSTREAM_FIXTURES / "pi-mx8/01_Electronics/PiMX8MP_r0.3_release/PiMX8MP_r0.3_release.PrjPcb"
+)
+JETSON_ORIN_PRO = UPSTREAM_FIXTURES / "jetson-orin" / "jetson-orin-baseboard.kicad_pro"
 ALLEGRO_BREAKOUT_BRD = (
-    FIXTURES
-    / "orcad/opencellular-breakout/allegro/OpenCellular/electronics/breakout/board"
+    UPSTREAM_FIXTURES
+    / "opencellular/electronics/breakout/board"
     / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
 )
 

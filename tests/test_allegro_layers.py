@@ -10,39 +10,36 @@ from phosphor_eda.formats.allegro.layers import AllegroLayerMap, build_allegro_l
 from phosphor_eda.formats.allegro.parser import parse_allegro_records
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 
 COMMITTED_LAYER_EXPECTATIONS = (
     (
-        FIXTURES
-        / "orcad"
-        / "opencellular-breakout"
-        / "allegro/OpenCellular/electronics/breakout/board"
+        UPSTREAM_FIXTURES
+        / "opencellular/electronics/breakout"
+        / "board"
         / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd",
         186,
         ("TOP", "L2_GND", "L3_PLANE", "BOTTOM"),
     ),
     (
-        FIXTURES
-        / "orcad"
-        / "opencellular-sync"
-        / "allegro/OpenCellular/electronics/sync/board"
+        UPSTREAM_FIXTURES
+        / "opencellular/electronics/sync"
+        / "board"
         / "Fb_Connect1_SYNC_Life-3.brd",
         109,
         ("ETCH_1", "GND", "SIG1", "ETCH_4", "ETCH_5", "BOTTOM"),
     ),
     (
-        FIXTURES
-        / "orcad"
-        / "cp-smartgarden-launchxl-cc1310"
+        UPSTREAM_FIXTURES
+        / "cp-smartgarden"
         / "Document/Hardware/mcu/swrc319/Cadence/Allegro"
         / "LAUNCHXL-CC1310.brd",
         91,
         ("TOP", "ETCH_2", "ETCH_3", "BOTTOM"),
     ),
     (
-        FIXTURES
-        / "orcad"
-        / "rohm-stepper-driver-ctrl"
+        UPSTREAM_FIXTURES
+        / "rohm-stepper-driver"
         / "Design Files for Rev 1.0"
         / "STEPPER EVAL BRD - PCB Board File - Rev 1.0.brd",
         79,
@@ -69,10 +66,9 @@ LAYERED_RECORD_TAGS = {
 
 def test_allegro_etch_layer_list_maps_to_concrete_copper_layers() -> None:
     path = (
-        FIXTURES
-        / "orcad"
-        / "opencellular-breakout"
-        / "allegro/OpenCellular/electronics/breakout/board"
+        UPSTREAM_FIXTURES
+        / "opencellular/electronics/breakout"
+        / "board"
         / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
     )
     record_set = parse_allegro_records(path.read_bytes(), source_name=path.name)
@@ -99,10 +95,9 @@ def test_allegro_etch_layer_list_maps_to_concrete_copper_layers() -> None:
 
 def test_allegro_fixed_class_subclass_roles_are_concrete_layers() -> None:
     path = (
-        FIXTURES
-        / "orcad"
-        / "opencellular-breakout"
-        / "allegro/OpenCellular/electronics/breakout/board"
+        UPSTREAM_FIXTURES
+        / "opencellular/electronics/breakout"
+        / "board"
         / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
     )
     record_set = parse_allegro_records(path.read_bytes(), source_name=path.name)
@@ -141,10 +136,9 @@ def test_allegro_layer_name_roles_do_not_treat_solid_as_solder_mask() -> None:
 
 def test_allegro_layer_info_records_preserve_native_class_and_subclass() -> None:
     path = (
-        FIXTURES
-        / "orcad"
-        / "opencellular-breakout"
-        / "allegro/OpenCellular/electronics/breakout/board"
+        UPSTREAM_FIXTURES
+        / "opencellular/electronics/breakout"
+        / "board"
         / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
     )
     record_set = parse_allegro_records(path.read_bytes(), source_name=path.name)
@@ -186,10 +180,9 @@ def test_committed_allegro_layer_counts_and_stackup_are_locked(
 
 def test_unresolved_layer_names_are_reported_as_diagnostics() -> None:
     path = (
-        FIXTURES
-        / "orcad"
-        / "opencellular-sync"
-        / "allegro/OpenCellular/electronics/sync/board"
+        UPSTREAM_FIXTURES
+        / "opencellular/electronics/sync"
+        / "board"
         / "Fb_Connect1_SYNC_Life-3.brd"
     )
     record_set = parse_allegro_records(path.read_bytes(), source_name=path.name)

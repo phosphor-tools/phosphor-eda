@@ -29,9 +29,10 @@ from phosphor_eda.formats.dsn.raw_models import DsnView
 from phosphor_eda.formats.dsn.views import parse_view_schematic, warn_repeated_sheet_identity
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 SYNC_DSN = (
-    FIXTURES
-    / "orcad/opencellular-sync/orcad/OpenCellular/electronics/sync/schematics/dsn"
+    UPSTREAM_FIXTURES
+    / "opencellular/electronics/sync/schematics/dsn"
     / "FB_CONNECT1_SYNC_LIFE-3_V1P1.DSN"
 )
 SYNC_ERC_STREAM = "Symbols/ERC"

@@ -6,9 +6,7 @@ import pytest
 
 from phosphor_eda.formats.kicad.pro_parser import parse_kicad_pro, parse_kicad_text_variables
 
-FIXTURE = (
-    Path(__file__).parent / "fixtures" / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pro"
-)
+FIXTURE = Path(__file__).parent / "upstream" / "jetson-orin" / "jetson-orin-baseboard.kicad_pro"
 
 requires_jetson_fixture = pytest.mark.skipif(not FIXTURE.exists(), reason="Fixture not available")
 

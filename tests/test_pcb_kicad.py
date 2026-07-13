@@ -27,10 +27,10 @@ from phosphor_eda.geometry.pcb_geometry import pad_polygon
 from phosphor_eda.render.drills import drill_geometry
 from phosphor_eda.render.inventory import InventoryItemKind, build_inventory
 
-FIXTURE = Path(__file__).parent / "fixtures" / "swd_switch.kicad_pcb"
+FIXTURE = Path(__file__).parent / "upstream" / "debugotron/hw/swd_switch/swd_switch.kicad_pcb"
 ORANGECRAB_FIXTURE = Path(__file__).parent / "fixtures" / "kicad-orangecrab/OrangeCrab.kicad_pcb"
 JETSON_ORIN_FIXTURE = (
-    Path(__file__).parent / "fixtures" / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pcb"
+    Path(__file__).parent / "upstream" / "jetson-orin" / "jetson-orin-baseboard.kicad_pcb"
 )
 V10_FIXTURE = Path(__file__).parent / "fixtures" / "kicad_v10_nets.kicad_pcb"
 # Hand-written minimal board exercising the KiCad v9 padstack grammar

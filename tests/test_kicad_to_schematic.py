@@ -8,7 +8,8 @@ from phosphor_eda.domain.schematic import Schematic
 from phosphor_eda.query.validate import Severity, validate_design
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-MINIMAL_SCH = FIXTURES / "kicad-minimal/RP2040_minimal_r2.kicad_sch"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
+MINIMAL_SCH = UPSTREAM_FIXTURES / "rp2040-minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_sch"
 
 
 @pytest.fixture(scope="module")

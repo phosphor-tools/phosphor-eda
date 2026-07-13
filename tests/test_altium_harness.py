@@ -17,7 +17,10 @@ from phosphor_eda.formats.altium.source import AltiumSheetSource, load_project_s
 from phosphor_eda.formats.altium.to_schematic import altium_to_design
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-PIMX8_PRJPCB = FIXTURES / "altium/pi-mx8/PiMX8MP_r0.3_release.PrjPcb"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
+PIMX8_PRJPCB = (
+    UPSTREAM_FIXTURES / "pi-mx8/01_Electronics/PiMX8MP_r0.3_release/PiMX8MP_r0.3_release.PrjPcb"
+)
 
 SDIO_MEMBERS = (
     "SDIO_CLK",

@@ -9,39 +9,36 @@ from phosphor_eda.formats.allegro.parser import parse_allegro_records
 from phosphor_eda.formats.allegro.records import AllegroRecord, AllegroRecordSet
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 
 COMMITTED_RECORD_INVENTORY = (
     (
-        FIXTURES
-        / "orcad"
-        / "opencellular-breakout"
-        / "allegro/OpenCellular/electronics/breakout/board"
+        UPSTREAM_FIXTURES
+        / "opencellular/electronics/breakout"
+        / "board"
         / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd",
         65_280,
         {0x06: 26, 0x1B: 105, 0x2A: 6, 0x2D: 80, 0x32: 595},
     ),
     (
-        FIXTURES
-        / "orcad"
-        / "opencellular-sync"
-        / "allegro/OpenCellular/electronics/sync/board"
+        UPSTREAM_FIXTURES
+        / "opencellular/electronics/sync"
+        / "board"
         / "Fb_Connect1_SYNC_Life-3.brd",
         100_970,
         {0x06: 70, 0x1B: 189, 0x2A: 6, 0x2D: 286, 0x32: 1_109},
     ),
     (
-        FIXTURES
-        / "orcad"
-        / "cp-smartgarden-launchxl-cc1310"
+        UPSTREAM_FIXTURES
+        / "cp-smartgarden"
         / "Document/Hardware/mcu/swrc319/Cadence/Allegro"
         / "LAUNCHXL-CC1310.brd",
         62_648,
         {0x06: 68, 0x1B: 211, 0x2A: 6, 0x2D: 172, 0x32: 999},
     ),
     (
-        FIXTURES
-        / "orcad"
-        / "rohm-stepper-driver-ctrl"
+        UPSTREAM_FIXTURES
+        / "rohm-stepper-driver"
         / "Design Files for Rev 1.0"
         / "STEPPER EVAL BRD - PCB Board File - Rev 1.0.brd",
         20_428,

@@ -15,6 +15,7 @@ from phosphor_eda.formats.altium.to_schematic import altium_to_design
 from phosphor_eda.formats.kicad.to_schematic import kicad_to_design
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 
 
 # ---------------------------------------------------------------------------
@@ -44,7 +45,7 @@ def test_altium_loads_schdoc_with_backslash_paths(tmp_path: Path):
     sub.mkdir()
 
     # Minimal valid OLE SchDoc — use a real fixture's bytes.
-    real_schdoc = FIXTURES / "altium/qfsae-debugger/TOP.SchDoc"
+    real_schdoc = UPSTREAM_FIXTURES / "qfsae-pcb/Debugger/TOP.SchDoc"
     schdoc_bytes = real_schdoc.read_bytes()
 
     (sub / "Main.SchDoc").write_bytes(schdoc_bytes)

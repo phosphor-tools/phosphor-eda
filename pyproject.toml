@@ -26,6 +26,7 @@ build-backend = "hatchling.build"
 packages = ["src/phosphor_eda"]
 
 [tool.pytest.ini_options]
+norecursedirs = ["upstream"]
 markers = [
     "corpus: optional local-corpus tests; run with --run-corpus or PHOSPHOR_RUN_CORPUS=1",
     "allegro_corpus: optional local Allegro corpus tests; run with --run-allegro-corpus, --run-corpus, PHOSPHOR_RUN_ALLEGRO_CORPUS=1, or PHOSPHOR_RUN_CORPUS=1",

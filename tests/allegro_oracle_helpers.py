@@ -3,33 +3,26 @@ from __future__ import annotations
 from pathlib import Path
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 
-OPENCELLULAR_BREAKOUT_ROOT = FIXTURES / "orcad/opencellular-breakout"
+OPENCELLULAR_BREAKOUT_ROOT = UPSTREAM_FIXTURES / "opencellular/electronics/breakout"
 OPENCELLULAR_BREAKOUT_IPC356 = (
-    OPENCELLULAR_BREAKOUT_ROOT
-    / "allegro/OpenCellular/electronics/breakout/gerbers/OC_CONNECT-1_BREAKOUT_LIFE-3.ipc"
+    OPENCELLULAR_BREAKOUT_ROOT / "gerbers/OC_CONNECT-1_BREAKOUT_LIFE-3.ipc"
 )
-OPENCELLULAR_BREAKOUT_NETLIST = (
-    OPENCELLULAR_BREAKOUT_ROOT / "orcad/OpenCellular/electronics/breakout/schematic/Netlist"
-)
+OPENCELLULAR_BREAKOUT_NETLIST = OPENCELLULAR_BREAKOUT_ROOT / "schematic/Netlist"
 
-OPENCELLULAR_SYNC_ROOT = FIXTURES / "orcad/opencellular-sync"
-OPENCELLULAR_SYNC_IPC356 = (
-    OPENCELLULAR_SYNC_ROOT
-    / "allegro/OpenCellular/electronics/sync/gerbers/Fb_Connect1_SYNC_Life-3.ipc"
-)
-OPENCELLULAR_SYNC_NETLIST = (
-    OPENCELLULAR_SYNC_ROOT / "orcad/OpenCellular/electronics/sync/schematics/Netlist"
-)
+OPENCELLULAR_SYNC_ROOT = UPSTREAM_FIXTURES / "opencellular/electronics/sync"
+OPENCELLULAR_SYNC_IPC356 = OPENCELLULAR_SYNC_ROOT / "gerbers/Fb_Connect1_SYNC_Life-3.ipc"
+OPENCELLULAR_SYNC_NETLIST = OPENCELLULAR_SYNC_ROOT / "schematics/Netlist"
 
 CP_SMARTGARDEN_ALLEGRO = (
-    FIXTURES / "orcad/cp-smartgarden-launchxl-cc1310/Document/Hardware/mcu/swrc319/Cadence/Allegro"
+    UPSTREAM_FIXTURES / "cp-smartgarden/Document/Hardware/mcu/swrc319/Cadence/Allegro"
 )
 CP_SMARTGARDEN_NETLIST = CP_SMARTGARDEN_ALLEGRO
 CP_SMARTGARDEN_PLACEMENT_LOG = CP_SMARTGARDEN_ALLEGRO / "log/plctxt.log"
 
 ROHM_GERBER_ROOT = (
-    FIXTURES / "orcad/rohm-stepper-driver-ctrl/Design Files for Rev 1.0/Gerbers & Panel CAD"
+    UPSTREAM_FIXTURES / "rohm-stepper-driver/Design Files for Rev 1.0/Gerbers & Panel CAD"
 )
 ROHM_DRILL = ROHM_GERBER_ROOT / "DRILL.DRL"
 ROHM_VIEW_ENV = ROHM_GERBER_ROOT / "VIEW.ENV"

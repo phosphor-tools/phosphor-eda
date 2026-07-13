@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from phosphor_eda.domain.project import Project
 
 FIXTURES = Path(__file__).parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 GOLDEN = Path(__file__).parent / "goldens" / "sql_behavior_lock.json"
 
 _UPDATE = os.environ.get("PHOSPHOR_UPDATE_GOLDENS") == "1"
@@ -51,14 +52,18 @@ _GEOMETRY_DECIMAL_PLACES = 6
 
 PROJECTS: dict[str, tuple[Path, Callable[[Path], Project]]] = {
     "allegro-breakout": (
-        FIXTURES
-        / "orcad/opencellular-breakout/allegro/OpenCellular/electronics/breakout/board"
+        UPSTREAM_FIXTURES
+        / "opencellular/electronics/breakout/board"
         / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd",
         load_allegro_pcb_project,
     ),
-    "pi-mx8": (FIXTURES / "altium/pi-mx8/PiMX8MP_r0.3_release.PrjPcb", load_project),
+    "pi-mx8": (
+        UPSTREAM_FIXTURES
+        / "pi-mx8/01_Electronics/PiMX8MP_r0.3_release/PiMX8MP_r0.3_release.PrjPcb",
+        load_project,
+    ),
     "jetson-orin": (
-        FIXTURES / "kicad-jetson-orin/jetson-orin-baseboard.kicad_pro",
+        UPSTREAM_FIXTURES / "jetson-orin/jetson-orin-baseboard.kicad_pro",
         load_project,
     ),
 }

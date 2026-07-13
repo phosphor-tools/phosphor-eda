@@ -19,6 +19,7 @@ from phosphor_eda.formats.allegro.parser import (
 )
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 CORPUS_ROOT = Path(os.environ.get("PHOSPHOR_EDA_CORPUS_ROOT", "__external_corpus_missing__"))
 EXTERNAL_KICAD_ALLEGRO_FIXTURES = CORPUS_ROOT / "kicad/qa/data/pcbnew/plugins/allegro"
 PRE_V18_BOARD_UNITS_OFFSET = 0x180
@@ -26,10 +27,9 @@ PRE_V18_UNIT_DIVISOR_OFFSET = 0x26C
 
 COMMITTED_BOARD_HEADERS = (
     (
-        FIXTURES
-        / "orcad"
-        / "opencellular-breakout"
-        / "allegro/OpenCellular/electronics/breakout/board"
+        UPSTREAM_FIXTURES
+        / "opencellular/electronics/breakout"
+        / "board"
         / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd",
         "V_166",
         66_448,
@@ -38,10 +38,9 @@ COMMITTED_BOARD_HEADERS = (
         1_000,
     ),
     (
-        FIXTURES
-        / "orcad"
-        / "opencellular-sync"
-        / "allegro/OpenCellular/electronics/sync/board"
+        UPSTREAM_FIXTURES
+        / "opencellular/electronics/sync"
+        / "board"
         / "Fb_Connect1_SYNC_Life-3.brd",
         "V_166",
         102_341,
@@ -50,9 +49,8 @@ COMMITTED_BOARD_HEADERS = (
         1_000,
     ),
     (
-        FIXTURES
-        / "orcad"
-        / "cp-smartgarden-launchxl-cc1310"
+        UPSTREAM_FIXTURES
+        / "cp-smartgarden"
         / "Document/Hardware/mcu/swrc319/Cadence/Allegro"
         / "LAUNCHXL-CC1310.brd",
         "V_166",
@@ -62,9 +60,8 @@ COMMITTED_BOARD_HEADERS = (
         1_000,
     ),
     (
-        FIXTURES
-        / "orcad"
-        / "rohm-stepper-driver-ctrl"
+        UPSTREAM_FIXTURES
+        / "rohm-stepper-driver"
         / "Design Files for Rev 1.0"
         / "STEPPER EVAL BRD - PCB Board File - Rev 1.0.brd",
         "V_165",

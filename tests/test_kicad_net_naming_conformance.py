@@ -13,15 +13,16 @@ from phosphor_eda.domain.schematic import Net, NetNameKind
 from phosphor_eda.formats.kicad.to_schematic import kicad_to_design
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 GOLDENS = Path(__file__).resolve().parent / "goldens"
 CORPUS_ROOT = Path(os.environ.get("PHOSPHOR_EDA_CORPUS_ROOT", "__external_corpus_missing__"))
 KICAD_CORPUS = CORPUS_ROOT / "designs/kicad"
 
 COMMITTED_SCHEMATICS = [
-    FIXTURES / "kicad-minimal/RP2040_minimal_r2.kicad_sch",
+    UPSTREAM_FIXTURES / "rp2040-minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_sch",
     FIXTURES / "kicad-hierarchy/root.kicad_sch",
     FIXTURES / "kicad-orangecrab/OrangeCrab.kicad_sch",
-    FIXTURES / "kicad-jetson-orin/jetson-orin-baseboard.kicad_sch",
+    UPSTREAM_FIXTURES / "jetson-orin/jetson-orin-baseboard.kicad_sch",
 ]
 
 CORPUS_SCHEMATICS = [
@@ -34,7 +35,7 @@ KICAD_CLI_ORACLES = [
         GOLDENS / "kicad/orangecrab.kicad-cli-netlist.json",
     ),
     (
-        FIXTURES / "kicad-jetson-orin/jetson-orin-baseboard.kicad_sch",
+        UPSTREAM_FIXTURES / "jetson-orin/jetson-orin-baseboard.kicad_sch",
         GOLDENS / "kicad/jetson-orin-baseboard.kicad-cli-netlist.json",
     ),
 ]

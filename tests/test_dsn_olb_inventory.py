@@ -6,11 +6,12 @@ import pytest
 from phosphor_eda.formats.dsn.library import parse_library_inventory
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 CORPUS_ROOT = Path(os.environ.get("PHOSPHOR_EDA_CORPUS_ROOT", "__external_corpus_missing__"))
 OPENORCADPARSER_OLB = FIXTURES / "orcad/openorcadparser-olb/0000.OLB"
 CP_SMARTGARDEN_DSN = (
-    FIXTURES
-    / "orcad/cp-smartgarden-launchxl-cc1310/Document/Hardware/mcu/swrc319/Cadence"
+    UPSTREAM_FIXTURES
+    / "cp-smartgarden/Document/Hardware/mcu/swrc319/Cadence"
     / "LAUNCHXL-CC1310.DSN"
 )
 LAPIS_DISCRETE_OLB = (

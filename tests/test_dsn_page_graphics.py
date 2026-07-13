@@ -23,33 +23,34 @@ from phosphor_eda.query.project_loader import load_project
 from phosphor_eda.query.sql import load_database
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 PICO_DSN = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
 PICOW_DSN = FIXTURES / "dsn/raspberry-pi-pico-w/RPI-PICOW-R2.DSN"
 CMIO_DSN = FIXTURES / "dsn/raspberry-pi-cmio/RPI-CMIO-V3_0-PUBLIC.DSN"
 LAUNCHXL_DSN = (
-    FIXTURES
-    / "orcad/cp-smartgarden-launchxl-cc1310/Document/Hardware/mcu/swrc319/Cadence"
+    UPSTREAM_FIXTURES
+    / "cp-smartgarden/Document/Hardware/mcu/swrc319/Cadence"
     / "LAUNCHXL-CC1310.DSN"
 )
 BREAKOUT_DSN = (
-    FIXTURES
-    / "orcad/opencellular-breakout/orcad/OpenCellular/electronics/breakout/schematic/dsn"
+    UPSTREAM_FIXTURES
+    / "opencellular/electronics/breakout/schematic/dsn"
     / "OC_CONNECT_1_BRKOUT_BRD.DSN"
 )
 POWER_UNIT_DSN = (
-    FIXTURES
-    / "orcad/opencellular-power-unit/orcad/OpenCellular/electronics/power-unit/Rev-A/schematics"
+    UPSTREAM_FIXTURES
+    / "opencellular/electronics/power-unit/Rev-A/schematics"
     / "POWER_SOURCE_BOARD_20180717.DSN"
 )
 SYNC_DSN = (
-    FIXTURES
-    / "orcad/opencellular-sync/orcad/OpenCellular/electronics/sync/schematics/dsn"
+    UPSTREAM_FIXTURES
+    / "opencellular/electronics/sync/schematics/dsn"
     / "FB_CONNECT1_SYNC_LIFE-3_V1P1.DSN"
 )
-STEPPER_DSN = FIXTURES / "orcad/rohm-stepper-driver-ctrl/Design Files for Rev 1.0/STEPPER.DSN"
+STEPPER_DSN = UPSTREAM_FIXTURES / "rohm-stepper-driver/Design Files for Rev 1.0/STEPPER.DSN"
 BREAKOUT_OPJ = (
-    FIXTURES
-    / "orcad/opencellular-breakout/orcad/OpenCellular/electronics/breakout/schematic/dsn"
+    UPSTREAM_FIXTURES
+    / "opencellular/electronics/breakout/schematic/dsn"
     / "OC_CONNECT_1_BRKOUT_BRD.opj"
 )
 

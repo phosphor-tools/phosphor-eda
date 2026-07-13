@@ -33,7 +33,8 @@ if TYPE_CHECKING:
     import pytest
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-QFSAE_PRJPCB = FIXTURES / "altium/qfsae-debugger/Debugger.PrjPcb"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
+QFSAE_PRJPCB = UPSTREAM_FIXTURES / "qfsae-pcb/Debugger/Debugger.PrjPcb"
 
 
 def _sheet_by_name(source_name: str):

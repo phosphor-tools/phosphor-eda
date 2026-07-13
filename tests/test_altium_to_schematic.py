@@ -8,7 +8,8 @@ import pytest
 from phosphor_eda.formats.altium.to_schematic import altium_to_design
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-QFSAE_PRJPCB = FIXTURES / "altium/qfsae-debugger/Debugger.PrjPcb"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
+QFSAE_PRJPCB = UPSTREAM_FIXTURES / "qfsae-pcb/Debugger/Debugger.PrjPcb"
 
 
 @pytest.fixture(scope="module")

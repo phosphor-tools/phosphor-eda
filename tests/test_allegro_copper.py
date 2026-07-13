@@ -17,19 +17,15 @@ from phosphor_eda.formats.allegro.parser import parse_allegro_records
 from phosphor_eda.formats.allegro.records import AllegroRecord, AllegroRecordSet
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 BREAKOUT_BOARD = (
-    FIXTURES
-    / "orcad"
-    / "opencellular-breakout"
-    / "allegro/OpenCellular/electronics/breakout/board"
+    UPSTREAM_FIXTURES
+    / "opencellular/electronics/breakout"
+    / "board"
     / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
 )
 SYNC_BOARD = (
-    FIXTURES
-    / "orcad"
-    / "opencellular-sync"
-    / "allegro/OpenCellular/electronics/sync/board"
-    / "Fb_Connect1_SYNC_Life-3.brd"
+    UPSTREAM_FIXTURES / "opencellular/electronics/sync" / "board" / "Fb_Connect1_SYNC_Life-3.brd"
 )
 
 

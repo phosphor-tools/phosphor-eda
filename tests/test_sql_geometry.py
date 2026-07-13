@@ -36,9 +36,12 @@ from phosphor_eda.geometry.pcb_geometry import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
-SWD_SWITCH_PCB = FIXTURES / "swd_switch.kicad_pcb"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
+SWD_SWITCH_PCB = UPSTREAM_FIXTURES / "debugotron/hw/swd_switch/swd_switch.kicad_pcb"
 ORANGECRAB_PCB = FIXTURES / "kicad-orangecrab/OrangeCrab.kicad_pcb"
-PI_MX8_PCB = FIXTURES / "altium" / "pi-mx8" / "PCB" / "PiMX8MP_r0.3.PcbDoc"
+PI_MX8_PCB = (
+    UPSTREAM_FIXTURES / "pi-mx8/01_Electronics/PiMX8MP_r0.3_release" / "PCB" / "PiMX8MP_r0.3.PcbDoc"
+)
 
 
 def test_pad_circle_is_circular() -> None:

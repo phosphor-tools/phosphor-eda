@@ -104,7 +104,7 @@ def test_load_sheet_accepts_ctx():
 
     # Use a real fixture to verify ctx propagates without crashing
     fixtures = Path(__file__).resolve().parent / "fixtures"
-    schdoc = fixtures / "altium/qfsae-debugger/TOP.SchDoc"
+    schdoc = fixtures.parent / "upstream/qfsae-pcb/Debugger/TOP.SchDoc"
     if not schdoc.exists():
         return  # Skip if fixture not available
 
@@ -122,7 +122,7 @@ def test_altium_to_design_returns_parse_issues():
     from phosphor_eda.formats.altium.to_schematic import altium_to_design
 
     fixtures = Path(__file__).resolve().parent / "fixtures"
-    schdoc = fixtures / "altium/qfsae-debugger/MCU.SchDoc"
+    schdoc = fixtures.parent / "upstream/qfsae-pcb/Debugger/MCU.SchDoc"
     if not schdoc.exists():
         return
 

@@ -48,28 +48,19 @@ from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
 from phosphor_eda.query.project_loader import load_project
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 PICO_DSN = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
 PICO_W_DSN = FIXTURES / "dsn/raspberry-pi-pico-w/RPI-PICOW-R2.DSN"
 CMIO_DSN = FIXTURES / "dsn/raspberry-pi-cmio/RPI-CMIO-V3_0-PUBLIC.DSN"
-BREAKOUT_DIR = FIXTURES / "orcad/opencellular-breakout"
-BREAKOUT_DSN = (
-    BREAKOUT_DIR
-    / "orcad/OpenCellular/electronics/breakout/schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.DSN"
-)
-BREAKOUT_OPJ = (
-    BREAKOUT_DIR
-    / "orcad/OpenCellular/electronics/breakout/schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.opj"
-)
-BREAKOUT_PSTXNET = (
-    BREAKOUT_DIR / "orcad/OpenCellular/electronics/breakout/schematic/Netlist/pstxnet.dat"
-)
-SYNC_DIR = FIXTURES / "orcad/opencellular-sync"
-SYNC_DSN = (
-    SYNC_DIR / "orcad/OpenCellular/electronics/sync/schematics/dsn/FB_CONNECT1_SYNC_LIFE-3_V1P1.DSN"
-)
-SYNC_PSTXNET = SYNC_DIR / "orcad/OpenCellular/electronics/sync/schematics/Netlist/pstxnet.dat"
-SYNC_NETLIST_DIR = SYNC_DIR / "orcad/OpenCellular/electronics/sync/schematics/Netlist"
-CP_SMARTGARDEN_DIR = FIXTURES / "orcad/cp-smartgarden-launchxl-cc1310"
+BREAKOUT_DIR = UPSTREAM_FIXTURES / "opencellular/electronics/breakout"
+BREAKOUT_DSN = BREAKOUT_DIR / "schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.DSN"
+BREAKOUT_OPJ = BREAKOUT_DIR / "schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.opj"
+BREAKOUT_PSTXNET = BREAKOUT_DIR / "schematic/Netlist/pstxnet.dat"
+SYNC_DIR = UPSTREAM_FIXTURES / "opencellular/electronics/sync"
+SYNC_DSN = SYNC_DIR / "schematics/dsn/FB_CONNECT1_SYNC_LIFE-3_V1P1.DSN"
+SYNC_PSTXNET = SYNC_DIR / "schematics/Netlist/pstxnet.dat"
+SYNC_NETLIST_DIR = SYNC_DIR / "schematics/Netlist"
+CP_SMARTGARDEN_DIR = UPSTREAM_FIXTURES / "cp-smartgarden"
 CP_SMARTGARDEN_DSN = (
     CP_SMARTGARDEN_DIR / "Document/Hardware/mcu/swrc319/Cadence/LAUNCHXL-CC1310.DSN"
 )

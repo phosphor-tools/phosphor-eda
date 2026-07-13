@@ -49,53 +49,38 @@ if TYPE_CHECKING:
     from phosphor_eda.domain.schematic import Component, Net
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-OPENCELLULAR_BREAKOUT_ROOT = FIXTURES / "orcad/opencellular-breakout"
-OPENCELLULAR_BREAKOUT_DSN = (
-    OPENCELLULAR_BREAKOUT_ROOT
-    / "orcad/OpenCellular/electronics/breakout/schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.DSN"
-)
-OPENCELLULAR_SYNC_ROOT = FIXTURES / "orcad/opencellular-sync"
-OPENCELLULAR_SYNC_DSN = (
-    OPENCELLULAR_SYNC_ROOT
-    / "orcad/OpenCellular/electronics/sync/schematics/dsn/FB_CONNECT1_SYNC_LIFE-3_V1P1.DSN"
-)
-OPENCELLULAR_SYNC_OPJ = (
-    OPENCELLULAR_SYNC_ROOT
-    / "orcad/OpenCellular/electronics/sync/schematics/dsn/FB_CONNECT1_SYNC_LIFE-3_V1P1.opj"
-)
-OPENCELLULAR_POWER_UNIT_ROOT = FIXTURES / "orcad/opencellular-power-unit"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
+OPENCELLULAR_BREAKOUT_ROOT = UPSTREAM_FIXTURES / "opencellular/electronics/breakout"
+OPENCELLULAR_BREAKOUT_DSN = OPENCELLULAR_BREAKOUT_ROOT / "schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.DSN"
+OPENCELLULAR_SYNC_ROOT = UPSTREAM_FIXTURES / "opencellular/electronics/sync"
+OPENCELLULAR_SYNC_DSN = OPENCELLULAR_SYNC_ROOT / "schematics/dsn/FB_CONNECT1_SYNC_LIFE-3_V1P1.DSN"
+OPENCELLULAR_SYNC_OPJ = OPENCELLULAR_SYNC_ROOT / "schematics/dsn/FB_CONNECT1_SYNC_LIFE-3_V1P1.opj"
+OPENCELLULAR_POWER_UNIT_ROOT = UPSTREAM_FIXTURES / "opencellular/electronics/power-unit"
 OPENCELLULAR_POWER_UNIT_DSN = (
-    OPENCELLULAR_POWER_UNIT_ROOT
-    / "orcad/OpenCellular/electronics/power-unit/Rev-A/schematics/"
-    / "POWER_SOURCE_BOARD_20180717.DSN"
+    OPENCELLULAR_POWER_UNIT_ROOT / "Rev-A/schematics/" / "POWER_SOURCE_BOARD_20180717.DSN"
 )
-CP_SMARTGARDEN_ROOT = FIXTURES / "orcad/cp-smartgarden-launchxl-cc1310"
+CP_SMARTGARDEN_ROOT = UPSTREAM_FIXTURES / "cp-smartgarden"
 CP_SMARTGARDEN_DSN = (
     CP_SMARTGARDEN_ROOT / "Document/Hardware/mcu/swrc319/Cadence/" / "LAUNCHXL-CC1310.DSN"
 )
 CP_SMARTGARDEN_OPJ = CP_SMARTGARDEN_DSN.parent / "launchxl-cc1310.opj"
 CP_SMARTGARDEN_ALLEGRO = CP_SMARTGARDEN_DSN.parent / "Allegro"
-ROHM_STEPPER_ROOT = FIXTURES / "orcad/rohm-stepper-driver-ctrl"
+ROHM_STEPPER_ROOT = UPSTREAM_FIXTURES / "rohm-stepper-driver"
 ROHM_STEPPER_DSN = ROHM_STEPPER_ROOT / "Design Files for Rev 1.0/STEPPER.DSN"
 ROHM_STEPPER_OPJ = ROHM_STEPPER_ROOT / "Design Files for Rev 1.0/STEPPER.opj"
-MAXOME_ROOT = FIXTURES / "orcad/maxome-mpcie"
+MAXOME_ROOT = UPSTREAM_FIXTURES / "maxome-mpcie"
 MAXOME_0P1_DSN = MAXOME_ROOT / "0p1/MAXOME_MPCIE_0P1.DSN"
 MAXOME_0P1_OPJ = MAXOME_ROOT / "0p1/maxome_mpcie_0p1.opj"
 MAXOME_1P1_DSN = MAXOME_ROOT / "1p1/MAXOME_MPCIE_1P1.DSN"
 MAXOME_1P1_OPJ = MAXOME_ROOT / "1p1/maxome_mpcie_1p1.opj"
-RFSOC_ROOT = FIXTURES / "orcad/rfsoc-frontend"
+RFSOC_ROOT = UPSTREAM_FIXTURES / "rfsoc-frontend"
 RFSOC_DSN = RFSOC_ROOT / "RFMC_Frontend/RFMC_FRONTEND_V1_00.DSN"
 RFSOC_OPJ = RFSOC_ROOT / "RFMC_Frontend/RFMC_Frontend_v1_00.opj"
 RPI_CMIO_DSN = FIXTURES / "dsn/raspberry-pi-cmio/RPI-CMIO-V3_0-PUBLIC.DSN"
 RPI_PICO_DSN = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
 RPI_PICOW_DSN = FIXTURES / "dsn/raspberry-pi-pico-w/RPI-PICOW-R2.DSN"
-OPENCELLULAR_BREAKOUT_OPJ = (
-    OPENCELLULAR_BREAKOUT_ROOT
-    / "orcad/OpenCellular/electronics/breakout/schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.opj"
-)
-OPENCELLULAR_BREAKOUT_NETLIST = (
-    OPENCELLULAR_BREAKOUT_ROOT / "orcad/OpenCellular/electronics/breakout/schematic/Netlist"
-)
+OPENCELLULAR_BREAKOUT_OPJ = OPENCELLULAR_BREAKOUT_ROOT / "schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.opj"
+OPENCELLULAR_BREAKOUT_NETLIST = OPENCELLULAR_BREAKOUT_ROOT / "schematic/Netlist"
 
 type CisStatus = Literal["absent", "placeholder", "non_placeholder"]
 
@@ -156,20 +141,12 @@ FIXTURE_INVENTORY_EXPECTATIONS = (
             erc_symbol_streams=(),
         ),
         required_project_files=(
-            Path("README.md"),
-            Path("LICENSE-HARDWARE"),
-            Path(
-                "orcad/OpenCellular/electronics/breakout/schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.opj"
-            ),
-            Path("orcad/OpenCellular/electronics/breakout/schematic/Netlist/pstxnet.dat"),
-            Path("orcad/OpenCellular/electronics/breakout/schematic/Netlist/pstxprt.dat"),
-            Path("orcad/OpenCellular/electronics/breakout/schematic/Netlist/pstchip.dat"),
-            Path(
-                "allegro/OpenCellular/electronics/breakout/board/OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
-            ),
-            Path(
-                "allegro/OpenCellular/electronics/breakout/gerbers/OC_CONNECT-1_BREAKOUT_LIFE-3.ipc"
-            ),
+            Path("schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.opj"),
+            Path("schematic/Netlist/pstxnet.dat"),
+            Path("schematic/Netlist/pstxprt.dat"),
+            Path("schematic/Netlist/pstchip.dat"),
+            Path("board/OC_CONNECT-1_BREAKOUT_LIFE-3.brd"),
+            Path("gerbers/OC_CONNECT-1_BREAKOUT_LIFE-3.ipc"),
         ),
     ),
     _FixtureInventoryExpectation(
@@ -189,16 +166,12 @@ FIXTURE_INVENTORY_EXPECTATIONS = (
             erc_symbol_streams=("Symbols/ERC",),
         ),
         required_project_files=(
-            Path("README.md"),
-            Path("LICENSE-HARDWARE"),
-            Path(
-                "orcad/OpenCellular/electronics/sync/schematics/dsn/FB_CONNECT1_SYNC_LIFE-3_V1P1.opj"
-            ),
-            Path("orcad/OpenCellular/electronics/sync/schematics/Netlist/pstxnet.dat"),
-            Path("orcad/OpenCellular/electronics/sync/schematics/Netlist/pstxprt.dat"),
-            Path("orcad/OpenCellular/electronics/sync/schematics/Netlist/pstchip.dat"),
-            Path("allegro/OpenCellular/electronics/sync/board/Fb_Connect1_SYNC_Life-3.brd"),
-            Path("allegro/OpenCellular/electronics/sync/gerbers/Fb_Connect1_SYNC_Life-3.ipc"),
+            Path("schematics/dsn/FB_CONNECT1_SYNC_LIFE-3_V1P1.opj"),
+            Path("schematics/Netlist/pstxnet.dat"),
+            Path("schematics/Netlist/pstxprt.dat"),
+            Path("schematics/Netlist/pstchip.dat"),
+            Path("board/Fb_Connect1_SYNC_Life-3.brd"),
+            Path("gerbers/Fb_Connect1_SYNC_Life-3.ipc"),
         ),
     ),
     _FixtureInventoryExpectation(
@@ -219,7 +192,6 @@ FIXTURE_INVENTORY_EXPECTATIONS = (
         ),
         required_project_files=(
             Path("README.md"),
-            Path("UPSTREAM-README.md"),
             Path("Document/Hardware/mcu/swrc319/Cadence/launchxl-cc1310.opj"),
             Path("Document/Hardware/mcu/swrc319/Cadence/Allegro/pstxnet.dat"),
             Path("Document/Hardware/mcu/swrc319/Cadence/Allegro/pstxprt.dat"),
@@ -245,21 +217,10 @@ FIXTURE_INVENTORY_EXPECTATIONS = (
             erc_symbol_streams=("Symbols/ERC",),
         ),
         required_project_files=(
-            Path("README.md"),
-            Path("LICENSE-HARDWARE"),
-            Path(
-                "orcad/OpenCellular/electronics/power-unit/Rev-A/schematics/"
-                "POWER_SOURCE_BOARD_20180717.DSN"
-            ),
-            Path("orcad/OpenCellular/electronics/power-unit/Rev-A/schematics/POWER.OLB"),
-            Path(
-                "orcad/OpenCellular/electronics/power-unit/Rev-A/bom/"
-                "BoM_PSU_Assembly_08102018_ver1.1.xlsx"
-            ),
-            Path(
-                "orcad/OpenCellular/electronics/power-unit/Rev-A/assembly/"
-                "Power_Source_Proto1_BoM.xlsx"
-            ),
+            Path("Rev-A/schematics/POWER_SOURCE_BOARD_20180717.DSN"),
+            Path("Rev-A/schematics/POWER.OLB"),
+            Path("Rev-A/bom/BoM_PSU_Assembly_08102018_ver1.1.xlsx"),
+            Path("Rev-A/assembly/Power_Source_Proto1_BoM.xlsx"),
         ),
     ),
     _FixtureInventoryExpectation(
@@ -286,7 +247,6 @@ FIXTURE_INVENTORY_EXPECTATIONS = (
         ),
         required_project_files=(
             Path("README.md"),
-            Path("UPSTREAM-README.md"),
             Path("Design Files for Rev 1.0/STEPPER.opj"),
             Path("Design Files for Rev 1.0/STEPPER EVAL BRD - SCHEMATIC File - Rev 1.0.opj"),
             Path("Design Files for Rev 1.0/STEPPER EVAL BRD - PCB Board File - Rev 1.0.brd"),
@@ -314,8 +274,7 @@ FIXTURE_INVENTORY_EXPECTATIONS = (
             erc_symbol_streams=(),
         ),
         required_project_files=(
-            Path("README.md"),
-            Path("0p1/UPSTREAM-README.md"),
+            Path("0p1/readme.md"),
             Path("0p1/maxome_mpcie_0p1.opj"),
             Path("0p1/MAXOME_MPCIE_0P1_0.DBK"),
             Path("0p1/devices.dml"),
@@ -341,8 +300,7 @@ FIXTURE_INVENTORY_EXPECTATIONS = (
             erc_symbol_streams=(),
         ),
         required_project_files=(
-            Path("README.md"),
-            Path("1p1/UPSTREAM-README.md"),
+            Path("1p1/readme.md"),
             Path("1p1/maxome_mpcie_1p1.opj"),
             Path("1p1/MAXOME_MPCIE_1P1_0.DBK"),
             Path("1p1/devices.dml"),
@@ -369,7 +327,6 @@ FIXTURE_INVENTORY_EXPECTATIONS = (
         ),
         required_project_files=(
             Path("README.md"),
-            Path("UPSTREAM-README.md"),
             Path("Components.xlsx"),
             Path("Tips.txt"),
             Path("RFMC_Frontend/RFMC_Frontend_v1_00.opj"),

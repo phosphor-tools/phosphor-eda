@@ -10,11 +10,14 @@ from phosphor_eda.formats.altium.pcb_project import AltiumEnrichment
 from phosphor_eda.query.project_loader import load_project
 
 FIXTURES = Path(__file__).parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 
-JETSON_ORIN_PRO = FIXTURES / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pro"
+JETSON_ORIN_PRO = UPSTREAM_FIXTURES / "jetson-orin" / "jetson-orin-baseboard.kicad_pro"
 ORANGECRAB_PRO = FIXTURES / "kicad-orangecrab" / "OrangeCrab.kicad_pro"
-SWD_SWITCH_PCB = FIXTURES / "swd_switch.kicad_pcb"
-PI_MX8_PRJPCB = FIXTURES / "altium" / "pi-mx8" / "PiMX8MP_r0.3_release.PrjPcb"
+SWD_SWITCH_PCB = UPSTREAM_FIXTURES / "debugotron/hw/swd_switch/swd_switch.kicad_pcb"
+PI_MX8_PRJPCB = (
+    UPSTREAM_FIXTURES / "pi-mx8/01_Electronics/PiMX8MP_r0.3_release" / "PiMX8MP_r0.3_release.PrjPcb"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +112,7 @@ def test_altium_project_has_stackup(altium_project: Project) -> None:
 
 
 def test_altium_project_has_net_classes(altium_project: Project) -> None:
-    assert len(altium_project.net_classes) == 64
+    assert len(altium_project.net_classes) == 78
 
 
 def test_altium_project_has_design_rules(altium_project: Project) -> None:

@@ -10,9 +10,12 @@ from typing import cast
 from phosphor_eda.query.project_loader import load_project
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 GOLDENS = Path(__file__).resolve().parent / "goldens"
 
-PI_MX8_PRJPCB = FIXTURES / "altium/pi-mx8/PiMX8MP_r0.3_release.PrjPcb"
+PI_MX8_PRJPCB = (
+    UPSTREAM_FIXTURES / "pi-mx8/01_Electronics/PiMX8MP_r0.3_release/PiMX8MP_r0.3_release.PrjPcb"
+)
 PI_MX8_PCB_NET_ORACLE = GOLDENS / "altium/pi-mx8-pcb-netlist.json"
 
 

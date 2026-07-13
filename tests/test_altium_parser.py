@@ -5,7 +5,8 @@ from pathlib import Path
 from phosphor_eda.formats.altium.to_schematic import altium_to_design, altium_to_source
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-MCU_SCHDOC = FIXTURES / "altium/qfsae-debugger/MCU.SchDoc"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
+MCU_SCHDOC = UPSTREAM_FIXTURES / "qfsae-pcb/Debugger/MCU.SchDoc"
 
 
 def test_parse_mcu_sheet_components():

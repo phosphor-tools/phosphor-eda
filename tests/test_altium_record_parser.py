@@ -9,7 +9,8 @@ from phosphor_eda.formats.altium.record_parser import (
 )
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-MCU_SCHDOC = FIXTURES / "altium/qfsae-debugger/MCU.SchDoc"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
+MCU_SCHDOC = UPSTREAM_FIXTURES / "qfsae-pcb/Debugger/MCU.SchDoc"
 
 
 def test_parse_record_payload_simple():

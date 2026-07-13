@@ -20,10 +20,9 @@ if TYPE_CHECKING:
     from pytest import MonkeyPatch
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-BREAKOUT_FIXTURE_ROOT = FIXTURES / "orcad" / "opencellular-breakout"
-BREAKOUT_BOARD_RELATIVE = Path(
-    "allegro/OpenCellular/electronics/breakout/board/OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
-)
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
+BREAKOUT_FIXTURE_ROOT = UPSTREAM_FIXTURES / "opencellular/electronics/breakout"
+BREAKOUT_BOARD_RELATIVE = Path("board/OC_CONNECT-1_BREAKOUT_LIFE-3.brd")
 
 
 def test_allegro_pad_sidecar_enriches_matching_padstack_without_changing_board_data(

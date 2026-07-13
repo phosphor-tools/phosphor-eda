@@ -9,11 +9,11 @@ from phosphor_eda.formats.allegro.project_loader import load_allegro_pcb_project
 from phosphor_eda.formats.allegro.records import AllegroHeader, AllegroRecord, AllegroRecordSet
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 BREAKOUT_BOARD = (
-    FIXTURES
-    / "orcad"
-    / "opencellular-breakout"
-    / "allegro/OpenCellular/electronics/breakout/board"
+    UPSTREAM_FIXTURES
+    / "opencellular/electronics/breakout"
+    / "board"
     / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
 )
 

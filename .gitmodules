@@ -1,0 +1,50 @@
+[submodule "tests/upstream/sparkfun-bme280"]
+	path = tests/upstream/sparkfun-bme280
+	url = https://github.com/sparkfun/SparkFun_BME280_Breakout_Board.git
+	shallow = true
+[submodule "tests/upstream/adafruit-rgb-lcd-shield"]
+	path = tests/upstream/adafruit-rgb-lcd-shield
+	url = https://github.com/adafruit/Adafruit-RGB-LCD-shield-PCB.git
+	shallow = true
+[submodule "tests/upstream/cp-smartgarden"]
+	path = tests/upstream/cp-smartgarden
+	url = https://github.com/sangphanthanh/CP_SmartGarden.git
+	shallow = true
+	# Avoid a false-dirty worktree from an upstream Unicode-normalized filename on macOS.
+	ignore = untracked
+[submodule "tests/upstream/maxome-mpcie"]
+	path = tests/upstream/maxome-mpcie
+	url = https://github.com/mmbnetworks/Maxome_mPCIe_HW.git
+	shallow = true
+[submodule "tests/upstream/rfsoc-frontend"]
+	path = tests/upstream/rfsoc-frontend
+	url = https://github.com/snu-quiqcl/RFSoC_FrontEnd.git
+	shallow = true
+[submodule "tests/upstream/rohm-stepper-driver"]
+	path = tests/upstream/rohm-stepper-driver
+	url = https://github.com/ROHMUSDC/StepperDriverCTRL.git
+	shallow = true
+[submodule "tests/upstream/opencellular"]
+	path = tests/upstream/opencellular
+	url = https://github.com/Telecominfraproject/OpenCellular.git
+	shallow = true
+[submodule "tests/upstream/pi-mx8"]
+	path = tests/upstream/pi-mx8
+	url = https://github.com/OV-Tech-GmbH/Pi.MX8.git
+	shallow = true
+[submodule "tests/upstream/qfsae-pcb"]
+	path = tests/upstream/qfsae-pcb
+	url = https://github.com/qfsae/pcb.git
+	shallow = true
+[submodule "tests/upstream/jetson-orin"]
+	path = tests/upstream/jetson-orin
+	url = https://github.com/antmicro/jetson-orin-baseboard.git
+	shallow = true
+[submodule "tests/upstream/debugotron"]
+	path = tests/upstream/debugotron
+	url = https://github.com/alvarop/debugotron.git
+	shallow = true
+[submodule "tests/upstream/rp2040-minimal"]
+	path = tests/upstream/rp2040-minimal
+	url = https://github.com/janelia-kicad/RP2040_minimal.git
+	shallow = true

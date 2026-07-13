@@ -29,10 +29,7 @@ def test_kicad_conversion_oracle_is_opt_in_and_reports_converted_board(
     if shutil.which("kicad-cli") is None:
         pytest.skip("kicad-cli is not installed")
 
-    board = (
-        OPENCELLULAR_BREAKOUT_ROOT
-        / "allegro/OpenCellular/electronics/breakout/board/OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
-    )
+    board = OPENCELLULAR_BREAKOUT_ROOT / "board/OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
     report = run_kicad_allegro_conversion_report(board, tmp_path / "converted.kicad_pcb")
 
     assert report.source_board == board

@@ -16,10 +16,10 @@ from phosphor_eda.formats.allegro.parser import parse_allegro_records
 from phosphor_eda.formats.allegro.records import AllegroRecord, AllegroRecordSet
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 LAUNCHXL_BOARD = (
-    FIXTURES
-    / "orcad"
-    / "cp-smartgarden-launchxl-cc1310"
+    UPSTREAM_FIXTURES
+    / "cp-smartgarden"
     / "Document/Hardware/mcu/swrc319/Cadence/Allegro"
     / "LAUNCHXL-CC1310.brd"
 )

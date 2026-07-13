@@ -11,36 +11,22 @@ from phosphor_eda.query.project_loader import load_project
 from phosphor_eda.query.sql import load_database
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 DSN_FILE = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
-JETSON_ORIN_PRO = FIXTURES / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pro"
-JETSON_ORIN_PCB = FIXTURES / "kicad-jetson-orin" / "jetson-orin-baseboard.kicad_pcb"
-PIMX8_PRJPCB = FIXTURES / "altium/pi-mx8/PiMX8MP_r0.3_release.PrjPcb"
-OPENCELLULAR_BREAKOUT = FIXTURES / "orcad/opencellular-breakout"
-OPENCELLULAR_BREAKOUT_OPJ = (
-    OPENCELLULAR_BREAKOUT
-    / "orcad/OpenCellular/electronics/breakout/schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.opj"
+JETSON_ORIN_PRO = UPSTREAM_FIXTURES / "jetson-orin" / "jetson-orin-baseboard.kicad_pro"
+JETSON_ORIN_PCB = UPSTREAM_FIXTURES / "jetson-orin" / "jetson-orin-baseboard.kicad_pcb"
+PIMX8_PRJPCB = (
+    UPSTREAM_FIXTURES / "pi-mx8/01_Electronics/PiMX8MP_r0.3_release/PiMX8MP_r0.3_release.PrjPcb"
 )
-OPENCELLULAR_BREAKOUT_DSN = (
-    OPENCELLULAR_BREAKOUT
-    / "orcad/OpenCellular/electronics/breakout/schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.DSN"
-)
-OPENCELLULAR_BREAKOUT_BOARD = (
-    OPENCELLULAR_BREAKOUT
-    / "allegro/OpenCellular/electronics/breakout/board/OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
-)
-OPENCELLULAR_SYNC = FIXTURES / "orcad/opencellular-sync"
-OPENCELLULAR_SYNC_OPJ = (
-    OPENCELLULAR_SYNC
-    / "orcad/OpenCellular/electronics/sync/schematics/dsn/FB_CONNECT1_SYNC_LIFE-3_V1P1.opj"
-)
-OPENCELLULAR_SYNC_DSN = (
-    OPENCELLULAR_SYNC
-    / "orcad/OpenCellular/electronics/sync/schematics/dsn/FB_CONNECT1_SYNC_LIFE-3_V1P1.DSN"
-)
-OPENCELLULAR_SYNC_BOARD = (
-    OPENCELLULAR_SYNC / "allegro/OpenCellular/electronics/sync/board/Fb_Connect1_SYNC_Life-3.brd"
-)
-QFSAE_PRJPCB = FIXTURES / "altium/qfsae-debugger/Debugger.PrjPcb"
+OPENCELLULAR_BREAKOUT = UPSTREAM_FIXTURES / "opencellular/electronics/breakout"
+OPENCELLULAR_BREAKOUT_OPJ = OPENCELLULAR_BREAKOUT / "schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.opj"
+OPENCELLULAR_BREAKOUT_DSN = OPENCELLULAR_BREAKOUT / "schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.DSN"
+OPENCELLULAR_BREAKOUT_BOARD = OPENCELLULAR_BREAKOUT / "board/OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
+OPENCELLULAR_SYNC = UPSTREAM_FIXTURES / "opencellular/electronics/sync"
+OPENCELLULAR_SYNC_OPJ = OPENCELLULAR_SYNC / "schematics/dsn/FB_CONNECT1_SYNC_LIFE-3_V1P1.opj"
+OPENCELLULAR_SYNC_DSN = OPENCELLULAR_SYNC / "schematics/dsn/FB_CONNECT1_SYNC_LIFE-3_V1P1.DSN"
+OPENCELLULAR_SYNC_BOARD = OPENCELLULAR_SYNC / "board/Fb_Connect1_SYNC_Life-3.brd"
+QFSAE_PRJPCB = UPSTREAM_FIXTURES / "qfsae-pcb/Debugger/Debugger.PrjPcb"
 
 
 def _write_opj(path: Path, dsn_path: Path = DSN_FILE) -> Path:

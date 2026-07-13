@@ -33,32 +33,26 @@ from phosphor_eda.formats.allegro.build import build_allegro_board
 from phosphor_eda.formats.allegro.parser import parse_allegro_records
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 
 BREAKOUT_BOARD = (
-    FIXTURES
-    / "orcad"
-    / "opencellular-breakout"
-    / "allegro/OpenCellular/electronics/breakout/board"
+    UPSTREAM_FIXTURES
+    / "opencellular/electronics/breakout"
+    / "board"
     / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
 )
 SYNC_BOARD = (
-    FIXTURES
-    / "orcad"
-    / "opencellular-sync"
-    / "allegro/OpenCellular/electronics/sync/board"
-    / "Fb_Connect1_SYNC_Life-3.brd"
+    UPSTREAM_FIXTURES / "opencellular/electronics/sync" / "board" / "Fb_Connect1_SYNC_Life-3.brd"
 )
 ROHM_BOARD = (
-    FIXTURES
-    / "orcad"
-    / "rohm-stepper-driver-ctrl"
+    UPSTREAM_FIXTURES
+    / "rohm-stepper-driver"
     / "Design Files for Rev 1.0"
     / "STEPPER EVAL BRD - PCB Board File - Rev 1.0.brd"
 )
 LAUNCHXL_BOARD = (
-    FIXTURES
-    / "orcad"
-    / "cp-smartgarden-launchxl-cc1310"
+    UPSTREAM_FIXTURES
+    / "cp-smartgarden"
     / "Document/Hardware/mcu/swrc319/Cadence/Allegro"
     / "LAUNCHXL-CC1310.brd"
 )

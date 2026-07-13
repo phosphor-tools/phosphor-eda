@@ -13,11 +13,10 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 CORPUS_ROOT = Path(os.environ.get("PHOSPHOR_EDA_CORPUS_ROOT", "__external_corpus_missing__"))
 EXTERNAL_ALLEGRO_CORPUS = CORPUS_ROOT / "designs/allegro"
-EXTERNAL_KICAD_ALLEGRO_FIXTURES = (
-    CORPUS_ROOT / "kicad/qa/data/pcbnew/plugins/allegro"
-)
+EXTERNAL_KICAD_ALLEGRO_FIXTURES = CORPUS_ROOT / "kicad/qa/data/pcbnew/plugins/allegro"
 
 VERSION_STRING_OFFSET = 0xF8
 V18_VERSION_STRING_OFFSET = 0x124
@@ -85,61 +84,57 @@ class _CorpusBoardHeader:
 ALLEGRO_FIXTURE_EXPECTATIONS = (
     _AllegroFixtureExpectation(
         name="opencellular-breakout",
-        root=FIXTURES / "orcad/opencellular-breakout",
-        board_file=(
-            "allegro/OpenCellular/electronics/breakout/board/OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
-        ),
+        root=UPSTREAM_FIXTURES / "opencellular/electronics/breakout",
+        board_file=("board/OC_CONNECT-1_BREAKOUT_LIFE-3.brd"),
         file_size=4_702_680,
         magic=0x00131504,
         version_family="V_166",
         writer_tokens=("allv16-62/8/2", "allv16-610/12"),
-        provenance_files=("LICENSE-HARDWARE", "README.md"),
+        provenance_files=(),
         project_sidecars=(
-            "orcad/OpenCellular/electronics/breakout/schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.DSN",
-            "orcad/OpenCellular/electronics/breakout/schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.opj",
+            "schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.DSN",
+            "schematic/dsn/OC_CONNECT_1_BRKOUT_BRD.opj",
         ),
         packaged_netlists=(
-            "orcad/OpenCellular/electronics/breakout/schematic/Netlist/pstchip.dat",
-            "orcad/OpenCellular/electronics/breakout/schematic/Netlist/pstxnet.dat",
-            "orcad/OpenCellular/electronics/breakout/schematic/Netlist/pstxprt.dat",
+            "schematic/Netlist/pstchip.dat",
+            "schematic/Netlist/pstxnet.dat",
+            "schematic/Netlist/pstxprt.dat",
         ),
-        ipc356_files=(
-            "allegro/OpenCellular/electronics/breakout/gerbers/OC_CONNECT-1_BREAKOUT_LIFE-3.ipc",
-        ),
+        ipc356_files=("gerbers/OC_CONNECT-1_BREAKOUT_LIFE-3.ipc",),
         manufacturing_files=(),
         report_files=(),
     ),
     _AllegroFixtureExpectation(
         name="opencellular-sync",
-        root=FIXTURES / "orcad/opencellular-sync",
-        board_file=("allegro/OpenCellular/electronics/sync/board/Fb_Connect1_SYNC_Life-3.brd"),
+        root=UPSTREAM_FIXTURES / "opencellular/electronics/sync",
+        board_file=("board/Fb_Connect1_SYNC_Life-3.brd"),
         file_size=5_327_796,
         magic=0x00131504,
         version_family="V_166",
         writer_tokens=("allv16-62/8/2", "batv16-62/8/2"),
-        provenance_files=("LICENSE-HARDWARE", "README.md"),
+        provenance_files=(),
         project_sidecars=(
-            "orcad/OpenCellular/electronics/sync/schematics/dsn/FB_CONNECT1_SYNC_LIFE-3_V1P1.DSN",
-            "orcad/OpenCellular/electronics/sync/schematics/dsn/FB_CONNECT1_SYNC_LIFE-3_V1P1.opj",
+            "schematics/dsn/FB_CONNECT1_SYNC_LIFE-3_V1P1.DSN",
+            "schematics/dsn/FB_CONNECT1_SYNC_LIFE-3_V1P1.opj",
         ),
         packaged_netlists=(
-            "orcad/OpenCellular/electronics/sync/schematics/Netlist/pstchip.dat",
-            "orcad/OpenCellular/electronics/sync/schematics/Netlist/pstxnet.dat",
-            "orcad/OpenCellular/electronics/sync/schematics/Netlist/pstxprt.dat",
+            "schematics/Netlist/pstchip.dat",
+            "schematics/Netlist/pstxnet.dat",
+            "schematics/Netlist/pstxprt.dat",
         ),
-        ipc356_files=("allegro/OpenCellular/electronics/sync/gerbers/Fb_Connect1_SYNC_Life-3.ipc",),
+        ipc356_files=("gerbers/Fb_Connect1_SYNC_Life-3.ipc",),
         manufacturing_files=(),
         report_files=(),
     ),
     _AllegroFixtureExpectation(
         name="cp-smartgarden-launchxl-cc1310",
-        root=FIXTURES / "orcad/cp-smartgarden-launchxl-cc1310",
+        root=UPSTREAM_FIXTURES / "cp-smartgarden",
         board_file="Document/Hardware/mcu/swrc319/Cadence/Allegro/LAUNCHXL-CC1310.brd",
         file_size=3_591_692,
         magic=0x00131503,
         version_family="V_166",
         writer_tokens=("allv16-611/4/", "batv16-610/28"),
-        provenance_files=("README.md", "UPSTREAM-README.md"),
+        provenance_files=("README.md",),
         project_sidecars=(
             "Document/Hardware/mcu/swrc319/Cadence/Allegro/art/art_param.txt",
             "Document/Hardware/mcu/swrc319/Cadence/Allegro/art/art_param.txt,1",
@@ -212,13 +207,13 @@ ALLEGRO_FIXTURE_EXPECTATIONS = (
     ),
     _AllegroFixtureExpectation(
         name="rohm-stepper-driver-ctrl",
-        root=FIXTURES / "orcad/rohm-stepper-driver-ctrl",
+        root=UPSTREAM_FIXTURES / "rohm-stepper-driver",
         board_file="Design Files for Rev 1.0/STEPPER EVAL BRD - PCB Board File - Rev 1.0.brd",
         file_size=1_209_464,
         magic=0x00131003,
         version_family="V_165",
         writer_tokens=("allv16-54/29/", "batv16-54/23"),
-        provenance_files=("README.md", "UPSTREAM-README.md"),
+        provenance_files=("README.md",),
         project_sidecars=(
             "Design Files for Rev 1.0/STEPPER EVAL BRD - DESIGN File - Rev 1.0.DSN",
             "Design Files for Rev 1.0/STEPPER EVAL BRD - SCHEMATIC File - Rev 1.0.opj",
@@ -366,21 +361,43 @@ def test_committed_allegro_board_fixture_inventory_is_locked(
     assert header.version_family == expected.version_family
     assert all(token in header.writer_string for token in expected.writer_tokens)
 
-    assert _relative_files(expected.root, lambda path: path.suffix.lower() == ".brd") == (
-        expected.board_file,
+    assert expected.board_file in _relative_files(
+        expected.root, lambda path: path.suffix.lower() == ".brd"
     )
-    assert (
+    assert set(expected.provenance_files) <= set(
         _relative_files(
             expected.root,
             lambda path: path.relative_to(expected.root).as_posix() in expected.provenance_files,
         )
-        == expected.provenance_files
     )
-    assert _relative_files(expected.root, _is_project_sidecar) == expected.project_sidecars
-    assert _relative_files(expected.root, _is_packaged_netlist) == expected.packaged_netlists
-    assert _relative_files(expected.root, _is_ipc356) == expected.ipc356_files
-    assert _relative_files(expected.root, _is_manufacturing_output) == expected.manufacturing_files
-    assert _relative_files(expected.root, _is_report) == expected.report_files
+    assert set(expected.project_sidecars) <= set(
+        _relative_files(expected.root, _is_project_sidecar)
+    )
+    assert set(expected.packaged_netlists) <= set(
+        _relative_files(expected.root, _is_packaged_netlist)
+    )
+    assert set(expected.ipc356_files) <= set(_relative_files(expected.root, _is_ipc356))
+    assert set(expected.manufacturing_files) <= set(
+        _relative_files(expected.root, _is_manufacturing_output)
+    )
+    assert set(expected.report_files) <= set(_relative_files(expected.root, _is_report))
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        "adafruit-rgb-lcd-shield/license.txt",
+        "debugotron/LICENSE",
+        "jetson-orin/LICENSE",
+        "opencellular/LICENSE-HARDWARE",
+        "pi-mx8/LICENSE",
+        "qfsae-pcb/LICENSE",
+        "rp2040-minimal/.metadata/LICENSE",
+        "sparkfun-bme280/LICENSE.md",
+    ),
+)
+def test_licensed_upstream_fixture_preserves_license_file(relative_path: str) -> None:
+    assert (UPSTREAM_FIXTURES / relative_path).is_file()
 
 
 @pytest.mark.parametrize(

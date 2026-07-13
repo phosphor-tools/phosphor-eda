@@ -45,13 +45,16 @@ if TYPE_CHECKING:
     from phosphor_eda.domain.pcb import Board
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 GOLDENS = Path(__file__).resolve().parent / "goldens"
 
-KICAD_FIXTURE = FIXTURES / "swd_switch.kicad_pcb"
-ALTIUM_FIXTURE = FIXTURES / "altium/pi-mx8/PCB/PiMX8MP_r0.3.PcbDoc"
+KICAD_FIXTURE = UPSTREAM_FIXTURES / "debugotron/hw/swd_switch/swd_switch.kicad_pcb"
+ALTIUM_FIXTURE = (
+    UPSTREAM_FIXTURES / "pi-mx8/01_Electronics/PiMX8MP_r0.3_release/PCB/PiMX8MP_r0.3.PcbDoc"
+)
 ALLEGRO_FIXTURE = (
-    FIXTURES
-    / "orcad/opencellular-breakout/allegro/OpenCellular/electronics/breakout/board"
+    UPSTREAM_FIXTURES
+    / "opencellular/electronics/breakout/board"
     / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
 )
 

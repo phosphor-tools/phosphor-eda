@@ -20,7 +20,10 @@ from phosphor_eda.domain.variants import (
 from phosphor_eda.query.project_loader import load_project
 
 FIXTURES = Path(__file__).parent / "fixtures"
-PI_MX8_PRJPCB = FIXTURES / "altium/pi-mx8/PiMX8MP_r0.3_release.PrjPcb"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
+PI_MX8_PRJPCB = (
+    UPSTREAM_FIXTURES / "pi-mx8/01_Electronics/PiMX8MP_r0.3_release/PiMX8MP_r0.3_release.PrjPcb"
+)
 
 
 def _project_with_component(component: Component, *, variants: list[Variant]) -> Project:

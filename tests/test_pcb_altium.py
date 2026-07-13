@@ -48,7 +48,10 @@ from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.render.inventory import InventoryItemKind, InventoryPurpose, build_inventory
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-PI_MX8_PCBDOC = FIXTURES / "altium/pi-mx8/PCB/PiMX8MP_r0.3.PcbDoc"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
+PI_MX8_PCBDOC = (
+    UPSTREAM_FIXTURES / "pi-mx8/01_Electronics/PiMX8MP_r0.3_release/PCB/PiMX8MP_r0.3.PcbDoc"
+)
 
 
 @pytest.fixture(scope="module")

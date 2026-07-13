@@ -26,9 +26,12 @@ from phosphor_eda.formats.altium.pcb_project import AltiumEnrichment
 from phosphor_eda.render.api import RenderResult
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 DSN_PATH = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
-PCB_PATH = FIXTURES / "swd_switch.kicad_pcb"
-PI_MX8_PRJPCB = FIXTURES / "altium/pi-mx8/PiMX8MP_r0.3_release.PrjPcb"
+PCB_PATH = UPSTREAM_FIXTURES / "debugotron/hw/swd_switch/swd_switch.kicad_pcb"
+PI_MX8_PRJPCB = (
+    UPSTREAM_FIXTURES / "pi-mx8/01_Electronics/PiMX8MP_r0.3_release/PiMX8MP_r0.3_release.PrjPcb"
+)
 
 
 def _write_opj(path: Path, dsn_path: Path = DSN_PATH) -> Path:
@@ -670,7 +673,8 @@ def test_cli_render_custom_css_file_option_is_removed(tmp_path: Path) -> None:
     )
 
     assert result.exit_code != 0
-    assert "No such option: --custom-css-file" in result.output
+    assert "No such option" in result.output
+    assert "--custom-css-file" in result.output
 
 
 def test_cli_render_theme_option_is_removed(tmp_path: Path) -> None:
@@ -679,7 +683,8 @@ def test_cli_render_theme_option_is_removed(tmp_path: Path) -> None:
     result = runner.invoke(main, ["-P", str(project), "pcb", "render", "--theme", "print"])
 
     assert result.exit_code != 0
-    assert "No such option: --theme" in result.output
+    assert "No such option" in result.output
+    assert "--theme" in result.output
 
 
 def test_cli_render_supports_highlight_pad(tmp_path: Path) -> None:

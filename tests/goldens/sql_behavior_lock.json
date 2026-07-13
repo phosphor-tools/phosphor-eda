@@ -185,7 +185,7 @@
     }
   },
   "jetson-orin": {
-    "serialize_sha256": "a0d286713454ebfbd06c6d8317c98a25432a5c419ffc6c5856d19ad6171b4b75",
+    "serialize_sha256": "9b08b6b76eb0267cce23ac8ae4ad0ded875e7ee1c6583e3bcbf87f1b0e674009",
     "tables": {
       "artwork": {
         "rows": 149352,
@@ -201,7 +201,7 @@
       },
       "boards": {
         "rows": 1,
-        "sha256": "9d728a2ed87b04a4265061f67e0e12b56b8ff985486252b7868f1a4969b6c813"
+        "sha256": "673ae55ad64916cea49960fb8f5bb16292b5b8b63819807fafeb42f206f73f70"
       },
       "bus_members": {
         "rows": 0,
@@ -317,7 +317,7 @@
       },
       "pages": {
         "rows": 10,
-        "sha256": "e2d6384c7ba35a6226e5b8e022a656662608cfdf473e0e5b817612667007bd2b"
+        "sha256": "109fd31414fce9072db63b0093aef5c80514928fd54b844766599efbebec6789"
       },
       "pin_occurrence_metadata": {
         "rows": 2670,
@@ -341,7 +341,7 @@
       },
       "project_documents": {
         "rows": 4,
-        "sha256": "7457082c72da1750c3b97d8324ad4afe0b0c29caa6f4f43df89f8edf75420cfb"
+        "sha256": "5ecc7abfcd49d8fbfbbdbe895e64ca657532cc2d0ddd8be913ff15af2f4405de"
       },
       "project_parameters": {
         "rows": 0,
@@ -385,8 +385,8 @@
         "sha256": "f79f8d6486c8e45e1548e4e0c3bd633afa0fb8f5be338c88a90c505770564710"
       },
       "boards": {
-        "rows": 1,
-        "sha256": "48f264ac36e21597a35a6bfcdee43d5b034cb903c7c18859f8784a0227668264"
+        "rows": 2,
+        "sha256": "fd6694a652788f2896d66a9e7db4e7c3ef76119215d2f27ad43daa5e25c22034"
       },
       "bus_members": {
         "rows": 246,
@@ -433,8 +433,8 @@
         "sha256": "1ef058a2dcd89ee68c1b0d47122a56bf257757175e69204a7fcfb7c9e4c7d570"
       },
       "design_rules": {
-        "rows": 107,
-        "sha256": "0e113fe1730f1acf1f49cf41eea03882dd74178c73208dc684bb7ac3ca34782d"
+        "rows": 142,
+        "sha256": "7a0e235ae7f64931242f952ad960fe5d1b646f002bb6d60afc04f88cb5564101"
       },
       "diff_pairs": {
         "rows": 55,
@@ -465,8 +465,8 @@
         "sha256": "264ba72ba89b5b69c7c65fd396cab9cb557b96aa9f2be0a7134140d1fd26a0e0"
       },
       "net_classes": {
-        "rows": 64,
-        "sha256": "ae7680176e64dc725b4a3cc7afc789a1421691df303b56fa921c37d586ac2be7"
+        "rows": 78,
+        "sha256": "5ad178583862b5c528e6d4119ff1c333636ca8e49c5949788cac830cfaa51a8c"
       },
       "net_metadata": {
         "rows": 487,
@@ -526,7 +526,7 @@
       },
       "project_documents": {
         "rows": 19,
-        "sha256": "c20f263c06e43a9e1d2ec83b2833d348e0f7154ab7b9f02735ad1477ff9e90be"
+        "sha256": "56252ad1721e306655989e041791296c15f52a6c36490a4757e3cd2e0fa3cc60"
       },
       "project_parameters": {
         "rows": 7,

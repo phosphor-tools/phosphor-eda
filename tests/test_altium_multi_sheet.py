@@ -6,12 +6,15 @@ from phosphor_eda.formats.altium.to_schematic import altium_to_design
 from phosphor_eda.query.format import serialize_design
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-QFSAE_PRJPCB = FIXTURES / "altium/qfsae-debugger/Debugger.PrjPcb"
-MCU_SCHDOC = FIXTURES / "altium/qfsae-debugger/MCU.SchDoc"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
+QFSAE_PRJPCB = UPSTREAM_FIXTURES / "qfsae-pcb/Debugger/Debugger.PrjPcb"
+MCU_SCHDOC = UPSTREAM_FIXTURES / "qfsae-pcb/Debugger/MCU.SchDoc"
 # pi-mx8 keeps its schematics in a SCH/ subdirectory while sheet-symbol
 # FileName records reference children by bare filename, so hierarchical net
 # resolution must reconcile the two path spellings.
-PIMX8_PRJPCB = FIXTURES / "altium/pi-mx8/PiMX8MP_r0.3_release.PrjPcb"
+PIMX8_PRJPCB = (
+    UPSTREAM_FIXTURES / "pi-mx8/01_Electronics/PiMX8MP_r0.3_release/PiMX8MP_r0.3_release.PrjPcb"
+)
 
 
 def _net_by_name(design, name):

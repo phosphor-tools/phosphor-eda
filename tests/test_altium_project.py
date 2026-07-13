@@ -8,7 +8,8 @@ import pytest
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode, parse_prjpcb, parse_prjpcb_file
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-QFSAE_PRJPCB = FIXTURES / "altium/qfsae-debugger/Debugger.PrjPcb"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
+QFSAE_PRJPCB = UPSTREAM_FIXTURES / "qfsae-pcb/Debugger/Debugger.PrjPcb"
 
 
 def test_parse_prjpcb_from_string():

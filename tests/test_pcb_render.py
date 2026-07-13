@@ -42,14 +42,15 @@ from phosphor_eda.render.settings import (
 )
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 ALLEGRO_BREAKOUT_BRD = (
-    FIXTURES
-    / "orcad/opencellular-breakout/allegro/OpenCellular/electronics/breakout/board"
+    UPSTREAM_FIXTURES
+    / "opencellular/electronics/breakout/board"
     / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
 )
 ALLEGRO_ROHM_STEPPER_BRD = (
-    FIXTURES
-    / "orcad/rohm-stepper-driver-ctrl/Design Files for Rev 1.0"
+    UPSTREAM_FIXTURES
+    / "rohm-stepper-driver/Design Files for Rev 1.0"
     / "STEPPER EVAL BRD - PCB Board File - Rev 1.0.brd"
 )
 
