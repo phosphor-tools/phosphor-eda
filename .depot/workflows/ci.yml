@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  prepare-3-13:
+    name: Prepare Python 3.13
+    runs-on: depot-ubuntu-24.04-8
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: ./.depot/actions/setup-python
+        with:
+          python-version: "3.13"
+          save-cache: "true"
+
+  prepare-3-14:
+    name: Prepare Python 3.14
+    runs-on: depot-ubuntu-24.04-8
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: ./.depot/actions/setup-python
+        with:
+          python-version: "3.14"
+          save-cache: "true"
+
+  quality:
+    name: Quality
+    needs: prepare-3-13
+    runs-on: depot-ubuntu-24.04-8
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: ./.depot/actions/setup-python
+        with:
+          python-version: "3.13"
+
+      - name: Lint
+        run: uv run --locked ruff check .
+      - name: Format
+        run: uv run --locked ruff format --check .
+      - name: Type check
+        run: uv run --locked basedpyright
+      - name: Audit dependencies
+        run: uv run --locked uv-secure uv.lock
+
+  test-3-13:
+    name: Test (Python 3.13)
+    needs: prepare-3-13
+    runs-on: depot-ubuntu-24.04-8
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Initialize fixture repositories
+        run: git submodule update --init --depth 1 --jobs 8
+      - uses: ./.depot/actions/setup-python
+        with:
+          python-version: "3.13"
+
+      - name: Test
+        env:
+          CI: "1"
+        run: uv run --locked --python 3.13 pytest
+      - name: Deinitialize fixture repositories
+        if: always()
+        run: git submodule deinit --all --force
+
+  test-3-14:
+    name: Test (Python 3.14)
+    needs: prepare-3-14
+    runs-on: depot-ubuntu-24.04-8
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Initialize fixture repositories
+        run: git submodule update --init --depth 1 --jobs 8
+      - uses: ./.depot/actions/setup-python
+        with:
+          python-version: "3.14"
+
+      - name: Test
+        env:
+          CI: "1"
+        run: uv run --locked --python 3.14 pytest
+      - name: Deinitialize fixture repositories
+        if: always()
+        run: git submodule deinit --all --force
+
+  package:
+    name: Package
+    needs: prepare-3-13
+    runs-on: depot-ubuntu-24.04-8
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: ./.depot/actions/setup-python
+        with:
+          python-version: "3.13"
+
+      - name: Build distributions
+        run: uv build --no-sources
+      - name: Check distribution metadata
+        run: uv run --locked twine check --strict dist/*
+      - name: Smoke-test wheel
+        run: uv run --isolated --no-project --with dist/*.whl tests/package_smoke.py
+      - name: Smoke-test source distribution
+        run: uv run --isolated --no-project --with dist/*.tar.gz tests/package_smoke.py

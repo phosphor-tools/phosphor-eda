@@ -8,7 +8,7 @@ from time import perf_counter
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Generator
 
 ProfileValue = int | float | str | bool | None
 
@@ -27,7 +27,7 @@ class RenderProfiler:
         self._events: list[RenderProfileEvent] = []
 
     @contextmanager
-    def span(self, name: str, **data: ProfileValue) -> Iterator[None]:
+    def span(self, name: str, **data: ProfileValue) -> Generator[None]:
         start = perf_counter()
         try:
             yield

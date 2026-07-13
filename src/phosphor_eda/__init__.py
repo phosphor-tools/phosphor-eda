@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from importlib import import_module
+from importlib.metadata import version as distribution_version
 from typing import TYPE_CHECKING, Any
 
 __all__ = [
@@ -12,7 +13,7 @@ __all__ = [
     "load_design",
     "load_project",
 ]
-__version__ = "0.1.0"
+__version__ = distribution_version("phosphor-eda")
 
 if TYPE_CHECKING:
     from phosphor_eda.query.project_loader import (

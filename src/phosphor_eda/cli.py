@@ -6,7 +6,7 @@ import json
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, ParamSpec, Protocol, TypeVar
+from typing import TYPE_CHECKING, Protocol
 
 import click
 
@@ -58,8 +58,6 @@ if TYPE_CHECKING:
     from phosphor_eda.render.profiler import RenderProfiler
     from phosphor_eda.render.settings import RenderSettings
 
-_P = ParamSpec("_P")
-_R = TypeVar("_R")
 _PCB_FORMAT_BY_EXTENSION = {
     ".brd": "allegro",
     ".kicad_pcb": "kicad",
@@ -72,11 +70,11 @@ class _HasId(Protocol):
     id: str
 
 
-def cli_command(func: Callable[_P, _R]) -> Callable[_P, _R]:
+def cli_command[**P, R](func: Callable[P, R]) -> Callable[P, R]:
     """Wrap a command handler with a uniform error boundary."""
 
     @functools.wraps(func)
-    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         try:
             return func(*args, **kwargs)
         except ValueError as exc:
