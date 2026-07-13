@@ -48,3 +48,7 @@
 	path = tests/upstream/rp2040-minimal
 	url = https://github.com/janelia-kicad/RP2040_minimal.git
 	shallow = true
+[submodule "tests/upstream/orangecrab"]
+	path = tests/upstream/orangecrab
+	url = https://github.com/gregdavill/OrangeCrab.git
+	shallow = true
