@@ -4,12 +4,13 @@ Used by both the Altium and KiCad parsers:
 
 - ``UnionFind`` — generic union-find for connectivity grouping
 - ``WireIndex`` — axis-aligned segment index with binary search (Altium)
-- ``point_on_segment`` — axis-aligned point-on-segment test
+- ``point_on_segment`` — point-on-segment test at any angle
 """
 
 from __future__ import annotations
 
 import bisect
+import math
 from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
@@ -139,18 +140,25 @@ def point_on_segment(
     seg_end: tuple[float, float],
     tol: float = 0.0,
 ) -> bool:
-    """Check if a point lies on a horizontal or vertical line segment.
+    """Check if a point lies on a line segment at any angle.
 
-    With ``tol=0.0`` (the default) the test is exact, suitable for integer
-    Altium coordinates. KiCad passes ``tol=0.01`` to absorb float rounding.
-    Diagonal segments are never matched — both producers emit axis-aligned
-    wires only.
+    ``tol`` is the allowed perpendicular (and along-segment) distance. With
+    ``tol=0.0`` (the default) the test is exact, suitable for integer Altium
+    coordinates. KiCad passes ``tol=0.01`` to absorb float rounding and to
+    match 45-degree / free-angle wires, which are first-class there.
     """
     px, py = point
     x1, y1 = seg_start
     x2, y2 = seg_end
-    if abs(y1 - y2) <= tol and abs(py - y1) <= tol:
-        return min(x1, x2) - tol <= px <= max(x1, x2) + tol
-    if abs(x1 - x2) <= tol and abs(px - x1) <= tol:
-        return min(y1, y2) - tol <= py <= max(y1, y2) + tol
-    return False
+    dx, dy = x2 - x1, y2 - y1
+    seg_len = math.hypot(dx, dy)
+    if seg_len == 0.0:
+        # Degenerate segment: a single point.
+        return abs(px - x1) <= tol and abs(py - y1) <= tol
+    # Perpendicular distance from the point to the infinite line, via the
+    # cross product magnitude normalized by the segment length.
+    if abs((px - x1) * dy - (py - y1) * dx) > tol * seg_len:
+        return False
+    # Projection onto the segment must fall within [start, end] (+/- tol).
+    dot = (px - x1) * dx + (py - y1) * dy
+    return -tol * seg_len <= dot <= seg_len * seg_len + tol * seg_len
