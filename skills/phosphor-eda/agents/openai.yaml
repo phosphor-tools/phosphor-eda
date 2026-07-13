@@ -1,0 +1,4 @@
+interface:
+  display_name: "Phosphor EDA"
+  short_description: "Query and render electronic design projects"
+  default_prompt: "Use $phosphor-eda to inspect this electronic design project."
