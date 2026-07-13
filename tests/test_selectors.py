@@ -13,11 +13,10 @@ from phosphor_eda.domain.schematic import (
     ScopeId,
 )
 from phosphor_eda.query.selectors import (
-    parse_selector,
     resolve_components,
     resolve_nets,
-    resolve_string_selectors,
 )
+from phosphor_eda.selector_match import parse_selector, resolve_string_selectors
 
 
 def _selector_design() -> Schematic:

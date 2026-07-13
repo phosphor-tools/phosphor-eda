@@ -46,10 +46,10 @@ from phosphor_eda.query.selectors import (
     resolve_components,
     resolve_nets,
     resolve_pages,
-    resolve_string_selectors,
 )
 from phosphor_eda.query.variants import format_variant_detail, format_variant_table
 from phosphor_eda.render.settings import render_settings_schema
+from phosphor_eda.selector_match import resolve_string_selectors
 
 if TYPE_CHECKING:
     from phosphor_eda.domain.pcb import Board
