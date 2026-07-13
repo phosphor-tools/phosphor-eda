@@ -1,0 +1,18 @@
+{
+  "name": "phosphor-tools",
+  "description": "Agent skills for working with electronic designs using Phosphor Tools",
+  "owner": {
+    "name": "Phosphor Tools"
+  },
+  "plugins": [
+    {
+      "name": "phosphor-eda",
+      "description": "Query and render electronic design projects with Phosphor EDA",
+      "source": "./skills",
+      "strict": false,
+      "skills": [
+        "./phosphor-eda"
+      ]
+    }
+  ]
+}
