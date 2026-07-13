@@ -26,8 +26,8 @@ from phosphor_eda.formats.altium.records import (
 from phosphor_eda.formats.altium.sheet_builder import SheetRecords, parse_harness_groups
 from phosphor_eda.formats.altium.source import load_project_source_sheets
 from phosphor_eda.formats.altium.to_schematic import altium_to_design, altium_to_source
+from phosphor_eda.formats.altium.wire_index import WireIndex
 from phosphor_eda.formats.common.diagnostics import ParseContext
-from phosphor_eda.formats.common.spatial import WireIndex
 
 if TYPE_CHECKING:
     import pytest
