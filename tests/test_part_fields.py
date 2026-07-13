@@ -1,10 +1,10 @@
 """Tests for the shared recognized-name resolution of part fields."""
 
-from phosphor_eda.domain.schematic import Parameter, PartNumber
-from phosphor_eda.formats.common.part_fields import (
+from phosphor_eda.domain.part_fields import (
     is_dnp_value,
     resolve_part_fields,
 )
+from phosphor_eda.domain.schematic import Parameter, PartNumber
 
 
 def _params(*pairs: tuple[str, str]) -> list[Parameter]:

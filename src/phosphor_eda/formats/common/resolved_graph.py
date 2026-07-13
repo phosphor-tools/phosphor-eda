@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from phosphor_eda.domain.part_fields import resolve_part_fields
 from phosphor_eda.domain.schematic import (
     Component,
     ComponentKind,
@@ -19,7 +20,6 @@ from phosphor_eda.domain.schematic import (
     PinOccurrence,
     Schematic,
 )
-from phosphor_eda.formats.common.part_fields import resolve_part_fields
 
 if TYPE_CHECKING:
     from phosphor_eda.domain.schematic import (
