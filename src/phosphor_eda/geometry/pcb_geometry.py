@@ -492,7 +492,9 @@ def arc_center_from_three_points(
     """Compute arc center and radius from three points on the arc.
 
     Uses the circumcircle determinant formula. Returns (cx, cy, radius).
-    For degenerate (collinear) input, returns the midpoint with a large radius.
+    Collinear or coincident input does not define a circle: the center is
+    reported at the chord midpoint with radius ``0.0``, the sentinel every
+    consumer treats as "straight line" (never a fabricated bulge).
     """
     ax, ay = sx, sy
     bx, by = mx, my
@@ -501,11 +503,7 @@ def arc_center_from_three_points(
     d = 2.0 * (ax * (by - cy_p) + bx * (cy_p - ay) + cx_p * (ay - by))
 
     if abs(d) < 1e-10:
-        # Degenerate — collinear points, treat as straight line
-        mid_x = (sx + ex) / 2
-        mid_y = (sy + ey) / 2
-        dist = math.hypot(ex - sx, ey - sy)
-        return mid_x, mid_y, dist / 2 if dist > 0 else 1.0
+        return (sx + ex) / 2, (sy + ey) / 2, 0.0
 
     a_sq = ax * ax + ay * ay
     b_sq = bx * bx + by * by
@@ -582,6 +580,10 @@ def arc_to_polyline(
     Returns a list of (x, y) coordinate pairs approximating the arc.
     """
     cx, cy, radius = arc_center_from_three_points(sx, sy, mx, my, ex, ey)
+    if radius <= 0.0:
+        # Collinear/degenerate: trace the straight chord (two coincident points
+        # for a zero-length arc, which downstream buffers paint as a dot).
+        return [(sx, sy), (ex, ey)]
     sweep_deg = arc_sweep_angle(sx, sy, mx, my, ex, ey, cx, cy)
     sweep_rad = math.radians(sweep_deg)
 

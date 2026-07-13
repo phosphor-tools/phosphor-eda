@@ -92,6 +92,40 @@ def test_arc_polyline_endpoints() -> None:
     assert points[-1] == pytest.approx((2.0, 0.0), abs=0.001)
 
 
+def test_collinear_arc_center_reports_zero_radius() -> None:
+    # Three collinear points do not define a circle; a zero radius is the
+    # sentinel every consumer treats as "straight line".
+    _cx, _cy, radius = arc_center_from_three_points(0.0, 0.0, 5.0, 0.0, 10.0, 0.0)
+
+    assert radius == 0.0
+
+
+def test_collinear_arc_degrades_to_straight_chord() -> None:
+    # Regression: a collinear arc must trace the chord, not bulge into a circle.
+    points = arc_to_polyline(0.0, 0.0, 5.0, 0.0, 10.0, 0.0)
+
+    assert points == [(0.0, 0.0), (10.0, 0.0)]
+    assert all(y == pytest.approx(0.0, abs=0.001) for _x, y in points)
+
+
+def test_collinear_arc_corridor_is_straight() -> None:
+    # A collinear arc used as a trace paints a straight corridor, not a circle.
+    arc = PcbArc(0.0, 0.0, 5.0, 0.0, 10.0, 0.0, 0.2)
+
+    centerline, corridor = trace_arc_geometry(arc)
+
+    assert centerline.length == pytest.approx(10.0, abs=0.001)
+    # A 10mm-long, 0.2mm-wide flat-capped corridor is ~2mm^2; a fabricated
+    # 5mm-radius circle would be orders of magnitude larger.
+    assert corridor.area == pytest.approx(10.0 * 0.2, abs=0.05)
+
+
+def test_zero_length_arc_degrades_to_point() -> None:
+    points = arc_to_polyline(3.0, 3.0, 3.0, 3.0, 3.0, 3.0)
+
+    assert points == [(3.0, 3.0), (3.0, 3.0)]
+
+
 def test_via_geometry_radii() -> None:
     drill = PcbDrill("drill:via", 5.0, 5.0, 0.4)
     via = PcbVia("via:1", 5.0, 5.0, PadStack.simple("circle", 0.8, 0.8), (), drill)
