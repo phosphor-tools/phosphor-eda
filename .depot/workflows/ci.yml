@@ -74,9 +74,11 @@ jobs:
           python-version: "3.13"
 
       - name: Test
-        env:
-          CI: "1"
         run: uv run --locked --python 3.13 pytest
+      - name: Behavior locks
+        run: >-
+          uv run --locked --python 3.13 pytest tests/test_sql_behavior_lock.py
+          --run-behavior-locks
       - name: Deinitialize fixture repositories
         if: always()
         run: git submodule deinit --all --force
@@ -97,8 +99,6 @@ jobs:
           python-version: "3.14"
 
       - name: Test
-        env:
-          CI: "1"
         run: uv run --locked --python 3.14 pytest
       - name: Deinitialize fixture repositories
         if: always()
