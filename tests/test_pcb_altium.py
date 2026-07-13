@@ -37,9 +37,11 @@ from phosphor_eda.formats.altium.pcb_primitives import (
     int_to_mm,
     parse_mil,
 )
+from phosphor_eda.formats.altium.enums import AltiumLayer
 from phosphor_eda.formats.altium.pcb_streams import (
     arc_to_three_point,
     parse_board6_outline,
+    parse_board_outline,
     parse_component_bodies,
     parse_pads,
     parse_vias,
@@ -137,6 +139,29 @@ def test_component_body_parser_extracts_models() -> None:
     assert model.source == "{ABC-123}"
     assert model.offset == pytest.approx((25.4, -12.7, 2.54), rel=1e-3)
     assert model.rotation == (0.0, 0.0, 90.0)
+
+
+def _track_record_bytes(layer: int, start: tuple[int, int], end: tuple[int, int]) -> bytes:
+    body = bytearray(33)
+    body[0] = layer
+    body[7:9] = (0xFFFF).to_bytes(2, "little")  # component = COMPONENT_NONE
+    body[13:17] = start[0].to_bytes(4, "little", signed=True)
+    body[17:21] = start[1].to_bytes(4, "little", signed=True)
+    body[21:25] = end[0].to_bytes(4, "little", signed=True)
+    body[25:29] = end[1].to_bytes(4, "little", signed=True)
+    body[29:33] = (10_000).to_bytes(4, "little", signed=True)  # width
+    return bytes([4]) + len(body).to_bytes(4, "little") + bytes(body)
+
+
+def test_board_outline_falls_back_to_keepout_layer() -> None:
+    keepout = int(AltiumLayer.KEEP_OUT_LAYER)
+    layer_map = {keepout: make_pcb_layer("Keep-Out Layer", LayerRole.KEEPOUT, number=keepout)}
+    tracks = _track_record_bytes(keepout, (0, 0), (100_000, 0))
+
+    outline = parse_board_outline(tracks, b"", layer_map, ParseContext())
+
+    assert len(outline) == 1
+    assert outline[0].layers == ("Keep-Out Layer",)
 
 
 def test_altium_parser_emits_typed_domain_collections(board: Board) -> None:
