@@ -20,6 +20,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
 
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
@@ -36,6 +37,14 @@ jobs:
             echo "::error::Release tag $RELEASE_TAG does not match project version v$PROJECT_VERSION"
             exit 1
           fi
+
+      - name: Verify release tag is on main
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          VERIFIER="$RUNNER_TEMP/verify-release-tag-on-main.sh"
+          git show origin/main:.github/scripts/verify-release-tag-on-main.sh > "$VERIFIER"
+          bash "$VERIFIER" "$RELEASE_TAG" origin/main
 
       - run: uv sync --locked
       - name: Build distributions
