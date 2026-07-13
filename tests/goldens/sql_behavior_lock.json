@@ -185,7 +185,7 @@
     }
   },
   "jetson-orin": {
-    "serialize_sha256": "9b08b6b76eb0267cce23ac8ae4ad0ded875e7ee1c6583e3bcbf87f1b0e674009",
+    "serialize_sha256": "235b351976a13d230920a0c97737e73e7fc7b3ec608fa9d84c3ea768987a86b8",
     "tables": {
       "artwork": {
         "rows": 149352,
@@ -201,7 +201,7 @@
       },
       "boards": {
         "rows": 1,
-        "sha256": "673ae55ad64916cea49960fb8f5bb16292b5b8b63819807fafeb42f206f73f70"
+        "sha256": "1ce15f9c6848d44fe6ca259b5e78ee6e700d03aa560935e769a5d570ee6aa7ae"
       },
       "bus_members": {
         "rows": 0,
@@ -317,7 +317,7 @@
       },
       "pages": {
         "rows": 10,
-        "sha256": "109fd31414fce9072db63b0093aef5c80514928fd54b844766599efbebec6789"
+        "sha256": "7356f5a01b83d6b3708ce9f5ff147fb865666b8c5f47e8643511e2708a415d22"
       },
       "pin_occurrence_metadata": {
         "rows": 2670,
@@ -341,7 +341,7 @@
       },
       "project_documents": {
         "rows": 4,
-        "sha256": "5ecc7abfcd49d8fbfbbdbe895e64ca657532cc2d0ddd8be913ff15af2f4405de"
+        "sha256": "40e592140433e59ed3ae91a5d5910d57aa7efa930a8b4746bfd454dd63b8047c"
       },
       "project_parameters": {
         "rows": 0,
@@ -386,7 +386,7 @@
       },
       "boards": {
         "rows": 2,
-        "sha256": "fd6694a652788f2896d66a9e7db4e7c3ef76119215d2f27ad43daa5e25c22034"
+        "sha256": "3897ec8e3555a909bbe283b12bfdf61ac62cc15dea8e0c9c3f4012680e09ec3f"
       },
       "bus_members": {
         "rows": 246,
@@ -526,7 +526,7 @@
       },
       "project_documents": {
         "rows": 19,
-        "sha256": "56252ad1721e306655989e041791296c15f52a6c36490a4757e3cd2e0fa3cc60"
+        "sha256": "2bdcfff8f501aa6ab32a8faf376a3a9d3de9fb758b5a7ae749d23a1940338b43"
       },
       "project_parameters": {
         "rows": 7,
