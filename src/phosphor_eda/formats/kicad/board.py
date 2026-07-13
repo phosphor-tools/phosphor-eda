@@ -25,7 +25,8 @@ from phosphor_eda.domain.pcb import (
     PcbViaType,
 )
 from phosphor_eda.domain.pcb_builder import PcbBuilder
-from phosphor_eda.formats.kicad import graphics, pcb_common, sexp
+from phosphor_eda.formats.common import sexp
+from phosphor_eda.formats.kicad import graphics, pcb_common
 from phosphor_eda.formats.kicad.footprint import parse_footprint, parse_graphic_item
 from phosphor_eda.formats.kicad.layers import parse_layer_defs, resolve_layers
 from phosphor_eda.formats.kicad.padstack import parse_via_stack
@@ -35,7 +36,7 @@ from phosphor_eda.formats.kicad.zones import parse_zone
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from phosphor_eda.formats.kicad.sexp import SExpNode
+    from phosphor_eda.formats.common.sexp import SExpNode
 
 
 def parse_nets(sexpr: SExpNode) -> dict[int, PcbNet]:

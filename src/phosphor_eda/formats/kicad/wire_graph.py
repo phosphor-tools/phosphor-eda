@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import phosphor_eda.formats.kicad.sexp as sexp
+import phosphor_eda.formats.common.sexp as sexp
 from phosphor_eda.formats.common.spatial import UnionFind, point_on_segment
 
 if TYPE_CHECKING:
-    from phosphor_eda.formats.kicad.sexp import SExpNode
+    from phosphor_eda.formats.common.sexp import SExpNode
     from phosphor_eda.formats.kicad.source import KiCadPoint
 
 

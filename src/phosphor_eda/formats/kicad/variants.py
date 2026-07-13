@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import sexpdata
 
-import phosphor_eda.formats.kicad.sexp as sexp
+import phosphor_eda.formats.common.sexp as sexp
 from phosphor_eda.domain.variants import (
     VariantField,
     VariantOverride,

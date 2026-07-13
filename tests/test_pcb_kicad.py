@@ -19,9 +19,9 @@ from phosphor_eda.domain.pcb import (
     copper_layers,
 )
 from phosphor_eda.domain.project import Stackup
+from phosphor_eda.formats.common.sexp import SExpNode
 from phosphor_eda.formats.kicad.board import parse_kicad_pcb, parse_kicad_pcb_from_sexpr
 from phosphor_eda.formats.kicad.footprint import extract_value
-from phosphor_eda.formats.kicad.sexp import SExpNode
 from phosphor_eda.formats.kicad.stackup import parse_kicad_stackup
 from phosphor_eda.geometry.pcb_geometry import pad_polygon
 from phosphor_eda.render.drills import drill_geometry

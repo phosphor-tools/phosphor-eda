@@ -27,7 +27,7 @@ from phosphor_eda.formats.dsn.variants import map_orcad_cis_not_fitted_variants
 if TYPE_CHECKING:
     from phosphor_eda.domain.schematic import Schematic
     from phosphor_eda.domain.variants import Variant
-    from phosphor_eda.formats.kicad.sexp import SExpItem, SExpNode
+    from phosphor_eda.formats.common.sexp import SExpItem, SExpNode
 
 
 @dataclass

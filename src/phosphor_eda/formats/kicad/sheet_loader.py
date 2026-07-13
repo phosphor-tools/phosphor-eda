@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Protocol
 
 import sexpdata
 
-import phosphor_eda.formats.kicad.sexp as sexp
+import phosphor_eda.formats.common.sexp as sexp
 from phosphor_eda.domain.schematic import ScopeId
 from phosphor_eda.formats.kicad.lib_symbols import LibPins, LibPowerKinds, parse_lib_symbols
 from phosphor_eda.formats.kicad.source import KiCadSheetInstance
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from phosphor_eda.formats.common.diagnostics import ParseContext
-    from phosphor_eda.formats.kicad.sexp import SExpNode
+    from phosphor_eda.formats.common.sexp import SExpNode
 
 
 class SheetWarningReporter(Protocol):

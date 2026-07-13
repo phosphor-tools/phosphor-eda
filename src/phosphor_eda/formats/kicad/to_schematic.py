@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import phosphor_eda.formats.kicad.sexp as sexp
+import phosphor_eda.formats.common.sexp as sexp
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.kicad.pro_parser import parse_kicad_text_variables
 from phosphor_eda.formats.kicad.resolver import resolve_kicad_source

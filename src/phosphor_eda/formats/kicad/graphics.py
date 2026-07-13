@@ -19,11 +19,12 @@ from phosphor_eda.domain.pcb import (
     artwork_purpose_for_layer,
     extend_shape_bounds,
 )
-from phosphor_eda.formats.kicad import pcb_common, sexp
+from phosphor_eda.formats.common import sexp
+from phosphor_eda.formats.kicad import pcb_common
 
 if TYPE_CHECKING:
     from phosphor_eda.domain.pcb import PcbArtwork, PcbLayer, PcbPad
-    from phosphor_eda.formats.kicad.sexp import SExpNode
+    from phosphor_eda.formats.common.sexp import SExpNode
 
 
 def stroke_width(item: SExpNode, *, default: float = 0.1) -> float:

@@ -18,13 +18,14 @@ from phosphor_eda.domain.pcb import (
     PcbPourFillMode,
     PcbPourSettings,
 )
-from phosphor_eda.formats.kicad import pcb_common, sexp
+from phosphor_eda.formats.common import sexp
+from phosphor_eda.formats.kicad import pcb_common
 from phosphor_eda.formats.kicad.layers import resolve_layers
 
 if TYPE_CHECKING:
     from phosphor_eda.domain.pcb import PcbFootprint
     from phosphor_eda.domain.pcb_builder import PcbBuilder
-    from phosphor_eda.formats.kicad.sexp import SExpNode
+    from phosphor_eda.formats.common.sexp import SExpNode
 
 
 def parse_zone_keepout(
