@@ -42,12 +42,12 @@ from phosphor_eda.query.format import (
     format_trace,
     serialize_design,
 )
+from phosphor_eda.query.lookup import find_bus
 from phosphor_eda.query.query import (
     filter_buses,
     filter_components,
     filter_nets,
     filter_pages,
-    find_bus,
 )
 
 if TYPE_CHECKING:

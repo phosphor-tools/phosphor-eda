@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from phosphor_eda.query.classify import PASSIVE_PREFIXES, is_power_net, ref_prefix
+from phosphor_eda.query.lookup import find_component
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -249,10 +250,6 @@ def find_paths(design: Schematic, ref_a: str, ref_b: str) -> list[ConnectionPath
     Returns one :class:`ConnectionPath` per signal-level connection between
     the components identified by *ref_a* and *ref_b*.
     """
-    # Function-level import: query imports trace_from_net at module scope, so a
-    # top-level `from query import find_component` would be a circular import.
-    from phosphor_eda.query.query import find_component
-
     comp_a = find_component(design, ref_a)
     comp_b = find_component(design, ref_b)
 

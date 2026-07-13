@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from phosphor_eda.query.format import find_page_for_detail
-from phosphor_eda.query.query import (
+from phosphor_eda.query.lookup import (
     component_physical_designator,
     find_bus,
     find_component,
