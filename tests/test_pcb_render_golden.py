@@ -13,7 +13,7 @@ fail loudly.
 
 Regenerate goldens after an intentional change:
 
-    PHOSPHOR_UPDATE_GOLDENS=1 uv run pytest cli/tests/test_pcb_render_golden.py
+    PHOSPHOR_UPDATE_GOLDENS=1 uv run pytest tests/test_pcb_render_golden.py
 
 Review the resulting diff before committing. The companion path-data
 assertions guard the specific primitive shapes (native arcs vs polygons).

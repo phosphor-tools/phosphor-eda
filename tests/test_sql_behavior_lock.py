@@ -9,13 +9,13 @@ serialization shows up as a hash mismatch naming the table.
 Regenerate after an intentional change:
 
     PHOSPHOR_RUN_BEHAVIOR_LOCKS=1 PHOSPHOR_UPDATE_GOLDENS=1 \
-        uv run pytest cli/tests/test_sql_behavior_lock.py
+        uv run pytest tests/test_sql_behavior_lock.py
 
 The tests are slow and skipped by default. Run them explicitly when changing
 parsers, SQL schema/loading, serialization, or any behavior that can alter
 full-project output:
 
-    uv run pytest cli/tests/test_sql_behavior_lock.py --run-behavior-locks
+    uv run pytest tests/test_sql_behavior_lock.py --run-behavior-locks
 """
 
 from __future__ import annotations
