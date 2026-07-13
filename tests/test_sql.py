@@ -697,6 +697,42 @@ def test_artwork_rows_map_geometry_and_text_by_column() -> None:
         con.close()
 
 
+def test_sql_variant_active_tracks_selected_variant_not_applied_overrides() -> None:
+    # SQL `active` must mean "is the selected variant" (matching the text
+    # commands and domain), not "has any applied override": a selected variant
+    # with no overrides is active, and an unselected one with applied overrides
+    # is not.
+    assembled = Variant(name="assembled", order=1, overrides=[])
+    proto = Variant(
+        name="proto",
+        order=2,
+        overrides=[
+            VariantOverride(
+                variant_name="proto",
+                target=VariantTarget(kind=VariantTargetKind.COMPONENT, object_id="component:r1"),
+                field=VariantField.FITTED,
+                value=False,
+                applied=True,
+            )
+        ],
+    )
+    project = Project(
+        name="Variant Active",
+        schematic=Schematic(name="Variant Active"),
+        variants=[assembled, proto],
+        selected_variant_name="assembled",
+    )
+
+    con = load_database(project)
+    try:
+        rows = con.execute(
+            "SELECT variant_name, active FROM project_variants ORDER BY ord"
+        ).fetchall()
+        assert rows == [("assembled", True), ("proto", False)]
+    finally:
+        con.close()
+
+
 class TestConstructedSchematicSql:
     def test_logical_components_and_occurrences(
         self, constructed_db: duckdb.DuckDBPyConnection

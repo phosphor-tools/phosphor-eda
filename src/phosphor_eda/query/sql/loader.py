@@ -538,6 +538,12 @@ class _TitleBlockRow:
 
 
 @dataclass(frozen=True, slots=True)
+class _ProjectVariantRow:
+    variant: Variant
+    active: bool
+
+
+@dataclass(frozen=True, slots=True)
 class _VariantOverrideRow:
     variant_name: str
     ord: int
@@ -1261,39 +1267,38 @@ _PROJECT_PARAMETERS: TableSpec[tuple[str, str]] = TableSpec(
     ),
 )
 
-_PROJECT_VARIANTS: TableSpec[Variant] = TableSpec(
+_PROJECT_VARIANTS: TableSpec[_ProjectVariantRow] = TableSpec(
     "project_variants",
     (
-        col("variant_name", "VARCHAR", lambda v: v.name, constraint="PRIMARY KEY"),
-        col("description", "VARCHAR", lambda v: v.description),
-        col("ord", "INTEGER", lambda v: v.order, constraint="NOT NULL"),
-        col(
-            "active",
-            "BOOLEAN",
-            lambda v: any(override.applied for override in v.overrides),
-            constraint="NOT NULL",
-        ),
-        col("override_count", "INTEGER", lambda v: len(v.overrides), constraint="NOT NULL"),
+        col("variant_name", "VARCHAR", lambda r: r.variant.name, constraint="PRIMARY KEY"),
+        col("description", "VARCHAR", lambda r: r.variant.description),
+        col("ord", "INTEGER", lambda r: r.variant.order, constraint="NOT NULL"),
+        # Active means "is the selected project variant" — matching the text
+        # commands and Project.active_variant, not "has any applied override".
+        col("active", "BOOLEAN", lambda r: r.active, constraint="NOT NULL"),
+        col("override_count", "INTEGER", lambda r: len(r.variant.overrides), constraint="NOT NULL"),
         col(
             "not_fitted_count",
             "INTEGER",
-            lambda v: sum(1 for o in v.overrides if o.field.value == "fitted" and o.value is False),
+            lambda r: sum(
+                1 for o in r.variant.overrides if o.field.value == "fitted" and o.value is False
+            ),
             constraint="NOT NULL",
         ),
         col(
             "alternate_part_count",
             "INTEGER",
-            lambda v: sum(1 for o in v.overrides if o.field.value == "alternate_part"),
+            lambda r: sum(1 for o in r.variant.overrides if o.field.value == "alternate_part"),
             constraint="NOT NULL",
         ),
         col(
             "parameter_count",
             "INTEGER",
-            lambda v: sum(1 for o in v.overrides if o.field.value == "parameter"),
+            lambda r: sum(1 for o in r.variant.overrides if o.field.value == "parameter"),
             constraint="NOT NULL",
         ),
-        col("source_id", "VARCHAR", lambda v: _null_if_unset(v.source_id)),
-        col("metadata", "JSON", lambda v: _json_or_null(v.metadata)),
+        col("source_id", "VARCHAR", lambda r: _null_if_unset(r.variant.source_id)),
+        col("metadata", "JSON", lambda r: _json_or_null(r.variant.metadata)),
     ),
 )
 
@@ -1724,7 +1729,12 @@ def _load_project_variants(con: duckdb.DuckDBPyConnection, project: Project) -> 
             override_rows.append(
                 _VariantOverrideRow(variant_name=variant.name, ord=index, override=override)
             )
-    _PROJECT_VARIANTS.bulk_insert(con, project.variants)
+    active_variant = project.active_variant
+    variant_rows = [
+        _ProjectVariantRow(variant=variant, active=variant is active_variant)
+        for variant in project.variants
+    ]
+    _PROJECT_VARIANTS.bulk_insert(con, variant_rows)
     _VARIANT_OVERRIDES.bulk_insert(con, override_rows)
 
 
