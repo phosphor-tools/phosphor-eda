@@ -100,7 +100,6 @@ def resolve_selectors[T](
     selectors: Sequence[str],
     choices: Sequence[Selectable[T]],
     *,
-    object_name: str,
     exact_resolver: Callable[[str], T] | None = None,
     item_key: Callable[[T], str],
     default_all: bool = False,
@@ -111,7 +110,6 @@ def resolve_selectors[T](
     and ambiguity behavior is preserved. Glob-looking selectors may match zero
     objects. Negative-only selector lists start from all objects.
     """
-    del object_name
     if not selectors:
         return [choice.item for choice in choices] if default_all else []
 
@@ -186,7 +184,6 @@ def resolve_components(
     return resolve_selectors(
         selectors,
         component_selectables(design),
-        object_name="component",
         exact_resolver=lambda ref: find_component(design, ref),
         item_key=lambda component: component.id,
         default_all=default_all,
@@ -199,7 +196,6 @@ def resolve_nets(
     return resolve_selectors(
         selectors,
         net_selectables(design),
-        object_name="net",
         exact_resolver=lambda name: find_net(design, name),
         item_key=lambda net: net.id,
         default_all=default_all,
@@ -212,7 +208,6 @@ def resolve_pages(
     return resolve_selectors(
         selectors,
         page_selectables(design),
-        object_name="page",
         exact_resolver=lambda name: find_page_for_detail(design, name),
         item_key=lambda page: page.id,
         default_all=default_all,
@@ -225,7 +220,6 @@ def resolve_buses(
     return resolve_selectors(
         selectors,
         bus_selectables(design),
-        object_name="bus",
         exact_resolver=lambda name: find_bus(design, name),
         item_key=lambda bus: bus.id,
         default_all=default_all,

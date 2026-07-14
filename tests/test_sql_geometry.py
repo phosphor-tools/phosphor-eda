@@ -6,6 +6,11 @@ from pathlib import Path
 import pytest
 from shapely import MultiPolygon, Polygon
 
+from phosphor_eda.domain.arc_geometry import (
+    arc_center_from_three_points,
+    arc_sweep_angle,
+    arc_to_polyline,
+)
 from phosphor_eda.domain.pcb import (
     PadStack,
     PcbArc,
@@ -22,9 +27,6 @@ from phosphor_eda.domain.pcb import (
     PcbVia,
 )
 from phosphor_eda.geometry.pcb_geometry import (
-    arc_center_from_three_points,
-    arc_sweep_angle,
-    arc_to_polyline,
     board_outline_polygon,
     closed_path_geometry,
     pad_polygon,

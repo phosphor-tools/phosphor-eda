@@ -19,6 +19,11 @@ import shapely
 from shapely import LineString, Point
 from shapely.affinity import rotate
 
+from phosphor_eda.domain.arc_geometry import (
+    arc_center_from_three_points,
+    arc_sweep_angle,
+    arc_to_polyline,
+)
 from phosphor_eda.domain.pcb import (
     LayerRole,
     PcbArc,
@@ -42,9 +47,6 @@ from phosphor_eda.domain.pcb import (
 from phosphor_eda.formats.common.electrical import ELECTRICAL_KEY
 from phosphor_eda.geometry.pcb_geometry import (
     MIN_STROKE_WIDTH_MM,
-    arc_center_from_three_points,
-    arc_sweep_angle,
-    arc_to_polyline,
     board_outline_polygon,
     closed_path_geometry,
     footprint_bbox_polygon,
@@ -65,6 +67,7 @@ from phosphor_eda.query.sql.schema import (
     col,
     create_views,
 )
+from phosphor_eda.query.variants import variant_counts
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
@@ -1276,25 +1279,15 @@ _PROJECT_VARIANTS: TableSpec[Variant] = TableSpec(
             lambda v: any(override.applied for override in v.overrides),
             constraint="NOT NULL",
         ),
-        col("override_count", "INTEGER", lambda v: len(v.overrides), constraint="NOT NULL"),
-        col(
-            "not_fitted_count",
-            "INTEGER",
-            lambda v: sum(1 for o in v.overrides if o.field.value == "fitted" and o.value is False),
-            constraint="NOT NULL",
-        ),
+        col("override_count", "INTEGER", lambda v: variant_counts(v)[0], constraint="NOT NULL"),
+        col("not_fitted_count", "INTEGER", lambda v: variant_counts(v)[1], constraint="NOT NULL"),
         col(
             "alternate_part_count",
             "INTEGER",
-            lambda v: sum(1 for o in v.overrides if o.field.value == "alternate_part"),
+            lambda v: variant_counts(v)[2],
             constraint="NOT NULL",
         ),
-        col(
-            "parameter_count",
-            "INTEGER",
-            lambda v: sum(1 for o in v.overrides if o.field.value == "parameter"),
-            constraint="NOT NULL",
-        ),
+        col("parameter_count", "INTEGER", lambda v: variant_counts(v)[3], constraint="NOT NULL"),
         col("source_id", "VARCHAR", lambda v: _null_if_unset(v.source_id)),
         col("metadata", "JSON", lambda v: _json_or_null(v.metadata)),
     ),
@@ -1421,6 +1414,16 @@ def _append_ddl_block(lines: list[str], ddls: dict[str, str]) -> None:
 def load_database(project: Project) -> duckdb.DuckDBPyConnection:
     """Create an in-memory DuckDB with spatial extension and load project data."""
     con = duckdb.connect(":memory:")
+    try:
+        _populate_database(con, project)
+    except BaseException:
+        # A partially loaded connection is useless; don't leak it on failure.
+        con.close()
+        raise
+    return con
+
+
+def _populate_database(con: duckdb.DuckDBPyConnection, project: Project) -> None:
     create_tables(con)
 
     # Geometry tables describe the primary board; the boards table lists all.
@@ -1471,7 +1474,6 @@ def load_database(project: Project) -> duckdb.DuckDBPyConnection:
     _load_project_metadata(con, project)
 
     create_views(con)
-    return con
 
 
 def _load_footprints(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
@@ -1580,7 +1582,7 @@ def _conductor_row(conductor: PcbConductor) -> _ConductorRow:
         arc_center_x=None,
         arc_center_y=None,
         arc_angle=None,
-        length=0.0,
+        length=None,
         centerline=None,
         geom=geom,
     )
@@ -1653,11 +1655,11 @@ def _load_keepouts(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
 
 def _load_layers(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
     stackup = pcb.stackup
-    stackup_map: dict[str, int] = {}
+    stackup_names: set[str] = set()
     rows: list[_LayerRow] = []
     if stackup:
         for index, stack_layer in enumerate(stackup.layers, start=1):
-            stackup_map[stack_layer.name] = index
+            stackup_names.add(stack_layer.name)
             pcb_layer = pcb.layer_for(stack_layer.name)
             info = pcb_layer or _stackup_layer_as_pcb_layer(
                 stack_layer.layer_type, stack_layer.side
@@ -1679,7 +1681,7 @@ def _load_layers(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
             )
 
     for layer in pcb.layers:
-        if layer.name in stackup_map:
+        if layer.name in stackup_names:
             continue
         rows.append(
             _LayerRow(
