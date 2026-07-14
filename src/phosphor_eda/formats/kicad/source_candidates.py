@@ -284,6 +284,29 @@ def _atom_text(value: object) -> str:
     return str(value)
 
 
+def _resolved_atom(
+    node: SExpNode,
+    index: int,
+    text_variables: Mapping[str, str],
+    ctx: ParseContext | None,
+    warned_variables: set[str],
+) -> str | None:
+    """Resolve the text atom at *index*, or None when the node is too short.
+
+    A node missing its expected value atom (e.g. a bare ``(label)``) is
+    malformed; the caller skips it and a diagnostic is recorded so the drop
+    is observable instead of raising a bare IndexError.
+    """
+    if len(node) <= index:
+        if ctx is not None:
+            ctx.warn(
+                "kicad_malformed_node",
+                f"Skipped malformed {sexp.tag(node) or 'node'} node missing atom at index {index}",
+            )
+        return None
+    return _resolve_text_variables(_atom_text(node[index]), text_variables, ctx, warned_variables)
+
+
 def _resolve_text_variables(
     text: str,
     text_variables: Mapping[str, str],
@@ -322,12 +345,9 @@ def _label_candidates(
 ) -> list[_LabelCandidate]:
     candidates: list[_LabelCandidate] = []
     for index, label in enumerate(sexp.find_all(data[1:], tag_name)):
-        label_name = _resolve_text_variables(
-            _atom_text(label[1]),
-            text_variables,
-            ctx,
-            warned_variables,
-        )
+        label_name = _resolved_atom(label, 1, text_variables, ctx, warned_variables)
+        if label_name is None:
+            continue
         at_node = sexp.find(label[2:], "at")
         if at_node is None:
             continue
@@ -364,12 +384,9 @@ def _bus_label_candidates(
     )
     for tag_name, id_kind in label_specs:
         for index, label in enumerate(sexp.find_all(data[1:], tag_name)):
-            label_name = _resolve_text_variables(
-                _atom_text(label[1]),
-                text_variables,
-                ctx,
-                warned_variables,
-            )
+            label_name = _resolved_atom(label, 1, text_variables, ctx, warned_variables)
+            if label_name is None:
+                continue
             bus_name = _bus_syntax_text(label_name)
             if bus_name is None:
                 continue
@@ -485,12 +502,7 @@ def _annotation_candidates(
             continue
         item_tag = sexp.tag(item)
         if item_tag in {"text", "text_box"}:
-            text = _resolve_text_variables(
-                _atom_text(item[1]),
-                text_variables,
-                ctx,
-                warned_variables,
-            ).strip()
+            text = (_resolved_atom(item, 1, text_variables, ctx, warned_variables) or "").strip()
         elif item_tag == "table":
             text = _annotation_table_text(item, text_variables, ctx, warned_variables)
         else:
@@ -523,17 +535,8 @@ def _annotation_table_text(
         return ""
     cells: list[str] = []
     for cell_node in sexp.find_all(cells_node, "table_cell"):
-        if len(cell_node) < 2:
-            cells.append("")
-            continue
-        cells.append(
-            _resolve_text_variables(
-                _atom_text(cell_node[1]),
-                text_variables,
-                ctx,
-                warned_variables,
-            ).strip()
-        )
+        resolved = _resolved_atom(cell_node, 1, text_variables, ctx, warned_variables)
+        cells.append((resolved or "").strip())
     rows: list[list[str]] = []
     for index in range(0, len(cells), column_count):
         row = cells[index : index + column_count]
@@ -555,7 +558,7 @@ def _sheet_symbol_sources(
     pins: list[_SheetPinCandidate] = []
     for sheet_index, sheet_node in enumerate(sexp.find_all(data[1:], "sheet")):
         sheet_uuid = _node_value(sheet_node[1:], "uuid") or f"sheet-{sheet_index}"
-        sheet_name, sheet_file = parse_sheet_info(sheet_node)
+        sheet_name, sheet_file = parse_sheet_info(sheet_node, ctx)
         symbol_id = _source_id(scope_id, "sheet_symbol", sheet_uuid)
         child_scope_id = ScopeId(path=(*scope_id.path, sheet_uuid))
         at_node = sexp.find(sheet_node[1:], "at")
@@ -581,13 +584,8 @@ def _sheet_symbol_sources(
         for pin_index, pin_node in enumerate(sexp.find_all(sheet_node[1:], "pin")):
             if len(pin_node) < 3:
                 continue
-            pin_name = _resolve_text_variables(
-                _atom_text(pin_node[1]),
-                text_variables,
-                ctx,
-                warned_variables,
-            )
-            if _is_bus_label_text(pin_name):
+            pin_name = _resolved_atom(pin_node, 1, text_variables, ctx, warned_variables)
+            if pin_name is None or _is_bus_label_text(pin_name):
                 continue
             at_pin = sexp.find(pin_node[3:], "at")
             if at_pin is None:

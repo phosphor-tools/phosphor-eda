@@ -27,7 +27,9 @@ from phosphor_eda.domain.pcb import (
     PcbPolygon,
     PcbText,
 )
+from phosphor_eda.formats.common.diagnostics import warn_optional
 from phosphor_eda.formats.kicad import graphics, pcb_common, sexp
+from phosphor_eda.formats.kicad.errors import MALFORMED_PCB_ITEM
 from phosphor_eda.formats.kicad.layers import resolve_layers
 from phosphor_eda.formats.kicad.padstack import parse_pad_stack
 from phosphor_eda.formats.kicad.zones import parse_zone_keepout
@@ -35,6 +37,7 @@ from phosphor_eda.formats.kicad.zones import parse_zone_keepout
 if TYPE_CHECKING:
     from phosphor_eda.domain.pcb import PcbLayer
     from phosphor_eda.domain.pcb_builder import PcbBuilder
+    from phosphor_eda.formats.common.diagnostics import ParseContext
     from phosphor_eda.formats.kicad.sexp import SExpNode
 
 
@@ -88,7 +91,17 @@ def parse_pad(
     fp_y: float,
     fp_rot: float,
     index: int,
+    ctx: ParseContext | None = None,
 ) -> None:
+    # A well-formed pad is (pad NUMBER TYPE SHAPE ...); a shorter node is
+    # malformed. Skip it with a diagnostic rather than an IndexError.
+    if len(pad_sexpr) < 4:
+        warn_optional(
+            ctx,
+            MALFORMED_PCB_ITEM,
+            f"Skipped pad {index} on footprint {footprint.reference}: node too short",
+        )
+        return
     global_pad_index = len(builder.pads)
     number = str(pad_sexpr[1])
     raw_pad_type = pad_sexpr[2]
@@ -376,7 +389,9 @@ def _xyz(parent: SExpNode | None) -> tuple[float, float, float]:
     return (sexp.num(xyz, 1), sexp.num(xyz, 2), sexp.num(xyz, 3))
 
 
-def parse_footprint(builder: PcbBuilder, fp_sexpr: SExpNode) -> FootprintParseResult:
+def parse_footprint(
+    builder: PcbBuilder, fp_sexpr: SExpNode, ctx: ParseContext | None = None
+) -> FootprintParseResult:
     lib_name = str(fp_sexpr[1])
     layer_node = sexp.find(fp_sexpr, "layer")
     layer = builder.resolve_layer(
@@ -402,7 +417,7 @@ def parse_footprint(builder: PcbBuilder, fp_sexpr: SExpNode) -> FootprintParseRe
 
     pad_start_index = len(builder.pads)
     for index, pad_sexpr in enumerate(sexp.find_all(fp_sexpr, "pad")):
-        parse_pad(builder, pad_sexpr, footprint, fp_x, fp_y, fp_rot, index)
+        parse_pad(builder, pad_sexpr, footprint, fp_x, fp_y, fp_rot, index, ctx)
 
     profile_elements: list[PcbBoardProfileElement] = []
     courtyard_artwork: list[PcbArtwork] = []

@@ -19,7 +19,9 @@ from phosphor_eda.domain.pcb import (
     copper_layers,
 )
 from phosphor_eda.domain.project import Stackup
+from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.kicad.board import parse_kicad_pcb, parse_kicad_pcb_from_sexpr
+from phosphor_eda.formats.kicad.errors import KiCadParseError
 from phosphor_eda.formats.kicad.footprint import extract_value
 from phosphor_eda.formats.kicad.sexp import SExpNode
 from phosphor_eda.formats.kicad.stackup import parse_kicad_stackup
@@ -664,15 +666,138 @@ def test_wildcard_selector_expands_aux_layers(selector: str, expected: set[str])
     assert names == expected
 
 
-def test_kicad_trace_arc_missing_mid_raises() -> None:
-    """A trace arc without a mid point is malformed and must raise, not be dropped."""
-    with pytest.raises(ValueError, match="Trace arc missing required"):
-        _parse_pcb_snippet(
-            """
-            (layers (0 "F.Cu" signal))
-            (arc (start 0 0) (end 1 1) (width 0.1) (layer "F.Cu"))
-            """
+_EDGE_CUTS_SQUARE = """
+    (gr_line (start 0 0) (end 10 0) (layer "Edge.Cuts") (width 0.1))
+    (gr_line (start 10 0) (end 10 10) (layer "Edge.Cuts") (width 0.1))
+    (gr_line (start 10 10) (end 0 10) (layer "Edge.Cuts") (width 0.1))
+    (gr_line (start 0 10) (end 0 0) (layer "Edge.Cuts") (width 0.1))
+"""
+
+
+def _parse_pcb_snippet_ctx(body: str, name: str = "test") -> tuple[Board, ParseContext]:
+    ctx = ParseContext()
+    parsed = sexpdata.loads(f"(kicad_pcb {body})")
+    board = parse_kicad_pcb_from_sexpr(list(parsed[1:]), default_name=name, ctx=ctx)
+    return board, ctx
+
+
+def test_kicad_trace_arc_missing_mid_degrades() -> None:
+    """A trace arc without a mid point is malformed: skip it with a diagnostic."""
+    board, ctx = _parse_pcb_snippet_ctx(
+        f"""
+        (layers (0 "F.Cu" signal) (44 "Edge.Cuts" user))
+        (arc (start 0 0) (end 1 1) (width 0.1) (layer "F.Cu"))
+        {_EDGE_CUTS_SQUARE}
+        """
+    )
+    assert [c for c in board.conductors if c.kind == PcbConductorKind.TRACE_ARC] == []
+    assert any(
+        issue.category == "kicad_malformed_pcb_item" and "trace arc" in issue.message
+        for issue in ctx.issues
+    )
+
+
+def test_kicad_segment_missing_width_degrades() -> None:
+    """A segment missing its width is skipped rather than aborting the board."""
+    board, ctx = _parse_pcb_snippet_ctx(
+        f"""
+        (layers (0 "F.Cu" signal) (44 "Edge.Cuts" user))
+        (segment (start 0 0) (end 1 0) (layer "F.Cu"))
+        {_EDGE_CUTS_SQUARE}
+        """
+    )
+    assert [c for c in board.conductors if c.kind == PcbConductorKind.TRACE] == []
+    assert any(
+        issue.category == "kicad_malformed_pcb_item" and "segment" in issue.message
+        for issue in ctx.issues
+    )
+
+
+def test_kicad_via_missing_drill_degrades() -> None:
+    """A via missing its drill is skipped rather than aborting the board."""
+    board, ctx = _parse_pcb_snippet_ctx(
+        f"""
+        (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+        (via (at 5 5) (size 0.6) (layers "F.Cu" "B.Cu"))
+        {_EDGE_CUTS_SQUARE}
+        """
+    )
+    assert board.vias == []
+    assert any(
+        issue.category == "kicad_malformed_pcb_item" and "via" in issue.message
+        for issue in ctx.issues
+    )
+
+
+def test_kicad_short_pad_node_degrades() -> None:
+    """A pad node missing its shape atom is skipped, not raised as IndexError."""
+    board, ctx = _parse_pcb_snippet_ctx(
+        f"""
+        (layers (0 "F.Cu" signal) (44 "Edge.Cuts" user))
+        (footprint "Test:Part"
+          (layer "F.Cu")
+          (at 5 5)
+          (property "Reference" "U1")
+          (pad "1" smd)
         )
+        {_EDGE_CUTS_SQUARE}
+        """
+    )
+    assert board.pads == []
+    assert any(
+        issue.category == "kicad_malformed_pcb_item" and "pad" in issue.message
+        for issue in ctx.issues
+    )
+
+
+def test_kicad_non_numeric_net_number_degrades() -> None:
+    """A net row with a non-numeric number is skipped with a diagnostic."""
+    board, ctx = _parse_pcb_snippet_ctx(
+        f"""
+        (layers (0 "F.Cu" signal) (44 "Edge.Cuts" user))
+        (net bogus "SIG_A")
+        (net 2 "GND")
+        {_EDGE_CUTS_SQUARE}
+        """
+    )
+    assert {net.name for net in board.nets.values()} == {"GND"}
+    assert any(
+        issue.category == "kicad_malformed_pcb_item" and "non-numeric" in issue.message
+        for issue in ctx.issues
+    )
+
+
+def test_kicad_zone_without_boundary_degrades() -> None:
+    """A zone with no boundary polygon is skipped with a diagnostic, not silently."""
+    board, ctx = _parse_pcb_snippet_ctx(
+        f"""
+        (layers (0 "F.Cu" signal) (44 "Edge.Cuts" user))
+        (net 1 "GND")
+        (zone (net 1) (net_name "GND") (layer "F.Cu"))
+        {_EDGE_CUTS_SQUARE}
+        """
+    )
+    assert board.pours == []
+    assert any(
+        issue.category == "kicad_malformed_pcb_item" and "zone" in issue.message
+        for issue in ctx.issues
+    )
+
+
+def test_kicad_truncated_pcb_raises_named_error(tmp_path: Path) -> None:
+    """A truncated .kicad_pcb raises a named, path-bearing KiCadParseError."""
+    pcb = tmp_path / "broken.kicad_pcb"
+    pcb.write_text('(kicad_pcb (layers (0 "F.Cu" signal)', encoding="utf-8")
+    with pytest.raises(KiCadParseError, match="broken.kicad_pcb"):
+        parse_kicad_pcb(pcb)
+
+
+def test_kicad_non_utf8_pcb_raises_named_error(tmp_path: Path) -> None:
+    """A non-UTF-8 .kicad_pcb raises the same named error, not UnicodeDecodeError."""
+    pcb = tmp_path / "binary.kicad_pcb"
+    pcb.write_bytes(b"\xff\xfe\x00(kicad_pcb")
+    with pytest.raises(KiCadParseError, match="binary.kicad_pcb"):
+        parse_kicad_pcb(pcb)
 
 
 def test_kicad_malformed_layer_def_raises() -> None:

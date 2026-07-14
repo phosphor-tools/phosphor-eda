@@ -18,12 +18,15 @@ from phosphor_eda.domain.pcb import (
     PcbPourFillMode,
     PcbPourSettings,
 )
+from phosphor_eda.formats.common.diagnostics import warn_optional
 from phosphor_eda.formats.kicad import pcb_common, sexp
+from phosphor_eda.formats.kicad.errors import MALFORMED_PCB_ITEM
 from phosphor_eda.formats.kicad.layers import resolve_layers
 
 if TYPE_CHECKING:
     from phosphor_eda.domain.pcb import PcbFootprint
     from phosphor_eda.domain.pcb_builder import PcbBuilder
+    from phosphor_eda.formats.common.diagnostics import ParseContext
     from phosphor_eda.formats.kicad.sexp import SExpNode
 
 
@@ -98,13 +101,16 @@ def parse_zone_polygon_points(zone_sexpr: SExpNode) -> list[tuple[float, float]]
     return [pcb_common.xy(xy_node) for xy_node in sexp.find_all(pts_node, "xy")]
 
 
-def parse_zone(builder: PcbBuilder, zone_sexpr: SExpNode, index: int) -> None:
+def parse_zone(
+    builder: PcbBuilder, zone_sexpr: SExpNode, index: int, ctx: ParseContext | None = None
+) -> None:
     keepout = parse_zone_keepout(builder, zone_sexpr, index=index)
     if keepout is not None:
         builder.add_keepout_object(keepout, source="zone keepout")
         return
     boundary_points = parse_zone_polygon_points(zone_sexpr)
     if not boundary_points:
+        warn_optional(ctx, MALFORMED_PCB_ITEM, f"Skipped zone {index}: no boundary polygon")
         return
     layers = resolve_layers(builder, zone_layer_names(zone_sexpr), source="zone")
     fill_node = sexp.find(zone_sexpr, "fill")
