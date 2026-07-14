@@ -12,6 +12,7 @@ from phosphor_eda.formats.kicad.source import (
     KiCadBusAlias,
     KiCadBusEntry,
     KiCadBusLabel,
+    KiCadBusSheetPin,
     KiCadGlobalLabel,
     KiCadHierarchicalLabel,
     KiCadLocalLabel,
@@ -49,11 +50,21 @@ class _ExtractedSheet:
     power_symbols: list[KiCadPowerSymbol]
     sheet_symbols: list[KiCadSheetSymbol]
     sheet_pins: list[KiCadSheetPin]
+    bus_sheet_pins: list[KiCadBusSheetPin]
     annotations: list[KiCadSheetAnnotation]
 
 
 class _HasLocalNetId(Protocol):
     local_net_id: str
+
+
+class _BusNameSource(Protocol):
+    """A named attachment to a bus group: a bus label or a bus sheet pin."""
+
+    id: str
+    scope_id: ScopeId
+    source_index: int
+    name: str
 
 
 def extract_sheet_sources(
@@ -184,6 +195,21 @@ def extract_sheet_sources(
         for candidate in candidates.sheet_pins
         if candidate.child_scope_id in loaded_scopes
     ]
+    bus_sheet_pins = [
+        KiCadBusSheetPin(
+            id=candidate.id,
+            scope_id=candidate.scope_id,
+            source_index=candidate.source_index,
+            sheet_symbol_id=candidate.sheet_symbol_id,
+            child_scope_id=candidate.child_scope_id,
+            name=candidate.name,
+            direction=candidate.direction,
+            location=candidate.location,
+            bus_group_id=candidate.bus_group_id,
+        )
+        for candidate in candidates.bus_sheet_pins
+        if candidate.child_scope_id in loaded_scopes
+    ]
     sheet_symbols = [
         symbol for symbol in candidates.sheet_symbols if symbol.child_scope_id in loaded_scopes
     ]
@@ -199,6 +225,7 @@ def extract_sheet_sources(
         bus_entries,
         bus_labels=bus_labels,
         bus_aliases=bus_aliases,
+        bus_sheet_pins=bus_sheet_pins,
         local_labels=local_labels,
         global_labels=global_labels,
         hierarchical_labels=hierarchical_labels,
@@ -277,6 +304,7 @@ def extract_sheet_sources(
         power_symbols=power_symbols,
         sheet_symbols=sheet_symbols,
         sheet_pins=sheet_pins,
+        bus_sheet_pins=bus_sheet_pins,
         annotations=annotations,
     )
 
@@ -297,16 +325,22 @@ def _assign_bus_entry_members(
     *,
     bus_labels: list[KiCadBusLabel],
     bus_aliases: list[KiCadBusAlias],
+    bus_sheet_pins: list[KiCadBusSheetPin],
     local_labels: list[KiCadLocalLabel],
     global_labels: list[KiCadGlobalLabel],
     hierarchical_labels: list[KiCadHierarchicalLabel],
     power_symbols: list[KiCadPowerSymbol],
     sheet_pins: list[KiCadSheetPin],
 ) -> None:
-    labels_by_bus_group: dict[str, list[KiCadBusLabel]] = {}
+    labels_by_bus_group: dict[str, list[_BusNameSource]] = {}
     for label in bus_labels:
         if label.bus_group_id:
             labels_by_bus_group.setdefault(label.bus_group_id, []).append(label)
+    # A bus sheet pin names its bus too; used only when the group has no
+    # explicit bus label.
+    pins_by_bus_group: dict[str, list[_BusNameSource]] = {}
+    for bus_pin in bus_sheet_pins:
+        pins_by_bus_group.setdefault(bus_pin.bus_group_id, []).append(bus_pin)
 
     scalar_names_by_net = _scalar_names_by_net(
         local_labels,
@@ -322,7 +356,9 @@ def _assign_bus_entry_members(
             entries_by_bus_group.setdefault(entry.bus_group_id, []).append(entry)
 
     for bus_group_id, entries in entries_by_bus_group.items():
-        label = _best_bus_group_label(labels_by_bus_group.get(bus_group_id, []))
+        label = _best_bus_group_label(
+            labels_by_bus_group.get(bus_group_id) or pins_by_bus_group.get(bus_group_id, [])
+        )
         if label is None:
             continue
         aliases = {
@@ -369,7 +405,7 @@ def _scalar_names_by_net(
     return {net_id: tuple(net_names) for net_id, net_names in names.items()}
 
 
-def _best_bus_group_label(labels: list[KiCadBusLabel]) -> KiCadBusLabel | None:
+def _best_bus_group_label(labels: list[_BusNameSource]) -> _BusNameSource | None:
     if not labels:
         return None
     return min(labels, key=lambda label: label.source_index)

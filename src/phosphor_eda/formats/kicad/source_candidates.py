@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import sexpdata
@@ -16,8 +15,22 @@ from phosphor_eda.domain.schematic import (
     Parameter,
     ScopeId,
 )
+from phosphor_eda.formats.common.diagnostics import warn_optional
 from phosphor_eda.formats.common.resolved_graph import ResolvedComponentInfo
 from phosphor_eda.formats.common.text import render_annotation_table
+from phosphor_eda.formats.kicad.candidate_models import (
+    AnnotationCandidate,
+    BusAliasCandidate,
+    BusEntryCandidate,
+    BusLabelCandidate,
+    BusSheetPinCandidate,
+    LabelCandidate,
+    NetclassFlagCandidate,
+    PinCandidate,
+    PowerCandidate,
+    SheetCandidates,
+    SheetPinCandidate,
+)
 from phosphor_eda.formats.kicad.lib_symbols import (
     LibPins,
     LibPowerKinds,
@@ -46,132 +59,6 @@ if TYPE_CHECKING:
     from phosphor_eda.formats.kicad.sexp import SExpNode
 
 _TEXT_VARIABLE_RE = re.compile(r"\$\{([^}]+)\}")
-
-
-@dataclass(slots=True)
-class _LabelCandidate:
-    id: str
-    scope_id: ScopeId
-    source_index: int
-    name: str
-    location: KiCadPoint
-
-
-@dataclass(slots=True)
-class _PowerCandidate:
-    id: str
-    scope_id: ScopeId
-    source_index: int
-    name: str
-    reference: str
-    lib_id: str
-    power_kind: str
-    location: KiCadPoint
-
-
-@dataclass(slots=True)
-class _PinCandidate:
-    id: str
-    scope_id: ScopeId
-    source_index: int
-    component_source_id: str
-    component_identity_source_id: str
-    component_unit: int
-    component_has_multiple_units: bool
-    component_reference: str
-    component_value: str
-    component_footprint: str
-    component_datasheet: str
-    component_description: str
-    component_x: float | None
-    component_y: float | None
-    component_rotation: float
-    component_mirror: bool
-    component_info: ResolvedComponentInfo | None
-    component_attr_metadata: dict[str, str]
-    pin_designator: str
-    pin_name: str
-    pin_net_name: str
-    pin_type: str
-    location: KiCadPoint
-    no_connect: bool
-
-
-@dataclass(slots=True)
-class _SheetPinCandidate:
-    id: str
-    scope_id: ScopeId
-    source_index: int
-    sheet_symbol_id: str
-    child_scope_id: ScopeId
-    name: str
-    direction: str
-    location: KiCadPoint
-
-
-@dataclass(slots=True)
-class _BusLabelCandidate:
-    id: str
-    scope_id: ScopeId
-    source_index: int
-    name: str
-    location: KiCadPoint
-    kind: str
-    bus_group_id: str
-
-
-@dataclass(slots=True)
-class _BusAliasCandidate:
-    id: str
-    scope_id: ScopeId
-    name: str
-    members: tuple[str, ...]
-
-
-@dataclass(slots=True)
-class _BusEntryCandidate:
-    id: str
-    scope_id: ScopeId
-    source_index: int
-    start: KiCadPoint
-    end: KiCadPoint
-    wire_point: KiCadPoint
-    bus_point: KiCadPoint
-    bus_group_id: str
-
-
-@dataclass(slots=True)
-class _NetclassFlagCandidate:
-    id: str
-    scope_id: ScopeId
-    source_index: int
-    location: KiCadPoint
-    rotation: float
-    net_class: str
-    component_class: str
-    metadata: dict[str, str]
-
-
-@dataclass(slots=True)
-class _AnnotationCandidate:
-    scope_id: ScopeId
-    text: str
-
-
-@dataclass(slots=True)
-class SheetCandidates:
-    local_labels: list[_LabelCandidate]
-    global_labels: list[_LabelCandidate]
-    hierarchical_labels: list[_LabelCandidate]
-    bus_labels: list[_BusLabelCandidate]
-    bus_aliases: list[_BusAliasCandidate]
-    bus_entries: list[_BusEntryCandidate]
-    power_symbols: list[_PowerCandidate]
-    sheet_symbols: list[KiCadSheetSymbol]
-    sheet_pins: list[_SheetPinCandidate]
-    pin_occurrences: list[_PinCandidate]
-    netclass_flags: list[_NetclassFlagCandidate]
-    annotations: list[_AnnotationCandidate]
 
 
 def extract_source_candidates(
@@ -231,10 +118,11 @@ def extract_source_candidates(
     )
     bus_alias_candidates = _bus_alias_candidates(data, scope_id)
     bus_entry_candidates = _bus_entry_candidates(data, scope_id, wire_graph, bus_graph)
-    sheet_symbols, sheet_pin_candidates = _sheet_symbol_sources(
+    sheet_symbols, sheet_pin_candidates, bus_sheet_pin_candidates = _sheet_symbol_sources(
         data,
         scope_id,
         wire_graph,
+        bus_graph,
         variables,
         ctx,
         warned_variables,
@@ -272,6 +160,7 @@ def extract_source_candidates(
         power_symbols=power_candidates,
         sheet_symbols=sheet_symbols,
         sheet_pins=sheet_pin_candidates,
+        bus_sheet_pins=bus_sheet_pin_candidates,
         pin_occurrences=pin_candidates,
         netclass_flags=netclass_flag_candidates,
         annotations=annotation_candidates,
@@ -319,8 +208,8 @@ def _label_candidates(
     text_variables: Mapping[str, str],
     ctx: ParseContext | None,
     warned_variables: set[str],
-) -> list[_LabelCandidate]:
-    candidates: list[_LabelCandidate] = []
+) -> list[LabelCandidate]:
+    candidates: list[LabelCandidate] = []
     for index, label in enumerate(sexp.find_all(data[1:], tag_name)):
         label_name = _resolve_text_variables(
             _atom_text(label[1]),
@@ -337,7 +226,7 @@ def _label_candidates(
         wire_graph.connect_point(location)
         source_key = _node_value(label[2:], "uuid") or str(index)
         candidates.append(
-            _LabelCandidate(
+            LabelCandidate(
                 id=_source_id(scope_id, id_kind, source_key),
                 scope_id=scope_id,
                 source_index=index,
@@ -355,8 +244,8 @@ def _bus_label_candidates(
     text_variables: Mapping[str, str],
     ctx: ParseContext | None,
     warned_variables: set[str],
-) -> list[_BusLabelCandidate]:
-    candidates: list[_BusLabelCandidate] = []
+) -> list[BusLabelCandidate]:
+    candidates: list[BusLabelCandidate] = []
     label_specs = (
         ("label", "local_label"),
         ("global_label", "global_label"),
@@ -387,7 +276,7 @@ def _bus_label_candidates(
             )
             source_key = _node_value(label[2:], "uuid") or str(index)
             candidates.append(
-                _BusLabelCandidate(
+                BusLabelCandidate(
                     id=_source_id(scope_id, f"bus_{id_kind}", source_key),
                     scope_id=scope_id,
                     source_index=index,
@@ -400,8 +289,8 @@ def _bus_label_candidates(
     return candidates
 
 
-def _bus_alias_candidates(data: SExpNode, scope_id: ScopeId) -> list[_BusAliasCandidate]:
-    aliases: list[_BusAliasCandidate] = []
+def _bus_alias_candidates(data: SExpNode, scope_id: ScopeId) -> list[BusAliasCandidate]:
+    aliases: list[BusAliasCandidate] = []
     for index, alias_node in enumerate(sexp.find_all(data[1:], "bus_alias")):
         if len(alias_node) < 2:
             continue
@@ -413,7 +302,7 @@ def _bus_alias_candidates(data: SExpNode, scope_id: ScopeId) -> list[_BusAliasCa
         if not name or not members:
             continue
         aliases.append(
-            _BusAliasCandidate(
+            BusAliasCandidate(
                 id=_source_id(scope_id, "bus_alias", f"{index}:{name}"),
                 scope_id=scope_id,
                 name=name,
@@ -428,8 +317,8 @@ def _bus_entry_candidates(
     scope_id: ScopeId,
     wire_graph: WireGraph,
     bus_graph: BusGraph,
-) -> list[_BusEntryCandidate]:
-    entries: list[_BusEntryCandidate] = []
+) -> list[BusEntryCandidate]:
+    entries: list[BusEntryCandidate] = []
     for index, entry_node in enumerate(sexp.find_all(data[1:], "bus_entry")):
         pts_node = sexp.find(entry_node[1:], "pts")
         if pts_node is None:
@@ -454,7 +343,7 @@ def _bus_entry_candidates(
         bus_graph.connect_point(bus_point)
         source_key = _node_value(entry_node[1:], "uuid") or str(index)
         entries.append(
-            _BusEntryCandidate(
+            BusEntryCandidate(
                 id=_source_id(scope_id, "bus_entry", source_key),
                 scope_id=scope_id,
                 source_index=index,
@@ -478,8 +367,8 @@ def _annotation_candidates(
     text_variables: Mapping[str, str],
     ctx: ParseContext | None,
     warned_variables: set[str],
-) -> list[_AnnotationCandidate]:
-    candidates: list[_AnnotationCandidate] = []
+) -> list[AnnotationCandidate]:
+    candidates: list[AnnotationCandidate] = []
     for item in data[1:]:
         if not isinstance(item, list) or len(item) < 2:
             continue
@@ -498,7 +387,7 @@ def _annotation_candidates(
         if not text:
             continue
         candidates.append(
-            _AnnotationCandidate(
+            AnnotationCandidate(
                 scope_id=scope_id,
                 text=text,
             )
@@ -547,12 +436,14 @@ def _sheet_symbol_sources(
     data: SExpNode,
     scope_id: ScopeId,
     wire_graph: WireGraph,
+    bus_graph: BusGraph,
     text_variables: Mapping[str, str],
     ctx: ParseContext | None,
     warned_variables: set[str],
-) -> tuple[list[KiCadSheetSymbol], list[_SheetPinCandidate]]:
+) -> tuple[list[KiCadSheetSymbol], list[SheetPinCandidate], list[BusSheetPinCandidate]]:
     symbols: list[KiCadSheetSymbol] = []
-    pins: list[_SheetPinCandidate] = []
+    pins: list[SheetPinCandidate] = []
+    bus_pins: list[BusSheetPinCandidate] = []
     for sheet_index, sheet_node in enumerate(sexp.find_all(data[1:], "sheet")):
         sheet_uuid = _node_value(sheet_node[1:], "uuid") or f"sheet-{sheet_index}"
         sheet_name, sheet_file = parse_sheet_info(sheet_node)
@@ -587,16 +478,45 @@ def _sheet_symbol_sources(
                 ctx,
                 warned_variables,
             )
-            if _is_bus_label_text(pin_name):
-                continue
             at_pin = sexp.find(pin_node[3:], "at")
             if at_pin is None:
                 continue
             pin_location = point_from_at(at_pin)
-            wire_graph.connect_point(pin_location)
             pin_uuid = _node_value(pin_node[3:], "uuid") or f"{sheet_uuid}:pin:{pin_index}"
+            if _is_bus_label_text(pin_name):
+                # A bus-syntax sheet pin attaches to the bus graph, not the
+                # wire graph; the resolver connects each bus member across the
+                # parent/child scope boundary.
+                if not bus_graph.touches_bus(pin_location):
+                    warn_optional(
+                        ctx,
+                        "kicad_dangling_bus_sheet_pin",
+                        f"Bus sheet pin '{pin_name}' on sheet '{sheet_name}' "
+                        "touches no bus; its members cannot connect",
+                    )
+                    continue
+                bus_graph.connect_point(pin_location)
+                bus_pins.append(
+                    BusSheetPinCandidate(
+                        id=_source_id(scope_id, "bus_sheet_pin", pin_uuid),
+                        scope_id=scope_id,
+                        source_index=pin_index,
+                        sheet_symbol_id=symbol_id,
+                        child_scope_id=child_scope_id,
+                        name=pin_name,
+                        direction=_atom_text(pin_node[2]),
+                        location=pin_location,
+                        bus_group_id=_source_id(
+                            scope_id,
+                            "bus_group",
+                            _point_key(bus_graph.find(pin_location)),
+                        ),
+                    ),
+                )
+                continue
+            wire_graph.connect_point(pin_location)
             pins.append(
-                _SheetPinCandidate(
+                SheetPinCandidate(
                     id=_source_id(scope_id, "sheet_pin", pin_uuid),
                     scope_id=scope_id,
                     source_index=pin_index,
@@ -607,7 +527,7 @@ def _sheet_symbol_sources(
                     location=pin_location,
                 ),
             )
-    return symbols, pins
+    return symbols, pins, bus_pins
 
 
 def _is_bus_label_text(text: str) -> bool:
@@ -627,8 +547,8 @@ def _power_symbol_candidates(
     lib_pins: LibPins,
     lib_power_kinds: LibPowerKinds,
     wire_graph: WireGraph,
-) -> list[_PowerCandidate]:
-    candidates: list[_PowerCandidate] = []
+) -> list[PowerCandidate]:
+    candidates: list[PowerCandidate] = []
     for index, sym_node in enumerate(sexp.find_all(data[1:], "symbol")):
         ref = sexp.find_property(sym_node[1:], "Reference")
         if not ref.startswith("#PWR") and not ref.startswith("#FLG"):
@@ -671,7 +591,7 @@ def _power_symbol_candidates(
                 f"{symbol_uuid}:pin:{pin_index:04d}" if has_multiple_locations else symbol_uuid
             )
             candidates.append(
-                _PowerCandidate(
+                PowerCandidate(
                     id=_source_id(scope_id, "power_symbol", source_key),
                     scope_id=scope_id,
                     source_index=index,
@@ -770,8 +690,8 @@ def _netclass_flag_candidates(
     data: SExpNode,
     scope_id: ScopeId,
     wire_graph: WireGraph,
-) -> list[_NetclassFlagCandidate]:
-    candidates: list[_NetclassFlagCandidate] = []
+) -> list[NetclassFlagCandidate]:
+    candidates: list[NetclassFlagCandidate] = []
     for index, flag_node in enumerate(sexp.find_all(data[1:], "netclass_flag")):
         at_node = sexp.find(flag_node[1:], "at")
         if at_node is None:
@@ -786,7 +706,7 @@ def _netclass_flag_candidates(
             continue
         source_key = _node_value(flag_node[1:], "uuid") or str(index)
         candidates.append(
-            _NetclassFlagCandidate(
+            NetclassFlagCandidate(
                 id=_source_id(scope_id, "netclass_flag", source_key),
                 scope_id=scope_id,
                 source_index=index,
@@ -816,10 +736,10 @@ def _pin_candidates(
     lib_descs: dict[str, str],
     wire_graph: WireGraph,
     root_uuid: str = "",
-) -> list[_PinCandidate]:
+) -> list[PinCandidate]:
     no_connect_positions = _no_connect_positions(data)
     instance_path = _scope_instance_path(root_uuid, scope_id)
-    candidates: list[_PinCandidate] = []
+    candidates: list[PinCandidate] = []
     source_index = 0
     for sym_node in sexp.find_all(data[1:], "symbol"):
         ref = sexp.find_property(sym_node[1:], "Reference")
@@ -868,7 +788,7 @@ def _pin_candidates(
             wire_graph.connect_point(location)
             pin_uuid = pin_uuids.get(pin.number, f"{symbol_uuid}:pin:{pin.number}")
             candidates.append(
-                _PinCandidate(
+                PinCandidate(
                     id=_source_id(scope_id, "pin", pin_uuid),
                     scope_id=scope_id,
                     source_index=source_index,

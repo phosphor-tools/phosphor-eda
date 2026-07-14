@@ -1,0 +1,70 @@
+(kicad_sch (version 20231120) (generator eeschema)
+
+  (uuid 11111111-1111-1111-1111-111111111111)
+
+  (paper "A4")
+
+  (lib_symbols
+    (symbol "Test:OnePin" (pin_names (offset 0)) (in_bom yes) (on_board yes)
+      (property "Reference" "J" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (property "Value" "OnePin" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (symbol "OnePin_1_1"
+        (pin passive line (at 0 0 0) (length 0)
+          (name "~" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27))))
+        )
+      )
+    )
+  )
+
+  (symbol (lib_id "Test:OnePin") (at 10 20 0) (unit 1)
+    (uuid aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa01)
+    (property "Reference" "J1" (at 10 20 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "Probe" (at 10 20 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb01))
+  )
+  (symbol (lib_id "Test:OnePin") (at 10 30 0) (unit 1)
+    (uuid aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa02)
+    (property "Reference" "J2" (at 10 30 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "Probe" (at 10 30 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbb02))
+  )
+
+  (wire (pts (xy 10 20) (xy 20 20)) (stroke (width 0) (type default))
+    (uuid cccccccc-cccc-cccc-cccc-cccccccccc01))
+  (wire (pts (xy 10 30) (xy 20 30)) (stroke (width 0) (type default))
+    (uuid cccccccc-cccc-cccc-cccc-cccccccccc02))
+
+  (bus (pts (xy 25 15) (xy 25 40)) (stroke (width 0) (type default))
+    (uuid dddddddd-dddd-dddd-dddd-dddddddddd01))
+
+  (bus_entry (pts (xy 20 20) (xy 25 15)) (stroke (width 0) (type default))
+    (uuid eeeeeeee-eeee-eeee-eeee-eeeeeeeeee01))
+  (bus_entry (pts (xy 20 30) (xy 25 25)) (stroke (width 0) (type default))
+    (uuid eeeeeeee-eeee-eeee-eeee-eeeeeeeeee02))
+
+  (label "D[0..1]" (at 25 15 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid ffffffff-ffff-ffff-ffff-ffffffffff01)
+  )
+
+  (sheet (at 20 40) (size 12.7 10.16)
+    (stroke (width 0.1524) (type solid))
+    (fill (type none) (color 0 0 0 0.0000))
+    (uuid 99999999-9999-9999-9999-999999999999)
+    (property "Sheetname" "ChildSheet" (at 20 39.2886 0)
+      (effects (font (size 1.27 1.27)) (justify left bottom))
+    )
+    (property "Sheetfile" "child.kicad_sch" (at 20 50.8714 0)
+      (effects (font (size 1.27 1.27)) (justify left top))
+    )
+    (pin "D[0..1]" input (at 25 40 90)
+      (effects (font (size 1.27 1.27)) (justify left))
+      (uuid 98765432-9876-9876-9876-987654329876)
+    )
+  )
+
+  (sheet_instances
+    (path "/" (page "1"))
+  )
+)

@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
+from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.kicad import kicad_to_design
+from phosphor_eda.formats.kicad.to_schematic import kicad_to_source
 from phosphor_eda.query.validate import Severity, validate_design
 
 HIERARCHY_DIR = Path(__file__).parent / "fixtures" / "kicad-hierarchy"
@@ -268,3 +270,72 @@ def test_reused_sheet_instances_get_per_instance_references():
         c.reference: next(p for p in c.pins if p.designator == "1").net for c in design.components
     }
     assert load_nets["R201"] is not load_nets["R301"]
+
+
+# --- Bus sheet pins ---
+
+BUS_HIERARCHY_DIR = Path(__file__).parent / "fixtures" / "kicad-bus-hierarchy"
+BUS_HIERARCHY_ROOT = BUS_HIERARCHY_DIR / "root.kicad_sch"
+
+
+def test_bus_sheet_pin_connects_members_across_scopes():
+    # A D[0..1] bus runs through a sheet pin: root taps D0 (J1) and D1 (J2),
+    # the child taps D0 (J3) and D1 (J4) below a hierarchical bus label. KiCad
+    # connects each member net across the sheet-pin boundary, so J1/J3 share
+    # one net and J2/J4 another — not four split nets.
+    design = kicad_to_design(BUS_HIERARCHY_ROOT)
+
+    net_by_pin = {
+        (pin.component.reference, pin.designator): net for net in design.nets for pin in net.pins
+    }
+    assert net_by_pin[("J1", "1")] is net_by_pin[("J3", "1")]
+    assert net_by_pin[("J2", "1")] is net_by_pin[("J4", "1")]
+    assert net_by_pin[("J1", "1")] is not net_by_pin[("J2", "1")]
+
+
+def test_dangling_bus_sheet_pin_warns(tmp_path):
+    # A bus-syntax sheet pin that touches no bus cannot be connected; it must
+    # be reported, not silently dropped.
+    root = tmp_path / "root.kicad_sch"
+    root.write_text(
+        """(kicad_sch (version 20231120) (generator eeschema)
+          (uuid 88888888-0000-0000-0000-000000000001)
+          (paper "A4")
+          (lib_symbols)
+          (sheet (at 20 40) (size 12.7 10.16)
+            (uuid 88888888-0000-0000-0000-000000000002)
+            (property "Sheetname" "ChildSheet" (at 20 39.3 0)
+              (effects (font (size 1.27 1.27)))
+            )
+            (property "Sheetfile" "child.kicad_sch" (at 20 50.9 0)
+              (effects (font (size 1.27 1.27)))
+            )
+            (pin "D[0..1]" input (at 25 40 90)
+              (effects (font (size 1.27 1.27)))
+              (uuid 88888888-0000-0000-0000-000000000003)
+            )
+          )
+          (sheet_instances (path "/" (page "1")))
+        )
+        """,
+        encoding="utf-8",
+    )
+    child = tmp_path / "child.kicad_sch"
+    child.write_text(
+        """(kicad_sch (version 20231120) (generator eeschema)
+          (uuid 88888888-0000-0000-0000-000000000010)
+          (paper "A4")
+          (lib_symbols)
+          (sheet_instances (path "/" (page "2")))
+        )
+        """,
+        encoding="utf-8",
+    )
+    ctx = ParseContext()
+
+    kicad_to_source(root, ctx=ctx)
+
+    assert any(
+        issue.category == "kicad_dangling_bus_sheet_pin" and "D[0..1]" in issue.message
+        for issue in ctx.issues
+    )
