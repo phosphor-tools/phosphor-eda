@@ -310,6 +310,60 @@ def _write_multipart_eagle_component_across_pages(tmp_path: Path) -> Path:
     return schematic
 
 
+def _write_multipad_eagle_component(tmp_path: Path) -> Path:
+    schematic = tmp_path / "multipad.sch"
+    schematic.write_text(
+        """<?xml version="1.0" encoding="utf-8"?>
+<eagle version="9.6.2">
+  <drawing>
+    <schematic>
+      <libraries>
+        <library name="test">
+          <symbols>
+            <symbol name="SYM">
+              <pin name="P" direction="pas"/>
+            </symbol>
+          </symbols>
+          <devicesets>
+            <deviceset name="DS" prefix="U">
+              <gates>
+                <gate name="G$1" symbol="SYM"/>
+              </gates>
+              <devices>
+                <device name="" package="PKG">
+                  <connects>
+                    <connect gate="G$1" pin="P" pad="3 9"/>
+                  </connects>
+                </device>
+              </devices>
+            </deviceset>
+          </devicesets>
+        </library>
+      </libraries>
+      <parts>
+        <part name="U1" library="test" deviceset="DS" device="" value="X"/>
+      </parts>
+      <sheets>
+        <sheet>
+          <instances>
+            <instance part="U1" gate="G$1" x="1" y="2"/>
+          </instances>
+          <nets>
+            <net name="N1" class="0">
+              <segment><pinref part="U1" gate="G$1" pin="P"/></segment>
+            </net>
+          </nets>
+        </sheet>
+      </sheets>
+    </schematic>
+  </drawing>
+</eagle>
+""",
+        encoding="utf-8",
+    )
+    return schematic
+
+
 def _write_eagle_net_without_pinrefs(tmp_path: Path) -> Path:
     schematic = tmp_path / "empty-net.sch"
     schematic.write_text(
@@ -540,6 +594,35 @@ def test_multipart_eagle_component_across_pages_has_pin_occurrences(tmp_path):
     }
     assert pins_by_designator["3"].occurrences[0].page.name == "Sheet 2"
     assert pins_by_designator["3"].occurrences[0].source_id.endswith(":instance:U1:B:pin:IN")
+
+
+def test_multipad_connect_yields_one_pin_per_pad(tmp_path):
+    """A space-separated connect pad maps one logical pin to several pads."""
+    design = eagle_to_design(_write_multipad_eagle_component(tmp_path))
+
+    component = _find_component(design, "U1")
+    assert component is not None
+    pins_by_designator = {pin.designator: pin for pin in component.pins}
+    assert set(pins_by_designator) == {"3", "9"}
+    assert {pin.name for pin in component.pins} == {"P"}
+
+    net = _find_net(design, "N1")
+    assert net is not None
+    assert {(pin.component.reference, pin.designator) for pin in net.pins} == {
+        ("U1", "3"),
+        ("U1", "9"),
+    }
+
+    assert pins_by_designator["3"].occurrences[0].metadata == {
+        "eagle_gate": "G$1",
+        "eagle_pin": "P",
+        "eagle_pad": "3",
+    }
+    assert pins_by_designator["9"].occurrences[0].metadata == {
+        "eagle_gate": "G$1",
+        "eagle_pin": "P",
+        "eagle_pad": "9",
+    }
 
 
 def test_eagle_named_net_without_pinrefs_does_not_create_empty_occurrence(tmp_path):

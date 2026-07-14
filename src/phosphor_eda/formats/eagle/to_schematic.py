@@ -13,12 +13,11 @@ from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET
 
 from phosphor_eda.domain.schematic import Schematic, ScopeId
-from phosphor_eda.formats.common.diagnostics import ParseContext
+from phosphor_eda.formats.common.diagnostics import ParseContext, serialize_parse_issues
 from phosphor_eda.formats.common.electrical import (
     EAGLE_DIRECTION_MAP,
     set_pin_electrical,
 )
-from phosphor_eda.formats.common.net_union import NetUnion
 from phosphor_eda.formats.common.resolved_graph import (
     ResolvedComponentOccurrenceInput,
     ResolvedLocalNetInput,
@@ -27,6 +26,7 @@ from phosphor_eda.formats.common.resolved_graph import (
     ResolvedPinInput,
     build_resolved_schematic,
 )
+from phosphor_eda.formats.common.spatial import UnionFind
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -55,8 +55,9 @@ class _DeviceSetInfo:
     description: str
     # gate_name -> symbol_name
     gates: dict[str, str] = field(default_factory=dict)
-    # (device_name, gate_name, pin_name) -> pad
-    connects: dict[tuple[str, str, str], str] = field(default_factory=dict)
+    # (device_name, gate_name, pin_name) -> physical pads (one pin can bond to
+    # several pads, e.g. pad="3 9")
+    connects: dict[tuple[str, str, str], tuple[str, ...]] = field(default_factory=dict)
     # True if no device in this deviceset has a package (power/aesthetic symbol)
     is_supply: bool = False
 
@@ -199,8 +200,9 @@ def _parse_libraries(schematic: ET.Element) -> dict[str, _LibData]:
                             for conn_elem in connects_elem.findall("connect"):
                                 gate = conn_elem.get("gate", "")
                                 pin = conn_elem.get("pin", "")
-                                pad = conn_elem.get("pad", "")
-                                ds_info.connects[(dev_name, gate, pin)] = pad
+                                # pad may list several space-separated pads
+                                pads = tuple(conn_elem.get("pad", "").split())
+                                ds_info.connects[(dev_name, gate, pin)] = pads
 
                 # Supply/power symbols have no physical package
                 ds_info.is_supply = not has_package
@@ -376,12 +378,12 @@ def _build_pages(
                     continue
 
                 for pin_def in lib_data.symbols.get(symbol_name, []):
-                    # Physical pin designator from connects mapping
-                    pad = ds_info.connects.get(
+                    # Physical pads from the connects mapping; a single logical
+                    # pin can bond to several pads (pad="3 9").
+                    pads = ds_info.connects.get(
                         (part_info.device, instance.gate_name, pin_def.name),
-                        "",
+                        (),
                     )
-                    designator = pad or pin_def.name
 
                     # Resolve net from pinref
                     local_net_id = pinref_map.get((part_name, instance.gate_name, pin_def.name))
@@ -396,16 +398,21 @@ def _build_pages(
                         f"{page_id}:instance:{instance.part_name}:"
                         f"{instance.gate_name}:pin:{pin_def.name}"
                     )
-                    pin_id = f"{component_id}:pin:{designator}"
-                    pin_occurrence_key = (pin_id, page_id, pin_source_id)
-                    if pin_occurrence_key not in pin_occurrences_seen:
+
+                    # One pin/pad mapping per pad; fall back to the logical pin
+                    # name when the deviceset has no connects entry.
+                    for designator in pads or (pin_def.name,):
+                        pin_id = f"{component_id}:pin:{designator}"
+                        pin_occurrence_key = (pin_id, page_id, pin_source_id)
+                        if pin_occurrence_key in pin_occurrences_seen:
+                            continue
                         pin_occurrences_seen.add(pin_occurrence_key)
                         occurrence_metadata = {
                             "eagle_gate": instance.gate_name,
                             "eagle_pin": pin_def.name,
                         }
-                        if pad:
-                            occurrence_metadata["eagle_pad"] = pad
+                        if pads:
+                            occurrence_metadata["eagle_pad"] = designator
                         pin_inputs.append(
                             ResolvedPinInput(
                                 id=pin_source_id,
@@ -436,7 +443,7 @@ def _build_pages(
                             )
                         )
 
-    net_union = NetUnion(local_net.id for local_net in local_net_inputs)
+    net_union = UnionFind(local_net.id for local_net in local_net_inputs)
     for local_net_ids in local_net_ids_by_name.values():
         if len(local_net_ids) < 2:
             continue
@@ -447,6 +454,7 @@ def _build_pages(
     design_metadata: dict[str, str] = {}
     if ctx is not None and ctx.issues:
         design_metadata["parse_issue_count"] = str(len(ctx.issues))
+        design_metadata["parse_issues"] = serialize_parse_issues(ctx.issues)
 
     return build_resolved_schematic(
         name=name,

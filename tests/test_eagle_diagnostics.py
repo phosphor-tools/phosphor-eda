@@ -45,3 +45,17 @@ def test_eagle_dropped_part_records_issue(tmp_path: Path) -> None:
     # surfaced as a parse issue count in the design metadata.
     assert "U1" not in {c.reference for c in design.components}
     assert design.metadata.get("parse_issue_count") == "1"
+
+
+def test_eagle_dropped_part_surfaces_diagnostic_messages(tmp_path: Path) -> None:
+    sch = tmp_path / "missing.sch"
+    sch.write_text(_SCH_WITH_MISSING_LIBRARY)
+
+    design = eagle_to_design(sch)
+
+    # The drop message itself is surfaced, not just the count, so callers can
+    # report what degraded rather than only how many issues occurred.
+    issues = design.metadata.get("parse_issues", "")
+    assert "eagle_missing_library" in issues
+    assert "U1" in issues
+    assert "ghost" in issues
