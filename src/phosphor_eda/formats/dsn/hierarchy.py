@@ -43,30 +43,44 @@ _STH_SUB = 0x44  # sub-entry: pin occurrence (id>=0) or named connection (id<0)
 MAX_ENTRY_DEPTH = 64
 
 
-def parse_hierarchy(data: bytes) -> list[NetIdMapping]:
-    """Parse the Hierarchy stream for net-to-ID mappings."""
+def parse_hierarchy(data: bytes, ctx: ParseContext | None = None) -> list[NetIdMapping]:
+    """Parse the Hierarchy stream for net-to-ID mappings.
+
+    A malformed or truncated stream degrades to the mappings recovered so far
+    with a ``dsn_hierarchy_mappings`` diagnostic. This runs before the loader's
+    byte-scan occurrence fallback (:func:`parse_hierarchy_stream`), so a raw
+    ``struct.error`` here would escape the caller's error boundary and abort the
+    whole project load instead of falling back.
+    """
     r = BinaryReader(data, "Hierarchy")
     mappings: list[NetIdMapping] = []
+    try:
+        r.skip(9)  # unknown_0
+        r.read_string_len_zero()  # schematic_name
+        r.skip(7)  # unknown_1
 
-    r.skip(9)  # unknown_0
-    r.read_string_len_zero()  # schematic_name
-    r.skip(7)  # unknown_1
+        # SthInHierarchy2 list
+        num_sth2 = r.read_uint16()
+        for _ in range(num_sth2):
+            skip_structure(r)
+            r.skip(4)  # trailing uint32
+            r.read_string_len_zero()  # someName
 
-    # SthInHierarchy2 list
-    num_sth2 = r.read_uint16()
-    for _ in range(num_sth2):
-        skip_structure(r)
-        r.skip(4)  # trailing uint32
-        r.read_string_len_zero()  # someName
-
-    # Net DB ID Mappings - this is what we want
-    num_mappings = r.read_uint16()
-    for _ in range(num_mappings):
-        skip_structure(r)  # StructNetDbIdMapping (empty payload)
-        mapping = NetIdMapping()
-        mapping.db_id = r.read_uint32()
-        mapping.name = r.read_string_len_zero()
-        mappings.append(mapping)
+        # Net DB ID Mappings - this is what we want
+        num_mappings = r.read_uint16()
+        for _ in range(num_mappings):
+            skip_structure(r)  # StructNetDbIdMapping (empty payload)
+            mapping = NetIdMapping()
+            mapping.db_id = r.read_uint32()
+            mapping.name = r.read_string_len_zero()
+            mappings.append(mapping)
+    except (struct.error, IndexError, ValueError) as exc:
+        warn_optional(
+            ctx,
+            "dsn_hierarchy_mappings",
+            f"Hierarchy: net-id mapping parse failed ({exc}); "
+            f"recovered {len(mappings)} mapping(s) before the error",
+        )
 
     return mappings
 

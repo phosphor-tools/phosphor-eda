@@ -860,6 +860,26 @@ def test_truncated_page_stream_raises_typed_dsn_format_error() -> None:
         parse_page(data, [], ParseContext())
 
 
+def test_page_stream_error_preserves_located_offset_and_type_id() -> None:
+    from phosphor_eda.formats.dsn.errors import DsnFormatError
+    from phosphor_eda.formats.dsn.parser import _parse_page, parse_page
+
+    # The bounds check inside _parse_page raises a *located* DsnFormatError
+    # (offset at the truncated read, type_id -1). parse_page re-wraps it with a
+    # friendlier message but must carry those coordinates through, or the loader
+    # persists parse_error_offset as a useless "0".
+    data = _page_prologue() + struct.pack("<H", 3)  # 3 nets declared, none present
+
+    with pytest.raises(DsnFormatError) as inner:
+        _parse_page(data, [])
+    with pytest.raises(DsnFormatError) as outer:
+        parse_page(data, [], ParseContext())
+
+    assert inner.value.offset > 0
+    assert outer.value.offset == inner.value.offset
+    assert outer.value.type_id == inner.value.type_id
+
+
 def test_library_string_count_uint16_fallback_emits_version_crosscheck() -> None:
     from phosphor_eda.formats.dsn.library import parse_library
 
