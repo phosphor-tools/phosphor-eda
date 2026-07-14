@@ -748,6 +748,29 @@ def test_can_read_string_len_zero_respects_scan_limit() -> None:
     assert _can_read_string_len_zero(data, 0, limit=6) is False
 
 
+def test_can_read_string_len_zero_matches_reader_on_empty_strings() -> None:
+    # The probe must accept exactly the empty-string buffers the strict reader
+    # accepts: after a length-0 prefix the reader requires the trailing null, so
+    # the probe agrees on both the terminated and terminator-less cases.
+    from phosphor_eda.formats.dsn.cache import _can_read_string_len_zero
+
+    def reader_accepts(data: bytes) -> bool:
+        try:
+            BinaryReader(data).read_string_len_zero()
+        except struct.error:
+            return False
+        return True
+
+    with_terminator = struct.pack("<H", 0) + b"\x00\xaa"
+    without_terminator = struct.pack("<H", 0) + b"\x01\xaa"
+
+    # Terminator present -> both accept; absent -> both reject.
+    assert reader_accepts(with_terminator) is True
+    assert _can_read_string_len_zero(with_terminator, 0) is True
+    assert reader_accepts(without_terminator) is False
+    assert _can_read_string_len_zero(without_terminator, 0) is False
+
+
 # --- B1: unknown-structure diagnostics per page section ---
 
 

@@ -269,6 +269,44 @@ def _warn_unknown_structure(
     )
 
 
+def _parse_trailing_flag_graphic(
+    r: BinaryReader,
+    string_list: list[str],
+    target: list[GraphicInst],
+    *,
+    struct_type: int,
+    error_label: str,
+    warn_code: str,
+    unknown_section: str,
+    ctx: ParseContext | None,
+) -> None:
+    """Parse one Global/OffPageConnector record and append it to *target*.
+
+    Both structures share a StructGraphicInst body followed by a one-byte
+    unknownFlag and five stream-level trailing bytes. The prefix chain's
+    end_offset resyncs the cursor whether or not the body decodes, so the
+    unknownFlag is consumed only after a successful parse.
+    """
+    offset = r.pos
+    type_id, end_offset, pairs = r.read_prefix_chain()
+    r.try_read_preamble()
+    gi: GraphicInst | None = None
+    if type_id == struct_type:
+        try:
+            gi = _parse_graphic_inst(r, string_list, pairs, type_id, has_name_indices=True)
+            r.skip(1)  # unknownFlag (0x21 for Global; same shape for off-page connectors)
+        except (struct.error, IndexError, ValueError) as e:
+            if ctx is not None:
+                ctx.warn(warn_code, f"{error_label} parse error: {e}")
+    else:
+        _warn_unknown_structure(ctx, unknown_section, type_id, offset)
+    if end_offset > 0:
+        r.pos = end_offset
+    if gi is not None:
+        target.append(gi)
+    r.skip(5)  # trailing data per record at stream level
+
+
 def _parse_block_sheet_pin(r: BinaryReader) -> DsnBlockSheetPin:
     """Read one StructSymbolPin from a block instance's embedded symbol body."""
     _type_id, pin_end, _pairs = r.read_prefix_chain()
@@ -356,11 +394,6 @@ def _parse_block_instance(r: BinaryReader) -> DsnBlockInstance:
     return block
 
 
-# A page carries one T0x34 display record per net group; thousands would mean
-# the self-describing header layout differs from what we know.
-_MAX_T34_RECORDS = 100000
-
-
 def _parse_net_display_props(r: BinaryReader, ctx: ParseContext | None) -> list[DsnNetDisplayProp]:
     """Parse the T0x34 section: per-net display records keyed by runtime net id.
 
@@ -398,9 +431,6 @@ def _parse_net_display_props(r: BinaryReader, ctx: ParseContext | None) -> list[
             records.append(record)
         except (struct.error, IndexError, ValueError) as e:
             warn_optional(ctx, "dsn_t0x34", f"T0x34 record parse error: {e}")
-        if len(records) > _MAX_T34_RECORDS:
-            msg = f"implausible T0x34 record count {count}"
-            raise ValueError(msg)
     return records
 
 
@@ -774,61 +804,30 @@ def _parse_page(
     # Globals (power symbols) — extract name, properties, and display props
     num_globals = r.read_uint16()
     for _ in range(num_globals):
-        global_offset = r.pos
-        type_id, end_offset, pairs = r.read_prefix_chain()
-        r.try_read_preamble()
-
-        gi: GraphicInst | None = None
-
-        try:
-            if type_id == STRUCT_GLOBAL:
-                gi = _parse_graphic_inst(
-                    r,
-                    string_list,
-                    pairs,
-                    type_id,
-                    has_name_indices=True,
-                )
-            else:
-                _warn_unknown_structure(ctx, "global", type_id, global_offset)
-            r.skip(1)  # unknownFlag (0x21 for Global)
-        except (struct.error, IndexError, ValueError) as e:
-            if ctx is not None:
-                ctx.warn("dsn_global", f"Global parse error: {e}")
-
-        if end_offset > 0:
-            r.pos = end_offset
-        if gi is not None:
-            page.globals.append(gi)
-        r.skip(5)  # trailing data per global at stream level
+        _parse_trailing_flag_graphic(
+            r,
+            string_list,
+            page.globals,
+            struct_type=STRUCT_GLOBAL,
+            error_label="Global",
+            warn_code="dsn_global",
+            unknown_section="global",
+            ctx=ctx,
+        )
 
     # Off-page connectors
     num_opc = r.read_uint16()
     for _ in range(num_opc):
-        opc_offset = r.pos
-        type_id, end_offset, pairs = r.read_prefix_chain()
-        r.try_read_preamble()
-        connector: GraphicInst | None = None
-        if type_id == STRUCT_OFF_PAGE_CONNECTOR:
-            try:
-                connector = _parse_graphic_inst(
-                    r,
-                    string_list,
-                    pairs,
-                    type_id,
-                    has_name_indices=True,
-                )
-                r.skip(1)  # unknownFlag, same trailing flag shape as globals
-            except (struct.error, IndexError, ValueError) as e:
-                if ctx is not None:
-                    ctx.warn("dsn_off_page_connector", f"Off-page connector parse error: {e}")
-        else:
-            _warn_unknown_structure(ctx, "off-page connector", type_id, opc_offset)
-        if end_offset > 0:
-            r.pos = end_offset
-        if connector is not None:
-            page.off_page_connectors.append(connector)
-        r.skip(5)  # trailing data
+        _parse_trailing_flag_graphic(
+            r,
+            string_list,
+            page.off_page_connectors,
+            struct_type=STRUCT_OFF_PAGE_CONNECTOR,
+            error_label="Off-page connector",
+            warn_code="dsn_off_page_connector",
+            unknown_section="off-page connector",
+            ctx=ctx,
+        )
 
     parse_page_tail_objects(r, page, ctx)
 

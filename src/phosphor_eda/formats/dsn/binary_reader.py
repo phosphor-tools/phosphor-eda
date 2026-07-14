@@ -144,12 +144,6 @@ class BinaryReader:
         text; an explicit codec (e.g. ``"latin1"``) is used verbatim.
         """
         length = self.read_uint16()
-        if length == 0:
-            # Empty strings may or may not carry the trailing null; consume it
-            # when present without demanding it.
-            if self.pos < len(self.data) and self.data[self.pos] == 0:
-                self.pos += 1
-            return ""
         end = self.pos + length
         if not allow_missing_terminator:
             if end >= len(self.data):

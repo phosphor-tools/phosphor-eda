@@ -96,9 +96,10 @@ def parse_hierarchy_occurrences(
     placed-instance DB ID and then a `0x42` structure marker. Preserve these
     links so CIS group rows can later resolve to schematic objects.
 
-    This whole-stream byte scan is the version-tolerant fallback: the
-    structured parser (:func:`parse_hierarchy_stream`) supersedes it on modern
-    streams but delegates here when it cannot decode an old/variant layout.
+    This whole-stream byte scan is the production source of occurrence links:
+    :func:`parse_dsn` stores its result on ``ParsedDesign.hierarchy_occurrences``
+    to resolve CIS group rows, and :func:`parse_hierarchy_stream` also delegates
+    here when it cannot decode an old/variant layout.
     """
     instance_ids = {db_id for db_id in placed_instance_db_ids if db_id > 0}
     if not instance_ids:
@@ -321,39 +322,6 @@ def _read_entry(
             raise ValueError(msg)
 
     r.read_uint16()  # entry trailer
-
-
-def hierarchy_occurrences_from_entries(
-    hierarchy: DsnHierarchy,
-    placed_instance_db_ids: Iterable[int],
-) -> list[DsnHierarchyOccurrence]:
-    """Derive placed-instance occurrence links from a structured hierarchy.
-
-    Applies the same filter as :func:`parse_hierarchy_occurrences` so the
-    structured tree can supply the occurrence->instance links downstream.
-    """
-    instance_ids = {db_id for db_id in placed_instance_db_ids if db_id > 0}
-    occurrences: list[DsnHierarchyOccurrence] = []
-    seen: set[tuple[int, int]] = set()
-    for entry in hierarchy.entries:
-        occurrence_id = entry.occurrence_id
-        instance_db_id = entry.instance_db_id
-        key = (occurrence_id, instance_db_id)
-        if (
-            occurrence_id <= 0
-            or occurrence_id == instance_db_id
-            or instance_db_id not in instance_ids
-            or key in seen
-        ):
-            continue
-        seen.add(key)
-        occurrences.append(
-            DsnHierarchyOccurrence(
-                occurrence_id=occurrence_id,
-                instance_db_id=instance_db_id,
-            )
-        )
-    return occurrences
 
 
 def build_occurrence_to_instance(

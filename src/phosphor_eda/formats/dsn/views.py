@@ -90,6 +90,7 @@ def warn_repeated_sheet_identity(
             "dsn_repeated_sheet_identity",
             (
                 f"page {page_name!r} appears under multiple schematic views ({scopes}); "
-                "current DSN resolver flattens page/source-page identity"
+                "this reflects page-name reuse only — confirmed repeated blocks are "
+                "resolved with occurrence-scoped page, refdes, and net identity"
             ),
         )

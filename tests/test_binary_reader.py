@@ -41,6 +41,28 @@ def test_read_string_len_zero_empty():
     assert r.read_string_len_zero() == ""
 
 
+def test_read_string_len_zero_empty_requires_terminator_like_nonempty() -> None:
+    # An empty string honors the same strict terminator rule as a non-empty one:
+    # a non-null byte where the terminator belongs raises instead of silently
+    # accepting and eating the following byte.
+    data = struct.pack("<H", 0) + b"\x01\x00"
+    r = BinaryReader(data)
+    with pytest.raises(struct.error):
+        r.read_string_len_zero()
+
+
+def test_read_string_len_zero_empty_matches_nonempty_terminator_handling() -> None:
+    # Empty and non-empty strings consume a present terminator the same way,
+    # so the empty case no longer runs its own divergent heuristic.
+    empty = BinaryReader(struct.pack("<H", 0) + b"\x00\xaa")
+    assert empty.read_string_len_zero(allow_missing_terminator=True) == ""
+    assert empty.pos == 3  # length(2) + terminator(1)
+
+    nonempty = BinaryReader(struct.pack("<H", 1) + b"X\x00\xaa")
+    assert nonempty.read_string_len_zero(allow_missing_terminator=True) == "X"
+    assert nonempty.pos == 4  # length(2) + 1 content byte + terminator(1)
+
+
 def test_at_preamble():
     r = BinaryReader(PREAMBLE + b"\x00\x00\x00\x00")
     assert r.at_preamble()
