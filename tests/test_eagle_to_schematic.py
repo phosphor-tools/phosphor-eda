@@ -3,12 +3,12 @@
 from pathlib import Path
 
 import pytest
+from fixture_paths import UPSTREAM_FIXTURES
 
 from phosphor_eda.formats.eagle import eagle_to_design
 from phosphor_eda.query.format import serialize_design
 from phosphor_eda.query.validate import Severity, validate_design
 
-UPSTREAM_FIXTURES = Path(__file__).resolve().parent / "upstream"
 BME280_SCH = UPSTREAM_FIXTURES / "sparkfun-bme280/Hardware/SparkFun_BME280_Breakout.sch"
 ADAFRUIT_SCH = UPSTREAM_FIXTURES / "adafruit-rgb-lcd-shield/adafruit_rgblcdshield.sch"
 

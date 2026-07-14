@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 import pytest
+from fixture_paths import FIXTURES, UPSTREAM_FIXTURES
 
 from phosphor_eda.domain.schematic import (
     Component,
@@ -19,8 +20,6 @@ from phosphor_eda.formats.dsn.resolver import resolve_dsn_source
 from phosphor_eda.formats.dsn.source import DsnPageSource, DsnPinOccurrence, DsnSourceDesign
 from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 PICO_DSN = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
 PICOW_DSN = FIXTURES / "dsn/raspberry-pi-pico-w/RPI-PICOW-R2.DSN"
 CMIO_DSN = FIXTURES / "dsn/raspberry-pi-cmio/RPI-CMIO-V3_0-PUBLIC.DSN"

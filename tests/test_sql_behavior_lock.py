@@ -9,13 +9,13 @@ serialization shows up as a hash mismatch naming the table.
 Regenerate after an intentional change:
 
     PHOSPHOR_RUN_BEHAVIOR_LOCKS=1 PHOSPHOR_UPDATE_GOLDENS=1 \
-        uv run pytest cli/tests/test_sql_behavior_lock.py
+        uv run pytest tests/test_sql_behavior_lock.py
 
 The tests are slow and skipped by default. Run them explicitly when changing
 parsers, SQL schema/loading, serialization, or any behavior that can alter
 full-project output:
 
-    uv run pytest cli/tests/test_sql_behavior_lock.py --run-behavior-locks
+    uv run pytest tests/test_sql_behavior_lock.py --run-behavior-locks
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from fixture_paths import FIXTURES, UPSTREAM_FIXTURES
 
 from phosphor_eda.formats.allegro import load_allegro_pcb_project
 from phosphor_eda.query.format import serialize_design
@@ -42,8 +43,6 @@ if TYPE_CHECKING:
 
     from phosphor_eda.domain.project import Project
 
-FIXTURES = Path(__file__).parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 GOLDEN = Path(__file__).parent / "goldens" / "sql_behavior_lock.json"
 
 _UPDATE = os.environ.get("PHOSPHOR_UPDATE_GOLDENS") == "1"
@@ -81,7 +80,7 @@ def _canon_value(table: str, column: str, value: object, *, is_geometry: bool) -
     if isinstance(value, float):
         return f"{value:.6f}"
     if isinstance(value, str):
-        return repr(value.replace(FIXTURES.as_posix(), "<fixtures>"))
+        return repr(_strip_fixture_roots(value))
     return repr(value)
 
 
@@ -104,18 +103,32 @@ def _canon_geojson_value(value: object) -> object:
     return value
 
 
+def _strip_fixture_roots(value: str) -> str:
+    """Replace absolute fixture roots with stable tokens.
+
+    Anchoring both ``tests/fixtures`` and ``tests/upstream`` keeps the golden
+    independent of the absolute checkout path, so it matches in every worktree
+    and in CI rather than only where it was regenerated.
+    """
+    return value.replace(UPSTREAM_FIXTURES.resolve().as_posix(), "<upstream>").replace(
+        FIXTURES.resolve().as_posix(), "<fixtures>"
+    )
+
+
 def _canon_fixture_path(value: str) -> str:
     path = Path(value)
     if not path.is_absolute():
         path = (Path.cwd() / path).resolve()
-    try:
-        return path.relative_to(FIXTURES.resolve()).as_posix()
-    except ValueError:
-        return value
+    for root in (FIXTURES.resolve(), UPSTREAM_FIXTURES.resolve()):
+        try:
+            return path.relative_to(root).as_posix()
+        except ValueError:
+            continue
+    return value
 
 
 def _canon_serialized(value: str) -> str:
-    return value.replace(FIXTURES.as_posix(), "<fixtures>")
+    return _strip_fixture_roots(value)
 
 
 def _table_select_expressions(table: str) -> list[tuple[str, str, bool]]:

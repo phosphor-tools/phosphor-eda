@@ -8,12 +8,11 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from fixture_paths import FIXTURES, UPSTREAM_FIXTURES
 
 from phosphor_eda.domain.schematic import Net, NetNameKind
 from phosphor_eda.formats.kicad.to_schematic import kicad_to_design
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 GOLDENS = Path(__file__).resolve().parent / "goldens"
 CORPUS_ROOT = Path(os.environ.get("PHOSPHOR_EDA_CORPUS_ROOT", "__external_corpus_missing__"))
 KICAD_CORPUS = CORPUS_ROOT / "designs/kicad"

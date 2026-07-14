@@ -1,17 +1,19 @@
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from click.testing import CliRunner
+from fixture_paths import FIXTURES, UPSTREAM_FIXTURES
 
 from phosphor_eda.cli import main
 from phosphor_eda.domain.project import DocumentKind
 from phosphor_eda.query.project_loader import load_project
 from phosphor_eda.query.sql import load_database
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
+if TYPE_CHECKING:
+    from pathlib import Path
+
 DSN_FILE = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
 JETSON_ORIN_PRO = UPSTREAM_FIXTURES / "jetson-orin" / "jetson-orin-baseboard.kicad_pro"
 JETSON_ORIN_PCB = UPSTREAM_FIXTURES / "jetson-orin" / "jetson-orin-baseboard.kicad_pcb"

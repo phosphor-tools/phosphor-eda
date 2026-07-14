@@ -7,10 +7,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
+from fixture_paths import UPSTREAM_FIXTURES
+
 from phosphor_eda.query.project_loader import load_project
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 GOLDENS = Path(__file__).resolve().parent / "goldens"
 
 PI_MX8_PRJPCB = (

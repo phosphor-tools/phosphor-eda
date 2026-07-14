@@ -1,13 +1,12 @@
 import struct
-from pathlib import Path
 
 import pytest
+from fixture_paths import FIXTURES
 
 from phosphor_eda.formats.dsn.binary_reader import BinaryReader, skip_self_describing
 from phosphor_eda.formats.dsn.errors import DsnFormatError
 from phosphor_eda.formats.dsn.parser import parse_dsn, parse_page
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
 DSN_FILE = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
 
 

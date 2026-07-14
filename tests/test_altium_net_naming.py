@@ -5,9 +5,8 @@ truth). The autoname witnesses below are the corpus cases that distinguish
 natural sort from plain ASCII sort.
 """
 
-from pathlib import Path
-
 import pytest
+from fixture_paths import UPSTREAM_FIXTURES
 
 from phosphor_eda.domain.schematic import Net, NetNameKind, ScopeId, TitleBlock
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode, AltiumProject
@@ -27,8 +26,6 @@ from phosphor_eda.formats.altium.source import (
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.query.project_loader import load_project
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 PIMX8_PRJPCB = (
     UPSTREAM_FIXTURES / "pi-mx8/01_Electronics/PiMX8MP_r0.3_release/PiMX8MP_r0.3_release.PrjPcb"
 )

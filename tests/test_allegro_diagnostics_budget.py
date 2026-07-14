@@ -25,15 +25,16 @@ cheap relative to the regression it prevents.
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+from fixture_paths import UPSTREAM_FIXTURES
 
 from phosphor_eda.formats.allegro.build import build_allegro_board
 from phosphor_eda.formats.allegro.parser import parse_allegro_records
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
+if TYPE_CHECKING:
+    from pathlib import Path
 
 BREAKOUT_BOARD = (
     UPSTREAM_FIXTURES

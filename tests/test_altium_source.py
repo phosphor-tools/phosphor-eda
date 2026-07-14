@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from fixture_paths import UPSTREAM_FIXTURES
+
 from phosphor_eda.domain.schematic import SchematicDirectiveKind
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode
 from phosphor_eda.formats.altium.records import (
@@ -32,8 +34,6 @@ from phosphor_eda.formats.common.spatial import WireIndex
 if TYPE_CHECKING:
     import pytest
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 QFSAE_PRJPCB = UPSTREAM_FIXTURES / "qfsae-pcb/Debugger/Debugger.PrjPcb"
 
 

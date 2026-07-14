@@ -35,29 +35,35 @@ from phosphor_eda.domain.pcb import (
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _missing_upstream_submodules() -> tuple[Path, ...]:
+def _uninitialized_upstream_submodules(root: Path = REPOSITORY_ROOT) -> tuple[str, ...]:
+    """Return the .gitmodules paths whose working tree holds no fixture content.
+
+    Detection is content-based rather than checking for ``.git``: a gitlink
+    pointer file is present in Git worktrees and after ``git submodule deinit``,
+    so its existence says nothing about whether the fixtures were checked out.
+    """
     modules = ConfigParser(interpolation=None)
-    modules.read(REPOSITORY_ROOT / ".gitmodules")
-    paths = (REPOSITORY_ROOT / modules.get(section, "path") for section in modules.sections())
-    return tuple(path for path in paths if not (path / ".git").exists())
+    modules.read(root / ".gitmodules")
+    missing: list[str] = []
+    for section in modules.sections():
+        relative_path = modules.get(section, "path")
+        path = root / relative_path
+        contents = {child.name for child in path.iterdir()} if path.is_dir() else set()
+        if not contents - {".git"}:
+            missing.append(relative_path)
+    return tuple(missing)
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
-    missing = _missing_upstream_submodules()
-    if missing and os.environ.get("CI") == "1":
-        names = ", ".join(path.name for path in missing)
+    missing = _uninitialized_upstream_submodules()
+    if missing:
+        listing = "\n".join(f"  {path}" for path in missing)
         raise pytest.UsageError(
-            f"upstream fixture submodules are not initialized ({names}); "
-            "run git submodule update --init --depth 1"
+            "Upstream fixture submodules are not checked out:\n"
+            f"{listing}\n"
+            "Populate them before running the tests:\n"
+            "    git submodule update --init --depth 1 --jobs 8"
         )
-
-
-def _item_module_paths(item: pytest.Item) -> tuple[Path, ...]:
-    module = item.getparent(pytest.Module)
-    if module is None:
-        return ()
-    module_object: object = module.obj
-    return tuple(value for value in vars(module_object).values() if isinstance(value, Path))
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -105,7 +111,6 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    missing_upstream_submodules = _missing_upstream_submodules()
     run_behavior_locks = (
         config.getoption("--run-behavior-locks")
         or os.environ.get("PHOSPHOR_RUN_BEHAVIOR_LOCKS") == "1"
@@ -139,25 +144,6 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         )
     )
     for item in items:
-        module_paths = _item_module_paths(item)
-        missing_for_item = next(
-            (
-                submodule
-                for path in module_paths
-                for submodule in missing_upstream_submodules
-                if path == submodule or submodule in path.parents
-            ),
-            None,
-        )
-        if missing_for_item is not None:
-            item.add_marker(
-                pytest.mark.skip(
-                    reason=(
-                        f"upstream fixture submodule {missing_for_item.name} is not initialized; "
-                        "run git submodule update --init --depth 1"
-                    )
-                )
-            )
         if "behavior_lock" in item.keywords and not run_behavior_locks:
             item.add_marker(skip_behavior_lock)
         if "corpus" in item.keywords and not run_corpus:

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
 import pytest
 from click.testing import CliRunner
+from fixture_paths import FIXTURES, UPSTREAM_FIXTURES
 
 from phosphor_eda.cli import main
 from phosphor_eda.domain.pcb import (
@@ -75,8 +75,6 @@ from phosphor_eda.formats.kicad.board import parse_kicad_pcb
 from phosphor_eda.query.project_loader import load_project
 from phosphor_eda.query.sql import load_database
 
-FIXTURES = Path(__file__).parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 RFSOC_DSN = UPSTREAM_FIXTURES / "rfsoc-frontend/RFMC_Frontend/RFMC_FRONTEND_V1_00.DSN"
 SWD_SWITCH_PCB = UPSTREAM_FIXTURES / "debugotron/hw/swd_switch/swd_switch.kicad_pcb"
 ORANGECRAB_PRO = FIXTURES / "kicad-orangecrab/OrangeCrab.kicad_pro"
@@ -92,6 +90,7 @@ ALLEGRO_BREAKOUT_BRD = (
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
 
 def _count(db: duckdb.DuckDBPyConnection, sql: str) -> int:

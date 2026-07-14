@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import olefile
 import pytest
+from fixture_paths import FIXTURES, UPSTREAM_FIXTURES
 
 from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.dsn.parser import parse_dsn, parse_symbol_types
@@ -22,8 +23,9 @@ from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
 from phosphor_eda.query.project_loader import load_project
 from phosphor_eda.query.sql import load_database
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
+if TYPE_CHECKING:
+    from pathlib import Path
+
 PICO_DSN = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
 PICOW_DSN = FIXTURES / "dsn/raspberry-pi-pico-w/RPI-PICOW-R2.DSN"
 CMIO_DSN = FIXTURES / "dsn/raspberry-pi-cmio/RPI-CMIO-V3_0-PUBLIC.DSN"

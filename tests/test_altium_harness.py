@@ -8,16 +8,13 @@ declare the harness members in different orders, so resolution must match
 members by name, not position.
 """
 
-from pathlib import Path
-
 import pytest
+from fixture_paths import UPSTREAM_FIXTURES
 
 from phosphor_eda.domain.schematic import BusKind, Schematic
 from phosphor_eda.formats.altium.source import AltiumSheetSource, load_project_source_sheets
 from phosphor_eda.formats.altium.to_schematic import altium_to_design
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 PIMX8_PRJPCB = (
     UPSTREAM_FIXTURES / "pi-mx8/01_Electronics/PiMX8MP_r0.3_release/PiMX8MP_r0.3_release.PrjPcb"
 )

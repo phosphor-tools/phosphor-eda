@@ -1,6 +1,6 @@
 """Tests for Altium record parser."""
 
-from pathlib import Path
+from fixture_paths import UPSTREAM_FIXTURES
 
 from phosphor_eda.formats.altium.record_parser import (
     parse_record_payload,
@@ -8,8 +8,6 @@ from phosphor_eda.formats.altium.record_parser import (
     read_schematic_records,
 )
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 MCU_SCHDOC = UPSTREAM_FIXTURES / "qfsae-pcb/Debugger/MCU.SchDoc"
 
 

@@ -1,13 +1,12 @@
 """Tests for multi-page schematic parsing."""
 
-from pathlib import Path
+from fixture_paths import FIXTURES
 
 from phosphor_eda.formats.dsn.netlist import build_netlist
 from phosphor_eda.formats.dsn.parser import parse_dsn
 from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
 from phosphor_eda.query.format import write_design
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
 PICO_W_DSN = FIXTURES / "dsn/raspberry-pi-pico-w/RPI-PICOW-R2.DSN"
 CMIO_DSN = FIXTURES / "dsn/raspberry-pi-cmio/RPI-CMIO-V3_0-PUBLIC.DSN"
 

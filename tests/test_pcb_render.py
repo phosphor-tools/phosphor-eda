@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 from importlib.resources import as_file, files
-from pathlib import Path
 from typing import cast
 
 import pytest
 from conftest import build_render_test_board
+from fixture_paths import UPSTREAM_FIXTURES
 
 from phosphor_eda.domain.pcb import (
     LayerRole,
@@ -41,8 +41,6 @@ from phosphor_eda.render.settings import (
     resolve_effective_settings,
 )
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 ALLEGRO_BREAKOUT_BRD = (
     UPSTREAM_FIXTURES
     / "opencellular/electronics/breakout/board"

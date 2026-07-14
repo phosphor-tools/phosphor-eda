@@ -1,12 +1,10 @@
 """Tests for multi-sheet Altium parsing."""
 
-from pathlib import Path
+from fixture_paths import UPSTREAM_FIXTURES
 
 from phosphor_eda.formats.altium.to_schematic import altium_to_design
 from phosphor_eda.query.format import serialize_design
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 QFSAE_PRJPCB = UPSTREAM_FIXTURES / "qfsae-pcb/Debugger/Debugger.PrjPcb"
 MCU_SCHDOC = UPSTREAM_FIXTURES / "qfsae-pcb/Debugger/MCU.SchDoc"
 # pi-mx8 keeps its schematics in a SCH/ subdirectory while sheet-symbol

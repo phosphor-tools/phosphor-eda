@@ -6,6 +6,8 @@ from shutil import copytree
 from typing import TYPE_CHECKING
 from zipfile import ZIP_DEFLATED, ZipFile
 
+from fixture_paths import UPSTREAM_FIXTURES
+
 from phosphor_eda.domain.project import DocumentKind
 from phosphor_eda.formats.allegro import parse_allegro_pcb
 from phosphor_eda.formats.allegro import sidecars as allegro_sidecars
@@ -19,8 +21,6 @@ from phosphor_eda.query.project_loader import load_project
 if TYPE_CHECKING:
     from pytest import MonkeyPatch
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 BREAKOUT_FIXTURE_ROOT = UPSTREAM_FIXTURES / "opencellular/electronics/breakout"
 BREAKOUT_BOARD_RELATIVE = Path("board/OC_CONNECT-1_BREAKOUT_LIFE-3.brd")
 

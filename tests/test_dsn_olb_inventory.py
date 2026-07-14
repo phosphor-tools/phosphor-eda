@@ -2,11 +2,10 @@ import os
 from pathlib import Path
 
 import pytest
+from fixture_paths import FIXTURES, UPSTREAM_FIXTURES
 
 from phosphor_eda.formats.dsn.library import parse_library_inventory
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 CORPUS_ROOT = Path(os.environ.get("PHOSPHOR_EDA_CORPUS_ROOT", "__external_corpus_missing__"))
 OPENORCADPARSER_OLB = FIXTURES / "orcad/openorcadparser-olb/0000.OLB"
 CP_SMARTGARDEN_DSN = (

@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import sexpdata
+from fixture_paths import FIXTURES
 
 from phosphor_eda.domain.schematic import BusKind, SchematicDirectiveKind, ScopeId
 from phosphor_eda.formats.common.diagnostics import ParseContext
@@ -22,7 +23,6 @@ from phosphor_eda.formats.kicad.source_extractor import (
 )
 from phosphor_eda.formats.kicad.to_schematic import kicad_to_source
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
 HIERARCHY_ROOT = FIXTURES / "kicad-hierarchy" / "root.kicad_sch"
 REPEATED_ROOT = FIXTURES / "kicad-repeated-sheet" / "root.kicad_sch"
 

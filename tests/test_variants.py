@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from click.testing import CliRunner
+from fixture_paths import UPSTREAM_FIXTURES
 
 import phosphor_eda.cli as cli_module
 from phosphor_eda.cli import main
@@ -19,8 +20,9 @@ from phosphor_eda.domain.variants import (
 )
 from phosphor_eda.query.project_loader import load_project
 
-FIXTURES = Path(__file__).parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
+if TYPE_CHECKING:
+    from pathlib import Path
+
 PI_MX8_PRJPCB = (
     UPSTREAM_FIXTURES / "pi-mx8/01_Electronics/PiMX8MP_r0.3_release/PiMX8MP_r0.3_release.PrjPcb"
 )

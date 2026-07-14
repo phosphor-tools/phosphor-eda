@@ -2,13 +2,12 @@ from pathlib import Path
 from shutil import copy2
 
 import pytest
+from fixture_paths import FIXTURES, UPSTREAM_FIXTURES
 
 from phosphor_eda.formats.altium.project_loader import resolve_prjpcb_pcbdoc
 from phosphor_eda.query.format import serialize_design
 from phosphor_eda.query.project_loader import SCHEMATIC_EXTENSIONS, load_design
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
 DSN_FILE = FIXTURES / "dsn/raspberry-pi-pico/RPI-PICO-R3-PUBLIC.DSN"
 PIMX8_PRJPCB = (
     UPSTREAM_FIXTURES / "pi-mx8/01_Electronics/PiMX8MP_r0.3_release/PiMX8MP_r0.3_release.PrjPcb"
