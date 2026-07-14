@@ -35,7 +35,7 @@ from phosphor_eda.formats.altium.source import (
     AltiumSheetSymbol,
     AltiumSourceDesign,
 )
-from phosphor_eda.formats.common.spatial import WireIndex
+from phosphor_eda.formats.altium.wire_index import WireIndex
 
 
 def _make_sheet(name: str, records: list[AltiumRecord]) -> SheetRecords:

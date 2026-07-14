@@ -27,7 +27,8 @@ from phosphor_eda.domain.pcb import (
     PcbPolygon,
     PcbText,
 )
-from phosphor_eda.formats.kicad import graphics, pcb_common, sexp
+from phosphor_eda.formats.common import sexp
+from phosphor_eda.formats.kicad import graphics, pcb_common
 from phosphor_eda.formats.kicad.layers import resolve_layers
 from phosphor_eda.formats.kicad.padstack import parse_pad_stack
 from phosphor_eda.formats.kicad.zones import parse_zone_keepout
@@ -35,7 +36,7 @@ from phosphor_eda.formats.kicad.zones import parse_zone_keepout
 if TYPE_CHECKING:
     from phosphor_eda.domain.pcb import PcbLayer
     from phosphor_eda.domain.pcb_builder import PcbBuilder
-    from phosphor_eda.formats.kicad.sexp import SExpNode
+    from phosphor_eda.formats.common.sexp import SExpNode
 
 
 @dataclass

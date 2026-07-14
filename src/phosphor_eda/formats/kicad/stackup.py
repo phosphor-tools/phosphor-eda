@@ -7,14 +7,14 @@ from typing import TYPE_CHECKING
 
 import sexpdata
 
-import phosphor_eda.formats.kicad.sexp as sexp
+import phosphor_eda.formats.common.sexp as sexp
 from phosphor_eda.domain.project import Stackup, StackupLayer
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from phosphor_eda.domain.pcb import PcbLayer
-    from phosphor_eda.formats.kicad.sexp import SExpNode
+    from phosphor_eda.formats.common.sexp import SExpNode
 
 _ASSUMED_FR4_MATERIAL = "FR4 (assumed)"
 _INNER_COPPER_RE = re.compile(r"^In(\d+)\.Cu$")

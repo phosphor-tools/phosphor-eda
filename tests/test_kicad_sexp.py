@@ -6,10 +6,10 @@ from typing import TYPE_CHECKING
 
 import sexpdata
 
-import phosphor_eda.formats.kicad.sexp as sexp
+import phosphor_eda.formats.common.sexp as sexp
 
 if TYPE_CHECKING:
-    from phosphor_eda.formats.kicad.sexp import SExpNode
+    from phosphor_eda.formats.common.sexp import SExpNode
 
 
 def _parse(text: str) -> SExpNode:

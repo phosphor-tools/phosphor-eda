@@ -6,6 +6,7 @@ from collections import defaultdict
 from dataclasses import replace
 from typing import TYPE_CHECKING, TypeGuard, cast
 
+from phosphor_eda.domain.part_fields import resolve_part_fields
 from phosphor_eda.domain.schematic import (
     DnpSource,
     FootprintModel,
@@ -14,7 +15,6 @@ from phosphor_eda.domain.schematic import (
     PartNumber,
 )
 from phosphor_eda.domain.variants import VariantField, VariantOverride, VariantTargetKind
-from phosphor_eda.formats.common.part_fields import resolve_part_fields
 
 if TYPE_CHECKING:
     from phosphor_eda.domain.project import Project

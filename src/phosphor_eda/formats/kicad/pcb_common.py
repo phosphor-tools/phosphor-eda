@@ -12,12 +12,12 @@ from typing import TYPE_CHECKING
 
 import sexpdata
 
-import phosphor_eda.formats.kicad.sexp as sexp
+import phosphor_eda.formats.common.sexp as sexp
 from phosphor_eda.domain.pcb import PcbNet, PcbObjectMetadata
 
 if TYPE_CHECKING:
     from phosphor_eda.domain.pcb_builder import PcbBuilder
-    from phosphor_eda.formats.kicad.sexp import SExpNode
+    from phosphor_eda.formats.common.sexp import SExpNode
 
 
 def xy(item: SExpNode) -> tuple[float, float]:

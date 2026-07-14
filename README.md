@@ -74,6 +74,28 @@ Run `phosphor-eda --help` to see the available commands. To update Phosphor EDA 
 uv tool upgrade phosphor-eda
 ```
 
+## Usage
+
+```python
+from pathlib import Path
+
+import phosphor_eda
+
+# Load a schematic, a PCB, or a full project from any supported format.
+schematic = phosphor_eda.load_design(Path("design.kicad_sch"))
+board = phosphor_eda.load_pcb(Path("board.kicad_pcb"))
+project = phosphor_eda.load_project(Path("board.kicad_pro"))
+
+# Render a board to SVG.
+settings = phosphor_eda.RenderSettings(side="top", width=1600, font_size=12.0)
+svg = phosphor_eda.render_pcb_svg(board, settings).svg
+
+# Query a project as an in-memory DuckDB database.
+from phosphor_eda.query.sql import load_database
+
+connection = load_database(project)
+```
+
 ## Development
 
 The project requires Python 3.13 or newer and uses [uv](https://docs.astral.sh/uv/).

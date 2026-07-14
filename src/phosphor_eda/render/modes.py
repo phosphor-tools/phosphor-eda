@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.pcb import LayerRole, PcbDrill
-from phosphor_eda.query.selectors import resolve_string_selectors, selector_matches
 from phosphor_eda.render.inventory import (
     InventoryItem,
     InventoryItemKind,
@@ -27,6 +26,7 @@ from phosphor_eda.render.primitives import (
     source_layer_name,
 )
 from phosphor_eda.render.tokens import VisualRole, resolve_layer_style
+from phosphor_eda.selector_match import resolve_string_selectors, selector_matches
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping

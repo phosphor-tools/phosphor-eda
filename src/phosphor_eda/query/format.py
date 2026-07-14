@@ -15,7 +15,7 @@ from phosphor_eda.domain.buses import bus_memberships
 from phosphor_eda.domain.schematic import ComponentKind
 from phosphor_eda.formats.common.electrical import ELECTRICAL_KEY, PinElectrical
 from phosphor_eda.query.classify import PASSIVE_PREFIXES, is_power_net, ref_prefix
-from phosphor_eda.query.query import (
+from phosphor_eda.query.lookup import (
     component_physical_designator,
     find_bus,
     find_component,

@@ -1,6 +1,6 @@
-"""Shared S-expression helpers for KiCad parsers.
+"""Shared S-expression helpers for sexpdata-backed parsers.
 
-Used by both the schematic and PCB (board.py and friends) parsers to
+Used by the KiCad schematic and PCB parsers and the OrCAD OPJ parser to
 navigate the nested-list structure returned by sexpdata.
 """
 

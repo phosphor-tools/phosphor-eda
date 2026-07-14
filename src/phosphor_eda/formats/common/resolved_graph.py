@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
+from phosphor_eda.domain.part_fields import resolve_part_fields
 from phosphor_eda.domain.schematic import (
     Component,
     ComponentKind,
@@ -19,9 +20,10 @@ from phosphor_eda.domain.schematic import (
     PinOccurrence,
     Schematic,
 )
-from phosphor_eda.formats.common.part_fields import resolve_part_fields
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from phosphor_eda.domain.schematic import (
         FootprintModel,
         LibraryLink,
@@ -35,6 +37,121 @@ if TYPE_CHECKING:
 
 class ResolutionInputError(ValueError):
     """Raised when format-specific resolution emits inconsistent graph input."""
+
+
+class PinOccurrenceLike(Protocol):
+    """The pin-occurrence surface shared by every format's resolver."""
+
+    @property
+    def component_source_id(self) -> str: ...
+    @property
+    def local_net_id(self) -> str | None: ...
+
+
+class HasScopeId(Protocol):
+    """A resolver-local net (or similar) carrying its scope."""
+
+    @property
+    def scope_id(self) -> ScopeId: ...
+
+
+def merge_ids(net_union: NetUnion, net_ids: list[str]) -> None:
+    """Union every net id in a group onto the first."""
+    if len(net_ids) < 2:
+        return
+    first_id = net_ids[0]
+    for net_id in net_ids[1:]:
+        _ = net_union.union(first_id, net_id)
+
+
+def dedupe(names: Iterable[str]) -> list[str]:
+    """First-occurrence-wins de-duplication, dropping empty strings."""
+    result: list[str] = []
+    seen: set[str] = set()
+    for name in names:
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        result.append(name)
+    return result
+
+
+def scope_key(scope_id: ScopeId) -> str:
+    """Stable string key for a scope: ``"root"`` or a ``/``-joined path."""
+    return "root" if not scope_id.path else "/".join(scope_id.path)
+
+
+def validate_pin_ref(
+    *,
+    id_: str,
+    scope_id: ScopeId,
+    local_net_id: str,
+    scopes: set[ScopeId],
+    local_nets_by_id: Mapping[str, HasScopeId],
+) -> None:
+    """Validate a pin's scope and local-net references against resolved input.
+
+    ``local_nets_by_id`` maps each known local-net id to an object carrying its
+    scope; a missing id means the pin references an unknown local net.
+    """
+    if scope_id not in scopes:
+        msg = f"pin {id_!r} references unknown scope {scope_id}"
+        raise ResolutionInputError(msg)
+    local_net = local_nets_by_id.get(local_net_id)
+    if local_net is None:
+        msg = f"pin {id_!r} references unknown local net {local_net_id!r}"
+        raise ResolutionInputError(msg)
+    if local_net.scope_id != scope_id:
+        msg = (
+            f"pin {id_!r} scope {scope_id} does not match "
+            f"local net {local_net_id!r} scope {local_net.scope_id}"
+        )
+        raise ResolutionInputError(msg)
+
+
+def merge_repeated_logical_pins[PinT: PinOccurrenceLike](
+    net_union: NetUnion,
+    pin_occurrences: Iterable[PinT],
+    pin_key: Callable[[PinT], tuple[str, str]],
+) -> None:
+    """Union the local nets of repeated occurrences of the same logical pin.
+
+    ``pin_key`` is the per-format (component identity, logical pin) key.
+    Callers filter *pin_occurrences* to those with a mergeable local net;
+    occurrences without a local net are skipped.
+    """
+    net_ids_by_pin: dict[tuple[str, str], list[str]] = {}
+    for pin_occurrence in pin_occurrences:
+        local_net_id = pin_occurrence.local_net_id
+        if local_net_id is None:
+            continue
+        net_ids_by_pin.setdefault(pin_key(pin_occurrence), []).append(local_net_id)
+    for net_ids in net_ids_by_pin.values():
+        merge_ids(net_union, net_ids)
+
+
+def component_source_ids_by_component_id[PinT: PinOccurrenceLike](
+    pin_occurrences: Iterable[PinT],
+    component_identity: Callable[[PinT], str],
+) -> dict[str, list[str]]:
+    """Group distinct component source ids under each component identity.
+
+    ``component_identity`` is the per-format mapping from a pin occurrence to
+    its owning component's public id.
+    """
+    result: dict[str, list[str]] = {}
+    seen_by_component_id: dict[str, set[str]] = {}
+    for pin_occurrence in pin_occurrences:
+        source_id = pin_occurrence.component_source_id
+        if not source_id:
+            continue
+        component_id = component_identity(pin_occurrence)
+        seen = seen_by_component_id.setdefault(component_id, set())
+        if source_id in seen:
+            continue
+        seen.add(source_id)
+        result.setdefault(component_id, []).append(source_id)
+    return result
 
 
 @dataclass(frozen=True, slots=True)

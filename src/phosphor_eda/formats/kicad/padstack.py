@@ -21,12 +21,13 @@ import dataclasses
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.pcb import PadStack, PadStackLayer, PadStackMode
-from phosphor_eda.formats.kicad import pcb_common, sexp
+from phosphor_eda.formats.common import sexp
+from phosphor_eda.formats.kicad import pcb_common
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from phosphor_eda.formats.kicad.sexp import SExpNode
+    from phosphor_eda.formats.common.sexp import SExpNode
 
 # KiCad's padstack mode tokens mapped to the domain's stack modes.
 _STACK_MODES = {

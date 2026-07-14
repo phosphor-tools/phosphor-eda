@@ -25,6 +25,12 @@ from phosphor_eda.formats.common.resolved_graph import (
     ResolvedPageInput,
     ResolvedPinInput,
     build_resolved_schematic,
+    component_source_ids_by_component_id,
+    dedupe,
+    merge_ids,
+    merge_repeated_logical_pins,
+    scope_key,
+    validate_pin_ref,
 )
 
 if TYPE_CHECKING:
@@ -81,16 +87,23 @@ def resolve_kicad_source(source: KiCadSourceDesign, ctx: ParseContext | None = N
         instance.scope_id: instance.sheet_name for instance in source.sheet_instances
     }
     component_ids_by_source_id = _component_ids_by_source_id(pin_occurrences)
-    component_source_ids_by_component_id = _component_source_ids_by_component_id(
+    source_ids_by_component_id = component_source_ids_by_component_id(
         pin_occurrences,
-        component_ids_by_source_id,
+        lambda pin: _component_identity(pin, component_ids_by_source_id),
     )
     local_nets_by_id = {local_net.id: local_net for local_net in source.local_nets}
     bus_labels_by_id = {label.id: label for label in source.bus_labels}
     _validate_source_refs(source, local_nets_by_id)
     net_union = NetUnion(local_net.id for local_net in source.local_nets)
 
-    _merge_repeated_logical_pins(net_union, pin_occurrences, component_ids_by_source_id)
+    merge_repeated_logical_pins(
+        net_union,
+        pin_occurrences,
+        lambda pin: (
+            _component_identity(pin, component_ids_by_source_id),
+            pin.pin_designator,
+        ),
+    )
     _merge_same_scope_names(net_union, source.local_nets)
     _merge_global_labels(net_union, source.local_nets)
     _merge_power_symbols(net_union, source.local_nets)
@@ -108,7 +121,7 @@ def resolve_kicad_source(source: KiCadSourceDesign, ctx: ParseContext | None = N
         pins=_pin_inputs(
             pin_occurrences,
             component_ids_by_source_id,
-            component_source_ids_by_component_id,
+            source_ids_by_component_id,
         ),
         net_union=net_union,
         net_factory=lambda net_index, root_id, group_local_nets: _kicad_net_input_for_group(
@@ -176,23 +189,6 @@ def _kicad_bus_aliases_for_scope(
     return {alias.name: alias.members for alias in source.bus_aliases if alias.scope_id == scope_id}
 
 
-def _merge_repeated_logical_pins(
-    net_union: NetUnion,
-    pin_occurrences: Iterable[KiCadPinOccurrence],
-    component_ids_by_source_id: dict[str, str],
-) -> None:
-    net_ids_by_pin: dict[tuple[str, str], list[str]] = {}
-    for pin_occurrence in pin_occurrences:
-        key = (
-            _component_identity(pin_occurrence, component_ids_by_source_id),
-            pin_occurrence.pin_designator,
-        )
-        net_ids_by_pin.setdefault(key, []).append(pin_occurrence.local_net_id)
-
-    for net_ids in net_ids_by_pin.values():
-        _merge_ids(net_union, net_ids)
-
-
 def _merge_same_scope_names(net_union: NetUnion, local_nets: Iterable[KiCadLocalNet]) -> None:
     label_ids: dict[tuple[ScopeId, str], list[str]] = {}
 
@@ -211,7 +207,7 @@ def _merge_same_scope_names(net_union: NetUnion, local_nets: Iterable[KiCadLocal
                 label_ids.setdefault((label.scope_id, name), []).append(local_net.id)
 
     for net_ids in label_ids.values():
-        _merge_ids(net_union, net_ids)
+        merge_ids(net_union, net_ids)
 
 
 def _merge_global_labels(net_union: NetUnion, local_nets: Iterable[KiCadLocalNet]) -> None:
@@ -223,7 +219,7 @@ def _merge_global_labels(net_union: NetUnion, local_nets: Iterable[KiCadLocalNet
                 ids_by_name.setdefault(name, []).append(local_net.id)
 
     for net_ids in ids_by_name.values():
-        _merge_ids(net_union, net_ids)
+        merge_ids(net_union, net_ids)
 
 
 def _merge_power_symbols(net_union: NetUnion, local_nets: Iterable[KiCadLocalNet]) -> None:
@@ -232,11 +228,11 @@ def _merge_power_symbols(net_union: NetUnion, local_nets: Iterable[KiCadLocalNet
         for symbol in local_net.power_symbols:
             name = _mergeable_name(symbol.name)
             if name is not None:
-                scope_key = symbol.scope_id if _is_local_power_symbol(symbol) else None
-                ids_by_name.setdefault((scope_key, name), []).append(local_net.id)
+                scope = symbol.scope_id if _is_local_power_symbol(symbol) else None
+                ids_by_name.setdefault((scope, name), []).append(local_net.id)
 
     for net_ids in ids_by_name.values():
-        _merge_ids(net_union, net_ids)
+        merge_ids(net_union, net_ids)
 
 
 def _merge_bus_entry_members(
@@ -252,7 +248,7 @@ def _merge_bus_entry_members(
             ids_by_member.setdefault(member_name, []).append(entry.local_net_id)
 
     for net_ids in ids_by_member.values():
-        _merge_ids(net_union, net_ids)
+        merge_ids(net_union, net_ids)
 
 
 def _is_local_power_symbol(symbol: KiCadPowerSymbol) -> bool:
@@ -276,14 +272,6 @@ def _merge_hierarchical_sheet_pins(source: KiCadSourceDesign, net_union: NetUnio
         child_key = (sheet_pin.child_scope_id, name)
         for child_net_id in child_hierarchical_net_ids.get(child_key, []):
             _ = net_union.union(sheet_pin.local_net_id, child_net_id)
-
-
-def _merge_ids(net_union: NetUnion, net_ids: list[str]) -> None:
-    if len(net_ids) < 2:
-        return
-    first_id = net_ids[0]
-    for net_id in net_ids[1:]:
-        _ = net_union.union(first_id, net_id)
 
 
 def _validate_source_refs(
@@ -413,7 +401,7 @@ def _validate_source_refs(
             )
             raise ResolutionInputError(msg)
     for pin in source.pin_occurrences:
-        _validate_pin_ref(
+        validate_pin_ref(
             id_=pin.id,
             scope_id=pin.scope_id,
             local_net_id=pin.local_net_id,
@@ -442,29 +430,6 @@ def _validate_top_level_sheet_pin_ref(
     )
     if child_scope_id not in scopes:
         msg = f"sheet pin {id_!r} references unknown child scope {child_scope_id}"
-        raise ResolutionInputError(msg)
-
-
-def _validate_pin_ref(
-    *,
-    id_: str,
-    scope_id: ScopeId,
-    local_net_id: str,
-    scopes: set[ScopeId],
-    local_nets_by_id: dict[str, KiCadLocalNet],
-) -> None:
-    if scope_id not in scopes:
-        msg = f"pin {id_!r} references unknown scope {scope_id}"
-        raise ResolutionInputError(msg)
-    local_net = local_nets_by_id.get(local_net_id)
-    if local_net is None:
-        msg = f"pin {id_!r} references unknown local net {local_net_id!r}"
-        raise ResolutionInputError(msg)
-    if local_net.scope_id != scope_id:
-        msg = (
-            f"pin {id_!r} scope {scope_id} does not match "
-            f"local net {local_net_id!r} scope {local_net.scope_id}"
-        )
         raise ResolutionInputError(msg)
 
 
@@ -930,27 +895,27 @@ def _source_names(local_net: KiCadLocalNet) -> set[str]:
 
 
 def _global_label_names(local_net: KiCadLocalNet) -> list[str]:
-    return _dedupe(_mergeable_name(label.name) or "" for label in local_net.global_labels)
+    return dedupe(_mergeable_name(label.name) or "" for label in local_net.global_labels)
 
 
 def _power_symbol_names(local_net: KiCadLocalNet) -> list[str]:
-    return _dedupe(_mergeable_name(symbol.name) or "" for symbol in local_net.power_symbols)
+    return dedupe(_mergeable_name(symbol.name) or "" for symbol in local_net.power_symbols)
 
 
 def _local_label_names(local_net: KiCadLocalNet) -> list[str]:
-    return _dedupe(_mergeable_name(label.name) or "" for label in local_net.local_labels)
+    return dedupe(_mergeable_name(label.name) or "" for label in local_net.local_labels)
 
 
 def _hierarchical_label_names(local_net: KiCadLocalNet) -> list[str]:
-    return _dedupe(_mergeable_name(label.name) or "" for label in local_net.hierarchical_labels)
+    return dedupe(_mergeable_name(label.name) or "" for label in local_net.hierarchical_labels)
 
 
 def _sheet_pin_names(local_net: KiCadLocalNet) -> list[str]:
-    return _dedupe(_mergeable_name(sheet_pin.name) or "" for sheet_pin in local_net.sheet_pins)
+    return dedupe(_mergeable_name(sheet_pin.name) or "" for sheet_pin in local_net.sheet_pins)
 
 
 def _bus_entry_names(local_net: KiCadLocalNet) -> list[str]:
-    return _dedupe(_mergeable_name(entry.member_name) or "" for entry in local_net.bus_entries)
+    return dedupe(_mergeable_name(entry.member_name) or "" for entry in local_net.bus_entries)
 
 
 def _mergeable_name(name: str) -> str | None:
@@ -960,17 +925,6 @@ def _mergeable_name(name: str) -> str | None:
 
 def _clean_name(name: str) -> str:
     return name.replace("\\", "").replace("{slash}", "/").strip()
-
-
-def _dedupe(names: Iterable[str]) -> list[str]:
-    result: list[str] = []
-    seen: set[str] = set()
-    for name in names:
-        if not name or name in seen:
-            continue
-        seen.add(name)
-        result.append(name)
-    return result
 
 
 def _pin_inputs(
@@ -1030,25 +984,6 @@ def _pins_by_local_net_id(
     result: dict[str, list[KiCadPinOccurrence]] = {}
     for pin_occurrence in pin_occurrences:
         result.setdefault(pin_occurrence.local_net_id, []).append(pin_occurrence)
-    return result
-
-
-def _component_source_ids_by_component_id(
-    pin_occurrences: Iterable[KiCadPinOccurrence],
-    component_ids_by_source_id: dict[str, str],
-) -> dict[str, list[str]]:
-    result: dict[str, list[str]] = {}
-    seen_by_component_id: dict[str, set[str]] = {}
-    for pin_occurrence in pin_occurrences:
-        source_id = pin_occurrence.component_source_id
-        if not source_id:
-            continue
-        component_id = _component_identity(pin_occurrence, component_ids_by_source_id)
-        seen = seen_by_component_id.setdefault(component_id, set())
-        if source_id in seen:
-            continue
-        seen.add(source_id)
-        result.setdefault(component_id, []).append(source_id)
     return result
 
 
@@ -1133,9 +1068,5 @@ def _component_identity(
     component_id = component_ids_by_source_id.get(pin_occurrence.component_source_id)
     if component_id:
         return component_id
-    scope_key = _scope_key(pin_occurrence.scope_id)
-    return f"kicad:component:{scope_key}:{pin_occurrence.component_reference}"
-
-
-def _scope_key(scope_id: ScopeId) -> str:
-    return "root" if not scope_id.path else "/".join(scope_id.path)
+    key = scope_key(pin_occurrence.scope_id)
+    return f"kicad:component:{key}:{pin_occurrence.component_reference}"

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from phosphor_eda.query.classify import is_power_net, ref_prefix
 from phosphor_eda.query.format import format_component_compact_line, single_line_text, tabulate
-from phosphor_eda.query.query import net_page_names
+from phosphor_eda.query.lookup import net_page_names
 from phosphor_eda.query.variants import variant_counts
 
 if TYPE_CHECKING:

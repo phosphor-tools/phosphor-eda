@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import sexpdata
 
-import phosphor_eda.formats.kicad.sexp as sexp
+import phosphor_eda.formats.common.sexp as sexp
 from phosphor_eda.domain.buses import bus_kind_for_name
 from phosphor_eda.domain.schematic import (
     FootprintModel,
@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from phosphor_eda.formats.common.diagnostics import ParseContext
-    from phosphor_eda.formats.kicad.sexp import SExpNode
+    from phosphor_eda.formats.common.sexp import SExpNode
 
 _TEXT_VARIABLE_RE = re.compile(r"\$\{([^}]+)\}")
 
