@@ -25,6 +25,10 @@ from phosphor_eda.formats.common.resolved_graph import (
     ResolvedPageInput,
     ResolvedPinInput,
     build_resolved_schematic,
+    component_source_ids_by_component_id,
+    dedupe,
+    merge_repeated_logical_pins,
+    validate_pin_ref,
 )
 from phosphor_eda.formats.common.spatial import UnionFind
 
@@ -88,11 +92,22 @@ def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None =
     effective_mode = _effective_hierarchy_mode(source)
     _validate_source_refs(source, local_net_by_id)
 
-    _merge_repeated_logical_pins(net_union, pin_occurrences)
+    duplicate_pin_keys = _duplicate_visible_source_pin_keys(pin_occurrences)
+    merge_repeated_logical_pins(
+        net_union,
+        (pin for pin in pin_occurrences if pin.local_net_id),
+        lambda pin: (
+            _source_component_identity(pin),
+            _source_logical_pin_key(pin, duplicate_pin_keys),
+        ),
+    )
     _merge_source_names(source, local_refs, net_union, effective_mode)
     _merge_hierarchy(source, local_refs, local_net_by_id, net_union, effective_mode, ctx)
 
-    component_source_ids_by_component_id = _component_source_ids_by_component_id(pin_occurrences)
+    source_ids_by_component_id = component_source_ids_by_component_id(
+        pin_occurrences,
+        _component_identity,
+    )
     symbol_uid_by_id = {
         symbol.id: symbol.unique_id
         for sheet in source.sheets.values()
@@ -120,7 +135,7 @@ def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None =
         local_nets=_local_net_inputs(local_refs),
         pins=_pin_inputs(
             pin_occurrences,
-            component_source_ids_by_component_id,
+            source_ids_by_component_id,
             source.physical_designators,
             symbol_uid_by_id,
             scope_root_ancestor_uids,
@@ -287,28 +302,6 @@ def _effective_hierarchy_mode(source: AltiumSourceDesign) -> AltiumHierarchyMode
                 return AltiumHierarchyMode.FLAT
 
     return AltiumHierarchyMode.GLOBAL
-
-
-def _merge_repeated_logical_pins(
-    net_union: NetUnion,
-    pin_occurrences: Iterable[AltiumPinOccurrence],
-) -> None:
-    pin_occurrences_tuple = tuple(pin_occurrences)
-    duplicate_pin_keys = _duplicate_visible_source_pin_keys(pin_occurrences_tuple)
-    net_ids_by_pin: dict[tuple[str, str], list[str]] = {}
-    for pin_occurrence in pin_occurrences_tuple:
-        if not pin_occurrence.local_net_id:
-            continue
-        key = (
-            _source_component_identity(pin_occurrence),
-            _source_logical_pin_key(pin_occurrence, duplicate_pin_keys),
-        )
-        net_ids_by_pin.setdefault(key, []).append(pin_occurrence.local_net_id)
-
-    for net_ids in net_ids_by_pin.values():
-        first_net_id = net_ids[0]
-        for net_id in net_ids[1:]:
-            _ = net_union.union(first_net_id, net_id)
 
 
 def _merge_source_names(
@@ -821,8 +814,15 @@ def _validate_source_refs(
                 sheet_symbol_ids=sheet_symbol_ids,
             )
 
+    local_nets_by_id = {net_id: ref.local_net for net_id, ref in local_net_by_id.items()}
     for pin in _collect_pin_occurrences(source):
-        _validate_pin_ref(pin, scopes, local_net_by_id)
+        validate_pin_ref(
+            id_=pin.id,
+            scope_id=pin.scope_id,
+            local_net_id=pin.local_net_id,
+            scopes=scopes,
+            local_nets_by_id=local_nets_by_id,
+        )
 
 
 def _validate_local_evidence(ref: _LocalNetRef, scopes: set[ScopeId]) -> None:
@@ -881,26 +881,6 @@ def _validate_sheet_entry_ref(
         raise ResolutionInputError(msg)
     if entry.sheet_symbol_id and entry.sheet_symbol_id not in sheet_symbol_ids:
         msg = f"sheet entry {entry.id!r} references unknown sheet symbol {entry.sheet_symbol_id!r}"
-        raise ResolutionInputError(msg)
-
-
-def _validate_pin_ref(
-    pin: AltiumPinOccurrence,
-    scopes: set[ScopeId],
-    local_net_by_id: dict[str, _LocalNetRef],
-) -> None:
-    if pin.scope_id not in scopes:
-        msg = f"pin {pin.id!r} references unknown scope {pin.scope_id}"
-        raise ResolutionInputError(msg)
-    ref = local_net_by_id.get(pin.local_net_id)
-    if ref is None:
-        msg = f"pin {pin.id!r} references unknown local net {pin.local_net_id!r}"
-        raise ResolutionInputError(msg)
-    if ref.local_net.scope_id != pin.scope_id:
-        msg = (
-            f"pin {pin.id!r} scope {pin.scope_id} does not match "
-            f"local net {pin.local_net_id!r} scope {ref.local_net.scope_id}"
-        )
         raise ResolutionInputError(msg)
 
 
@@ -1445,11 +1425,11 @@ def _all_source_names(refs: Iterable[_LocalNetRef]) -> set[str]:
 
 
 def _label_names(local_net: AltiumLocalNet) -> list[str]:
-    return _dedupe(_mergeable_name(label.name) or "" for label in local_net.net_labels)
+    return dedupe(_mergeable_name(label.name) or "" for label in local_net.net_labels)
 
 
 def _power_names(local_net: AltiumLocalNet) -> list[str]:
-    return _dedupe(_mergeable_name(power_port.name) or "" for power_port in local_net.power_ports)
+    return dedupe(_mergeable_name(power_port.name) or "" for power_port in local_net.power_ports)
 
 
 def _port_names(local_net: AltiumLocalNet) -> list[str]:
@@ -1460,7 +1440,7 @@ def _port_names(local_net: AltiumLocalNet) -> list[str]:
         name = _mergeable_name(port.name)
         if name is not None:
             names.append(name)
-    return _dedupe(names)
+    return dedupe(names)
 
 
 def _sheet_entry_names(local_net: AltiumLocalNet) -> list[str]:
@@ -1471,7 +1451,7 @@ def _sheet_entry_names(local_net: AltiumLocalNet) -> list[str]:
         name = _mergeable_name(entry.name)
         if name is not None:
             names.append(name)
-    return _dedupe(names)
+    return dedupe(names)
 
 
 def _mergeable_bus_member_names(name: str) -> list[str]:
@@ -1481,7 +1461,7 @@ def _mergeable_bus_member_names(name: str) -> list[str]:
     members = expand_bus_members(cleaned)
     if members is None:
         return []
-    return _dedupe(member for member in (_mergeable_name(member) for member in members) if member)
+    return dedupe(member for member in (_mergeable_name(member) for member in members) if member)
 
 
 def _harness_member_names(local_net: AltiumLocalNet) -> list[str]:
@@ -1495,11 +1475,11 @@ def _harness_member_names(local_net: AltiumLocalNet) -> list[str]:
             continue
         port_name = _clean_name(member.port_name)
         names.append(f"{port_name}.{name}" if port_name else name)
-    return _dedupe(names)
+    return dedupe(names)
 
 
 def _generic_bus_member_names(local_net: AltiumLocalNet) -> list[str]:
-    return _dedupe(_mergeable_name(name) or "" for name in local_net.generic_bus_members)
+    return dedupe(_mergeable_name(name) or "" for name in local_net.generic_bus_members)
 
 
 def _mergeable_name(name: str) -> str | None:
@@ -1513,17 +1493,6 @@ def _mergeable_name(name: str) -> str | None:
 
 def _clean_name(name: str) -> str:
     return name.replace("\\", "").strip()
-
-
-def _dedupe(names: Iterable[str]) -> list[str]:
-    result: list[str] = []
-    seen: set[str] = set()
-    for name in names:
-        if not name or name in seen:
-            continue
-        seen.add(name)
-        result.append(name)
-    return result
 
 
 def _component_identity(pin_occurrence: AltiumPinOccurrence) -> str:
@@ -1567,24 +1536,6 @@ def _pin_occurrence_metadata(pin_occurrence: AltiumPinOccurrence) -> dict[str, s
     if pin_occurrence.component_source_id:
         metadata["altium_component_source_id"] = pin_occurrence.component_source_id
     return metadata
-
-
-def _component_source_ids_by_component_id(
-    pin_occurrences: Iterable[AltiumPinOccurrence],
-) -> dict[str, list[str]]:
-    result: dict[str, list[str]] = {}
-    seen_by_component_id: dict[str, set[str]] = {}
-    for pin_occurrence in pin_occurrences:
-        source_id = pin_occurrence.component_source_id
-        if not source_id:
-            continue
-        component_id = _component_identity(pin_occurrence)
-        seen = seen_by_component_id.setdefault(component_id, set())
-        if source_id in seen:
-            continue
-        seen.add(source_id)
-        result.setdefault(component_id, []).append(source_id)
-    return result
 
 
 def _component_metadata_for_pin(

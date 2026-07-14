@@ -31,6 +31,9 @@ from phosphor_eda.formats.common.resolved_graph import (
     ResolvedPageInput,
     ResolvedPinInput,
     build_resolved_schematic,
+    merge_ids,
+    merge_repeated_logical_pins,
+    scope_key,
 )
 from phosphor_eda.formats.dsn.source import (
     dsn_component_public_id,
@@ -93,7 +96,11 @@ def resolve_dsn_source(source: DsnSourceDesign, ctx: ParseContext | None = None)
     pin_occurrences = _collect_pin_occurrences(source.pages)
 
     _merge_stored_page_net_names(source.pages, net_union, local_net_ids)
-    _merge_repeated_logical_pins(net_union, pin_occurrences, local_net_ids)
+    merge_repeated_logical_pins(
+        net_union,
+        (pin for pin in pin_occurrences if pin.local_net_id in local_net_ids),
+        lambda pin: (_component_identity(pin), pin.pin_designator),
+    )
     _merge_known_scope_off_page_connectors(source.pages, net_union, local_net_ids)
     _merge_block_sheet_pins(source, net_union, local_net_ids, ctx)
 
@@ -247,22 +254,6 @@ def _collect_pin_occurrences(pages: Iterable[DsnPageSource]) -> list[DsnPinOccur
     return occurrences
 
 
-def _merge_repeated_logical_pins(
-    net_union: NetUnion,
-    pin_occurrences: Iterable[DsnPinOccurrence],
-    local_net_ids: set[str],
-) -> None:
-    net_ids_by_pin: dict[tuple[str, str], list[str]] = {}
-    for pin_occurrence in pin_occurrences:
-        if pin_occurrence.local_net_id not in local_net_ids:
-            continue
-        key = (_component_identity(pin_occurrence), pin_occurrence.pin_designator)
-        net_ids_by_pin.setdefault(key, []).append(pin_occurrence.local_net_id)
-
-    for net_ids in net_ids_by_pin.values():
-        _merge_ids(net_union, net_ids)
-
-
 def _merge_stored_page_net_names(
     pages: Iterable[DsnPageSource],
     net_union: NetUnion,
@@ -286,7 +277,7 @@ def _merge_stored_page_net_names(
                 )
 
     for net_ids in ids_by_name.values():
-        _merge_ids(net_union, net_ids)
+        merge_ids(net_union, net_ids)
 
 
 def _merge_block_sheet_pins(
@@ -364,13 +355,13 @@ def _merge_known_scope_off_page_connectors(
         for connector in page.off_page_connectors:
             if connector.local_net_id not in local_net_ids or not connector.name_key:
                 continue
-            scope_key = _off_page_scope_key(connector.scope_id)
-            ids_by_scope_name.setdefault((scope_key, connector.name_key), []).append(
+            scope = _off_page_scope_key(connector.scope_id)
+            ids_by_scope_name.setdefault((scope, connector.name_key), []).append(
                 connector.local_net_id
             )
 
     for net_ids in ids_by_scope_name.values():
-        _merge_ids(net_union, net_ids)
+        merge_ids(net_union, net_ids)
 
 
 def _validate_evidence_refs(
@@ -463,14 +454,6 @@ def _off_page_scope_key(scope_id: ScopeId) -> tuple[str, ...]:
     if len(scope_id.path) > 1:
         return scope_id.path[:-1]
     return scope_id.path
-
-
-def _merge_ids(net_union: NetUnion, net_ids: list[str]) -> None:
-    if len(net_ids) < 2:
-        return
-    first_id = net_ids[0]
-    for net_id in net_ids[1:]:
-        _ = net_union.union(first_id, net_id)
 
 
 def _page_inputs(source_pages: Iterable[DsnPageSource]) -> list[ResolvedPageInput]:
@@ -912,8 +895,8 @@ def _component_source_key(pin_occurrence: DsnPinOccurrence) -> str:
     """The source-level identity a component's public IDs are built from."""
     if pin_occurrence.component_source_id:
         return pin_occurrence.component_source_id
-    scope_key = _scope_key(pin_occurrence.scope_id)
-    return f"{scope_key}:{pin_occurrence.component_reference}"
+    key = scope_key(pin_occurrence.scope_id)
+    return f"{key}:{pin_occurrence.component_reference}"
 
 
 def _component_identity(pin_occurrence: DsnPinOccurrence) -> str:
@@ -930,7 +913,3 @@ def _include_dsn_net(
     _pins: tuple[ResolvedPinInput, ...],
 ) -> bool:
     return True
-
-
-def _scope_key(scope_id: ScopeId) -> str:
-    return "root" if not scope_id.path else "/".join(scope_id.path)
