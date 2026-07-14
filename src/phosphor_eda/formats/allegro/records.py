@@ -135,6 +135,7 @@ class AllegroRecordSet:
     string_table: AllegroStringTable | None
     records: tuple[AllegroRecord, ...]
     end_offset: int
+    diagnostics: tuple[AllegroRecordDiagnostic, ...] = ()
     _by_key: Mapping[int, AllegroRecord] = field(init=False, repr=False)
     _tag_counts: Mapping[int, int] = field(init=False, repr=False)
 

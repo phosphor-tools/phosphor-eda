@@ -7,7 +7,12 @@ import pytest
 from phosphor_eda.formats.allegro.errors import AllegroParseError
 from phosphor_eda.formats.allegro.graph import build_allegro_object_graph
 from phosphor_eda.formats.allegro.parser import parse_allegro_records
-from phosphor_eda.formats.allegro.records import AllegroRecord, AllegroRecordSet
+from phosphor_eda.formats.allegro.record_parser import _next_aligned_record_offset
+from phosphor_eda.formats.allegro.records import (
+    AllegroRecord,
+    AllegroRecordDiagnostic,
+    AllegroRecordSet,
+)
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
@@ -140,6 +145,96 @@ def test_parse_allegro_records_rejects_mismatched_scalar_field_substructure_size
     assert error.offset == field_record.offset
     assert error.source_name == "bad-scalar-field-size.brd"
     assert "0x03 subtype 0x64 consumed" in str(error)
+
+
+def test_parse_allegro_records_reports_dropped_stream_tail() -> None:
+    clean = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    boundary = clean.records[50]
+
+    data = bytearray(BREAKOUT_BOARD.read_bytes())
+    # Replace a record with a 0x00 tag followed by unparseable nonzero garbage so
+    # the forward scan gives up instead of finding the next record.
+    for index in range(boundary.offset, len(data)):
+        data[index] = 0xFF
+    data[boundary.offset] = 0x00
+
+    record_set = parse_allegro_records(bytes(data), source_name="dropped-tail.brd")
+
+    assert len(record_set.records) == 50
+    tail = next(
+        diagnostic
+        for diagnostic in record_set.diagnostics
+        if diagnostic.code == "dropped-record-stream-tail"
+    )
+    assert tail.offset == boundary.offset
+    assert str(len(data) - boundary.offset) in tail.message
+
+
+def test_parse_allegro_records_does_not_report_zero_padded_stream_tail() -> None:
+    record_set = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+
+    assert not any(
+        diagnostic.code == "dropped-record-stream-tail" for diagnostic in record_set.diagnostics
+    )
+
+
+def test_next_aligned_record_offset_reports_skipped_padding_garbage() -> None:
+    # A zero-lead word carrying nonzero bytes is padding garbage the stride-4 scan
+    # would otherwise skip silently before landing on the next record tag (0x06).
+    data = bytes([0, 0, 0, 0]) + bytes([0x00, 0xFF, 0x00, 0x00]) + bytes([0x06, 0, 0, 0])
+    diagnostics: list[AllegroRecordDiagnostic] = []
+
+    result = _next_aligned_record_offset(data, 4, diagnostics)
+
+    assert result == 8
+    assert [diagnostic.code for diagnostic in diagnostics] == ["skipped-record-padding-garbage"]
+    assert diagnostics[0].offset == 4
+
+
+def test_parse_allegro_records_records_unknown_field_subtype_but_still_decodes() -> None:
+    clean = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    scalar = next(
+        record for record in clean.records if record.tag == 0x03 and record.payload.get("size") == 4
+    )
+
+    data = bytearray(BREAKOUT_BOARD.read_bytes())
+    data[scalar.offset + 12] = 0x50
+
+    record_set = parse_allegro_records(bytes(data), source_name="unknown-subtype.brd")
+
+    decoded = next(record for record in record_set.records if record.offset == scalar.offset)
+    assert decoded.payload["subtype"] == 0x50
+    assert "value" in decoded.payload
+    diagnostic = next(
+        diagnostic
+        for diagnostic in record_set.diagnostics
+        if diagnostic.code == "unknown-field-subtype"
+    )
+    assert diagnostic.offset == scalar.offset
+
+
+def test_parse_allegro_records_skips_unknown_field_subtype_with_unhandled_size() -> None:
+    clean = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    dynamic = next(
+        record
+        for record in clean.records
+        if record.tag == 0x03 and record.payload["subtype"] == 0x6C
+    )
+    declared_size = dynamic.payload["size"]
+    assert isinstance(declared_size, int) and declared_size not in {4, 8}
+
+    data = bytearray(BREAKOUT_BOARD.read_bytes())
+    data[dynamic.offset + 12] = 0x50
+
+    record_set = parse_allegro_records(bytes(data), source_name="skipped-subtype.brd")
+
+    diagnostic = next(
+        diagnostic
+        for diagnostic in record_set.diagnostics
+        if diagnostic.code == "skipped-unknown-field-subtype"
+    )
+    assert diagnostic.offset == dynamic.offset
+    assert str(declared_size) in diagnostic.message
 
 
 def test_record_set_key_lookup_matches_object_graph_first_record_contract() -> None:

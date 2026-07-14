@@ -31,6 +31,74 @@ def drop_diagnostic(
     )
 
 
+def dropped_stream_tail_diagnostic(
+    data: bytes, offset: int, size: int
+) -> AllegroRecordDiagnostic | None:
+    """Diagnostic for a 0x00-tag forward scan that abandons the rest of the stream.
+
+    Returns ``None`` when the abandoned tail is pure zero padding, since aligned
+    end-of-stream padding drops no data.
+    """
+    if not any(data[offset:]):
+        return None
+    return AllegroRecordDiagnostic(
+        code="dropped-record-stream-tail",
+        message=f"record scan gave up at 0x{offset:X}; dropped {size - offset} trailing bytes",
+        offset=offset,
+        tag=0x00,
+    )
+
+
+def skipped_record_padding_diagnostic(*, offset: int, word_count: int) -> AllegroRecordDiagnostic:
+    return AllegroRecordDiagnostic(
+        code="skipped-record-padding-garbage",
+        message=f"record scan skipped {word_count} nonzero padding word(s) at 0x{offset:X}",
+        offset=offset,
+    )
+
+
+def unknown_field_subtype_diagnostic(
+    *, offset: int, subtype: int, size: int
+) -> AllegroRecordDiagnostic:
+    return AllegroRecordDiagnostic(
+        code="unknown-field-subtype",
+        message=f"0x03 field subtype 0x{subtype:02X} is unknown; decoded {size}-byte value as u32",
+        offset=offset,
+        tag=0x03,
+    )
+
+
+def skipped_field_subtype_diagnostic(
+    *, offset: int, subtype: int, size: int
+) -> AllegroRecordDiagnostic:
+    return AllegroRecordDiagnostic(
+        code="skipped-unknown-field-subtype",
+        message=f"0x03 field subtype 0x{subtype:02X} unhandled; skipped {size} bytes",
+        offset=offset,
+        tag=0x03,
+    )
+
+
+def scan_zero_padding(data: bytes, start: int) -> tuple[int, AllegroRecordDiagnostic | None]:
+    """Advance over 4-byte zero-lead words, flagging nonzero padding garbage.
+
+    Returns the first cursor whose byte is nonzero and, when any skipped word
+    carried nonzero bytes past its zero lead, a diagnostic recording the run.
+    """
+    cursor = start
+    garbage_start: int | None = None
+    garbage_words = 0
+    while cursor < len(data) and data[cursor] == 0:
+        if any(data[cursor + 1 : cursor + 4]):
+            if garbage_start is None:
+                garbage_start = cursor
+            garbage_words += 1
+        cursor += 4
+    if garbage_start is None:
+        return cursor, None
+    return cursor, skipped_record_padding_diagnostic(offset=garbage_start, word_count=garbage_words)
+
+
 def missing_layer_diagnostic(record: AllegroRecord) -> AllegroRecordDiagnostic:
     class_id = payload_int(record, "layer_class_id")
     subclass_id = payload_int(record, "layer_subclass_id")

@@ -8,6 +8,9 @@ import phosphor_eda.formats.allegro.layers as allegro_layers
 from phosphor_eda.domain.pcb import LayerRole
 from phosphor_eda.formats.allegro.layers import AllegroLayerMap, build_allegro_layers
 from phosphor_eda.formats.allegro.parser import parse_allegro_records
+from phosphor_eda.formats.allegro.records import AllegroRecord, AllegroRecordSet
+
+_CLASS_ETCH = 0x06
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
@@ -191,6 +194,78 @@ def test_unresolved_layer_names_are_reported_as_diagnostics() -> None:
 
     assert any(diagnostic.code == "unresolved-layer-name" for diagnostic in result.diagnostics)
     assert result.layer_for_class_subclass(0x06, 0).metadata.native_user_name == "ETCH_1"
+
+
+def test_missing_etch_layer_list_degrades_with_diagnostic() -> None:
+    path = (
+        UPSTREAM_FIXTURES
+        / "opencellular/electronics/breakout"
+        / "board"
+        / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
+    )
+    record_set = parse_allegro_records(path.read_bytes(), source_name=path.name)
+    assert record_set.header is not None
+    etch_key = record_set.header.layer_map[_CLASS_ETCH].layer_list_key
+    filtered = tuple(
+        record
+        for record in record_set.records
+        if not (record.tag == 0x2A and record.key == etch_key)
+    )
+    degraded = AllegroRecordSet(
+        header=record_set.header,
+        string_table=record_set.string_table,
+        records=filtered,
+        end_offset=record_set.end_offset,
+    )
+
+    result = build_allegro_layers(degraded)
+
+    missing = next(
+        diagnostic for diagnostic in result.diagnostics if diagnostic.code == "missing-layer-list"
+    )
+    assert missing.reference_key == etch_key
+    assert result.stackup is None
+    assert not result.layers_by_role(LayerRole.COPPER)
+
+
+def test_malformed_etch_layer_entries_degrade_with_diagnostic() -> None:
+    path = (
+        UPSTREAM_FIXTURES
+        / "opencellular/electronics/breakout"
+        / "board"
+        / "OC_CONNECT-1_BREAKOUT_LIFE-3.brd"
+    )
+    record_set = parse_allegro_records(path.read_bytes(), source_name=path.name)
+    assert record_set.header is not None
+    etch_key = record_set.header.layer_map[_CLASS_ETCH].layer_list_key
+    malformed = AllegroRecord(
+        tag=0x2A,
+        offset=0x100,
+        end_offset=0x108,
+        key=etch_key,
+        next_key=None,
+        payload={"layer_entries": (1, 2, 3)},
+    )
+    records = tuple(
+        malformed if (record.tag == 0x2A and record.key == etch_key) else record
+        for record in record_set.records
+    )
+    degraded = AllegroRecordSet(
+        header=record_set.header,
+        string_table=record_set.string_table,
+        records=records,
+        end_offset=record_set.end_offset,
+    )
+
+    result = build_allegro_layers(degraded)
+
+    diagnostic = next(
+        diagnostic
+        for diagnostic in result.diagnostics
+        if diagnostic.code == "malformed-layer-entries"
+    )
+    assert diagnostic.key == etch_key
+    assert not result.layers_by_role(LayerRole.COPPER)
 
 
 def _assert_roles(
