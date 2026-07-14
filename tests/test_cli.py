@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-import phosphor_eda.cli as cli_module
+import phosphor_eda.cli_project as cli_project_module
 from phosphor_eda.cli import main
 from phosphor_eda.domain.pcb import (
     Board,
@@ -208,7 +208,7 @@ def test_cli_schematic_list_pages(tmp_path: Path):
 def test_cli_schematic_list_buses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     opj = _write_opj(tmp_path / "bus.opj")
     monkeypatch.setattr(
-        cli_module,
+        cli_project_module,
         "load_project",
         lambda _path, **_kwargs: Project(name="BUS", schematic=_bus_design_for_cli()),
     )
@@ -266,7 +266,7 @@ def test_cli_schematic_show_net_not_found(tmp_path: Path):
 def test_cli_schematic_show_bus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     opj = _write_opj(tmp_path / "bus.opj")
     monkeypatch.setattr(
-        cli_module,
+        cli_project_module,
         "load_project",
         lambda _path, **_kwargs: Project(name="BUS", schematic=_bus_design_for_cli()),
     )
@@ -421,7 +421,7 @@ def test_cli_list_components_selector_exclusion(
 ) -> None:
     opj = _write_opj(tmp_path / "selectors.opj")
     monkeypatch.setattr(
-        cli_module,
+        cli_project_module,
         "load_project",
         lambda _path, **_kwargs: Project(name="selectors", schematic=_selector_design_for_cli()),
     )
@@ -442,7 +442,7 @@ def test_cli_list_components_unmatched_glob_returns_empty_filter(
 ) -> None:
     opj = _write_opj(tmp_path / "selectors.opj")
     monkeypatch.setattr(
-        cli_module,
+        cli_project_module,
         "load_project",
         lambda _path, **_kwargs: Project(name="selectors", schematic=_selector_design_for_cli()),
     )
@@ -460,7 +460,7 @@ def test_cli_list_components_unmatched_glob_returns_empty_filter(
 def test_cli_list_nets_by_net_selector(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     opj = _write_opj(tmp_path / "selectors.opj")
     monkeypatch.setattr(
-        cli_module,
+        cli_project_module,
         "load_project",
         lambda _path, **_kwargs: Project(name="selectors", schematic=_selector_design_for_cli()),
     )
@@ -479,7 +479,7 @@ def test_cli_show_net_selector_outputs_multiple_blocks(
 ) -> None:
     opj = _write_opj(tmp_path / "selectors.opj")
     monkeypatch.setattr(
-        cli_module,
+        cli_project_module,
         "load_project",
         lambda _path, **_kwargs: Project(name="selectors", schematic=_selector_design_for_cli()),
     )
@@ -497,7 +497,7 @@ def test_cli_show_net_unmatched_glob_reports_no_results(
 ) -> None:
     opj = _write_opj(tmp_path / "selectors.opj")
     monkeypatch.setattr(
-        cli_module,
+        cli_project_module,
         "load_project",
         lambda _path, **_kwargs: Project(name="selectors", schematic=_selector_design_for_cli()),
     )
@@ -651,8 +651,8 @@ def test_cli_render_accepts_direct_pcb_source(
         captured_projects.append(project)
         return parsed_board
 
-    monkeypatch.setattr("phosphor_eda.cli.load_pcb", fake_load_pcb)
-    monkeypatch.setattr("phosphor_eda.cli._select_project_board", fake_select_project_board)
+    monkeypatch.setattr("phosphor_eda.cli_project.load_pcb", fake_load_pcb)
+    monkeypatch.setattr("phosphor_eda.cli.select_project_board", fake_select_project_board)
     monkeypatch.setattr("phosphor_eda.render.api.render_pcb_svg", fake_render_pcb_svg)
 
     runner = CliRunner()
@@ -701,6 +701,24 @@ def test_cli_render_supports_highlight_pad(tmp_path: Path) -> None:
     assert 'data-source-id="pad:' in result.output
     assert ":TP3:1:copper:" in result.output
     assert 'data-source-ids="' not in result.output
+
+
+def test_cli_render_rejects_zero_width(tmp_path: Path) -> None:
+    project = _write_swd_project(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(main, ["-P", str(project), "pcb", "render", "--width", "0"])
+
+    assert result.exit_code != 0
+    assert "Invalid value for '--width'" in result.output
+
+
+def test_cli_render_rejects_negative_width(tmp_path: Path) -> None:
+    project = _write_swd_project(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(main, ["-P", str(project), "pcb", "render", "--width", "-100"])
+
+    assert result.exit_code != 0
+    assert "Invalid value for '--width'" in result.output
 
 
 def test_cli_render_prjpcb_resolves_single_existing_pcbdoc(
@@ -1264,7 +1282,7 @@ def test_cli_render_net_highlight_traverses_series_passives_via_schematic(
     project_file = tmp_path / "series-passive-highlight.kicad_pro"
     project_file.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(
-        cli_module,
+        cli_project_module,
         "load_project",
         lambda path, **_kwargs: _series_passive_highlight_project(path),
     )
@@ -1360,6 +1378,21 @@ def test_cli_corrupt_pcb_reports_one_line_error(tmp_path: Path) -> None:
     assert "Traceback" not in result.output
 
 
+def test_cli_missing_schematic_error_omits_unrelated_pcb_failure(tmp_path: Path) -> None:
+    """A schematic-missing error names only schematic/project failures, not the PCB's."""
+    project = tmp_path / "board-only.kicad_pro"
+    bad = tmp_path / "board-only.kicad_pcb"
+    project.write_text("{}", encoding="utf-8")
+    bad.write_text("(this is not a valid kicad pcb")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["-P", str(project), "list", "components"])
+
+    assert result.exit_code == 1
+    assert "no loadable schematic" in result.output
+    assert "board-only.kicad_pcb" not in result.output
+
+
 # ---- pcb stackup CLI tests ----
 
 
@@ -1421,7 +1454,7 @@ def test_cli_pcb_stackup_board_without_stackup_metadata_reports_graceful_error(
     project_path.write_text("{}", encoding="utf-8")
     board = _empty_board("No Stackup Board", project_path)
     monkeypatch.setattr(
-        cli_module,
+        cli_project_module,
         "load_project",
         lambda _path, **_kwargs: Project(name="No Stackup", boards=[board]),
     )

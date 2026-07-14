@@ -10,6 +10,13 @@ from typing import TYPE_CHECKING, Protocol
 
 import click
 
+from phosphor_eda.cli_project import (
+    load_project_or_die,
+    load_render_project_or_die,
+    missing_board_error,
+    schematic_or_die,
+    select_project_board,
+)
 from phosphor_eda.query.format import (
     format_bus_detail_for,
     format_bus_table,
@@ -22,12 +29,6 @@ from phosphor_eda.query.format import (
     format_trace,
 )
 from phosphor_eda.query.overview import format_project_overview, format_stackup_section
-from phosphor_eda.query.project_loader import (
-    PCB_EXTENSIONS,
-    PROJECT_EXTENSIONS,
-    load_pcb,
-    load_project,
-)
 from phosphor_eda.query.query import (
     filter_buses as filter_bus_objects,
 )
@@ -51,19 +52,13 @@ from phosphor_eda.query.variants import format_variant_detail, format_variant_ta
 from phosphor_eda.render.settings import render_settings_schema
 
 if TYPE_CHECKING:
+    import duckdb
+
     from phosphor_eda.domain.pcb import Board
     from phosphor_eda.domain.project import Project
-    from phosphor_eda.domain.schematic import Schematic
     from phosphor_eda.render.annotations import ResolvedAnnotations
     from phosphor_eda.render.profiler import RenderProfiler
     from phosphor_eda.render.settings import RenderSettings
-
-_PCB_FORMAT_BY_EXTENSION = {
-    ".brd": "allegro",
-    ".kicad_pcb": "kicad",
-    ".pcbdoc": "altium",
-    ".prjpcb": "altium",
-}
 
 
 class _HasId(Protocol):
@@ -125,87 +120,6 @@ def main(project_file: Path | None, variant_name: str | None, base_variant: bool
     del base_variant
 
 
-def _project_path_required() -> Path:
-    root = click.get_current_context().find_root()
-    project_file = root.params.get("project_file")
-    if not isinstance(project_file, Path):
-        raise click.ClickException("missing -P/--project.")
-    if project_file.suffix.lower() not in PROJECT_EXTENSIONS:
-        supported = ", ".join(sorted(PROJECT_EXTENSIONS))
-        raise click.ClickException(
-            f"project file required: '{project_file.suffix}' is not a project entry point. "
-            f"Supported: {supported}"
-        )
-    return project_file
-
-
-def _load_project_or_die() -> "Project":
-    project_file = _project_path_required()
-    root = click.get_current_context().find_root()
-    variant_name = root.params.get("variant_name")
-    base_variant = bool(root.params.get("base_variant"))
-    try:
-        return load_project(
-            project_file,
-            variant_name=variant_name if isinstance(variant_name, str) else None,
-            base_variant=base_variant,
-        )
-    except click.ClickException:
-        raise
-    except Exception as exc:
-        raise click.ClickException(f"failed to parse {project_file}: {exc}") from exc
-
-
-def _load_render_project_or_die(source_path: Path | None) -> "Project":
-    from phosphor_eda.domain.project import Project, ProjectMetadata
-
-    root = click.get_current_context().find_root()
-    project_file = root.params.get("project_file")
-    if source_path is not None and isinstance(project_file, Path):
-        raise click.ClickException(
-            "provide either a render source argument or -P/--project, not both."
-        )
-    if source_path is None:
-        return _load_project_or_die()
-
-    ext = source_path.suffix.lower()
-    try:
-        if ext in PROJECT_EXTENSIONS:
-            variant_name = root.params.get("variant_name")
-            base_variant = bool(root.params.get("base_variant"))
-            return load_project(
-                source_path,
-                variant_name=variant_name if isinstance(variant_name, str) else None,
-                base_variant=base_variant,
-            )
-        if ext in PCB_EXTENSIONS:
-            board = load_pcb(source_path)
-            return Project(
-                name=board.name or source_path.stem,
-                metadata=ProjectMetadata(
-                    name=board.name or source_path.stem,
-                    format=_PCB_FORMAT_BY_EXTENSION[ext],
-                    source_paths=[str(source_path)],
-                ),
-                boards=[board],
-            )
-    except click.ClickException:
-        raise
-    except Exception as exc:
-        raise click.ClickException(f"failed to parse {source_path}: {exc}") from exc
-
-    supported = ", ".join(sorted(PROJECT_EXTENSIONS | PCB_EXTENSIONS))
-    raise click.ClickException(
-        f"unsupported render source: '{source_path.suffix}'. Supported: {supported}"
-    )
-
-
-def _schematic_or_die(project: "Project") -> "Schematic":
-    if project.schematic is None:
-        raise click.ClickException("project contains no loadable schematic.")
-    return project.schematic
-
-
 def _object_ids(items: Sequence[_HasId]) -> set[str]:
     return {item.id for item in items}
 
@@ -221,7 +135,7 @@ def _echo_detail_blocks(blocks: list[str], empty_message: str) -> None:
 @cli_command
 def overview() -> None:
     """Show a bounded project overview."""
-    project = _load_project_or_die()
+    project = load_project_or_die()
     click.echo(format_project_overview(project))
 
 
@@ -239,7 +153,7 @@ def show_group() -> None:
 @cli_command
 def variants() -> None:
     """List project variants."""
-    project = _load_project_or_die()
+    project = load_project_or_die()
     click.echo(format_variant_table(project))
 
 
@@ -248,7 +162,7 @@ def variants() -> None:
 @cli_command
 def show_variant(name: str) -> None:
     """Show details for a project variant."""
-    project = _load_project_or_die()
+    project = load_project_or_die()
     click.echo(format_variant_detail(project, name))
 
 
@@ -285,7 +199,7 @@ def components(
     filter_nets: tuple[str, ...],
 ) -> None:
     """List components in a schematic."""
-    design = _schematic_or_die(_load_project_or_die())
+    design = schematic_or_die(load_project_or_die())
     selected_components = resolve_components(design, filter_components)
     selected_pages = resolve_pages(design, filter_pages)
     selected_nets = resolve_nets(design, filter_nets)
@@ -350,7 +264,7 @@ def nets(
     trace: bool,
 ) -> None:
     """List nets in a schematic."""
-    design = _schematic_or_die(_load_project_or_die())
+    design = schematic_or_die(load_project_or_die())
     selected_nets = resolve_nets(design, filter_nets)
     selected_components = resolve_components(design, filter_components)
     selected_pages = resolve_pages(design, filter_pages)
@@ -405,7 +319,7 @@ def buses(
     min_members: int | None,
 ) -> None:
     """List buses in a schematic."""
-    design = _schematic_or_die(_load_project_or_die())
+    design = schematic_or_die(load_project_or_die())
     selected_buses = resolve_buses(design, filter_buses)
     selected_nets = resolve_nets(design, filter_nets)
 
@@ -448,7 +362,7 @@ def pages(
     filter_components: tuple[str, ...],
 ) -> None:
     """List pages in a schematic."""
-    design = _schematic_or_die(_load_project_or_die())
+    design = schematic_or_die(load_project_or_die())
     selected_pages = resolve_pages(design, filter_pages)
     selected_nets = resolve_nets(design, filter_nets)
     selected_components = resolve_components(design, filter_components)
@@ -470,7 +384,7 @@ def pages(
 @cli_command
 def component(selectors: tuple[str, ...]) -> None:
     """Show full detail for components by selector."""
-    design = _schematic_or_die(_load_project_or_die())
+    design = schematic_or_die(load_project_or_die())
     components = resolve_components(design, selectors)
     _echo_detail_blocks(
         [format_component_detail_for(design, component) for component in components],
@@ -483,7 +397,7 @@ def component(selectors: tuple[str, ...]) -> None:
 @cli_command
 def net(selectors: tuple[str, ...]) -> None:
     """Show full detail for nets by selector."""
-    design = _schematic_or_die(_load_project_or_die())
+    design = schematic_or_die(load_project_or_die())
     nets = resolve_nets(design, selectors)
     _echo_detail_blocks(
         [format_net_detail_for(design, net) for net in nets],
@@ -496,7 +410,7 @@ def net(selectors: tuple[str, ...]) -> None:
 @cli_command
 def bus(selectors: tuple[str, ...]) -> None:
     """Show full detail for buses by selector."""
-    design = _schematic_or_die(_load_project_or_die())
+    design = schematic_or_die(load_project_or_die())
     buses = resolve_buses(design, selectors)
     _echo_detail_blocks(
         [format_bus_detail_for(design, bus) for bus in buses],
@@ -509,7 +423,7 @@ def bus(selectors: tuple[str, ...]) -> None:
 @cli_command
 def page(selectors: tuple[str, ...]) -> None:
     """Show full detail for pages by selector."""
-    design = _schematic_or_die(_load_project_or_die())
+    design = schematic_or_die(load_project_or_die())
     pages = resolve_pages(design, selectors)
     _echo_detail_blocks(
         [format_page_detail_for(design, page) for page in pages],
@@ -526,7 +440,7 @@ def page(selectors: tuple[str, ...]) -> None:
 @cli_command
 def trace(ref_a: str, ref_b: str) -> None:
     """Show signal paths between two components."""
-    design = _schematic_or_die(_load_project_or_die())
+    design = schematic_or_die(load_project_or_die())
     click.echo(format_trace(design, ref_a, ref_b))
 
 
@@ -585,59 +499,6 @@ def _net_highlight_expansions(
             expanded_names.update(connected_pcb_net_names(board, project.schematic, net_name))
         expansions[selector] = frozenset(expanded_names)
     return expansions
-
-
-def _select_project_board(project: "Project", selector: str | None) -> "Board":
-    boards = project.boards
-    if not boards:
-        raise click.ClickException("project contains no renderable PCB board.")
-    if selector is None:
-        if len(boards) == 1:
-            return boards[0]
-        raise click.ClickException(
-            "project contains multiple boards; use --board with one of: "
-            + ", ".join(_board_label(board) for board in boards)
-        )
-
-    exact_name = [board for board in boards if board.name == selector]
-    if len(exact_name) == 1:
-        return exact_name[0]
-    if len(exact_name) > 1:
-        _raise_ambiguous_board(selector, exact_name)
-
-    exact_source = [board for board in boards if Path(board.source_path).name == selector]
-    if len(exact_source) == 1:
-        return exact_source[0]
-    if len(exact_source) > 1:
-        _raise_ambiguous_board(selector, exact_source)
-
-    normalized_selector = selector.replace("\\", "/").lower()
-    suffix_matches = [
-        board
-        for board in boards
-        if board.source_path.replace("\\", "/").lower().endswith(normalized_selector)
-    ]
-    if len(suffix_matches) == 1:
-        return suffix_matches[0]
-    if len(suffix_matches) > 1:
-        _raise_ambiguous_board(selector, suffix_matches)
-
-    raise click.ClickException(
-        f"board '{selector}' not found. Available boards: "
-        + ", ".join(_board_label(board) for board in boards)
-    )
-
-
-def _raise_ambiguous_board(selector: str, boards: list["Board"]) -> None:
-    raise click.ClickException(
-        f"board selector '{selector}' is ambiguous. Matches: "
-        + ", ".join(_board_label(board) for board in boards)
-    )
-
-
-def _board_label(board: "Board") -> str:
-    source = Path(board.source_path).name if board.source_path else ""
-    return f"{board.name} ({source})" if source and source != board.name else board.name
 
 
 def _resolve_render_annotations(
@@ -739,7 +600,7 @@ def pcb() -> None:
     multiple=True,
     help="Pad target to highlight as <component>.<pad> (repeatable), e.g. CN11.30.",
 )
-@click.option("--width", type=int, default=800, help="SVG width in pixels.")
+@click.option("--width", type=click.IntRange(min=1), default=800, help="SVG width in pixels.")
 @click.option(
     "--custom-css",
     type=str,
@@ -836,8 +697,8 @@ def render(
     profiler = RenderProfiler() if profile_render else None
 
     with profile_span(profiler, "cli.load_project"):
-        project = _load_render_project_or_die(source_path)
-        board = _select_project_board(project, board_selector)
+        project = load_render_project_or_die(source_path)
+        board = select_project_board(project, board_selector)
 
     # -- Base render settings (file/stdin, or bundled default) -------------
     if render_settings_file == "-":
@@ -925,9 +786,9 @@ def stackup() -> None:
     physical layer, plus total board thickness. Placeholder layer slots
     that carry no physical construction are omitted.
     """
-    project = _load_project_or_die()
+    project = load_project_or_die()
     if not project.boards:
-        raise click.ClickException("project contains no renderable PCB board.")
+        raise missing_board_error(project)
     section = format_stackup_section(project.boards)
     if not section:
         raise click.ClickException("project has no stackup metadata.")
@@ -935,6 +796,15 @@ def stackup() -> None:
 
 
 # ---- sql command ----
+
+
+def _spatial_engine_error(exc: "duckdb.Error") -> click.ClickException:
+    """Actionable message for a DuckDB engine-init failure (spatial download needs a network)."""
+    return click.ClickException(
+        "could not initialize the spatial query engine; the DuckDB spatial "
+        "extension is downloaded on first use and requires network access: "
+        f"{exc}"
+    )
 
 
 @main.command()
@@ -956,20 +826,31 @@ def sql(query: str | None, show_schema: bool) -> None:
     if not query:
         raise click.ClickException("provide a SQL query or use --schema.")
 
-    project = _load_project_or_die()
-    con = load_database(project)
+    project = load_project_or_die()
 
     try:
-        result = con.execute(query)
+        con = load_database(project)
+    except duckdb.Error as exc:
+        raise _spatial_engine_error(exc) from exc
+
+    try:
+        _ = con.execute(query)
     except duckdb.Error as exc:
         raise click.ClickException(f"SQL error: {exc}") from exc
 
-    rows = result.fetchall()
+    # Statements without a result set (comment-only input, or DDL) leave the
+    # connection with no column description; report that cleanly rather than
+    # dereferencing a missing cursor.
+    if not con.description:
+        click.echo("(no result set)")
+        return
+
+    rows = con.fetchall()
     if not rows:
         click.echo("(0 rows)")
         return
 
-    headers = tuple(col[0] for col in result.description)
+    headers = tuple(col[0] for col in con.description)
     str_rows = [tuple(str(v) for v in row) for row in rows]
     click.echo(tabulate(headers, str_rows))
     click.echo(f"\n({len(rows)} row{'s' if len(rows) != 1 else ''})")

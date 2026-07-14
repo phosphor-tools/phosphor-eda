@@ -195,7 +195,7 @@ def resolve_effective_settings(
         if overrides.debug_attributes is not None
         else base.debug_attributes
     )
-    width = overrides.width or base.width or DEFAULT_WIDTH
+    width = overrides.width if overrides.width is not None else (base.width or DEFAULT_WIDTH)
     font_size = overrides.font_size or base.font_size or DEFAULT_FONT_SIZE
     background = base.background or DEFAULT_BACKGROUND
 

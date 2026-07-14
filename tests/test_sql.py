@@ -1998,3 +1998,24 @@ class TestCLI:
         lines = result.output.strip().split("\n")
         # Header + separator + 1 data row + "(1 row)" footer
         assert len(lines) >= 3
+
+    def test_statement_without_result_set_does_not_crash(self, tmp_path: Path) -> None:
+        # A comment-only statement executes but yields no result set (DuckDB
+        # returns no cursor); the command must report that cleanly, not crash on
+        # a missing description.
+        project_file = _write_swd_project(tmp_path)
+        runner = CliRunner()
+        result = runner.invoke(main, ["-P", str(project_file), "sql", "--", "-- just a comment"])
+        assert result.exit_code == 0, result.output
+        assert result.exception is None
+        assert "no result set" in result.output.lower()
+
+
+def test_spatial_engine_error_mentions_network_requirement() -> None:
+    from phosphor_eda.cli import _spatial_engine_error
+
+    exc = duckdb.IOException("Failed to download extension 'spatial'")
+    translated = _spatial_engine_error(exc)
+    message = translated.format_message().lower()
+    assert "network" in message
+    assert "spatial" in message
