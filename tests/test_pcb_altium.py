@@ -128,7 +128,7 @@ def test_component_body_parser_extracts_models() -> None:
     ).encode("ascii")
     data = len(payload).to_bytes(4, "little") + payload
 
-    result = parse_component_bodies(data)
+    result = parse_component_bodies(data, ParseContext())
 
     assert 2 in result
     assert len(result[2]) == 1
@@ -481,7 +481,7 @@ def _make_via_stream(
 def test_altium_via_stack_top_mid_bottom() -> None:
     diameters = (600000,) + (500000,) * 30 + (700000,)
     data = _make_via_stream(mode=1, diameters=diameters)
-    vias = parse_vias(data, _stack_layer_map(), ParseContext())
+    vias = parse_vias(data, {}, _stack_layer_map(), ParseContext())
 
     assert len(vias) == 1
     payload = vias[0].data
@@ -499,7 +499,7 @@ def test_altium_via_stack_top_mid_bottom() -> None:
 def test_altium_via_stack_full_per_layer() -> None:
     diameters = (600000, 500000) + (400000,) * 29 + (700000,)
     data = _make_via_stream(mode=2, diameters=diameters)
-    vias = parse_vias(data, _stack_layer_map(inner=2), ParseContext())
+    vias = parse_vias(data, {}, _stack_layer_map(inner=2), ParseContext())
 
     assert len(vias) == 1
     payload = vias[0].data
@@ -517,7 +517,7 @@ def test_altium_via_stack_full_per_layer() -> None:
 
 def test_altium_via_stack_uniform_stays_simple() -> None:
     data = _make_via_stream(mode=1, diameters=(600000,) * 32)
-    vias = parse_vias(data, _stack_layer_map(), ParseContext())
+    vias = parse_vias(data, {}, _stack_layer_map(), ParseContext())
 
     assert len(vias) == 1
     payload = vias[0].data
@@ -530,7 +530,7 @@ def test_altium_via_unknown_stack_mode_records_diagnostic() -> None:
     # via keeps its simple outer geometry rather than guessing a layout.
     ctx = ParseContext()
     data = _make_via_stream(mode=7, diameters=(600000,) * 32)
-    vias = parse_vias(data, _stack_layer_map(), ctx)
+    vias = parse_vias(data, {}, _stack_layer_map(), ctx)
 
     assert len(vias) == 1
     payload = vias[0].data
@@ -545,7 +545,7 @@ def test_altium_via_stack_mode_without_diameters_records_diagnostic() -> None:
     ctx = ParseContext()
     body = _make_via_stream(mode=1, diameters=(600000,) * 32)[5:][:100]
     data = _make_via_stream(body)
-    vias = parse_vias(data, _stack_layer_map(), ctx)
+    vias = parse_vias(data, {}, _stack_layer_map(), ctx)
 
     assert len(vias) == 1
     payload = vias[0].data
@@ -569,7 +569,9 @@ def test_altium_build_carries_pad_and_via_stacks() -> None:
     pad_data = (FIXTURES / "altium" / "pad_stack_top_mid_bottom.bin").read_bytes()
     pad_primitives = [prim for _, prim in parse_pads(pad_data, _STACK_NETS, layer_map, ctx)]
     via_diameters = (600000,) + (500000,) * 30 + (700000,)
-    via_primitives = parse_vias(_make_via_stream(mode=1, diameters=via_diameters), layer_map, ctx)
+    via_primitives = parse_vias(
+        _make_via_stream(mode=1, diameters=via_diameters), {}, layer_map, ctx
+    )
     outline = ParsedPrimitive(
         id="outline:0",
         object_type=ParsedObjectKind.GRAPHIC,

@@ -331,12 +331,12 @@ class BezierRec(AltiumRecord):
     line_width: int = 0
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.BEZIER,
             index=index,
             owner_index=_owner(props),
-            points=prop_points(props),
+            points=prop_points(props, ctx),
             line_width=prop_int(props, "linewidth"),
         )
 
@@ -355,7 +355,7 @@ class PolylineRec(AltiumRecord):
             record_type=RecordType.POLYLINE,
             index=index,
             owner_index=_owner(props),
-            points=prop_points(props),
+            points=prop_points(props, ctx),
             line_width=prop_int(props, "linewidth"),
             line_style=ctx.require_enum(
                 prop_int(props, "linestyle"),
@@ -376,12 +376,12 @@ class PolygonRec(AltiumRecord):
     is_solid: bool = False
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.POLYGON,
             index=index,
             owner_index=_owner(props),
-            points=prop_points(props),
+            points=prop_points(props, ctx),
             line_width=prop_int(props, "linewidth"),
             is_solid=prop_bool(props, "issolid"),
         )
@@ -745,12 +745,12 @@ class BusRec(AltiumRecord):
     points: list[tuple[int, int]] = field(default_factory=list)
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.BUS,
             index=index,
             owner_index=_owner(props),
-            points=prop_points(props),
+            points=prop_points(props, ctx),
         )
 
     @property
@@ -769,12 +769,12 @@ class WireRec(AltiumRecord):
     points: list[tuple[int, int]] = field(default_factory=list)
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.WIRE,
             index=index,
             owner_index=_owner(props),
-            points=prop_points(props),
+            points=prop_points(props, ctx),
         )
 
     @property
@@ -1198,12 +1198,12 @@ class SignalHarnessRec(AltiumRecord):
     points: list[tuple[int, int]] = field(default_factory=list)
 
     @classmethod
-    def from_properties(cls, index: int, props: dict[str, str], _ctx: ParseContext) -> Self:
+    def from_properties(cls, index: int, props: dict[str, str], ctx: ParseContext) -> Self:
         return cls(
             record_type=RecordType.SIGNAL_HARNESS,
             index=index,
             owner_index=_owner(props),
-            points=prop_points(props),
+            points=prop_points(props, ctx),
         )
 
     @property

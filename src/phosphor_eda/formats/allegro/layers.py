@@ -185,40 +185,41 @@ def build_allegro_layers(record_set: AllegroRecordSet) -> AllegroLayerMap:
     string_table: Mapping[int, str] = (
         record_set.string_table.by_id if record_set.string_table is not None else empty_string_table
     )
+    diagnostics: list[AllegroRecordDiagnostic] = []
     layer_list_records = _layer_list_records_by_key(record_set)
-    etch_record = _layer_list_for_class(record_set, _CLASS_ETCH, layer_list_records)
-    etch_entries = _layer_entries(etch_record)
+    etch_record = _layer_list_for_class(record_set, _CLASS_ETCH, layer_list_records, diagnostics)
 
     layers: list[PcbLayer] = []
-    diagnostics: list[AllegroRecordDiagnostic] = []
     by_class_subclass: dict[tuple[int, int], PcbLayer] = {}
     copper_layers: list[PcbLayer] = []
 
-    for entry in etch_entries:
-        name = _resolved_entry_name(
-            entry,
-            string_table,
-            fallback=f"ETCH_{entry.index + 1}",
-            class_id=_CLASS_ETCH,
-            record=etch_record,
-            diagnostics=diagnostics,
-        )
-        layer = PcbLayer(
-            name=name,
-            roles=_copper_roles(entry.index, len(etch_entries), name),
-            number=entry.index + 1,
-            stack_index=entry.index,
-            metadata=_metadata(
-                native_class_id=_CLASS_ETCH,
-                native_subclass_id=entry.index,
-                native_layer_name=name,
-                layer_list_key=etch_record.key,
-                entry=entry,
-            ),
-        )
-        layers.append(layer)
-        copper_layers.append(layer)
-        by_class_subclass[(_CLASS_ETCH, entry.index)] = layer
+    if etch_record is not None:
+        etch_entries = _layer_entries(etch_record, diagnostics)
+        for entry in etch_entries:
+            name = _resolved_entry_name(
+                entry,
+                string_table,
+                fallback=f"ETCH_{entry.index + 1}",
+                class_id=_CLASS_ETCH,
+                record=etch_record,
+                diagnostics=diagnostics,
+            )
+            layer = PcbLayer(
+                name=name,
+                roles=_copper_roles(entry.index, len(etch_entries), name),
+                number=entry.index + 1,
+                stack_index=entry.index,
+                metadata=_metadata(
+                    native_class_id=_CLASS_ETCH,
+                    native_subclass_id=entry.index,
+                    native_layer_name=name,
+                    layer_list_key=etch_record.key,
+                    entry=entry,
+                ),
+            )
+            layers.append(layer)
+            copper_layers.append(layer)
+            by_class_subclass[(_CLASS_ETCH, entry.index)] = layer
 
     for class_id, entry in enumerate(record_set.header.layer_map if record_set.header else ()):
         if class_id == _CLASS_ETCH or entry.layer_list_key == 0:
@@ -231,7 +232,7 @@ def build_allegro_layers(record_set: AllegroRecordSet) -> AllegroLayerMap:
                 if copper.stack_index is not None:
                     by_class_subclass[(class_id, copper.stack_index)] = copper
             continue
-        for layer_entry in _layer_entries(record):
+        for layer_entry in _layer_entries(record, diagnostics):
             name = _resolved_entry_name(
                 layer_entry,
                 string_table,
@@ -295,23 +296,45 @@ def _layer_list_for_class(
     record_set: AllegroRecordSet,
     class_id: int,
     layer_list_records: Mapping[int, AllegroRecord],
-) -> AllegroRecord:
+    diagnostics: list[AllegroRecordDiagnostic],
+) -> AllegroRecord | None:
     if record_set.header is None or class_id >= len(record_set.header.layer_map):
-        msg = f"Allegro header has no layer-map entry for class 0x{class_id:02X}"
-        raise ValueError(msg)
+        diagnostics.append(
+            AllegroRecordDiagnostic(
+                code="missing-layer-list",
+                message=f"Allegro header has no layer-map entry for class 0x{class_id:02X}",
+            )
+        )
+        return None
     key = record_set.header.layer_map[class_id].layer_list_key
     record = layer_list_records.get(key)
     if record is None:
-        msg = f"Allegro class 0x{class_id:02X} references missing 0x2A layer list {key}"
-        raise ValueError(msg)
+        diagnostics.append(
+            AllegroRecordDiagnostic(
+                code="missing-layer-list",
+                message=f"Allegro class 0x{class_id:02X} references missing 0x2A layer list {key}",
+                reference_key=key,
+            )
+        )
+        return None
     return record
 
 
-def _layer_entries(record: AllegroRecord) -> tuple[AllegroLayerListEntry, ...]:
+def _layer_entries(
+    record: AllegroRecord, diagnostics: list[AllegroRecordDiagnostic]
+) -> tuple[AllegroLayerListEntry, ...]:
     entries = record.payload.get("layer_entries", ())
     if not _is_layer_entries(entries):
-        msg = f"Allegro 0x2A record {record.key} has malformed layer entries"
-        raise ValueError(msg)
+        diagnostics.append(
+            AllegroRecordDiagnostic(
+                code="malformed-layer-entries",
+                message=f"Allegro 0x2A record {record.key} has malformed layer entries",
+                offset=record.offset,
+                tag=record.tag,
+                key=record.key,
+            )
+        )
+        return ()
     return entries
 
 

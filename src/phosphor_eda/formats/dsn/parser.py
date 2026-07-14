@@ -572,6 +572,10 @@ def parse_page(
         return _parse_page(data, string_list, ctx)
     except (struct.error, IndexError, DsnFormatError) as exc:
         msg = f"Page stream is truncated or uses an unsupported layout: {exc}"
+        # Preserve the located coordinates when the inner error already carries
+        # them; struct.error/IndexError have none, so fall back to 0.
+        if isinstance(exc, DsnFormatError):
+            raise DsnFormatError(msg, offset=exc.offset, type_id=exc.type_id) from exc
         raise DsnFormatError(msg, offset=0, type_id=0) from exc
 
 
@@ -1197,7 +1201,7 @@ def parse_dsn(dsn_path: Path, ctx: ParseContext | None = None) -> ParsedDesign:
             if "Hierarchy/Hierarchy" not in path:
                 continue
             hier_data = ole.openstream(entry).read()
-            mapping_groups.append(parse_hierarchy(hier_data))
+            mapping_groups.append(parse_hierarchy(hier_data, ctx))
             design.hierarchy_occurrences.extend(
                 parse_hierarchy_occurrences(hier_data, instance_db_id_set)
             )

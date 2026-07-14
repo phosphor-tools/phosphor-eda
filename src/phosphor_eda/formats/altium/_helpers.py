@@ -9,12 +9,58 @@ from __future__ import annotations
 
 import re
 import struct
+from typing import TYPE_CHECKING
+
+from phosphor_eda.formats.common.diagnostics import warn_optional
+
+if TYPE_CHECKING:
+    from phosphor_eda.formats.common.diagnostics import ParseContext
 
 # DistanceFromTop fractional properties use 1/100000 resolution.
 _FRAC_DENOM = 100_000
 
 # Matches ``PREFIX[START..END]`` in Altium bus notation.
 _BUS_RANGE_RE = re.compile(r"^(.*?)\[(\d+)\.\.(\d+)\]$")
+
+# Matches a single ``x{i}``/``y{i}``/``ex{i}``/``ey{i}`` vertex coordinate key.
+_COORD_KEY_RE = re.compile(r"^e?[xy]\d+$")
+
+
+# ---------------------------------------------------------------------------
+# Guarded numeric conversion (file-supplied text → number, degrade on garbage)
+# ---------------------------------------------------------------------------
+
+
+def guarded_int(
+    raw: str,
+    *,
+    ctx: ParseContext | None,
+    field: str,
+    default: int = 0,
+    category: str = "malformed_number",
+) -> int:
+    """Parse *raw* as an int, warning and returning *default* on garbage."""
+    try:
+        return int(raw)
+    except (ValueError, TypeError):
+        warn_optional(ctx, category, f"non-integer {field} {raw!r}; using {default}")
+        return default
+
+
+def guarded_float(
+    raw: str,
+    *,
+    ctx: ParseContext | None,
+    field: str,
+    default: float = 0.0,
+    category: str = "malformed_number",
+) -> float:
+    """Parse *raw* as a float, warning and returning *default* on garbage."""
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        warn_optional(ctx, category, f"non-numeric {field} {raw!r}; using {default}")
+        return default
 
 
 # ---------------------------------------------------------------------------
@@ -59,16 +105,29 @@ def prop_location(props: dict[str, str]) -> tuple[int, int]:
     return (prop_int(props, "location.x"), prop_int(props, "location.y"))
 
 
-def prop_points(props: dict[str, str]) -> list[tuple[int, int]]:
+def prop_points(props: dict[str, str], ctx: ParseContext | None = None) -> list[tuple[int, int]]:
     """Parse ``LocationCount`` / ``X1,Y1`` / ``X2,Y2`` / ... into points.
 
     Altium caps ``LocationCount`` at 50; vertices 51+ are stored as
     ``ExtraLocationCount`` / ``EX{i},EY{i}``.
+
+    ``LocationCount`` is file-supplied and untrusted; a corrupt value could
+    request an unbounded loop. Cap the requested vertex count by the number of
+    coordinate keys the record actually carries and warn when clamped.
     """
     loc_count = prop_int(props, "locationcount", 2)
     extra_count = prop_int(props, "extralocationcount", 0)
+    requested = loc_count + extra_count
+    max_points = sum(1 for key in props if _COORD_KEY_RE.match(key)) // 2
+    if requested > max_points:
+        warn_optional(
+            ctx,
+            "location_count_capped",
+            f"LocationCount {requested} exceeds available coordinate keys ({max_points}); capped",
+        )
+        requested = max_points
     points: list[tuple[int, int]] = []
-    for i in range(1, loc_count + extra_count + 1):
+    for i in range(1, requested + 1):
         if f"x{i}" in props:
             points.append((prop_int(props, f"x{i}"), prop_int(props, f"y{i}")))
         else:

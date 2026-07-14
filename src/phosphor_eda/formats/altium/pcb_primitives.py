@@ -22,14 +22,16 @@ from phosphor_eda.domain.pcb import (
     PcbLayer,
     PcbLine,
     PcbModel3D,
+    PcbNet,
     PcbObjectMetadata,
     PcbPolygon,
     PcbText,
 )
-from phosphor_eda.formats.altium._helpers import u32
+from phosphor_eda.formats.altium._helpers import guarded_float, u32
 from phosphor_eda.formats.altium.enums import AltiumLayer
 from phosphor_eda.formats.altium.pcb_records import NET_UNCONNECTED
 from phosphor_eda.formats.altium.record_parser import parse_record_payload
+from phosphor_eda.formats.common.diagnostics import warn_optional
 
 if TYPE_CHECKING:
     from phosphor_eda.formats.common.diagnostics import ParseContext
@@ -256,19 +258,51 @@ def int_to_mm(val: int) -> float:
     return val * _INT_TO_MM
 
 
-def parse_mil(s: str) -> float:
-    """Parse a mil-string like ``'1153.8945mil'`` and return mm."""
-    return float(s.removesuffix("mil")) * MIL_TO_MM
+def parse_mil(s: str, *, ctx: ParseContext | None = None, field: str = "mil value") -> float:
+    """Parse a mil-string like ``'1153.8945mil'`` and return mm.
+
+    File-supplied; a garbage value degrades to ``0.0`` with a diagnostic on
+    *ctx* rather than raising.
+    """
+    return guarded_float(s.removesuffix("mil"), ctx=ctx, field=field) * MIL_TO_MM
 
 
-def parse_rotation(s: str) -> float:
+def parse_rotation(s: str, *, ctx: ParseContext | None = None, field: str = "rotation") -> float:
     """Parse a rotation string (may be scientific notation)."""
-    return float(s)
+    return guarded_float(s, ctx=ctx, field=field)
 
 
 def altium_net_number(raw: int) -> int:
     """Map Altium net index to domain net number (0 = unconnected)."""
     return 0 if raw == NET_UNCONNECTED else raw + 1
+
+
+def resolve_stream_net(raw: int, nets: dict[int, PcbNet], unknown: list[int]) -> int:
+    """Resolve a raw Altium net index to a domain net number.
+
+    Returns the 1-based domain number, or ``0`` (unconnected) when the index is
+    absent from *nets*. Each unresolved raw index is appended to *unknown* so a
+    single per-stream diagnostic can summarize the degradations without one
+    warning per primitive.
+    """
+    num = altium_net_number(raw)
+    if num != 0 and num not in nets:
+        unknown.append(raw)
+        return 0
+    return num
+
+
+def warn_unknown_stream_nets(ctx: ParseContext | None, source: str, unknown: list[int]) -> None:
+    """Emit one diagnostic summarizing unknown net indices seen in a stream."""
+    if not unknown:
+        return
+    distinct = sorted(set(unknown))
+    warn_optional(
+        ctx,
+        "unknown_net",
+        f"{source}: {len(unknown)} primitive(s) reference unknown net "
+        f"index(es) {distinct}; treated as unconnected",
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -32,6 +32,7 @@ from phosphor_eda.render.inventory import (
 )
 from phosphor_eda.render.settings import (
     BUNDLED_PRESETS,
+    DEFAULT_WIDTH,
     MAX_CUSTOM_CSS_LENGTH,
     CliOverrides,
     HighlightSpec,
@@ -304,6 +305,18 @@ def test_default_font_size_is_20pt() -> None:
     """No preset pins a font size, so every render inherits this default."""
     resolved = resolve_effective_settings(load_render_settings_json("{}"), CliOverrides())
     assert resolved.font_size == 20.0
+
+
+def test_unset_width_falls_back_to_default() -> None:
+    """An unset base and override width resolve to the bundled default."""
+    resolved = resolve_effective_settings(load_render_settings_json("{}"), CliOverrides())
+    assert resolved.width == DEFAULT_WIDTH
+
+
+def test_explicit_zero_width_is_preserved_not_defaulted() -> None:
+    """A width of 0 is a real value the resolver must not coerce to the default."""
+    resolved = resolve_effective_settings(load_render_settings_json("{}"), CliOverrides(width=0))
+    assert resolved.width == 0
 
 
 def test_font_size_pt_parses_and_px_is_rejected() -> None:

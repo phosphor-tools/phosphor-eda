@@ -195,7 +195,8 @@ def build_allegro_board(
     )
     _add_graphics(builder, graphics, include_copper_artwork=False)
     diagnostic_count = (
-        len(layer_map.diagnostics)
+        len(record_set.diagnostics)
+        + len(layer_map.diagnostics)
         + len(graphics.diagnostics)
         + len(copper.diagnostics)
         + len(build_diagnostics)
@@ -205,6 +206,7 @@ def build_allegro_board(
         _add_parse_diagnostic_metadata(
             builder,
             (
+                *record_set.diagnostics,
                 *layer_map.diagnostics,
                 *graphics.diagnostics,
                 *copper.diagnostics,
@@ -228,12 +230,14 @@ def build_allegro_graphics_board(record_set: AllegroRecordSet, *, name: str) -> 
     layer_map = build_allegro_layers(record_set)
     graphics = extract_allegro_graphics(record_set, layer_map)
     metadata = PcbMetadata(source_format="allegro")
-    diagnostic_count = len(layer_map.diagnostics) + len(graphics.diagnostics)
+    diagnostic_count = (
+        len(record_set.diagnostics) + len(layer_map.diagnostics) + len(graphics.diagnostics)
+    )
     if diagnostic_count:
         metadata.properties["parse_diagnostic_count"] = str(diagnostic_count)
         _add_parse_diagnostic_properties(
             metadata.properties,
-            (*layer_map.diagnostics, *graphics.diagnostics),
+            (*record_set.diagnostics, *layer_map.diagnostics, *graphics.diagnostics),
         )
 
     builder = PcbBuilder(name, metadata=metadata)

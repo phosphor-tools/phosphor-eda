@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-import phosphor_eda.cli as cli_module
+import phosphor_eda.cli_project as cli_project_module
 from phosphor_eda.cli import main
 from phosphor_eda.domain.project import Project
 from phosphor_eda.domain.schematic import Component, DnpSource, Parameter, PartNumber, Schematic
@@ -155,7 +155,7 @@ def test_cli_variant_option_is_passed_to_project_loader(monkeypatch, tmp_path):
         calls.append(kwargs)
         return Project(name="demo", variants=[Variant(name="production")])
 
-    monkeypatch.setattr(cli_module, "load_project", fake_load_project)
+    monkeypatch.setattr(cli_project_module, "load_project", fake_load_project)
 
     result = CliRunner().invoke(
         main,

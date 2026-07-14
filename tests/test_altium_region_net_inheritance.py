@@ -9,7 +9,7 @@ import struct
 
 from phosphor_eda.domain.pcb import LayerRole, PcbLayer, PcbNet
 from phosphor_eda.formats.altium.pcb_records import EXTENDED_VERTEX_SIZE
-from phosphor_eda.formats.altium.pcb_streams import (
+from phosphor_eda.formats.altium.pcb_regions import (
     parse_regions,
     parse_shape_based_regions,
 )

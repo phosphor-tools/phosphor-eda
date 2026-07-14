@@ -7,7 +7,7 @@ from phosphor_eda.formats.altium.pcb_primitives import (
     ParsedRole,
     ParsedShapeKind,
 )
-from phosphor_eda.formats.altium.pcb_streams import (
+from phosphor_eda.formats.altium.pcb_regions import (
     dedupe_shape_based_board_polygons,
 )
 

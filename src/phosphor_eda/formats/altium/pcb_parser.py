@@ -34,9 +34,13 @@ from phosphor_eda.formats.altium.pcb_primitives import (
 )
 from phosphor_eda.formats.altium.pcb_project import parse_altium_stackup
 from phosphor_eda.formats.altium.pcb_records import COMPONENT_NONE
+from phosphor_eda.formats.altium.pcb_regions import (
+    dedupe_shape_based_board_polygons,
+    parse_regions,
+    parse_shape_based_regions,
+)
 from phosphor_eda.formats.altium.pcb_streams import (
     apply_drill_manager_mask_apertures,
-    dedupe_shape_based_board_polygons,
     parse_arcs,
     parse_board6_outline,
     parse_board_outline,
@@ -46,8 +50,6 @@ from phosphor_eda.formats.altium.pcb_streams import (
     parse_nets,
     parse_pads,
     parse_polygon_pours,
-    parse_regions,
-    parse_shape_based_regions,
     parse_texts,
     parse_tracks,
     parse_vias,
@@ -110,23 +112,23 @@ def parse_altium_pcb(
     layer_map = build_layer_map(board_props, ctx)
 
     # Parse text streams
-    nets = parse_nets(nets_data)
-    footprints = parse_components(comp_data, layer_map)
+    nets = parse_nets(nets_data, ctx)
+    footprints = parse_components(comp_data, layer_map, ctx)
 
     # Parse binary streams
-    vias = parse_vias(vias_data, layer_map, ctx)
+    vias = parse_vias(vias_data, nets, layer_map, ctx)
     raw_pads = parse_pads(pads_data, nets, layer_map, ctx)
     raw_pads = apply_drill_manager_mask_apertures(raw_pads, drill_manager_data, ctx)
     raw_texts = parse_texts(texts_data, layer_map, ctx)
-    pours, pour_id_map, pour_net_map = parse_polygon_pours(polygons6_data, nets, layer_map)
-    track_geometry, track_keepouts = parse_tracks(tracks_data, layer_map, ctx, pour_id_map)
-    arc_geometry, arc_keepouts = parse_arcs(arcs_data, layer_map, ctx, pour_id_map)
-    fills, fill_keepouts = parse_fills(fills_data, layer_map, ctx)
+    pours, pour_id_map, pour_net_map = parse_polygon_pours(polygons6_data, nets, layer_map, ctx)
+    track_geometry, track_keepouts = parse_tracks(tracks_data, nets, layer_map, ctx, pour_id_map)
+    arc_geometry, arc_keepouts = parse_arcs(arcs_data, nets, layer_map, ctx, pour_id_map)
+    fills, fill_keepouts = parse_fills(fills_data, nets, layer_map, ctx)
     regions = parse_regions(regions_data, nets, layer_map, ctx, pour_id_map, pour_net_map)
     shape_regions = parse_shape_based_regions(
         sb_regions_data, nets, layer_map, ctx, pour_id_map, pour_net_map
     )
-    comp_models = parse_component_bodies(comp_bodies_data)
+    comp_models = parse_component_bodies(comp_bodies_data, ctx)
 
     geometry = [
         *[item for item in track_geometry if item.metadata.native_component_index is None],
@@ -209,8 +211,10 @@ def parse_altium_pcb(
     # manufacturing outputs (gerber/pick-and-place). Stored in model
     # coordinates (mm, y negated like all parsed geometry).
     if "originx" in board_props and "originy" in board_props:
-        pcb.metadata.properties["origin_x_mm"] = f"{parse_mil(board_props['originx']):.6f}"
-        pcb.metadata.properties["origin_y_mm"] = f"{-parse_mil(board_props['originy']):.6f}"
+        origin_x = parse_mil(board_props["originx"], ctx=ctx, field="Board6 originx")
+        origin_y = parse_mil(board_props["originy"], ctx=ctx, field="Board6 originy")
+        pcb.metadata.properties["origin_x_mm"] = f"{origin_x:.6f}"
+        pcb.metadata.properties["origin_y_mm"] = f"{-origin_y:.6f}"
     if board_props:
         pcb.stackup = parse_altium_stackup(board_props, ctx)
     pcb.source_path = str(path)

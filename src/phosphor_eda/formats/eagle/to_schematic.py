@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET
 
 from phosphor_eda.domain.schematic import Schematic, ScopeId
-from phosphor_eda.formats.common.diagnostics import ParseContext
+from phosphor_eda.formats.common.diagnostics import ParseContext, warn_optional
 from phosphor_eda.formats.common.electrical import (
     EAGLE_DIRECTION_MAP,
     set_pin_electrical,
@@ -32,6 +32,20 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+# KiCad's pre-v6 schematic shares the .sch extension with Eagle but is a
+# line-based text format whose first line begins with this literal.
+_KICAD_LEGACY_SCH_MAGIC = "EESchema Schematic File"
+
+
+class EagleFormatError(ValueError):
+    """Raised when a ``.sch`` handed to the Eagle parser is not Eagle XML.
+
+    Subclasses ValueError so the CLI error boundary reports a bad input file
+    instead of surfacing an XML traceback as an internal bug. Covers both
+    malformed XML and files that are actually a different format (e.g. a KiCad
+    legacy schematic misrouted here by the shared ``.sch`` extension).
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -123,17 +137,42 @@ def _sheet_annotations(sheet_elem: ET.Element) -> tuple[str, ...]:
     return tuple(annotations)
 
 
-def _optional_float(value: str | None) -> float | None:
-    if value is None or not value:
+def _optional_float(
+    value: str | None,
+    ctx: ParseContext | None = None,
+    *,
+    label: str = "",
+) -> float | None:
+    if not value:
         return None
-    return float(value)
+    try:
+        return float(value)
+    except ValueError:
+        warn_optional(
+            ctx,
+            "eagle_malformed_coordinate",
+            f"{label}: non-numeric coordinate {value!r}; coordinate dropped",
+        )
+        return None
 
 
-def _parse_rotation(value: str) -> tuple[float, bool]:
+def _parse_rotation(
+    value: str,
+    ctx: ParseContext | None = None,
+    *,
+    label: str = "",
+) -> tuple[float, bool]:
     mirror = value.startswith("M")
     rotation_text = value[1:] if mirror else value
     if rotation_text.startswith("R"):
-        return (float(rotation_text[1:] or "0"), mirror)
+        try:
+            return (float(rotation_text[1:] or "0"), mirror)
+        except ValueError:
+            warn_optional(
+                ctx,
+                "eagle_malformed_rotation",
+                f"{label}: non-numeric rotation {value!r}; rotation dropped",
+            )
     return (0.0, mirror)
 
 
@@ -287,13 +326,15 @@ def _build_pages(
             for inst_elem in instances_elem.findall("instance"):
                 part_name = inst_elem.get("part", "")
                 gate_name = inst_elem.get("gate", "")
-                rotation, mirror = _parse_rotation(inst_elem.get("rot", ""))
+                rotation, mirror = _parse_rotation(
+                    inst_elem.get("rot", ""), ctx, label=f"{part_name} instance rot"
+                )
                 instances_per_part.setdefault(part_name, []).append(
                     _InstanceInfo(
                         part_name=part_name,
                         gate_name=gate_name,
-                        x=_optional_float(inst_elem.get("x")),
-                        y=_optional_float(inst_elem.get("y")),
+                        x=_optional_float(inst_elem.get("x"), ctx, label=f"{part_name} instance x"),
+                        y=_optional_float(inst_elem.get("y"), ctx, label=f"{part_name} instance y"),
                         rotation=rotation,
                         mirror=mirror,
                     )
@@ -496,12 +537,38 @@ def _include_eagle_net(
 # ---------------------------------------------------------------------------
 
 
+def _reject_non_eagle_sch(path: Path) -> None:
+    """Raise when *path* is a KiCad legacy schematic misrouted to the Eagle parser.
+
+    The ``.sch`` extension is shared between Eagle (XML) and KiCad's pre-v6
+    format (line-based text). Detect the KiCad legacy signature up front so
+    callers get a named, actionable error instead of an opaque XML failure.
+    """
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        head = handle.read(len(_KICAD_LEGACY_SCH_MAGIC))
+    if head == _KICAD_LEGACY_SCH_MAGIC:
+        msg = (
+            f"{path.name}: unsupported schematic format: KiCad legacy schematic "
+            f"(EESchema). The .sch extension is shared with Eagle; only Eagle XML "
+            f".sch and KiCad .kicad_sch schematics are supported."
+        )
+        raise EagleFormatError(msg)
+
+
 def eagle_to_design(path: Path, name: str = "") -> Schematic:
     """Parse an Eagle .sch schematic and return a Schematic."""
     if not name:
         name = path.stem
 
-    tree = ET.parse(path)  # noqa: S314 — trusted local files only
+    _reject_non_eagle_sch(path)
+
+    try:
+        # ElementTree.parse does not resolve external entities, so this is not
+        # vulnerable to XXE regardless of file provenance.
+        tree = ET.parse(path)  # noqa: S314 — ElementTree is XXE-safe: it never resolves external entities
+    except ET.ParseError as exc:
+        msg = f"{path.name}: not a well-formed Eagle XML schematic ({exc})"
+        raise EagleFormatError(msg) from exc
     root = tree.getroot()
 
     # Navigate to <eagle><drawing><schematic>

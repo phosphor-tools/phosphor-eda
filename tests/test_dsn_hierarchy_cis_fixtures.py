@@ -17,6 +17,7 @@ from phosphor_eda.formats.dsn.hierarchy import (
     MAX_ENTRY_DEPTH,
     build_occurrence_to_instance,
     hierarchy_occurrences_from_entries,
+    parse_hierarchy,
     parse_hierarchy_stream,
 )
 from phosphor_eda.formats.dsn.package_netlist import (
@@ -2041,6 +2042,37 @@ def test_hierarchy_entry_with_rewinding_end_offset_engages_fallback() -> None:
         (0x1111, 0x2222)
     ]
     assert any(issue.category == "dsn_hierarchy_fallback" for issue in ctx.issues)
+
+
+def test_malformed_hierarchy_mapping_stream_degrades_with_diagnostic() -> None:
+    # The net-id-mapping parse (parse_hierarchy, reached before the byte-scan
+    # occurrence fallback in the loader) recovers one mapping, then the second
+    # mapping's string length overshoots EOF. A raw struct.error there escapes
+    # the loader's ``(DsnFormatError, OSError, ValueError)`` boundary and crashes
+    # the whole project load. It must instead be contained: keep the recovered
+    # mapping and emit a diagnostic so the occurrence fallback still runs.
+    empty_structure = b"\x00" + struct.pack("<h", 0)  # short-form prefix, no pairs
+    data = (
+        b"\x00" * 9  # unknown_0
+        + _hierarchy_string("ROOT")  # schematic_name
+        + b"\x00" * 7  # unknown_1
+        + struct.pack("<H", 0)  # SthInHierarchy2 count
+        + struct.pack("<H", 2)  # net db-id mapping count
+        + empty_structure
+        + struct.pack("<I", 111)  # db_id
+        + _hierarchy_string("NET1")  # name
+        + empty_structure
+        + struct.pack("<I", 222)  # db_id
+        + struct.pack("<H", 0xFFFF)  # oversized string length overshoots EOF
+    )
+    ctx = ParseContext()
+
+    mappings = parse_hierarchy(data, ctx)
+
+    assert [(mapping.db_id, mapping.name) for mapping in mappings] == [(111, "NET1")]
+    diagnostics = [issue for issue in ctx.issues if issue.category == "dsn_hierarchy_mappings"]
+    assert len(diagnostics) == 1
+    assert "net-id mapping parse failed" in diagnostics[0].message
 
 
 def _hierarchy_string(text: str) -> bytes:

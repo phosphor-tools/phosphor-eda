@@ -5,10 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
-import sexpdata
-
 import phosphor_eda.formats.kicad.sexp as sexp
 from phosphor_eda.domain.schematic import ScopeId
+from phosphor_eda.formats.common.diagnostics import warn_optional
+from phosphor_eda.formats.kicad.errors import KiCadParseError, load_kicad_sexp
 from phosphor_eda.formats.kicad.lib_symbols import LibPins, LibPowerKinds, parse_lib_symbols
 from phosphor_eda.formats.kicad.source import KiCadSheetInstance
 from phosphor_eda.formats.kicad.title_block import parse_kicad_title_block
@@ -103,16 +103,25 @@ def load_sheet_tree(
     )
 
 
-def parse_sheet_info(sheet_node: SExpNode) -> tuple[str, str]:
+def parse_sheet_info(sheet_node: SExpNode, ctx: ParseContext | None = None) -> tuple[str, str]:
     """Extract name and filename from a sheet S-expression node.
 
     KiCad 6 wrote the properties as ``"Sheet name"`` / ``"Sheet file"``
-    (with a space); KiCad 7+ writes ``"Sheetname"`` / ``"Sheetfile"``.
+    (with a space); KiCad 7+ writes ``"Sheetname"`` / ``"Sheetfile"``. A
+    property node missing its name atom is malformed; it is skipped and a
+    diagnostic recorded on *ctx* rather than raising a bare IndexError.
     """
     sheet_name = ""
     sheet_file = ""
     for sub in sheet_node[1:]:
         if sexp.tag(sub) == "property" and isinstance(sub, list):
+            if len(sub) < 2:
+                warn_optional(
+                    ctx,
+                    "kicad_malformed_node",
+                    "Skipped malformed sheet property node missing its name",
+                )
+                continue
             prop_name = str(sub[1])
             prop_val = str(sub[2]) if len(sub) > 2 else ""
             if prop_name in ("Sheetname", "Sheet name"):
@@ -187,24 +196,29 @@ def _load_sheet_tree(
                 f"Warning: child sheet cycle skipped: {child_file} (resolved to {child_path})",
             )
             continue
-        _load_sheet_tree(
-            path=child_path,
-            sheet_name=child_name or child_path.stem,
-            scope_id=child_scope,
-            parent_scope_id=scope_id,
-            sheet_symbol_id=symbol_id,
-            loaded_sheets=loaded_sheets,
-            sheet_instances=sheet_instances,
-            lib_pins=lib_pins,
-            lib_descs=lib_descs,
-            lib_power_kinds=lib_power_kinds,
-            ancestor_files=(*ancestor_files, child_resolved_path),
-            warning_reporter=warning_reporter,
-        )
+        try:
+            _load_sheet_tree(
+                path=child_path,
+                sheet_name=child_name or child_path.stem,
+                scope_id=child_scope,
+                parent_scope_id=scope_id,
+                sheet_symbol_id=symbol_id,
+                loaded_sheets=loaded_sheets,
+                sheet_instances=sheet_instances,
+                lib_pins=lib_pins,
+                lib_descs=lib_descs,
+                lib_power_kinds=lib_power_kinds,
+                ancestor_files=(*ancestor_files, child_resolved_path),
+                warning_reporter=warning_reporter,
+            )
+        except KiCadParseError as exc:
+            # A malformed child sheet degrades like a missing one: skip it and
+            # keep loading the rest of the tree rather than aborting the parse.
+            warning_reporter.warn(f"Warning: child sheet not parsed: {child_file} ({exc})")
 
 
 def _load_kicad_file(path: Path) -> SExpNode:
-    return sexpdata.loads(path.read_text(encoding="utf-8"))
+    return load_kicad_sexp(path)
 
 
 def _source_id(scope_id: ScopeId, kind: str, source_key: str) -> str:

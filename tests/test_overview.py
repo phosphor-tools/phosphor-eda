@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from click.testing import CliRunner
 
-import phosphor_eda.cli as cli_module
+import phosphor_eda.cli_project as cli_project_module
 from phosphor_eda.cli import main
 from phosphor_eda.domain.pcb import Board, LayerRole, PcbLayer, PcbNet
 from phosphor_eda.domain.project import (
@@ -299,7 +299,7 @@ def test_overview_cli_uses_project_option(monkeypatch: MonkeyPatch, tmp_path: Pa
     def fake_load_project(_path: Path, **_kwargs: object) -> Project:
         return _overview_project()
 
-    monkeypatch.setattr(cli_module, "load_project", fake_load_project)
+    monkeypatch.setattr(cli_project_module, "load_project", fake_load_project)
 
     result = CliRunner().invoke(main, ["-P", str(project_path), "overview"])
 

@@ -2,10 +2,12 @@
 
 from pathlib import Path
 
+import pytest
 import sexpdata
 
 from phosphor_eda.domain.schematic import BusKind, SchematicDirectiveKind, ScopeId
 from phosphor_eda.formats.common.diagnostics import ParseContext
+from phosphor_eda.formats.kicad.errors import KiCadParseError
 from phosphor_eda.formats.kicad.resolver import resolve_kicad_source
 from phosphor_eda.formats.kicad.sheet_loader import LoadedSheet
 from phosphor_eda.formats.kicad.source import (
@@ -490,6 +492,67 @@ def test_project_text_variables_are_resolved_in_kicad_net_names(tmp_path: Path) 
     assert [label.name for label in source.local_labels] == ["USB/DP"]
     [net] = resolve_kicad_source(source).nets
     assert net.name == "/USB/DP"
+
+
+def test_truncated_root_schematic_raises_named_error(tmp_path: Path) -> None:
+    """A truncated root .kicad_sch raises a named, path-bearing KiCadParseError
+    instead of leaking sexpdata's path-less ExpectClosingBracket."""
+    schematic_path = tmp_path / "truncated.kicad_sch"
+    schematic_path.write_text("(kicad_sch (version 20231120) (lib_symbols", encoding="utf-8")
+
+    with pytest.raises(KiCadParseError, match="truncated.kicad_sch"):
+        kicad_to_source(schematic_path)
+
+
+def test_malformed_child_sheet_degrades(tmp_path: Path) -> None:
+    """A malformed child sheet is skipped with a warning; the root still loads."""
+    root = tmp_path / "root.kicad_sch"
+    child = tmp_path / "child.kicad_sch"
+    child.write_text("(kicad_sch (version 20231120) (lib_symbols", encoding="utf-8")
+    root.write_text(
+        """(kicad_sch (version 20231120) (generator eeschema)
+          (uuid 88888888-0000-0000-0000-000000000001)
+          (paper "A4")
+          (lib_symbols)
+          (sheet (at 20 30) (size 12 10)
+            (uuid 88888888-0000-0000-0000-000000000002)
+            (property "Sheetname" "Child" (at 20 29 0) (effects (font (size 1.27 1.27))))
+            (property "Sheetfile" "child.kicad_sch" (at 20 31 0) (effects (font (size 1.27 1.27))))
+          )
+          (sheet_instances (path "/" (page "1")))
+        )
+        """,
+        encoding="utf-8",
+    )
+    ctx = ParseContext()
+    source = kicad_to_source(root, ctx=ctx)
+
+    assert source.name == "root"
+    assert any(
+        issue.category == "missing_sheet" and "not parsed" in issue.message for issue in ctx.issues
+    )
+
+
+def test_malformed_label_node_is_skipped(tmp_path: Path) -> None:
+    """A bare ``(label)`` node with no name atom is skipped with a diagnostic
+    rather than raising a bare IndexError."""
+    schematic_path = tmp_path / "malformed_label.kicad_sch"
+    schematic_path.write_text(
+        """(kicad_sch (version 20231120) (generator eeschema)
+          (uuid 99999999-0000-0000-0000-000000000001)
+          (paper "A4")
+          (lib_symbols)
+          (label)
+          (sheet_instances (path "/" (page "1")))
+        )
+        """,
+        encoding="utf-8",
+    )
+    ctx = ParseContext()
+    source = kicad_to_source(schematic_path, ctx=ctx)
+
+    assert source.local_labels == []
+    assert any(issue.category == "kicad_malformed_node" for issue in ctx.issues)
 
 
 def test_unresolved_project_text_variables_are_reported(tmp_path: Path) -> None:

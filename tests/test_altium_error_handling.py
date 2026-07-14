@@ -157,3 +157,143 @@ def test_non_ole_garbage_gets_named_error(tmp_path):
     with pytest.raises(AltiumFormatError) as excinfo:
         parse_altium_pcb(path)
     assert "garbage.PcbDoc" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# PCB backend: malformed input degrades with diagnostics (no crash)
+# ---------------------------------------------------------------------------
+
+
+def _text_stream(*payloads: str) -> bytes:
+    """Frame pipe-delimited payloads as an Altium text-record stream."""
+    out = b""
+    for payload in payloads:
+        body = payload.encode("cp1252")
+        out += len(body).to_bytes(4, "little") + body
+    return out
+
+
+def test_guarded_int_and_float_degrade_with_diagnostic():
+    from phosphor_eda.formats.altium._helpers import guarded_float, guarded_int
+
+    ctx = ParseContext()
+    assert guarded_int("12", ctx=ctx, field="pourindex") == 12
+    assert guarded_int("oops", ctx=ctx, field="pourindex", default=-1) == -1
+    assert guarded_float("1.5", ctx=ctx, field="angle") == 1.5
+    assert guarded_float("nope", ctx=ctx, field="angle", default=0.0) == 0.0
+    messages = [i.message for i in ctx.issues]
+    assert any("pourindex" in m for m in messages)
+    assert any("angle" in m for m in messages)
+
+
+def test_parse_mil_malformed_degrades():
+    from phosphor_eda.formats.altium.pcb_primitives import parse_mil
+
+    ctx = ParseContext()
+    assert parse_mil("bogusmil", ctx=ctx, field="vertex x") == 0.0
+    assert len(ctx.issues) == 1
+    assert "vertex x" in ctx.issues[0].message
+
+
+def test_prop_points_caps_absurd_location_count():
+    from phosphor_eda.formats.altium._helpers import prop_points
+
+    ctx = ParseContext()
+    props = {"locationcount": "1000000", "x1": "10", "y1": "20", "x2": "30", "y2": "40"}
+    points = prop_points(props, ctx)
+    # Only two coordinate pairs are present; the loop must not run a million times.
+    assert points == [(10, 20), (30, 40)]
+    assert any(i.category == "location_count_capped" for i in ctx.issues)
+
+
+def test_unknown_layer_ref_warns_and_skips():
+    from phosphor_eda.formats.altium.pcb_layers import altium_layer_ref
+
+    ctx = ParseContext()
+    assert altium_layer_ref(250, {}, ctx, source="track 3") is None
+    assert len(ctx.issues) == 1
+    assert ctx.issues[0].category == "unknown_layer"
+    assert "track 3" in ctx.issues[0].message
+
+
+def test_resolve_stream_net_degrades_unknown_index():
+    from phosphor_eda.domain.pcb import PcbNet
+    from phosphor_eda.formats.altium.pcb_primitives import (
+        resolve_stream_net,
+        warn_unknown_stream_nets,
+    )
+    from phosphor_eda.formats.altium.pcb_records import NET_UNCONNECTED
+
+    nets = {1: PcbNet(number=1, name="N1")}
+    unknown: list[int] = []
+    assert resolve_stream_net(0, nets, unknown) == 1  # 0-based → domain 1 (known)
+    assert resolve_stream_net(NET_UNCONNECTED, nets, unknown) == 0  # unconnected sentinel
+    assert unknown == []
+    assert resolve_stream_net(5, nets, unknown) == 0  # domain 6 absent → unconnected
+    assert unknown == [5]
+
+    ctx = ParseContext()
+    warn_unknown_stream_nets(ctx, "Pads6/Data", unknown)
+    assert len(ctx.issues) == 1
+    assert ctx.issues[0].category == "unknown_net"
+
+
+def test_polygon_pour_unknown_net_does_not_crash():
+    from phosphor_eda.domain.pcb import PcbNet
+    from phosphor_eda.formats.altium.pcb_layers import build_layer_map
+    from phosphor_eda.formats.altium.pcb_streams import parse_polygon_pours
+
+    layer_map = build_layer_map({"layer1name": "Top Layer"})
+    nets = {1: PcbNet(number=1, name="GND")}
+    stream = _text_stream(
+        "|POURINDEX=0|NET=5|LAYER=TOP|VX0=0mil|VY0=0mil|VX1=100mil|VY1=0mil|VX2=100mil|VY2=100mil|"
+    )
+    ctx = ParseContext()
+    pours, _id_map, _net_map = parse_polygon_pours(stream, nets, layer_map, ctx)
+    assert len(pours) == 1
+    assert pours[0].net is None  # unknown net degraded to unconnected
+    assert any(i.category == "unknown_net" for i in ctx.issues)
+
+
+def test_text_record_undecodable_bytes_warn():
+    from phosphor_eda.formats.altium.pcb_records import TextRecord
+
+    sub1 = bytes(42)
+    sub2 = bytes([1, 0x81])  # Pascal length 1, 0x81 is undefined in cp1252
+    data = (
+        bytes([5]) + len(sub1).to_bytes(4, "little") + sub1 + len(sub2).to_bytes(4, "little") + sub2
+    )
+    ctx = ParseContext()
+    rec = TextRecord.from_bytes(data, ctx)
+    assert rec is not None
+    assert any(i.category == "text_decode" for i in ctx.issues)
+
+
+def test_region_record_vertex_truncation_warns():
+    from phosphor_eda.formats.altium.pcb_records import RegionRecord
+
+    header = bytearray(22)  # prop_len (bytes 18:22) stays 0
+    body = bytes(header) + (5).to_bytes(4, "little") + bytes(16)  # count says 5, one vertex given
+    ctx = ParseContext()
+    rec = RegionRecord.from_bytes(body, ctx)
+    assert rec is not None
+    assert len(rec.vertices) == 1
+    assert any("truncat" in i.message.lower() for i in ctx.issues)
+
+
+def test_parse_pads_unexpected_type_byte_warns():
+    from phosphor_eda.formats.altium.pcb_streams import parse_pads
+
+    ctx = ParseContext()
+    pads = parse_pads(b"\x09\x00\x00", {}, {}, ctx)
+    assert pads == []
+    assert any(i.category == "truncated_stream" for i in ctx.issues)
+
+
+def test_hierarchy_mode_unknown_falls_back_without_raising():
+    from phosphor_eda.formats.altium.project import AltiumHierarchyMode, parse_prjpcb
+
+    ctx = ParseContext()
+    project = parse_prjpcb("[Design]\nHierarchyMode=Nonsense\n", ctx)
+    assert project.hierarchy_mode == AltiumHierarchyMode.FLAT
+    assert any(i.category == "unknown_enum" for i in ctx.issues)

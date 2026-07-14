@@ -109,7 +109,9 @@ def build_derived_render_plan(
     side = settings.side
     width_px = settings.width
     assert side, "render settings must have a resolved side"
-    assert width_px > 0, "render settings must have a resolved width"
+    if width_px <= 0:
+        msg = f"render width must be a positive number of pixels, got {width_px}"
+        raise ValueError(msg)
     board_bbox = board.bbox()
     if board_bbox is None:
         msg = "cannot render an empty board: no board profile and no pads to bound the view"

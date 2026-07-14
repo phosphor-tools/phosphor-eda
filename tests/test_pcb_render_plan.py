@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from conftest import build_render_test_board as _board
 
 from phosphor_eda.render.plan import build_derived_render_plan
@@ -56,6 +57,19 @@ def test_render_plan_builds_from_typed_inventory() -> None:
     assert plan.width_px == 640
     assert plan.height_px > 0
     assert {layer.role.function for layer in plan.base_layers} >= {"copper", "silkscreen", "edge"}
+
+
+def test_render_plan_rejects_nonpositive_width() -> None:
+    """A resolved width of 0 raises a real validation error, not a bare assert."""
+    settings = RenderSettings(
+        render_mode="eda",
+        side="front",
+        width=0,
+        source=SourceSelection(layers=[LayerSelectionRule(match=LayerMatch(role="copper"))]),
+    )
+
+    with pytest.raises(ValueError, match="width"):
+        build_derived_render_plan(_board(), settings=settings, annotations=None)
 
 
 def test_render_plan_profiler_counts_typed_collections() -> None:

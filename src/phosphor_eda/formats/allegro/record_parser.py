@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from types import MappingProxyType
 
+from phosphor_eda.formats.allegro import diagnostics as _diag
 from phosphor_eda.formats.allegro.binary import BoundedBinaryReader
 from phosphor_eda.formats.allegro.constants import AllegroVersion, version_at_least
 from phosphor_eda.formats.allegro.errors import AllegroParseError
@@ -13,6 +14,7 @@ from phosphor_eda.formats.allegro.records import (
     AllegroPadstackComponent,
     AllegroPayloadValue,
     AllegroRecord,
+    AllegroRecordDiagnostic,
     AllegroRecordSet,
     AllegroStringTable,
 )
@@ -38,14 +40,18 @@ def parse_allegro_record_stream(
     reader.seek(_align4(string_table.end_offset))
 
     records: list[AllegroRecord] = []
+    diagnostics: list[AllegroRecordDiagnostic] = []
     while reader.offset < reader.size:
         offset = reader.offset
         tag = reader.read_uint8()
         if tag == 0x00:
-            next_offset = _next_aligned_record_offset(data, reader.offset)
+            next_offset = _next_aligned_record_offset(data, reader.offset, diagnostics)
             if next_offset is not None:
                 reader.seek(next_offset)
                 continue
+            tail = _diag.dropped_stream_tail_diagnostic(data, offset, reader.size)
+            if tail is not None:
+                diagnostics.append(tail)
             break
         if tag > 0x3C:
             # Allegro record lengths are tag-specific and implicit, so an
@@ -63,6 +69,7 @@ def parse_allegro_record_stream(
             offset=offset,
             version=header.version,
             record_0x27_end=header.record_0x27_end,
+            diagnostics=diagnostics,
         )
         records.append(record)
 
@@ -71,6 +78,7 @@ def parse_allegro_record_stream(
         string_table=string_table,
         records=tuple(records),
         end_offset=reader.offset,
+        diagnostics=tuple(diagnostics),
     )
 
 
@@ -81,6 +89,7 @@ def _parse_known_record(
     offset: int,
     version: AllegroVersion,
     record_0x27_end: int,
+    diagnostics: list[AllegroRecordDiagnostic],
 ) -> AllegroRecord:
     payload: dict[str, AllegroPayloadValue] = {}
     key: int | None = None
@@ -121,7 +130,7 @@ def _parse_known_record(
         _skip_cond_u32(reader, version, AllegroVersion.V_172)
         payload["subtype"] = subtype
         payload["size"] = size
-        _parse_field_substruct(reader, subtype=subtype, size=size, payload=payload, offset=offset)
+        _parse_field_substruct(reader, subtype, size, payload, offset, diagnostics)
     elif tag == 0x04:
         reader.skip(3)
         key = reader.read_uint32()
@@ -921,11 +930,11 @@ def _parse_definition_table_record(
 
 def _parse_field_substruct(
     reader: BoundedBinaryReader,
-    *,
     subtype: int,
     size: int,
     payload: dict[str, AllegroPayloadValue],
     offset: int,
+    diagnostics: list[AllegroRecordDiagnostic],
 ) -> None:
     _require_dynamic_count(reader, size, offset=offset, label="0x03 field")
     start_offset = reader.offset
@@ -951,14 +960,18 @@ def _parse_field_substruct(
         payload["value"] = tuple(reader.read_uint32() for _ in range(20))
     elif size == 4:
         payload["value"] = reader.read_uint32()
+        diagnostics.append(
+            _diag.unknown_field_subtype_diagnostic(offset=offset, subtype=subtype, size=size)
+        )
     elif size == 8:
         payload["value"] = (reader.read_uint32(), reader.read_uint32())
+        diagnostics.append(
+            _diag.unknown_field_subtype_diagnostic(offset=offset, subtype=subtype, size=size)
+        )
     else:
-        raise AllegroParseError(
-            f"unknown 0x03 subtype 0x{subtype:02X} with size {size}",
-            code="record-length-invalid",
-            offset=offset,
-            source_name=reader.source_name,
+        reader.skip(size)
+        diagnostics.append(
+            _diag.skipped_field_subtype_diagnostic(offset=offset, subtype=subtype, size=size)
         )
     if size != 0:
         _require_field_substruct_size(
@@ -1032,10 +1045,12 @@ def _align4(offset: int) -> int:
     return (offset + 3) & ~3
 
 
-def _next_aligned_record_offset(data: bytes, offset: int) -> int | None:
-    cursor = _align4(offset)
-    while cursor < len(data) and data[cursor] == 0:
-        cursor += 4
+def _next_aligned_record_offset(
+    data: bytes, offset: int, diagnostics: list[AllegroRecordDiagnostic]
+) -> int | None:
+    cursor, garbage = _diag.scan_zero_padding(data, _align4(offset))
+    if garbage is not None:
+        diagnostics.append(garbage)
     if cursor < len(data) and 0 < data[cursor] <= 0x3C:
         return cursor
     return None
