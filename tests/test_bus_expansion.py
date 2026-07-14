@@ -19,7 +19,10 @@ from phosphor_eda.formats.altium.records import (
     DesignatorRec,
     NetLabelRec,
     PinRec,
+    PortRec,
     RecordType,
+    SheetEntryRec,
+    SheetSymbolRec,
     WireRec,
 )
 from phosphor_eda.formats.altium.resolver import resolve_altium_source
@@ -190,7 +193,7 @@ def _bus_source(
         name="bus",
         project=AltiumProject(hierarchy_mode=mode, allow_port_net_names=True),
         sheets={sheet.name: sheet for sheet in sheets},
-        root_sheet_name=sheets[0].name,
+        root_sheet_id=sheets[0].name,
     )
 
 
@@ -275,10 +278,16 @@ def test_plain_names_comma_separated_returns_none():
 # ---------------------------------------------------------------------------
 
 
-def test_bus_sheet_entry_skipped_in_resolve_nets():
-    """A sheet entry with bus notation should not name a wire group 'D[0..7]'."""
-    from phosphor_eda.formats.altium.records import RecordType, SheetEntryRec, SheetSymbolRec
+def _generated_name_at(sheet: SheetRecords, coord: tuple[int, int]) -> str:
+    """Resolve local net groups and return the generated name of the group at *coord*."""
+    resolution = resolve_local_net_groups(sheet)
+    root = resolution.coord_to_root[coord]
+    group = next(group for group in resolution.groups if group.root == root)
+    return group.generated_name
 
+
+def test_bus_sheet_entry_skipped_in_generated_names():
+    """A sheet entry with bus notation should not name a wire group 'D[0..7]'."""
     # Wire at y=100 from x=0 to x=200
     wire = WireRec(
         record_type=RecordType.WIRE,
@@ -307,20 +316,13 @@ def test_bus_sheet_entry_skipped_in_resolve_nets():
     )
 
     sheet = _make_sheet("Test", [wire, sym, entry])
-    from phosphor_eda.formats.altium.sheet_builder import resolve_nets
-
-    coord_to_net, _nc = resolve_nets(sheet)
 
     # The wire group should NOT be named "D[0..7]"
-    net_at_wire = coord_to_net.get((0, 100))
-    assert net_at_wire is not None
-    assert "D[0..7]" not in net_at_wire
+    assert "D[0..7]" not in _generated_name_at(sheet, (0, 100))
 
 
-def test_bus_port_skipped_in_resolve_nets():
+def test_bus_port_skipped_in_generated_names():
     """A port with bus notation should not name a wire group 'D[0..7]'."""
-    from phosphor_eda.formats.altium.records import PortRec, RecordType
-
     wire = WireRec(
         record_type=RecordType.WIRE,
         index=0,
@@ -337,13 +339,8 @@ def test_bus_port_skipped_in_resolve_nets():
     )
 
     sheet = _make_sheet("Test", [wire, port])
-    from phosphor_eda.formats.altium.sheet_builder import resolve_nets
 
-    coord_to_net, _nc = resolve_nets(sheet)
-
-    net_at_wire = coord_to_net.get((0, 100))
-    assert net_at_wire is not None
-    assert "D[0..7]" not in net_at_wire
+    assert "D[0..7]" not in _generated_name_at(sheet, (0, 100))
 
 
 def test_bus_sheet_entry_aggregate_name_does_not_merge_member_nets():

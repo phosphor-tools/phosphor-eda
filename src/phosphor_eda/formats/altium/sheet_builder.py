@@ -1,11 +1,8 @@
-"""High-level sheet loading and net resolution using typed records.
+"""High-level sheet loading and sheet-local net grouping from typed records.
 
-Replaces the raw-dict iteration in ``netlist.py`` and the inner loop of
-``to_schematic.py`` with a structured pipeline:
-
-1. ``load_sheet()`` — parse + materialize + link + index
+1. ``load_sheet()`` — parse + materialize + link + index one ``.SchDoc``
 2. ``resolve_local_net_groups()`` — wire connectivity → Altium source local nets
-3. ``resolve_nets()`` — legacy coordinate → generated net-name map
+3. ``parse_harness_groups()`` — harness connectors, entries, and matched ports
 """
 
 from __future__ import annotations
@@ -44,6 +41,19 @@ from phosphor_eda.formats.common.spatial import UnionFind, WireIndex, point_on_s
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+
+def _merge(uf: UnionFind[tuple[int, int]], a: tuple[int, int], b: tuple[int, int]) -> None:
+    """Auto-insert both coordinates and union them, keeping ``b`` as the root."""
+    uf.add(a)
+    uf.add(b)
+    uf.union(b, a)
+
+
+def _root(uf: UnionFind[tuple[int, int]], point: tuple[int, int]) -> tuple[int, int]:
+    """Auto-insert ``point`` if unseen, then return its representative."""
+    uf.add(point)
+    return uf.find(point)
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +202,7 @@ def _connect_point_to_wire_group(
 ) -> None:
     touches = sheet.wire_index.segments_touching(point[0], point[1])
     for wire, seg_idx in touches:
-        uf.union(point, wire.segments[seg_idx][0])
+        _merge(uf, point, wire.segments[seg_idx][0])
         break
 
 
@@ -213,7 +223,7 @@ def _connect_point_to_signal_harness(
 ) -> None:
     for seg in harness_segments:
         if point_on_segment(point, seg[0], seg[1]):
-            uf.union(point, seg[0])
+            _merge(uf, point, seg[0])
             break
 
 
@@ -268,12 +278,12 @@ def resolve_local_net_groups(
     for wire in sheet.by_type(WireRec):
         all_wire_points.update(wire.points)
         for p1, p2 in wire.segments:
-            uf.union(p1, p2)
+            _merge(uf, p1, p2)
 
     for bus in sheet.by_type(BusRec):
         all_bus_points.update(bus.points)
         for p1, p2 in bus.segments:
-            bus_uf.union(p1, p2)
+            _merge(bus_uf, p1, p2)
 
     # --- Step 1.5: Signal harness wires ---
     # Signal harnesses carry whole harness bundles between harness-typed
@@ -283,7 +293,7 @@ def resolve_local_net_groups(
     harness_segments: list[tuple[tuple[int, int], tuple[int, int]]] = []
     for signal_harness in sheet.by_type(SignalHarnessRec):
         for p1, p2 in signal_harness.segments:
-            uf.union(p1, p2)
+            _merge(uf, p1, p2)
             harness_segments.append((p1, p2))
     # T-junctions between signal harness wires: an endpoint of one wire
     # landing mid-segment on another.
@@ -293,7 +303,7 @@ def resolve_local_net_groups(
                 if pt == seg_b[0] or pt == seg_b[1]:
                     continue
                 if point_on_segment(pt, seg_b[0], seg_b[1]):
-                    uf.union(pt, seg_b[0])
+                    _merge(uf, pt, seg_b[0])
 
     # --- Step 2: T-junction detection ---
     # Check every wire endpoint against the wire index.
@@ -304,7 +314,7 @@ def resolve_local_net_groups(
             # Skip if pt is an endpoint of this segment
             if pt == seg[0] or pt == seg[1]:
                 continue
-            uf.union(pt, seg[0])
+            _merge(uf, pt, seg[0])
             break  # Only need to connect to one segment
 
     for pt in list(all_bus_points):
@@ -313,7 +323,7 @@ def resolve_local_net_groups(
             seg = bus.segments[seg_idx]
             if pt == seg[0] or pt == seg[1]:
                 continue
-            bus_uf.union(pt, seg[0])
+            _merge(bus_uf, pt, seg[0])
             break
 
     # --- Step 3: Add junctions (explicit connection markers) ---
@@ -321,7 +331,7 @@ def resolve_local_net_groups(
         jp = junc.location
         touches = sheet.wire_index.segments_touching(jp[0], jp[1])
         for wire, seg_idx in touches:
-            uf.union(jp, wire.segments[seg_idx][0])
+            _merge(uf, jp, wire.segments[seg_idx][0])
             break
         all_wire_points.add(jp)
 
@@ -351,7 +361,7 @@ def resolve_local_net_groups(
         lp = label.location
         bus_segment_start = _segment_start_touching(lp, sheet.bus_index)
         if bus_segment_start is not None and parse_bus_notation(label.text) is not None:
-            bus_uf.union(lp, bus_segment_start)
+            _merge(bus_uf, lp, bus_segment_start)
             all_bus_points.add(lp)
             bus_label_points.append((label, lp))
             continue
@@ -364,7 +374,7 @@ def resolve_local_net_groups(
     for _name, points in label_groups.items():
         if len(points) > 1:
             for p in points[1:]:
-                uf.union(points[0], p)
+                _merge(uf, points[0], p)
 
     # Power ports
     for pp in sheet.by_type(PowerPortRec):
@@ -386,7 +396,7 @@ def resolve_local_net_groups(
             # Harness ports attach to signal harness wires at either end
             # of the port shape.
             for probe in _harness_port_ends(port):
-                uf.union(loc, probe)
+                _merge(uf, loc, probe)
                 _connect_point_to_signal_harness(probe, harness_segments, uf)
         port_points.append((port, loc))
 
@@ -418,10 +428,10 @@ def resolve_local_net_groups(
         second_bus_start = _segment_start_touching(endpoints[1], sheet.bus_index)
         if first_bus_start is not None and second_bus_start is None:
             bus_point, member_point = endpoints[0], endpoints[1]
-            bus_uf.union(bus_point, first_bus_start)
+            _merge(bus_uf, bus_point, first_bus_start)
         elif second_bus_start is not None and first_bus_start is None:
             bus_point, member_point = endpoints[1], endpoints[0]
-            bus_uf.union(bus_point, second_bus_start)
+            _merge(bus_uf, bus_point, second_bus_start)
         else:
             continue
         _connect_point_to_wire_group(member_point, sheet, uf)
@@ -430,7 +440,7 @@ def resolve_local_net_groups(
         bus_entry_points.append((bus_point, member_point))
 
     # --- Step 5: Build group records after all unions ---
-    coord_to_root = {pt: uf.find(pt) for pt in all_wire_points | all_named_points}
+    coord_to_root = {pt: _root(uf, pt) for pt in all_wire_points | all_named_points}
     groups_by_root: dict[tuple[int, int], LocalNetRecordGroup] = {}
     for root in sorted(set(coord_to_root.values())):
         groups_by_root[root] = LocalNetRecordGroup(
@@ -446,19 +456,19 @@ def resolve_local_net_groups(
         )
 
     for point in all_wire_points:
-        groups_by_root[uf.find(point)].wire_points.add(point)
+        groups_by_root[_root(uf, point)].wire_points.add(point)
     for point in all_named_points:
-        groups_by_root[uf.find(point)].named_points.add(point)
+        groups_by_root[_root(uf, point)].named_points.add(point)
     for label, point in label_points:
-        groups_by_root[uf.find(point)].net_labels.append(label)
+        groups_by_root[_root(uf, point)].net_labels.append(label)
     for power_port, point in power_port_points:
-        groups_by_root[uf.find(point)].power_ports.append(power_port)
+        groups_by_root[_root(uf, point)].power_ports.append(power_port)
     for port, point in port_points:
-        groups_by_root[uf.find(point)].ports.append((port, point))
+        groups_by_root[_root(uf, point)].ports.append((port, point))
     for entry, point in sheet_entry_points:
-        groups_by_root[uf.find(point)].sheet_entries.append(entry)
+        groups_by_root[_root(uf, point)].sheet_entries.append(entry)
     for point, name in extra_points.items():
-        groups_by_root[uf.find(point)].extra_named_coords[point] = name
+        groups_by_root[_root(uf, point)].extra_named_coords[point] = name
 
     # --- Step 7: Compute no-connect wire group coordinates ---
     # NC markers propagate through wire groups: any pin on the same wire
@@ -466,10 +476,10 @@ def resolve_local_net_groups(
     nc_wire_coords: set[tuple[int, int]] = set()
     nc_roots: set[tuple[int, int]] = set()
     for nc in sheet.by_type(NoConnectRec):
-        nc_roots.add(uf.find(nc.location))
+        nc_roots.add(_root(uf, nc.location))
     if nc_roots:
         for pt in all_wire_points | all_named_points:
-            if uf.find(pt) in nc_roots:
+            if _root(uf, pt) in nc_roots:
                 nc_wire_coords.add(pt)
 
     groups = list(groups_by_root.values())
@@ -478,7 +488,7 @@ def resolve_local_net_groups(
 
     bus_entries_by_root: dict[tuple[int, int], list[tuple[tuple[int, int], tuple[int, int]]]] = {}
     for bus_point, member_point in bus_entry_points:
-        bus_root = bus_uf.find(bus_point)
+        bus_root = _root(bus_uf, bus_point)
         bus_entries_by_root.setdefault(bus_root, []).append((bus_point, member_point))
 
     generic_bus_groups: list[GenericBusRecordGroup] = []
@@ -486,7 +496,7 @@ def resolve_local_net_groups(
         member_names = parse_bus_notation(label.text)
         if not member_names:
             continue
-        bus_root = bus_uf.find(point)
+        bus_root = _root(bus_uf, point)
         entries = sorted(
             bus_entries_by_root.get(bus_root, []),
             key=lambda item: (item[0][1], item[0][0], item[1][1], item[1][0]),
@@ -513,21 +523,6 @@ def resolve_local_net_groups(
         no_connect_wire_coords=nc_wire_coords,
         generic_bus_groups=generic_bus_groups,
     )
-
-
-def resolve_nets(
-    sheet: SheetRecords,
-    extra_named_coords: dict[tuple[int, int], str] | None = None,
-) -> tuple[dict[tuple[int, int], str], set[tuple[int, int]]]:
-    """Build the legacy coordinate → generated net name map for one sheet."""
-    resolution = resolve_local_net_groups(sheet, extra_named_coords=extra_named_coords)
-    name_by_root = {group.root: group.generated_name for group in resolution.groups}
-    coord_to_net = {
-        coord: name_by_root[root]
-        for coord, root in resolution.coord_to_root.items()
-        if root in name_by_root
-    }
-    return coord_to_net, resolution.no_connect_wire_coords
 
 
 # ---------------------------------------------------------------------------
@@ -604,7 +599,7 @@ def parse_harness_groups(sheet: SheetRecords) -> list[HarnessGroup]:
     harness_wire_segments: list[tuple[tuple[int, int], tuple[int, int]]] = []
     for sh in sheet.by_type(SignalHarnessRec):
         for seg in sh.segments:
-            uf.union(seg[0], seg[1])
+            _merge(uf, seg[0], seg[1])
             harness_wire_segments.append(seg)
 
     # Connect each connector's wire-side edge to signal harness wires.
@@ -627,7 +622,7 @@ def parse_harness_groups(sheet: SheetRecords) -> list[HarnessGroup]:
         # Connect to any signal harness segment touching this edge
         for seg in harness_wire_segments:
             if point_on_segment(wire_pt, seg[0], seg[1]):
-                uf.union(wire_pt, seg[0])
+                _merge(uf, wire_pt, seg[0])
                 break
         else:
             # Mid-y didn't land on a segment; try each segment endpoint
@@ -638,7 +633,7 @@ def parse_harness_groups(sheet: SheetRecords) -> list[HarnessGroup]:
             for seg in harness_wire_segments:
                 for pt in (seg[0], seg[1]):
                     if pt[0] == wire_x and cy_bot <= pt[1] <= cy_top:
-                        uf.union(wire_pt, pt)
+                        _merge(uf, wire_pt, pt)
                         break
 
     # Connect each harness port to signal harness wires; the wire can
@@ -651,8 +646,8 @@ def parse_harness_groups(sheet: SheetRecords) -> list[HarnessGroup]:
                 None,
             )
             if seg is not None:
-                uf.union(port.location, probe)
-                uf.union(probe, seg[0])
+                _merge(uf, port.location, probe)
+                _merge(uf, probe, seg[0])
                 break
 
     # Map each connector to its port by finding which port shares the
@@ -663,7 +658,7 @@ def parse_harness_groups(sheet: SheetRecords) -> list[HarnessGroup]:
         if wire_pt is None:
             continue
         for port in harness_ports:
-            if uf.find(wire_pt) == uf.find(port.location):
+            if _root(uf, wire_pt) == _root(uf, port.location):
                 port_name_for_connector[ai] = port.name
                 break
 

@@ -674,6 +674,61 @@ def test_multipart_component_source_identity_uses_component_not_part_record():
     assert len({pin.component_occurrence_source_id for pin in u1_pins}) > 1
 
 
+def _child_first_project(tmp_path, monkeypatch, records_by_file: dict[str, SheetRecords]):
+    """Set up a fake project whose documents list a child sheet before the root."""
+    project_path = tmp_path / "ChildFirst.PrjPcb"
+    project_path.write_text("", encoding="utf-8")
+    for sheet_name in records_by_file:
+        (tmp_path / sheet_name).write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "phosphor_eda.formats.altium.source.parse_prjpcb_file",
+        lambda _path: type(
+            "Project",
+            (),
+            {
+                "schematic_paths": list(records_by_file),
+                "hierarchy_mode": AltiumHierarchyMode.SMART,
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        "phosphor_eda.formats.altium.source.load_sheet",
+        lambda path, ctx: records_by_file[Path(path).name],
+    )
+    return project_path
+
+
+def test_project_root_is_structural_root_not_first_listed(tmp_path, monkeypatch):
+    """The root sheet is the one no sheet symbol references, not the first listed."""
+    project_path = _child_first_project(
+        tmp_path,
+        monkeypatch,
+        {
+            "Child.SchDoc": _records_sheet("Child", []),
+            "Top.SchDoc": _records_sheet("Top", ["Child.SchDoc"]),
+        },
+    )
+
+    source = altium_to_source(project_path)
+    assert source.root_sheet_id == "sheet:Top.SchDoc"
+
+
+def test_project_root_falls_back_to_first_listed_on_reference_cycle(tmp_path, monkeypatch):
+    """When every sheet is referenced (a cycle), the first-listed sheet wins."""
+    project_path = _child_first_project(
+        tmp_path,
+        monkeypatch,
+        {
+            "Child.SchDoc": _records_sheet("Child", ["Top.SchDoc"]),
+            "Top.SchDoc": _records_sheet("Top", ["Child.SchDoc"]),
+        },
+    )
+
+    source = altium_to_source(project_path)
+    assert source.root_sheet_id == "sheet:Child.SchDoc"
+
+
 def test_project_source_expands_nested_repeated_sheet_instances(tmp_path, monkeypatch):
     project_path = tmp_path / "Nested.PrjPcb"
     project_path.write_text("", encoding="utf-8")

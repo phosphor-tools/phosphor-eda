@@ -251,7 +251,8 @@ class AltiumSourceDesign:
     name: str
     project: AltiumProject
     sheets: dict[str, AltiumSheetSource]
-    root_sheet_name: str = ""
+    # Key into ``sheets`` for the design's root sheet.
+    root_sheet_id: str = ""
     # Hierarchical unique-id path -> per-instance designator entry, from the
     # project's ``.Annotation`` file. Empty for single sheets and un-annotated
     # projects.
@@ -1327,6 +1328,37 @@ def load_project_source_sheets(
     return project, sheets
 
 
+def structural_root_sheet_id(sheets: dict[str, AltiumSheetSource]) -> str:
+    """Pick the root sheet id: the sheet no sheet symbol references.
+
+    Project files list documents in arbitrary order, so document order alone
+    cannot identify the top sheet. The first-listed candidate wins ties
+    (several unreferenced sheets), and the first-listed sheet overall is the
+    fallback for reference cycles and empty projects.
+    """
+    known = {_source_file_key(sheet.source_file) for sheet in sheets.values()}
+    referenced: set[str] = set()
+    for sheet in sheets.values():
+        referencing_dir = _parent_dir(_source_file_key(sheet.source_file))
+        for symbol in sheet.sheet_symbols:
+            if not symbol.child_source_file:
+                continue
+            # No ctx here: the loader already warned once about ambiguous
+            # child references when it expanded the hierarchy.
+            resolved = resolve_document_reference(
+                symbol.child_source_file,
+                referencing_dir=referencing_dir,
+                known_documents=known,
+            )
+            referenced.add(
+                resolved if resolved is not None else _source_file_key(symbol.child_source_file)
+            )
+    for sheet_id, sheet in sheets.items():
+        if _source_file_key(sheet.source_file) not in referenced:
+            return sheet_id
+    return next(iter(sheets), "")
+
+
 def altium_to_source(
     path: Path, name: str = "", ctx: ParseContext | None = None
 ) -> AltiumSourceDesign:
@@ -1338,11 +1370,10 @@ def altium_to_source(
     if ctx is None:
         ctx = ParseContext()
     project, sheets = load_project_source_sheets(path, ctx=ctx)
-    root_sheet_name = next(iter(sheets), "")
     return AltiumSourceDesign(
         name=name or path.stem,
         project=project,
         sheets=sheets,
-        root_sheet_name=root_sheet_name,
+        root_sheet_id=structural_root_sheet_id(sheets),
         physical_designators=load_annotation_designators(path, ctx=ctx),
     )

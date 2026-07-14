@@ -11,7 +11,8 @@ from pathlib import Path
 import pytest
 
 from phosphor_eda.formats.altium.project import parse_prjpcb
-from phosphor_eda.formats.altium.to_schematic import altium_to_design
+from phosphor_eda.formats.altium.to_schematic import altium_to_design, load_project_sheets
+from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.kicad.to_schematic import kicad_to_design
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -59,11 +60,27 @@ def test_altium_loads_schdoc_with_backslash_paths(tmp_path: Path):
     assert len(design.pages) == 1
 
 
+def test_altium_same_basename_sheets_in_different_directories_do_not_collide(tmp_path: Path):
+    """Sheets are keyed by project-relative path, so equal basenames stay distinct."""
+    real_schdoc = UPSTREAM_FIXTURES / "qfsae-pcb/Debugger/TOP.SchDoc"
+    schdoc_bytes = real_schdoc.read_bytes()
+    for sub in ("a", "b"):
+        (tmp_path / sub).mkdir()
+        (tmp_path / sub / "Main.SchDoc").write_bytes(schdoc_bytes)
+
+    prjpcb = tmp_path / "Test.PrjPcb"
+    prjpcb.write_text(
+        "[Design]\nHierarchyMode=1\n\n"
+        "[Document1]\nDocumentPath=a\\Main.SchDoc\n\n"
+        "[Document2]\nDocumentPath=b\\Main.SchDoc\n"
+    )
+
+    sheets = load_project_sheets(prjpcb)
+    assert set(sheets) == {"a/Main.SchDoc", "b/Main.SchDoc"}
+
+
 def test_altium_warns_on_missing_schdoc(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
     """A missing sheet records a ParseContext warning (not a stdout/stderr print)."""
-    from phosphor_eda.formats.altium.to_schematic import load_project_sheets
-    from phosphor_eda.formats.common.diagnostics import ParseContext
-
     prjpcb = tmp_path / "Test.PrjPcb"
     prjpcb.write_text("[Design]\nHierarchyMode=1\n\n[Document1]\nDocumentPath=Missing.SchDoc\n")
 
@@ -85,9 +102,6 @@ def test_altium_warns_on_missing_schdoc(tmp_path: Path, capsys: pytest.CaptureFi
 
 def test_altium_warns_on_missing_backslash_schdoc(tmp_path: Path) -> None:
     """The recorded warning includes the original path when a backslash path is missing."""
-    from phosphor_eda.formats.altium.to_schematic import load_project_sheets
-    from phosphor_eda.formats.common.diagnostics import ParseContext
-
     prjpcb = tmp_path / "Test.PrjPcb"
     prjpcb.write_text(
         "[Design]\nHierarchyMode=1\n\n[Document1]\nDocumentPath=sub\\Missing.SchDoc\n"

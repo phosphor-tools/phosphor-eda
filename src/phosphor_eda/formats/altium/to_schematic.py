@@ -12,6 +12,7 @@ from phosphor_eda.formats.altium.source import (
     AltiumSourceDesign,
     altium_to_source,
     load_project_source_sheets,
+    structural_root_sheet_id,
 )
 from phosphor_eda.formats.common.diagnostics import ParseContext
 
@@ -34,10 +35,13 @@ def load_project_sheets(
         project = parse_prjpcb_file(str(path))
         project_dir = path.parent
         for rel_path in project.schematic_paths:
-            schdoc = project_dir / rel_path.replace("\\", "/")
+            # Key by the project-relative path, mirroring
+            # load_project_source_sheets, so equal basenames in different
+            # directories stay distinct.
+            source_file = rel_path.replace("\\", "/")
+            schdoc = project_dir / source_file
             if schdoc.exists():
-                sheet = load_sheet(str(schdoc), ctx=ctx)
-                sheets[sheet.name] = sheet
+                sheets[source_file] = load_sheet(str(schdoc), ctx=ctx)
             else:
                 ctx.warn(
                     "missing_sheet",
@@ -45,8 +49,7 @@ def load_project_sheets(
                 )
         return sheets
 
-    sheet = load_sheet(str(path), ctx=ctx)
-    sheets[sheet.name] = sheet
+    sheets[path.name] = load_sheet(str(path), ctx=ctx)
     return sheets
 
 
@@ -62,7 +65,7 @@ def load_project_source(
         name=path.stem,
         project=project,
         sheets=sheets,
-        root_sheet_name=next(iter(sheets), ""),
+        root_sheet_id=structural_root_sheet_id(sheets),
         physical_designators=load_annotation_designators(path, ctx=ctx),
     )
     return source, ctx

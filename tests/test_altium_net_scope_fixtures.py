@@ -171,7 +171,7 @@ def _source(
             allow_sheet_entry_net_names=allow_sheet_entry_net_names,
         ),
         sheets={sheet.name: sheet for sheet in sheets},
-        root_sheet_name=sheets[0].name,
+        root_sheet_id=sheets[0].name,
     )
 
 
