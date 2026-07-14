@@ -97,6 +97,27 @@ class KiCadSheetPin:
 
 
 @dataclass(slots=True)
+class KiCadBusSheetPin:
+    """A bus-syntax sheet pin: connects each bus member across the boundary.
+
+    Attached to the parent scope's bus graph (``bus_group_id``), not a wire
+    local net; the resolver merges member nets between the parent bus group
+    and the child scope's same-named hierarchical bus label.
+    """
+
+    id: str
+    scope_id: ScopeId
+    source_index: int
+    sheet_symbol_id: str
+    child_scope_id: ScopeId
+    name: str
+    direction: str
+    location: KiCadPoint
+    bus_group_id: str
+    kind: str = field(default="bus_sheet_pin", init=False)
+
+
+@dataclass(slots=True)
 class KiCadBusLabel:
     id: str
     scope_id: ScopeId
@@ -213,5 +234,6 @@ class KiCadSourceDesign:
     power_symbols: list[KiCadPowerSymbol]
     sheet_symbols: list[KiCadSheetSymbol]
     sheet_pins: list[KiCadSheetPin]
+    bus_sheet_pins: list[KiCadBusSheetPin] = field(default_factory=list)
     annotations: list[KiCadSheetAnnotation] = field(default_factory=list)
     schematic_version: int = 20231120

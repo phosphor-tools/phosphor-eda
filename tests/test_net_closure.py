@@ -235,3 +235,63 @@ def test_multi_pin_component_is_not_traversed_through() -> None:
     closure = connected_pcb_net_names(_board(), _schematic(), "USB_PULLUP")
 
     assert closure == frozenset({"USB_D+", "/IO/_USB_D_P", "USB_PULLUP"})
+
+
+def test_ambiguous_reference_is_excluded_from_seeding() -> None:
+    # Two schematic components share the reference R99, so the (ref, number)
+    # bridge key is ambiguous. Seeding from an arbitrary instance would pull an
+    # unrelated net's name into the closure; ambiguous keys must be skipped.
+    schematic = Schematic(name="dup")
+    sch_nets = {name: Net(id=f"n-{name}", name=name.upper()) for name in ("s", "a", "b", "c")}
+
+    def component(comp_id: str, reference: str, pin_nets: dict[str, Net]) -> Component:
+        comp = Component(id=comp_id, reference=reference, part="", description="")
+        for designator, net in pin_nets.items():
+            pin = Pin(
+                id=f"{comp_id}.{designator}",
+                designator=designator,
+                name=designator,
+                component=comp,
+                net=net,
+            )
+            comp.pins.append(pin)
+            net.pins.append(pin)
+        return comp
+
+    schematic.components = [
+        component("c1", "R99", {"1": sch_nets["s"], "2": sch_nets["a"]}),
+        component("c2", "R99", {"1": sch_nets["b"], "2": sch_nets["c"]}),
+    ]
+    schematic.nets = list(sch_nets.values())
+
+    pcb_nets = {"sig": PcbNet(1, "SIG"), "other": PcbNet(2, "OTHER_PCB")}
+    footprint = PcbFootprint("R99", "lib:fp", 0.0, 0.0, 0.0, _LAYER)
+    pads = [
+        PcbPad(
+            id=f"pad:R99:{number}",
+            number=number,
+            x=0.0,
+            y=0.0,
+            stack=PadStack.simple("rect", 1.0, 1.0),
+            pad_type=PcbPadType.SMD,
+            layers=(_LAYER,),
+            net=pcb_nets[net_key],
+            footprint=footprint,
+        )
+        for number, net_key in (("1", "sig"), ("2", "other"))
+    ]
+    board = Board(
+        name="dup",
+        layers=[_LAYER],
+        nets={net.number: net for net in pcb_nets.values()},
+        footprints=[footprint],
+        pads=pads,
+        vias=[],
+        drills=[],
+        conductors=[],
+        artwork=[],
+        pours=[],
+        keepouts=[],
+    )
+
+    assert connected_pcb_net_names(board, schematic, "SIG") == frozenset({"SIG"})

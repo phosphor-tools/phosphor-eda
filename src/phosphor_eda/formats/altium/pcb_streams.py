@@ -1516,20 +1516,21 @@ def parse_board_outline(
 ) -> list[ParsedPrimitive]:
     """Extract board outline geometry from fallback mechanical/keepout layers.
 
-    Falls back to Keep-Out layer (74) if no Mechanical 1 primitives found.
-    Also checks for any mechanical layer whose MECHKIND is EDGE.
+    Falls back to the Keep-Out layer (56) if no Mechanical 1 primitives found —
+    a keep-out ring is a common legacy way to draw the board edge. Also checks
+    for any mechanical layer whose MECHKIND is EDGE.
     """
     outline: list[ParsedPrimitive] = []
 
     # Prefer a layer with EDGE function (from MECHKIND=BoardShape), then
-    # fall back to Mechanical 1 (57), then Keep-Out (74).
+    # fall back to Mechanical 1 (57), then Keep-Out (56).
     edge_layers = [
         num
         for num, lyr in layer_map.items()
         if lyr.has_role(LayerRole.EDGE) and num >= AltiumLayer.MECHANICAL_1
     ]
     candidates = edge_layers or [int(AltiumLayer.MECHANICAL_1)]
-    candidates.append(int(AltiumLayer.MULTI_LAYER))
+    candidates.append(int(AltiumLayer.KEEP_OUT_LAYER))
     # Deduplicate while preserving order
     seen: set[int] = set()
     target_layers: list[int] = []

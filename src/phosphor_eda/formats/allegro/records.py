@@ -162,6 +162,16 @@ def payload_int(record: AllegroRecord, key: str) -> int:
     return value if isinstance(value, int) else 0
 
 
+def rectangle_owner_key(record: AllegroRecord) -> int:
+    """Owner key for a rectangle record (0x0E or 0x24).
+
+    0x24 rectangles store their owner as ``parent_key``; only 0x0E stores it as
+    ``footprint_key``. Reading the wrong field yields 0, defeating the
+    footprint-ownership filter.
+    """
+    return payload_int(record, "parent_key" if record.tag == 0x24 else "footprint_key")
+
+
 def payload_float(record: AllegroRecord, key: str) -> float:
     value = record.payload.get(key, 0.0)
     if isinstance(value, float):

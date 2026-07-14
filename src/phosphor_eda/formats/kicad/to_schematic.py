@@ -22,6 +22,7 @@ from phosphor_eda.formats.kicad.source import (
     KiCadBusAlias,
     KiCadBusEntry,
     KiCadBusLabel,
+    KiCadBusSheetPin,
     KiCadGlobalLabel,
     KiCadHierarchicalLabel,
     KiCadLocalLabel,
@@ -71,6 +72,7 @@ def kicad_to_source(
     power_symbols: list[KiCadPowerSymbol] = []
     sheet_symbols: list[KiCadSheetSymbol] = []
     sheet_pins: list[KiCadSheetPin] = []
+    bus_sheet_pins: list[KiCadBusSheetPin] = []
     annotations: list[KiCadSheetAnnotation] = []
 
     # Sheet symbols/pins reference child scopes by UUID, but a child whose file
@@ -103,6 +105,7 @@ def kicad_to_source(
         power_symbols.extend(extracted.power_symbols)
         sheet_symbols.extend(extracted.sheet_symbols)
         sheet_pins.extend(extracted.sheet_pins)
+        bus_sheet_pins.extend(extracted.bus_sheet_pins)
         annotations.extend(extracted.annotations)
 
     return KiCadSourceDesign(
@@ -121,6 +124,7 @@ def kicad_to_source(
         power_symbols=power_symbols,
         sheet_symbols=sheet_symbols,
         sheet_pins=sheet_pins,
+        bus_sheet_pins=bus_sheet_pins,
         annotations=annotations,
         schematic_version=_root_version(sheet_tree),
     )

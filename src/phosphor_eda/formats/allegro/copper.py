@@ -38,7 +38,11 @@ from phosphor_eda.formats.allegro.primitives import (
     AllegroPrimitiveKind,
     AllegroPrimitiveRole,
 )
-from phosphor_eda.formats.allegro.records import AllegroRecordDiagnostic, payload_int
+from phosphor_eda.formats.allegro.records import (
+    AllegroRecordDiagnostic,
+    payload_int,
+    rectangle_owner_key,
+)
 
 if TYPE_CHECKING:
     from phosphor_eda.domain.pcb import PcbLayer
@@ -282,7 +286,7 @@ def _rectangle_region_conductors(
     for record in record_set.records:
         if record.tag not in {0x0E, 0x24} or record.key is None:
             continue
-        if owned_by_footprint_definition(graph, payload_int(record, "footprint_key")):
+        if owned_by_footprint_definition(graph, rectangle_owner_key(record)):
             continue
         if _copper_layer(record, layer_map, diagnostics, require_etch=False) is None:
             continue
@@ -494,7 +498,7 @@ def _rectangle_region_conductor_primitive(
     if primitive.layer is None or not isinstance(primitive.data, PcbPolygon):
         return None
     properties = dict(primitive.metadata.properties)
-    footprint_key = payload_int(record, "footprint_key")
+    footprint_key = rectangle_owner_key(record)
     if footprint_key:
         properties["native_footprint_key"] = str(footprint_key)
     return AllegroConductorPrimitive(

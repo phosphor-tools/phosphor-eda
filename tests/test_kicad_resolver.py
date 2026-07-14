@@ -9,6 +9,7 @@ from phosphor_eda.formats.kicad.source import (
     KiCadBusAlias,
     KiCadBusEntry,
     KiCadBusLabel,
+    KiCadBusSheetPin,
     KiCadGlobalLabel,
     KiCadHierarchicalLabel,
     KiCadLocalLabel,
@@ -1273,6 +1274,38 @@ def test_global_label_scope_must_match_local_net_scope() -> None:
                 sheet_instances=[_sheet(root, "Root"), _sheet(child, "Child")],
             )
         )
+
+
+def _bus_sheet_pin(scope_id: ScopeId, child_scope_id: ScopeId) -> KiCadBusSheetPin:
+    return KiCadBusSheetPin(
+        id="root:bus_sheet_pin:1",
+        scope_id=scope_id,
+        source_index=1,
+        sheet_symbol_id="root:sheet_symbol:child",
+        child_scope_id=child_scope_id,
+        name="D[0..1]",
+        direction="input",
+        location=(1.0, 50.0),
+        bus_group_id="root:bus_group:1",
+    )
+
+
+def test_bus_sheet_pin_with_unknown_scope_fails_resolution() -> None:
+    root = _scope()
+    source = _source([], [], sheet_instances=[_sheet(root, "Root")])
+    source.bus_sheet_pins.append(_bus_sheet_pin(_scope("missing"), root))
+
+    with pytest.raises(ResolutionInputError, match=r"bus sheet pin .* unknown scope"):
+        _ = resolve_kicad_source(source)
+
+
+def test_bus_sheet_pin_with_unknown_child_scope_fails_resolution() -> None:
+    root = _scope()
+    source = _source([], [], sheet_instances=[_sheet(root, "Root")])
+    source.bus_sheet_pins.append(_bus_sheet_pin(root, _scope("missing")))
+
+    with pytest.raises(ResolutionInputError, match=r"bus sheet pin .* unknown child scope"):
+        _ = resolve_kicad_source(source)
 
 
 def test_top_level_sheet_pin_with_unknown_local_net_fails_resolution() -> None:

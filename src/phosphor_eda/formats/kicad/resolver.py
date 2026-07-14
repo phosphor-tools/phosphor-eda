@@ -18,7 +18,6 @@ from phosphor_eda.formats.common.electrical import (
 )
 from phosphor_eda.formats.common.net_union import NetUnion
 from phosphor_eda.formats.common.resolved_graph import (
-    ResolutionInputError,
     ResolvedComponentOccurrenceInput,
     ResolvedLocalNetInput,
     ResolvedNetInput,
@@ -26,6 +25,8 @@ from phosphor_eda.formats.common.resolved_graph import (
     ResolvedPinInput,
     build_resolved_schematic,
 )
+from phosphor_eda.formats.common.spatial import UnionFind
+from phosphor_eda.formats.kicad.source_validation import validate_source_refs
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -87,7 +88,7 @@ def resolve_kicad_source(source: KiCadSourceDesign, ctx: ParseContext | None = N
     )
     local_nets_by_id = {local_net.id: local_net for local_net in source.local_nets}
     bus_labels_by_id = {label.id: label for label in source.bus_labels}
-    _validate_source_refs(source, local_nets_by_id)
+    validate_source_refs(source, local_nets_by_id)
     net_union = NetUnion(local_net.id for local_net in source.local_nets)
 
     _merge_repeated_logical_pins(net_union, pin_occurrences, component_ids_by_source_id)
@@ -96,6 +97,7 @@ def resolve_kicad_source(source: KiCadSourceDesign, ctx: ParseContext | None = N
     _merge_power_symbols(net_union, source.local_nets)
     _merge_bus_entry_members(source, net_union, sheet_names_by_scope, bus_labels_by_id)
     _merge_hierarchical_sheet_pins(source, net_union)
+    _merge_bus_sheet_pin_members(source, net_union)
 
     metadata = {"kicad_root_source_file": source.root_source_file}
     if ctx is not None and ctx.issues:
@@ -278,225 +280,45 @@ def _merge_hierarchical_sheet_pins(source: KiCadSourceDesign, net_union: NetUnio
             _ = net_union.union(sheet_pin.local_net_id, child_net_id)
 
 
+def _merge_bus_sheet_pin_members(source: KiCadSourceDesign, net_union: NetUnion) -> None:
+    """Connect bus members across sheet-pin boundaries.
+
+    The bus analog of ``_merge_hierarchical_sheet_pins``: a bus sheet pin
+    joins the parent scope's bus group to the child scope's bus group named
+    by a same-named hierarchical bus label. Within each joined component,
+    bus-entry nets carrying the same member name merge — a bus sheet pin
+    connects every member net between parent and child scope.
+    """
+    child_bus_groups: dict[tuple[ScopeId, str], list[str]] = {}
+    for label in source.bus_labels:
+        if label.kind == "hierarchical_label" and label.bus_group_id:
+            key = (label.scope_id, _clean_name(label.name))
+            child_bus_groups.setdefault(key, []).append(label.bus_group_id)
+
+    bus_group_union: UnionFind[str] = UnionFind()
+    for pin in source.bus_sheet_pins:
+        child_key = (pin.child_scope_id, _clean_name(pin.name))
+        for child_group_id in child_bus_groups.get(child_key, []):
+            bus_group_union.union(pin.bus_group_id, child_group_id)
+
+    net_ids_by_group_member: dict[tuple[str, str], list[str]] = {}
+    for entry in source.bus_entries:
+        # Groups never joined by a sheet pin need no cross-scope merging;
+        # same-scope member merging is _merge_bus_entry_members' job.
+        if entry.member_name and entry.bus_group_id in bus_group_union:
+            key = (bus_group_union.find(entry.bus_group_id), entry.member_name)
+            net_ids_by_group_member.setdefault(key, []).append(entry.local_net_id)
+
+    for net_ids in net_ids_by_group_member.values():
+        _merge_ids(net_union, net_ids)
+
+
 def _merge_ids(net_union: NetUnion, net_ids: list[str]) -> None:
     if len(net_ids) < 2:
         return
     first_id = net_ids[0]
     for net_id in net_ids[1:]:
         _ = net_union.union(first_id, net_id)
-
-
-def _validate_source_refs(
-    source: KiCadSourceDesign,
-    local_nets_by_id: dict[str, KiCadLocalNet],
-) -> None:
-    scopes = {instance.scope_id for instance in source.sheet_instances}
-    attached_sheet_pin_local_net_ids: dict[str, str] = {}
-    attached_bus_entry_local_net_ids: dict[str, str] = {}
-    for local_net in source.local_nets:
-        if local_net.scope_id not in scopes:
-            msg = f"local net {local_net.id!r} references unknown scope {local_net.scope_id}"
-            raise ResolutionInputError(msg)
-        for label in local_net.local_labels:
-            _validate_scoped_local_net_ref(
-                kind="local label",
-                id_=label.id,
-                scope_id=label.scope_id,
-                local_net_id=label.local_net_id,
-                containing_local_net_id=local_net.id,
-                scopes=scopes,
-                local_nets_by_id=local_nets_by_id,
-            )
-        for label in local_net.global_labels:
-            _validate_scoped_local_net_ref(
-                kind="global label",
-                id_=label.id,
-                scope_id=label.scope_id,
-                local_net_id=label.local_net_id,
-                containing_local_net_id=local_net.id,
-                scopes=scopes,
-                local_nets_by_id=local_nets_by_id,
-            )
-        for label in local_net.hierarchical_labels:
-            _validate_scoped_local_net_ref(
-                kind="hierarchical label",
-                id_=label.id,
-                scope_id=label.scope_id,
-                local_net_id=label.local_net_id,
-                containing_local_net_id=local_net.id,
-                scopes=scopes,
-                local_nets_by_id=local_nets_by_id,
-            )
-        for symbol in local_net.power_symbols:
-            _validate_scoped_local_net_ref(
-                kind="power symbol",
-                id_=symbol.id,
-                scope_id=symbol.scope_id,
-                local_net_id=symbol.local_net_id,
-                containing_local_net_id=local_net.id,
-                scopes=scopes,
-                local_nets_by_id=local_nets_by_id,
-            )
-        for sheet_pin in local_net.sheet_pins:
-            _validate_scoped_local_net_ref(
-                kind="sheet pin",
-                id_=sheet_pin.id,
-                scope_id=sheet_pin.scope_id,
-                local_net_id=sheet_pin.local_net_id,
-                containing_local_net_id=local_net.id,
-                scopes=scopes,
-                local_nets_by_id=local_nets_by_id,
-            )
-            if sheet_pin.child_scope_id not in scopes:
-                msg = (
-                    f"sheet pin {sheet_pin.id!r} references unknown child scope "
-                    f"{sheet_pin.child_scope_id}"
-                )
-                raise ResolutionInputError(msg)
-            attached_sheet_pin_local_net_ids[sheet_pin.id] = local_net.id
-        for bus_entry in local_net.bus_entries:
-            _validate_scoped_local_net_ref(
-                kind="bus entry",
-                id_=bus_entry.id,
-                scope_id=bus_entry.scope_id,
-                local_net_id=bus_entry.local_net_id,
-                containing_local_net_id=local_net.id,
-                scopes=scopes,
-                local_nets_by_id=local_nets_by_id,
-            )
-            attached_bus_entry_local_net_ids[bus_entry.id] = local_net.id
-    for sheet_pin in source.sheet_pins:
-        _validate_top_level_sheet_pin_ref(
-            id_=sheet_pin.id,
-            scope_id=sheet_pin.scope_id,
-            child_scope_id=sheet_pin.child_scope_id,
-            local_net_id=sheet_pin.local_net_id,
-            scopes=scopes,
-            local_nets_by_id=local_nets_by_id,
-        )
-        attached_local_net_id = attached_sheet_pin_local_net_ids.get(sheet_pin.id)
-        if attached_local_net_id is None:
-            msg = (
-                f"sheet pin {sheet_pin.id!r} is not attached to local net "
-                f"{sheet_pin.local_net_id!r}"
-            )
-            raise ResolutionInputError(msg)
-        if attached_local_net_id != sheet_pin.local_net_id:
-            msg = (
-                f"sheet pin {sheet_pin.id!r} references local net "
-                f"{sheet_pin.local_net_id!r} but is attached to local net "
-                f"{attached_local_net_id!r}"
-            )
-            raise ResolutionInputError(msg)
-    for bus_entry in source.bus_entries:
-        _validate_scoped_local_net_ref(
-            kind="bus entry",
-            id_=bus_entry.id,
-            scope_id=bus_entry.scope_id,
-            local_net_id=bus_entry.local_net_id,
-            containing_local_net_id=bus_entry.local_net_id,
-            scopes=scopes,
-            local_nets_by_id=local_nets_by_id,
-        )
-        attached_local_net_id = attached_bus_entry_local_net_ids.get(bus_entry.id)
-        if attached_local_net_id is None:
-            msg = (
-                f"bus entry {bus_entry.id!r} is not attached to local net "
-                f"{bus_entry.local_net_id!r}"
-            )
-            raise ResolutionInputError(msg)
-        if attached_local_net_id != bus_entry.local_net_id:
-            msg = (
-                f"bus entry {bus_entry.id!r} references local net "
-                f"{bus_entry.local_net_id!r} but is attached to local net "
-                f"{attached_local_net_id!r}"
-            )
-            raise ResolutionInputError(msg)
-    for pin in source.pin_occurrences:
-        _validate_pin_ref(
-            id_=pin.id,
-            scope_id=pin.scope_id,
-            local_net_id=pin.local_net_id,
-            scopes=scopes,
-            local_nets_by_id=local_nets_by_id,
-        )
-
-
-def _validate_top_level_sheet_pin_ref(
-    *,
-    id_: str,
-    scope_id: ScopeId,
-    child_scope_id: ScopeId,
-    local_net_id: str,
-    scopes: set[ScopeId],
-    local_nets_by_id: dict[str, KiCadLocalNet],
-) -> None:
-    _validate_scoped_local_net_ref(
-        kind="sheet pin",
-        id_=id_,
-        scope_id=scope_id,
-        local_net_id=local_net_id,
-        containing_local_net_id=local_net_id,
-        scopes=scopes,
-        local_nets_by_id=local_nets_by_id,
-    )
-    if child_scope_id not in scopes:
-        msg = f"sheet pin {id_!r} references unknown child scope {child_scope_id}"
-        raise ResolutionInputError(msg)
-
-
-def _validate_pin_ref(
-    *,
-    id_: str,
-    scope_id: ScopeId,
-    local_net_id: str,
-    scopes: set[ScopeId],
-    local_nets_by_id: dict[str, KiCadLocalNet],
-) -> None:
-    if scope_id not in scopes:
-        msg = f"pin {id_!r} references unknown scope {scope_id}"
-        raise ResolutionInputError(msg)
-    local_net = local_nets_by_id.get(local_net_id)
-    if local_net is None:
-        msg = f"pin {id_!r} references unknown local net {local_net_id!r}"
-        raise ResolutionInputError(msg)
-    if local_net.scope_id != scope_id:
-        msg = (
-            f"pin {id_!r} scope {scope_id} does not match "
-            f"local net {local_net_id!r} scope {local_net.scope_id}"
-        )
-        raise ResolutionInputError(msg)
-
-
-def _validate_scoped_local_net_ref(
-    *,
-    kind: str,
-    id_: str,
-    scope_id: ScopeId,
-    local_net_id: str,
-    containing_local_net_id: str,
-    scopes: set[ScopeId],
-    local_nets_by_id: dict[str, KiCadLocalNet],
-) -> None:
-    if scope_id not in scopes:
-        msg = f"{kind} {id_!r} references unknown scope {scope_id}"
-        raise ResolutionInputError(msg)
-    local_net = local_nets_by_id.get(local_net_id)
-    if local_net is None:
-        msg = f"{kind} {id_!r} references unknown local net {local_net_id!r}"
-        raise ResolutionInputError(msg)
-    if local_net_id != containing_local_net_id:
-        msg = (
-            f"{kind} {id_!r} references local net {local_net_id!r} "
-            f"but is attached to local net {containing_local_net_id!r}"
-        )
-        raise ResolutionInputError(msg)
-    if local_net.scope_id != scope_id:
-        msg = (
-            f"{kind} {id_!r} scope {scope_id} does not match "
-            f"local net {local_net_id!r} scope {local_net.scope_id}"
-        )
-        raise ResolutionInputError(msg)
 
 
 def _page_inputs(source: KiCadSourceDesign) -> list[ResolvedPageInput]:

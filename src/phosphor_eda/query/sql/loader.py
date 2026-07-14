@@ -67,7 +67,7 @@ from phosphor_eda.query.sql.schema import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Sequence
+    from collections.abc import Callable, Iterable, Iterator, Sequence
 
     from numpy.typing import NDArray
     from shapely.geometry.base import BaseGeometry
@@ -133,8 +133,6 @@ _shapely_linestrings: Callable[[Sequence[_LineCoords]], NDArray[np.object_]] = v
     "linestrings"
 ]
 _shapely_buffer: _ShapelyBuffer = vars(shapely)["buffer"]
-_shapely_is_empty: Callable[[NDArray[np.object_]], NDArray[np.bool_]] = vars(shapely)["is_empty"]
-_shapely_to_wkb: Callable[[NDArray[np.object_]], NDArray[np.bytes_]] = vars(shapely)["to_wkb"]
 
 
 def _wkb(geom: BaseGeometry | None) -> bytes | None:
@@ -228,7 +226,12 @@ def _shape_geometry(payload: PcbShape) -> BaseGeometry | None:
     return None
 
 
-def _line_artwork_wkbs(lines: list[PcbLine]) -> list[bytes | None]:
+def _line_artwork_geometries(lines: list[PcbLine]) -> list[BaseGeometry]:
+    """Buffer many line-artwork corridors at once (vectorized for silkscreen).
+
+    Zero-width lines keep their bare centerline; the result matches
+    ``_shape_geometry`` per line but computes the buffers in a single call.
+    """
     if not lines:
         return []
 
@@ -236,18 +239,12 @@ def _line_artwork_wkbs(lines: list[PcbLine]) -> list[bytes | None]:
         [((line.start_x, line.start_y), (line.end_x, line.end_y)) for line in lines]
     )
     widths = np.array([line.width for line in lines], dtype=np.float64)
-    geometries = _shapely_buffer(
+    corridors = _shapely_buffer(
         centerlines,
         widths / 2.0,
         cap_style="flat",
     )
-    geometries = np.where(widths > 0.0, geometries, centerlines)
-    empty_flags = _shapely_is_empty(geometries)
-    wkb_values = _shapely_to_wkb(geometries)
-    return [
-        None if bool(is_empty) else bytes(wkb)
-        for is_empty, wkb in zip(empty_flags, wkb_values, strict=True)
-    ]
+    return list(np.where(widths > 0.0, corridors, centerlines))
 
 
 def _profile_shape_geometry(
@@ -538,6 +535,12 @@ class _ComponentPartNumberRow:
 class _TitleBlockRow:
     page: Page
     block: TitleBlock
+
+
+@dataclass(frozen=True, slots=True)
+class _ProjectVariantRow:
+    variant: Variant
+    active: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -1264,39 +1267,38 @@ _PROJECT_PARAMETERS: TableSpec[tuple[str, str]] = TableSpec(
     ),
 )
 
-_PROJECT_VARIANTS: TableSpec[Variant] = TableSpec(
+_PROJECT_VARIANTS: TableSpec[_ProjectVariantRow] = TableSpec(
     "project_variants",
     (
-        col("variant_name", "VARCHAR", lambda v: v.name, constraint="PRIMARY KEY"),
-        col("description", "VARCHAR", lambda v: v.description),
-        col("ord", "INTEGER", lambda v: v.order, constraint="NOT NULL"),
-        col(
-            "active",
-            "BOOLEAN",
-            lambda v: any(override.applied for override in v.overrides),
-            constraint="NOT NULL",
-        ),
-        col("override_count", "INTEGER", lambda v: len(v.overrides), constraint="NOT NULL"),
+        col("variant_name", "VARCHAR", lambda r: r.variant.name, constraint="PRIMARY KEY"),
+        col("description", "VARCHAR", lambda r: r.variant.description),
+        col("ord", "INTEGER", lambda r: r.variant.order, constraint="NOT NULL"),
+        # Active means "is the selected project variant" — matching the text
+        # commands and Project.active_variant, not "has any applied override".
+        col("active", "BOOLEAN", lambda r: r.active, constraint="NOT NULL"),
+        col("override_count", "INTEGER", lambda r: len(r.variant.overrides), constraint="NOT NULL"),
         col(
             "not_fitted_count",
             "INTEGER",
-            lambda v: sum(1 for o in v.overrides if o.field.value == "fitted" and o.value is False),
+            lambda r: sum(
+                1 for o in r.variant.overrides if o.field.value == "fitted" and o.value is False
+            ),
             constraint="NOT NULL",
         ),
         col(
             "alternate_part_count",
             "INTEGER",
-            lambda v: sum(1 for o in v.overrides if o.field.value == "alternate_part"),
+            lambda r: sum(1 for o in r.variant.overrides if o.field.value == "alternate_part"),
             constraint="NOT NULL",
         ),
         col(
             "parameter_count",
             "INTEGER",
-            lambda v: sum(1 for o in v.overrides if o.field.value == "parameter"),
+            lambda r: sum(1 for o in r.variant.overrides if o.field.value == "parameter"),
             constraint="NOT NULL",
         ),
-        col("source_id", "VARCHAR", lambda v: _null_if_unset(v.source_id)),
-        col("metadata", "JSON", lambda v: _json_or_null(v.metadata)),
+        col("source_id", "VARCHAR", lambda r: _null_if_unset(r.variant.source_id)),
+        col("metadata", "JSON", lambda r: _json_or_null(r.variant.metadata)),
     ),
 )
 
@@ -1590,51 +1592,32 @@ def _load_conductors(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
     _CONDUCTORS.bulk_insert(con, (_conductor_row(conductor) for conductor in pcb.conductors))
 
 
-def _load_artwork(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
-    rows: list[list[object]] = []
-    line_row_indexes: list[int] = []
-    line_payloads: list[PcbLine] = []
-    for artwork in pcb.artwork:
-        text = x = y = rotation = font_size = None
-        geom_wkb = None
-        if isinstance(artwork.data, PcbText):
-            text = artwork.data.text
-            x = artwork.data.x
-            y = artwork.data.y
-            rotation = artwork.data.rotation
-            font_size = artwork.data.font_size
-            geom_wkb = _wkb(_shape_geometry(artwork.data))
-        elif isinstance(artwork.data, PcbLine):
-            line_row_indexes.append(len(rows))
-            line_payloads.append(artwork.data)
-        else:
-            geom_wkb = _wkb(_shape_geometry(artwork.data))
-        rows.append(
-            [
-                artwork.id,
-                artwork.purpose.value,
-                artwork.kind.value,
-                None if artwork.footprint is None else artwork.footprint.reference,
-                None if artwork.layer is None else artwork.layer.name,
-                text,
-                x,
-                y,
-                rotation,
-                font_size,
-                geom_wkb,
-            ]
+def _artwork_row(artwork: PcbArtwork, line_geometries: Iterator[BaseGeometry]) -> _ArtworkRow:
+    """Build one artwork row; line geometry is pulled from the batched buffer."""
+    data = artwork.data
+    if isinstance(data, PcbText):
+        return _ArtworkRow(
+            artwork=artwork,
+            text=data.text,
+            x=data.x,
+            y=data.y,
+            rotation=data.rotation,
+            font_size=data.font_size,
+            geom=_shape_geometry(data),
         )
-    if not rows:
-        return
+    geom = next(line_geometries) if isinstance(data, PcbLine) else _shape_geometry(data)
+    return _ArtworkRow(
+        artwork=artwork, text=None, x=None, y=None, rotation=None, font_size=None, geom=geom
+    )
 
-    for row_index, geom_wkb in zip(
-        line_row_indexes,
-        _line_artwork_wkbs(line_payloads),
-        strict=True,
-    ):
-        rows[row_index][-1] = geom_wkb
 
-    _ARTWORK.bulk_insert_values(con, rows)
+def _load_artwork(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
+    line_geometries = iter(
+        _line_artwork_geometries(
+            [artwork.data for artwork in pcb.artwork if isinstance(artwork.data, PcbLine)]
+        )
+    )
+    _ARTWORK.bulk_insert(con, (_artwork_row(artwork, line_geometries) for artwork in pcb.artwork))
 
 
 def _load_board_profile(con: duckdb.DuckDBPyConnection, pcb: Board) -> None:
@@ -1746,7 +1729,12 @@ def _load_project_variants(con: duckdb.DuckDBPyConnection, project: Project) -> 
             override_rows.append(
                 _VariantOverrideRow(variant_name=variant.name, ord=index, override=override)
             )
-    _PROJECT_VARIANTS.bulk_insert(con, project.variants)
+    active_variant = project.active_variant
+    variant_rows = [
+        _ProjectVariantRow(variant=variant, active=variant is active_variant)
+        for variant in project.variants
+    ]
+    _PROJECT_VARIANTS.bulk_insert(con, variant_rows)
     _VARIANT_OVERRIDES.bulk_insert(con, override_rows)
 
 

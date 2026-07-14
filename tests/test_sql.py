@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import duckdb
 import pytest
 from click.testing import CliRunner
+from conftest import build_render_test_board
 
 from phosphor_eda.cli import main
 from phosphor_eda.domain.pcb import (
@@ -672,6 +673,62 @@ def test_sql_exports_variants_and_effective_component_state() -> None:
             ("fitted", True, "false", "true"),
             ("exclude_from_simulation", True, "true", "false"),
         ]
+    finally:
+        con.close()
+
+
+def test_artwork_rows_map_geometry_and_text_by_column() -> None:
+    # Line artwork geometry is batched separately from text/other shapes; the
+    # loader must place each row's geom and text in the right columns without
+    # assuming geom is positionally last.
+    project = Project(name="artwork", boards=[build_render_test_board()])
+
+    con = load_database(project)
+    try:
+        line = con.execute(
+            "SELECT content_kind, text, geom IS NOT NULL FROM artwork WHERE id = 'silk:1'"
+        ).fetchone()
+        assert line == ("line", None, True)
+        text = con.execute(
+            "SELECT content_kind, text, geom IS NOT NULL FROM artwork WHERE id = 'text:U1:ref'"
+        ).fetchone()
+        assert text == ("text", "U1", True)
+    finally:
+        con.close()
+
+
+def test_sql_variant_active_tracks_selected_variant_not_applied_overrides() -> None:
+    # SQL `active` must mean "is the selected variant" (matching the text
+    # commands and domain), not "has any applied override": a selected variant
+    # with no overrides is active, and an unselected one with applied overrides
+    # is not.
+    assembled = Variant(name="assembled", order=1, overrides=[])
+    proto = Variant(
+        name="proto",
+        order=2,
+        overrides=[
+            VariantOverride(
+                variant_name="proto",
+                target=VariantTarget(kind=VariantTargetKind.COMPONENT, object_id="component:r1"),
+                field=VariantField.FITTED,
+                value=False,
+                applied=True,
+            )
+        ],
+    )
+    project = Project(
+        name="Variant Active",
+        schematic=Schematic(name="Variant Active"),
+        variants=[assembled, proto],
+        selected_variant_name="assembled",
+    )
+
+    con = load_database(project)
+    try:
+        rows = con.execute(
+            "SELECT variant_name, active FROM project_variants ORDER BY ord"
+        ).fetchall()
+        assert rows == [("assembled", True), ("proto", False)]
     finally:
         con.close()
 

@@ -1,0 +1,54 @@
+(kicad_sch (version 20231120) (generator eeschema)
+
+  (uuid 22222222-2222-2222-2222-222222222222)
+
+  (paper "A4")
+
+  (lib_symbols
+    (symbol "Test:OnePin" (pin_names (offset 0)) (in_bom yes) (on_board yes)
+      (property "Reference" "J" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (property "Value" "OnePin" (at 0 0 0) (effects (font (size 1.27 1.27))))
+      (symbol "OnePin_1_1"
+        (pin passive line (at 0 0 0) (length 0)
+          (name "~" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27))))
+        )
+      )
+    )
+  )
+
+  (hierarchical_label "D[0..1]" (shape input) (at 25 15 0)
+    (effects (font (size 1.27 1.27)) (justify left))
+    (uuid 33333333-3333-3333-3333-333333333333)
+  )
+
+  (symbol (lib_id "Test:OnePin") (at 10 20 0) (unit 1)
+    (uuid 44444444-4444-4444-4444-444444444401)
+    (property "Reference" "J3" (at 10 20 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "Probe" (at 10 20 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid 55555555-5555-5555-5555-555555555501))
+  )
+  (symbol (lib_id "Test:OnePin") (at 10 30 0) (unit 1)
+    (uuid 44444444-4444-4444-4444-444444444402)
+    (property "Reference" "J4" (at 10 30 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "Probe" (at 10 30 0) (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid 55555555-5555-5555-5555-555555555502))
+  )
+
+  (wire (pts (xy 10 20) (xy 20 20)) (stroke (width 0) (type default))
+    (uuid 66666666-6666-6666-6666-666666666601))
+  (wire (pts (xy 10 30) (xy 20 30)) (stroke (width 0) (type default))
+    (uuid 66666666-6666-6666-6666-666666666602))
+
+  (bus (pts (xy 25 15) (xy 25 25)) (stroke (width 0) (type default))
+    (uuid 77777777-7777-7777-7777-777777777701))
+
+  (bus_entry (pts (xy 20 20) (xy 25 15)) (stroke (width 0) (type default))
+    (uuid 88888888-8888-8888-8888-888888888801))
+  (bus_entry (pts (xy 20 30) (xy 25 25)) (stroke (width 0) (type default))
+    (uuid 88888888-8888-8888-8888-888888888802))
+
+  (sheet_instances
+    (path "/" (page "2"))
+  )
+)

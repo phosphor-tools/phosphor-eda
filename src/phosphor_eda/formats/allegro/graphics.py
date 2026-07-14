@@ -41,6 +41,7 @@ from phosphor_eda.formats.allegro.records import (
     payload_float,
     payload_int,
     payload_int_items,
+    rectangle_owner_key,
 )
 
 _FALLBACK_TEXT_FONT_SIZE_MM = 1.0
@@ -99,7 +100,7 @@ def extract_allegro_graphics(
             diagnostics.append(drc_marker_diagnostic(record))
             continue
         if record.tag in {0x0E, 0x24}:
-            if owned_by_footprint_definition(graph, payload_int(record, "footprint_key")):
+            if owned_by_footprint_definition(graph, rectangle_owner_key(record)):
                 continue
             rectangle = rectangle_primitive(
                 record,
