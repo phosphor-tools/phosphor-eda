@@ -109,11 +109,18 @@ def _strip_fixture_roots(value: str) -> str:
 
     Anchoring both ``tests/fixtures`` and ``tests/upstream`` keeps the golden
     independent of the absolute checkout path, so it matches in every worktree
-    and in CI rather than only where it was regenerated.
+    and in CI rather than only where it was regenerated. Only a root followed
+    by a path separator (or the whole string) is replaced, so sibling
+    directories sharing the root as a prefix are left untouched.
     """
-    return value.replace(UPSTREAM_FIXTURES.resolve().as_posix(), "<upstream>").replace(
-        FIXTURES.resolve().as_posix(), "<fixtures>"
-    )
+    for root, token in (
+        (UPSTREAM_FIXTURES.resolve().as_posix(), "<upstream>"),
+        (FIXTURES.resolve().as_posix(), "<fixtures>"),
+    ):
+        if value == root:
+            return token
+        value = value.replace(root + "/", token + "/")
+    return value
 
 
 def _canon_fixture_path(value: str) -> str:
