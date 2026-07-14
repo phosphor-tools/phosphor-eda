@@ -13,6 +13,7 @@ from phosphor_eda.domain.variants import (
     VariantTarget,
     VariantTargetKind,
 )
+from phosphor_eda.formats.common.diagnostics import ParseContext, warn_optional
 
 
 class AltiumHierarchyMode(IntEnum):
@@ -52,16 +53,36 @@ class AltiumProject:
     variants: list[Variant] = field(default_factory=list)
 
 
-def _get_hierarchy_mode(parser: configparser.ConfigParser) -> AltiumHierarchyMode:
+def _get_hierarchy_mode(
+    parser: configparser.ConfigParser, ctx: ParseContext | None = None
+) -> AltiumHierarchyMode:
+    """Resolve the Design/HierarchyMode enum, degrading to FLAT on bad input.
+
+    An unknown or non-integer value is a malformed-project condition, not a
+    parser bug: warn and fall back like every other Design option here rather
+    than raising.
+    """
     raw_value = parser.get("Design", "HierarchyMode", fallback=str(AltiumHierarchyMode.FLAT.value))
     try:
         value = int(raw_value)
+    except ValueError:
+        warn_optional(
+            ctx,
+            "unknown_enum",
+            f"Unknown HierarchyMode value {raw_value!r}; using {AltiumHierarchyMode.FLAT.name}",
+        )
+        return AltiumHierarchyMode.FLAT
+    if ctx is not None:
+        return ctx.require_enum(
+            value, AltiumHierarchyMode, "HierarchyMode", default=AltiumHierarchyMode.FLAT
+        )
+    try:
         return AltiumHierarchyMode(value)
-    except ValueError as exc:
-        raise ValueError(f"HierarchyMode has unknown value {raw_value}") from exc
+    except ValueError:
+        return AltiumHierarchyMode.FLAT
 
 
-def parse_prjpcb(content: str) -> AltiumProject:
+def parse_prjpcb(content: str, ctx: ParseContext | None = None) -> AltiumProject:
     """Parse a .PrjPcb file's text content into an AltiumProject."""
     parser = configparser.ConfigParser(strict=False)
     content = content.lstrip("\ufeff")
@@ -70,7 +91,7 @@ def parse_prjpcb(content: str) -> AltiumProject:
     project = AltiumProject()
 
     if parser.has_section("Design"):
-        project.hierarchy_mode = _get_hierarchy_mode(parser)
+        project.hierarchy_mode = _get_hierarchy_mode(parser, ctx)
         project.allow_port_net_names = parser.getboolean(
             "Design",
             "AllowPortNetNames",
@@ -309,11 +330,11 @@ def _as_int(value: str) -> int:
         return 0
 
 
-def parse_prjpcb_file(path: str) -> AltiumProject:
+def parse_prjpcb_file(path: str, ctx: ParseContext | None = None) -> AltiumProject:
     """Read and parse a .PrjPcb file from disk."""
     try:
         with open(path, encoding="utf-8-sig") as f:
-            return parse_prjpcb(f.read())
+            return parse_prjpcb(f.read(), ctx)
     except UnicodeDecodeError:
         with open(path, encoding="latin-1") as f:
-            return parse_prjpcb(f.read())
+            return parse_prjpcb(f.read(), ctx)

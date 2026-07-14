@@ -36,7 +36,7 @@ from phosphor_eda.domain.pcb import (
     PcbPourSettings,
     PcbText,
 )
-from phosphor_eda.formats.altium._helpers import u32
+from phosphor_eda.formats.altium._helpers import guarded_float, guarded_int, u32
 from phosphor_eda.formats.altium.enums import (
     AltiumLayer,
     PadHoleShape,
@@ -44,9 +44,7 @@ from phosphor_eda.formats.altium.enums import (
     PadShape,
     PadShapeAlt,
     PcbRecordType,
-    RegionKind,
 )
-from phosphor_eda.formats.altium.errors import AltiumPcbParseError
 from phosphor_eda.formats.altium.geometry import is_full_circle_arc, linearize_arc_vertices
 from phosphor_eda.formats.altium.pcb_keepouts import (
     altium_keepout_rules,
@@ -68,7 +66,6 @@ from phosphor_eda.formats.altium.pcb_primitives import (
     ParsedRole,
     ParsedShapeKind,
     ParsedViaPayload,
-    altium_net_number,
     geometry_metadata,
     int_to_mm,
     keepout_metadata,
@@ -81,7 +78,8 @@ from phosphor_eda.formats.altium.pcb_primitives import (
     read_binary_records,
     read_text_records,
     resolve_pour_id,
-    resolve_pour_net,
+    resolve_stream_net,
+    warn_unknown_stream_nets,
 )
 from phosphor_eda.formats.altium.pcb_records import (
     COMPONENT_NONE,
@@ -90,8 +88,6 @@ from phosphor_eda.formats.altium.pcb_records import (
     ExtendedVertex,
     FillRecord,
     PadRecord,
-    RegionRecord,
-    ShapeBasedRegionRecord,
     TextRecord,
     TrackRecord,
     ViaRecord,
@@ -129,20 +125,24 @@ def _classify_copper_primitive(
     layer_map: dict[int, PcbLayer],
     component_index: int | None,
     net: int,
+    nets: dict[int, PcbNet],
+    unknown_nets: list[int],
 ) -> tuple[ParsedObjectKind, tuple[ParsedRole, ...], str, int]:
     """Classify a line/arc primitive by its layer.
 
     Returns (object_type, roles, source_collection, net_number).  Copper
     layers become conductors carrying their net; the board edge becomes a
     board-outline graphic; everything else is silkscreen/paste artwork with
-    no net.  Shared verbatim by ``parse_tracks`` and ``parse_arcs``.
+    no net.  Shared verbatim by ``parse_tracks`` and ``parse_arcs``.  Copper
+    nets absent from *nets* degrade to unconnected and are recorded in
+    *unknown_nets* for a single per-stream diagnostic.
     """
     if layer_num in COPPER_LAYERS:
         return (
             ParsedObjectKind.TRACK,
             layered_geometry_roles(layer_num, layer_map, ParsedRole.CONDUCTOR),
             "conductors",
-            altium_net_number(net),
+            resolve_stream_net(net, nets, unknown_nets),
         )
     if layer_map[layer_num].has_role(LayerRole.EDGE):
         return (
@@ -215,13 +215,13 @@ def _arc_shape_payload(
     return ParsedShapeKind.ARC, PcbArc(sx, -sy, mx, -my, ex, -ey, width)
 
 
-def parse_nets(data: bytes) -> dict[int, PcbNet]:
+def parse_nets(data: bytes, ctx: ParseContext) -> dict[int, PcbNet]:
     """Parse Nets6/Data → {net_number: PcbNet}.
 
     Nets are numbered starting at 1 (index+1 in the stream order).
     Net 0 is reserved for "unconnected".
     """
-    records = read_text_records(data)
+    records = read_text_records(data, ctx, source="Nets6/Data")
     nets: dict[int, PcbNet] = {}
     for i, rec in enumerate(records):
         num = i + 1
@@ -233,26 +233,38 @@ def parse_nets(data: bytes) -> dict[int, PcbNet]:
     return nets
 
 
-def parse_components(data: bytes, layer_map: dict[int, PcbLayer]) -> list[PcbFootprint]:
+def parse_components(
+    data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext
+) -> list[PcbFootprint]:
     """Parse Components6/Data → list of footprint shells.
 
     Component records are text-based and contain position, pattern,
     layer, rotation, and designator.  Pads and geometry are added later.
     """
-    records = read_text_records(data)
+    records = read_text_records(data, ctx, source="Components6/Data")
     footprints: list[PcbFootprint] = []
-    for rec in records:
+    for index, rec in enumerate(records):
         x_str = rec.get("x", "0mil")
         y_str = rec.get("y", "0mil")
-        x_mm = parse_mil(x_str)
-        y_mm = -parse_mil(y_str)  # Negate Y
+        x_mm = parse_mil(x_str, ctx=ctx, field=f"component {index} x")
+        y_mm = -parse_mil(y_str, ctx=ctx, field=f"component {index} y")  # Negate Y
 
         layer_str = rec.get("layer", "TOP")
         layer = altium_layer_ref(
-            1 if layer_str.upper() == "TOP" else 32, layer_map, source="component"
+            1 if layer_str.upper() == "TOP" else 32,
+            layer_map,
+            ctx,
+            source=f"component {index}",
         )
+        if layer is None:
+            # Placement layer missing from Board6; fall back to any concrete
+            # layer so footprint indexing (pads reference it by position) stays
+            # stable rather than shifting on a dropped entry.
+            layer = next(iter(layer_map.values()), None)
+            if layer is None:
+                continue
 
-        rot = parse_rotation(rec.get("rotation", "0"))
+        rot = parse_rotation(rec.get("rotation", "0"), ctx=ctx, field=f"component {index} rotation")
 
         ref = rec.get("sourcedesignator", rec.get("designator", "?"))
         pattern = rec.get("pattern", "")
@@ -284,6 +296,7 @@ def parse_components(data: bytes, layer_map: dict[int, PcbLayer]) -> list[PcbFoo
 
 def parse_tracks(
     data: bytes,
+    nets: dict[int, PcbNet],
     layer_map: dict[int, PcbLayer],
     ctx: ParseContext,
     pour_id_map: dict[int, str] | None = None,
@@ -293,6 +306,7 @@ def parse_tracks(
     geometry: list[ParsedPrimitive] = []
     keepouts: list[PcbKeepout] = []
     resolved_pour_id_map = pour_id_map or {}
+    unknown_nets: list[int] = []
 
     for index, (rec_type, body) in enumerate(records):
         if rec_type != PcbRecordType.TRACK:
@@ -301,7 +315,9 @@ def parse_tracks(
         if track is None:
             continue
 
-        layer_ref = altium_layer_ref(track.layer, layer_map, source=f"track {index}")
+        layer_ref = altium_layer_ref(track.layer, layer_map, ctx, source=f"track {index}")
+        if layer_ref is None:
+            continue
         layer = layer_ref.name
 
         x1 = int_to_mm(track.start[0])
@@ -329,7 +345,7 @@ def parse_tracks(
 
         pour_id = resolve_pour_id(resolved_pour_id_map, track.polygon)
         object_type, roles, source_collection, net_number = _classify_copper_primitive(
-            track.layer, layer_map, component_index, track.net
+            track.layer, layer_map, component_index, track.net, nets, unknown_nets
         )
 
         geometry.append(
@@ -353,6 +369,7 @@ def parse_tracks(
             )
         )
 
+    warn_unknown_stream_nets(ctx, "Tracks6/Data", unknown_nets)
     return geometry, keepouts
 
 
@@ -524,11 +541,12 @@ def _altium_via_stack(
 
 
 def parse_vias(
-    data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext
+    data: bytes, nets: dict[int, PcbNet], layer_map: dict[int, PcbLayer], ctx: ParseContext
 ) -> list[ParsedPrimitive]:
     """Parse Vias6/Data into normalized via geometry."""
     records = read_binary_records(data, ctx, source="Vias6/Data")
     vias: list[ParsedPrimitive] = []
+    unknown_nets: list[int] = []
 
     for index, (rec_type, body) in enumerate(records):
         if rec_type != PcbRecordType.VIA:
@@ -537,10 +555,11 @@ def parse_vias(
         if via is None:
             continue
 
-        layer_refs = [
-            altium_layer_ref(via.start_layer, layer_map, source=f"via {index} start"),
-            altium_layer_ref(via.end_layer, layer_map, source=f"via {index} end"),
-        ]
+        start_ref = altium_layer_ref(via.start_layer, layer_map, ctx, source=f"via {index} start")
+        end_ref = altium_layer_ref(via.end_layer, layer_map, ctx, source=f"via {index} end")
+        if start_ref is None or end_ref is None:
+            continue
+        layer_refs = [start_ref, end_ref]
         layers: list[str] = []
         for layer_ref in layer_refs:
             if layer_ref.name not in layers:
@@ -572,7 +591,7 @@ def parse_vias(
                     stack=_altium_via_stack(via, layer_map, ctx, index),
                 ),
                 layers=tuple(layers),
-                net_number=altium_net_number(via.net),
+                net_number=resolve_stream_net(via.net, nets, unknown_nets),
                 metadata=geometry_metadata(
                     native_type="VIA",
                     source_collection="vias",
@@ -586,11 +605,13 @@ def parse_vias(
             )
         )
 
+    warn_unknown_stream_nets(ctx, "Vias6/Data", unknown_nets)
     return vias
 
 
 def parse_arcs(
     data: bytes,
+    nets: dict[int, PcbNet],
     layer_map: dict[int, PcbLayer],
     ctx: ParseContext,
     pour_id_map: dict[int, str] | None = None,
@@ -600,6 +621,7 @@ def parse_arcs(
     geometry: list[ParsedPrimitive] = []
     keepouts: list[PcbKeepout] = []
     resolved_pour_id_map = pour_id_map or {}
+    unknown_nets: list[int] = []
 
     for index, (rec_type, body) in enumerate(records):
         if rec_type != PcbRecordType.ARC:
@@ -608,7 +630,9 @@ def parse_arcs(
         if arc is None:
             continue
 
-        layer_ref = altium_layer_ref(arc.layer, layer_map, source=f"arc {index}")
+        layer_ref = altium_layer_ref(arc.layer, layer_map, ctx, source=f"arc {index}")
+        if layer_ref is None:
+            continue
         layer = layer_ref.name
 
         cx = int_to_mm(arc.center[0])
@@ -639,7 +663,7 @@ def parse_arcs(
 
         pour_id = resolve_pour_id(resolved_pour_id_map, arc.polygon)
         object_type, roles, source_collection, net_number = _classify_copper_primitive(
-            arc.layer, layer_map, component_index, arc.net
+            arc.layer, layer_map, component_index, arc.net, nets, unknown_nets
         )
 
         geometry.append(
@@ -663,6 +687,7 @@ def parse_arcs(
             )
         )
 
+    warn_unknown_stream_nets(ctx, "Arcs6/Data", unknown_nets)
     return geometry, keepouts
 
 
@@ -676,11 +701,17 @@ def parse_pads(
     record and the cursor past it.
     """
     pads: list[tuple[int, ParsedPrimitive]] = []
+    unknown_nets: list[int] = []
     pos = 0
     index = 0
 
     while pos < len(data):
         if data[pos] != 2:
+            ctx.warn(
+                "truncated_stream",
+                f"Pads6/Data: unexpected record type byte {data[pos]} at byte {pos}; "
+                f"{len(data) - pos} trailing bytes dropped",
+            )
             break
         pad, pos = PadRecord.parse(data, pos, ctx)
         if pad is None:
@@ -718,13 +749,13 @@ def parse_pads(
                 layer.name for layer in layer_map.values() if layer.has_role(LayerRole.COPPER)
             ]
         else:
-            layers = [altium_layer_ref(pad.layer, layer_map, source=f"pad {index}").name]
+            pad_layer_ref = altium_layer_ref(pad.layer, layer_map, ctx, source=f"pad {index}")
+            if pad_layer_ref is None:
+                continue
+            layers = [pad_layer_ref.name]
 
-        net_num = altium_net_number(pad.net)
+        net_num = resolve_stream_net(pad.net, nets, unknown_nets)
         net_obj = None if net_num == 0 else nets.get(net_num)
-        if net_num != 0 and net_obj is None:
-            msg = f"pad {index}: unknown Altium net index {pad.net}"
-            raise AltiumPcbParseError(msg)
         net_name = net_obj.name if net_obj is not None else ""
 
         roles = [ParsedRole.CONDUCTOR]
@@ -781,6 +812,7 @@ def parse_pads(
         )
         index += 1
 
+    warn_unknown_stream_nets(ctx, "Pads6/Data", unknown_nets)
     return pads
 
 
@@ -952,12 +984,20 @@ def parse_texts(
 
     while pos < len(data):
         if data[pos] != 5:
+            ctx.warn(
+                "truncated_stream",
+                f"Texts6/Data: unexpected record type byte {data[pos]} at byte {pos}; "
+                f"{len(data) - pos} trailing bytes dropped",
+            )
             break
         text_rec, pos = TextRecord.parse(data, pos, ctx)
         if text_rec is None:
             continue
 
-        layer = altium_layer_ref(text_rec.layer, layer_map, source=f"text {index}").name
+        text_layer_ref = altium_layer_ref(text_rec.layer, layer_map, ctx, source=f"text {index}")
+        if text_layer_ref is None:
+            continue
+        layer = text_layer_ref.name
 
         roles = list(layer_geometry_roles(text_rec.layer, layer_map))
         roles.append(ParsedRole.TEXT)
@@ -1004,12 +1044,13 @@ def parse_texts(
 
 
 def parse_fills(
-    data: bytes, layer_map: dict[int, PcbLayer], ctx: ParseContext
+    data: bytes, nets: dict[int, PcbNet], layer_map: dict[int, PcbLayer], ctx: ParseContext
 ) -> tuple[list[ParsedPrimitive], list[PcbKeepout]]:
     """Parse Fills6/Data into rectangular source-layer geometry."""
     records = read_binary_records(data, ctx, source="Fills6/Data")
     fills: list[ParsedPrimitive] = []
     keepouts: list[PcbKeepout] = []
+    unknown_nets: list[int] = []
 
     for index, (rec_type, body) in enumerate(records):
         if rec_type != PcbRecordType.FILL:
@@ -1017,7 +1058,9 @@ def parse_fills(
         fill = FillRecord.from_bytes(body, ctx)
         if fill is None:
             continue
-        layer_ref = altium_layer_ref(fill.layer, layer_map, source=f"fill {index}")
+        layer_ref = altium_layer_ref(fill.layer, layer_map, ctx, source=f"fill {index}")
+        if layer_ref is None:
+            continue
         layer = layer_ref.name
 
         x1 = int_to_mm(fill.pos1[0])
@@ -1072,7 +1115,11 @@ def parse_fills(
                 roles=normalize_parsed_roles(*roles),
                 data=PcbPolygon(points=points),
                 layers=(layer,),
-                net_number=altium_net_number(fill.net) if fill.layer in COPPER_LAYERS else 0,
+                net_number=(
+                    resolve_stream_net(fill.net, nets, unknown_nets)
+                    if fill.layer in COPPER_LAYERS
+                    else 0
+                ),
                 metadata=geometry_metadata(
                     native_type="FILL",
                     source_collection=source_collection,
@@ -1082,6 +1129,7 @@ def parse_fills(
             )
         )
 
+    warn_unknown_stream_nets(ctx, "Fills6/Data", unknown_nets)
     return fills, keepouts
 
 
@@ -1089,6 +1137,7 @@ def parse_polygon_pours(
     data: bytes,
     nets: dict[int, PcbNet],
     layer_map: dict[int, PcbLayer],
+    ctx: ParseContext,
 ) -> tuple[list[PcbPour], dict[int, str], dict[int, int]]:
     """Parse Polygons6/Data → copper-pour intent and lookup maps.
 
@@ -1096,29 +1145,40 @@ def parse_polygon_pours(
     geometry inherit net and parent-pour identity without rendering the source
     boundary as copper.
     """
-    records = read_text_records(data)
+    records = read_text_records(data, ctx, source="Polygons6/Data")
     pours: list[PcbPour] = []
     pour_id_map: dict[int, str] = {}
     pour_net_map: dict[int, int] = {}
+    unknown_nets: list[int] = []
 
     for index, rec in enumerate(records):
-        pourindex = int(rec.get("pourindex", "-1") or "-1")
+        pourindex = guarded_int(
+            rec.get("pourindex", "-1") or "-1",
+            ctx=ctx,
+            field=f"polygon pour {index} pourindex",
+            default=-1,
+        )
 
         # Resolve net: text records store 0-based Nets6 index,
-        # apply altium_net_number() to convert to 1-based pcb.nets key
-        net_raw = int(rec.get("net", str(NET_UNCONNECTED)) or str(NET_UNCONNECTED))
-        net_num = altium_net_number(net_raw)
+        # resolve_stream_net converts to the 1-based pcb.nets key and degrades
+        # an unknown index to unconnected.
+        net_raw = guarded_int(
+            rec.get("net", str(NET_UNCONNECTED)) or str(NET_UNCONNECTED),
+            ctx=ctx,
+            field=f"polygon pour {index} net",
+            default=NET_UNCONNECTED,
+        )
+        net_num = resolve_stream_net(net_raw, nets, unknown_nets)
         net = None if net_num == 0 else nets.get(net_num)
-        if net_num != 0 and net is None:
-            msg = f"polygon pour {index}: unknown Altium net index {net_raw}"
-            raise AltiumPcbParseError(msg)
 
         # Resolve layer from V7 layer name
         layer_id = rec.get("layer", "").upper()
         layer_num = V7_NAME_TO_NUM.get(layer_id)
         if layer_num is None:
             continue
-        layer = altium_layer_ref(layer_num, layer_map, source=f"polygon pour {index}")
+        layer = altium_layer_ref(layer_num, layer_map, ctx, source=f"polygon pour {index}")
+        if layer is None:
+            continue
 
         # Extract boundary vertices (vx0..vxN, vy0..vyN in mils)
         boundary: list[tuple[float, float]] = []
@@ -1128,8 +1188,8 @@ def parse_polygon_pours(
             vy_key = f"vy{i}"
             if vx_key not in rec or vy_key not in rec:
                 break
-            x_mm = parse_mil(rec[vx_key])
-            y_mm = -parse_mil(rec[vy_key])  # Altium Y is inverted
+            x_mm = parse_mil(rec[vx_key], ctx=ctx, field=f"polygon pour {index} {vx_key}")
+            y_mm = -parse_mil(rec[vy_key], ctx=ctx, field=f"polygon pour {index} {vy_key}")
             boundary.append((x_mm, y_mm))
             i += 1
 
@@ -1142,9 +1202,17 @@ def parse_polygon_pours(
 
         # Track width (min thickness within pour)
         trackwidth_str = rec.get("trackwidth", "")
-        track_width = parse_mil(trackwidth_str) if trackwidth_str else 0.0
+        track_width = (
+            parse_mil(trackwidth_str, ctx=ctx, field=f"polygon pour {index} trackwidth")
+            if trackwidth_str
+            else 0.0
+        )
         grid_str = rec.get("gridsize", "")
-        grid = parse_mil(grid_str) if grid_str else 0.0
+        grid = (
+            parse_mil(grid_str, ctx=ctx, field=f"polygon pour {index} gridsize")
+            if grid_str
+            else 0.0
+        )
 
         pour_id = f"polygon_pour:{pourindex}:{index}"
         if pourindex >= 0:
@@ -1174,6 +1242,7 @@ def parse_polygon_pours(
             )
         )
 
+    warn_unknown_stream_nets(ctx, "Polygons6/Data", unknown_nets)
     return pours, pour_id_map, pour_net_map
 
 
@@ -1186,264 +1255,6 @@ def _altium_pour_fill_mode(hatchstyle: str) -> PcbPourFillMode:
     if normalized in {"none", "no", "unfilled"}:
         return PcbPourFillMode.NONE
     return PcbPourFillMode.HATCH
-
-
-def _region_primitive(
-    *,
-    id_prefix: str,
-    native_type: str,
-    region: RegionRecord | ShapeBasedRegionRecord,
-    points: list[tuple[float, float]],
-    holes: list[list[tuple[float, float]]],
-    resolved_num: int,
-    layer: str,
-    region_kind: int | None,
-    index: int,
-    nets: dict[int, PcbNet],
-    layer_map: dict[int, PcbLayer],
-    pour_id_map: dict[int, str] | None,
-    pour_net_map: dict[int, int] | None,
-) -> ParsedPrimitive:
-    """Build a polygon primitive shared by Regions6 and ShapeBasedRegions6.
-
-    Both record streams resolve net, pour id, roles and metadata identically
-    once their vertices are decoded; only the id prefix, ``native_type`` and
-    the vertex-decoding step (raw f64 pairs vs arc-linearized extended
-    vertices) differ, and those are handled by the callers.
-    """
-    polygon_property_index = int(region.properties.get("polygonindex", "-1") or "-1")
-    polygon_index = polygon_property_index if polygon_property_index >= 0 else region.polygon
-    subpolygon_index = int(region.properties.get("subpolyindex", "-1") or "-1")
-    pour_id = resolve_pour_id(pour_id_map or {}, polygon_index)
-
-    # Net resolution: use direct net if assigned, otherwise inherit from pour.
-    if resolved_num in COPPER_LAYERS:
-        if region.net == NET_UNCONNECTED and pour_net_map:
-            net_num = resolve_pour_net(pour_net_map, polygon_index)
-        else:
-            net_num = altium_net_number(region.net)
-    else:
-        net_num = 0
-    net_obj = nets.get(net_num)
-    net_name = net_obj.name if net_obj else ""
-
-    roles = list(layer_geometry_roles(resolved_num, layer_map))
-    if region_kind == RegionKind.POLYGON_CUTOUT:
-        roles.append(ParsedRole.POLYGON_CUTOUT)
-    elif resolved_num in COPPER_LAYERS:
-        roles.append(ParsedRole.CONDUCTOR)
-
-    component_index = None if region.component == COMPONENT_NONE else region.component
-
-    return ParsedPrimitive(
-        id=f"{id_prefix}:{resolved_num}:{index}",
-        object_type=ParsedObjectKind.REGION,
-        shape=ParsedShapeKind.POLYGON,
-        roles=tuple(roles),
-        data=PcbPolygon(points=points, holes=holes),
-        layers=(layer,),
-        net_number=net_num,
-        net_name=net_name,
-        pour_id=pour_id,
-        metadata=geometry_metadata(
-            native_type=native_type,
-            native_kind="" if region_kind is None else str(region_kind),
-            source_collection="conductors" if ParsedRole.CONDUCTOR in roles else "artwork",
-            native_index=index,
-            native_component_index=component_index,
-            native_polygon_index=polygon_index,
-            native_subpolygon_index=subpolygon_index,
-            properties=region.properties,
-        ),
-    )
-
-
-def parse_regions(
-    data: bytes,
-    nets: dict[int, PcbNet],
-    layer_map: dict[int, PcbLayer],
-    ctx: ParseContext,
-    pour_id_map: dict[int, str] | None = None,
-    pour_net_map: dict[int, int] | None = None,
-) -> list[ParsedPrimitive]:
-    """Parse Regions6/Data into polygon geometry.
-
-    Region records contain a property string followed by vertex data
-    (pairs of float64 in Altium internal units).  All layers are included —
-    copper regions carry net info, non-copper regions (silkscreen fills,
-    paste openings, etc.) have net_number 0.
-
-    When pour_net_map is provided, regions with net=0xFFFF (inherit) and
-    a valid polygon reference will inherit the net from their parent polygon
-    pour.
-    """
-    records = read_binary_records(data, ctx, source="Regions6/Data")
-    polygons: list[ParsedPrimitive] = []
-
-    for index, (rec_type, body) in enumerate(records):
-        if rec_type != PcbRecordType.REGION:
-            continue
-        region = RegionRecord.from_bytes(body, ctx)
-        if region is None:
-            continue
-
-        # Determine layer from V7 property or fallback to byte
-        v7_layer = region.properties.get("v7_layer", "").upper()
-        resolved_num = (
-            V7_NAME_TO_NUM[v7_layer] if v7_layer and v7_layer in V7_NAME_TO_NUM else region.layer
-        )
-
-        layer = altium_layer_ref(resolved_num, layer_map, source=f"region {index}").name
-        region_kind = parse_region_kind(region.properties, ctx)
-
-        points = [(int_to_mm(int(vx)), -int_to_mm(int(vy))) for vx, vy in region.vertices]
-        if len(points) < 3:
-            continue
-
-        # Convert hole vertices
-        holes: list[list[tuple[float, float]]] = []
-        for hole_verts in region.holes:
-            h_pts = [(int_to_mm(int(vx)), -int_to_mm(int(vy))) for vx, vy in hole_verts]
-            if len(h_pts) >= 3:
-                holes.append(h_pts)
-
-        polygons.append(
-            _region_primitive(
-                id_prefix="region",
-                native_type="REGION",
-                region=region,
-                points=points,
-                holes=holes,
-                resolved_num=resolved_num,
-                layer=layer,
-                region_kind=region_kind,
-                index=index,
-                nets=nets,
-                layer_map=layer_map,
-                pour_id_map=pour_id_map,
-                pour_net_map=pour_net_map,
-            )
-        )
-
-    return polygons
-
-
-def parse_shape_based_regions(
-    data: bytes,
-    nets: dict[int, PcbNet],
-    layer_map: dict[int, PcbLayer],
-    ctx: ParseContext,
-    pour_id_map: dict[int, str] | None = None,
-    pour_net_map: dict[int, int] | None = None,
-) -> list[ParsedPrimitive]:
-    """Parse ShapeBasedRegions6/Data into polygon geometry.
-
-    Uses the extended vertex format (37 bytes per vertex with arc support).
-
-    Net inheritance matches ``parse_regions``: a copper region carrying the
-    unconnected sentinel (net == 0xFFFF) inherits the net of its parent polygon
-    pour via the text or binary polygon index.
-    """
-    records = read_binary_records(data, ctx, source="ShapeBasedRegions6/Data")
-    polygons: list[ParsedPrimitive] = []
-
-    for index, (rec_type, body) in enumerate(records):
-        if rec_type != PcbRecordType.REGION:
-            continue
-        region = ShapeBasedRegionRecord.from_bytes(body, ctx)
-        if region is None:
-            continue
-
-        # Determine layer from V7 property or fallback to byte
-        v7_layer = region.properties.get("v7_layer", "").upper()
-        resolved_num = (
-            V7_NAME_TO_NUM[v7_layer] if v7_layer and v7_layer in V7_NAME_TO_NUM else region.layer
-        )
-
-        layer = altium_layer_ref(resolved_num, layer_map, source=f"shape region {index}").name
-        region_kind = parse_region_kind(region.properties, ctx)
-
-        # Linearize arc edges, then convert to mm with Y negated
-        raw_pts = linearize_arc_vertices(region.vertices)
-        points: list[tuple[float, float]] = [(int_to_mm(x), -int_to_mm(y)) for x, y in raw_pts]
-        if len(points) < 3:
-            continue
-
-        # Convert hole vertices (stored as f64 in internal units)
-        holes: list[list[tuple[float, float]]] = []
-        for hole_verts in region.holes:
-            h_pts = [(int_to_mm(int(vx)), -int_to_mm(int(vy))) for vx, vy in hole_verts]
-            if len(h_pts) >= 3:
-                holes.append(h_pts)
-
-        polygons.append(
-            _region_primitive(
-                id_prefix="shape_region",
-                native_type="SHAPE_BASED_REGION",
-                region=region,
-                points=points,
-                holes=holes,
-                resolved_num=resolved_num,
-                layer=layer,
-                region_kind=region_kind,
-                index=index,
-                nets=nets,
-                layer_map=layer_map,
-                pour_id_map=pour_id_map,
-                pour_net_map=pour_net_map,
-            )
-        )
-
-    return polygons
-
-
-def dedupe_shape_based_board_polygons(
-    regions: list[ParsedPrimitive],
-    shape_based_regions: list[ParsedPrimitive],
-) -> list[ParsedPrimitive]:
-    """Drop ShapeBasedRegions6 board polygons already represented by Regions6."""
-    if not regions:
-        return shape_based_regions
-    region_keys = {
-        key for polygon in regions for key in (_polygon_duplicate_key(polygon),) if key is not None
-    }
-    return [
-        polygon
-        for polygon in shape_based_regions
-        if _polygon_duplicate_key(polygon) not in region_keys
-    ]
-
-
-type _PolygonDuplicateKey = tuple[str, int, tuple[tuple[float, float], ...]]
-
-
-def _polygon_duplicate_key(poly: ParsedPrimitive) -> _PolygonDuplicateKey | None:
-    # Key on layer + vertex count + the rounded vertices themselves. A bbox-only
-    # key dropped distinct polygons that merely share a bounding box (e.g. a
-    # board frame and an inscribed shape). The Regions6 and ShapeBasedRegions6
-    # representations of the same primitive differ only by an explicit closing
-    # vertex, so normalize that away before keying.
-    if not isinstance(poly.data, PcbPolygon) or len(poly.data.points) < 3:
-        return None
-    vertices = [(round(x, 3), round(y, 3)) for x, y in poly.data.points]
-    if len(vertices) > 1 and vertices[0] == vertices[-1]:
-        vertices.pop()
-    return (poly.primary_layer, len(vertices), tuple(vertices))
-
-
-def parse_region_kind(properties: dict[str, str], ctx: ParseContext | None = None) -> int | None:
-    raw_kind = properties.get("kind")
-    if raw_kind is None:
-        return None
-    try:
-        return int(raw_kind)
-    except ValueError:
-        if ctx is not None:
-            ctx.warn(
-                "malformed_region_kind",
-                f"non-integer region kind {raw_kind!r}; treated as default region",
-            )
-        return None
 
 
 def parse_board6_outline(
@@ -1463,14 +1274,22 @@ def parse_board6_outline(
         is_round = board_props.get(f"kind{i}", "0").strip() != "0"
         vertices.append(
             ExtendedVertex(
-                x=_mil_str_to_internal(board_props[f"vx{i}"]),
-                y=_mil_str_to_internal(board_props[f"vy{i}"]),
+                x=_mil_str_to_internal(board_props[f"vx{i}"], ctx, f"Board6 vx{i}"),
+                y=_mil_str_to_internal(board_props[f"vy{i}"], ctx, f"Board6 vy{i}"),
                 is_round=is_round,
-                center_x=_mil_str_to_internal(board_props.get(f"cx{i}", "0mil")),
-                center_y=_mil_str_to_internal(board_props.get(f"cy{i}", "0mil")),
-                radius=_mil_str_to_internal(board_props.get(f"r{i}", "0mil")),
-                start_angle=float(board_props.get(f"sa{i}", "0")),
-                end_angle=float(board_props.get(f"ea{i}", "0")),
+                center_x=_mil_str_to_internal(
+                    board_props.get(f"cx{i}", "0mil"), ctx, f"Board6 cx{i}"
+                ),
+                center_y=_mil_str_to_internal(
+                    board_props.get(f"cy{i}", "0mil"), ctx, f"Board6 cy{i}"
+                ),
+                radius=_mil_str_to_internal(board_props.get(f"r{i}", "0mil"), ctx, f"Board6 r{i}"),
+                start_angle=guarded_float(
+                    board_props.get(f"sa{i}", "0"), ctx=ctx, field=f"Board6 sa{i}"
+                ),
+                end_angle=guarded_float(
+                    board_props.get(f"ea{i}", "0"), ctx=ctx, field=f"Board6 ea{i}"
+                ),
             )
         )
         i += 1
@@ -1503,9 +1322,11 @@ def parse_board6_outline(
     ]
 
 
-def _mil_str_to_internal(value: str) -> int:
+def _mil_str_to_internal(
+    value: str, ctx: ParseContext | None = None, field: str = "Board6 mil value"
+) -> int:
     """Convert a Board6 mil-string to Altium internal units (0.1 µinch)."""
-    return round(parse_mil(value) / int_to_mm(1))
+    return round(parse_mil(value, ctx=ctx, field=field) / int_to_mm(1))
 
 
 def parse_board_outline(
@@ -1627,7 +1448,7 @@ def parse_board_outline(
     return outline
 
 
-def parse_component_bodies(data: bytes) -> dict[int, list[ParsedPrimitive]]:
+def parse_component_bodies(data: bytes, ctx: ParseContext) -> dict[int, list[ParsedPrimitive]]:
     """Parse ComponentBodies6/Data into component-indexed model geometry.
 
     Text records with pipe-delimited properties. Key properties:
@@ -1637,7 +1458,7 @@ def parse_component_bodies(data: bytes) -> dict[int, list[ParsedPrimitive]]:
     - ``MODEL.3D.ROTX/Y/Z``: rotation in degrees
     - ``MODEL.3D.DZ``: Z offset in mil
     """
-    records = read_text_records(data)
+    records = read_text_records(data, ctx, source="ComponentBodies6/Data")
     result: dict[int, list[ParsedPrimitive]] = {}
 
     for index, rec in enumerate(records):
@@ -1648,24 +1469,26 @@ def parse_component_bodies(data: bytes) -> dict[int, list[ParsedPrimitive]]:
         comp_str = rec.get("component", "")
         if not comp_str:
             continue
-        comp_idx = int(comp_str)
+        comp_idx = guarded_int(
+            comp_str, ctx=ctx, field=f"component body {index} component", default=COMPONENT_NONE
+        )
         if comp_idx == COMPONENT_NONE:
             continue
 
         # 2D position (mil → mm)
         x_str = rec.get("model.2d.x", "0mil")
         y_str = rec.get("model.2d.y", "0mil")
-        offset_x = parse_mil(x_str)
-        offset_y = -parse_mil(y_str)
+        offset_x = parse_mil(x_str, ctx=ctx, field=f"component body {index} x")
+        offset_y = -parse_mil(y_str, ctx=ctx, field=f"component body {index} y")
 
         # Z offset (mil → mm)
         dz_str = rec.get("model.3d.dz", "0mil")
-        offset_z = parse_mil(dz_str)
+        offset_z = parse_mil(dz_str, ctx=ctx, field=f"component body {index} dz")
 
         # Rotation (degrees, may be scientific notation)
-        rot_x = float(rec.get("model.3d.rotx", "0"))
-        rot_y = float(rec.get("model.3d.roty", "0"))
-        rot_z = float(rec.get("model.3d.rotz", "0"))
+        rot_x = guarded_float(rec.get("model.3d.rotx", "0"), ctx=ctx, field=f"body {index} rotx")
+        rot_y = guarded_float(rec.get("model.3d.roty", "0"), ctx=ctx, field=f"body {index} roty")
+        rot_z = guarded_float(rec.get("model.3d.rotz", "0"), ctx=ctx, field=f"body {index} rotz")
 
         model = ParsedPrimitive(
             id=f"component_body:{comp_idx}:{index}",

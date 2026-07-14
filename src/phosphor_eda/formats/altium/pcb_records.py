@@ -346,7 +346,25 @@ class TextRecord:
         text_content = ""
         if sub2_len > 0 and len(sub2) > 0:
             str_len = sub2[0]
-            text_content = sub2[1 : 1 + str_len].decode("cp1252", errors="replace")
+            raw_text = sub2[1 : 1 + str_len]
+            try:
+                # Strict first so mojibake is observable rather than silently
+                # smoothed over; WideStrings6 decoding is out of scope.
+                text_content = raw_text.decode("cp1252")
+            except UnicodeDecodeError:
+                text_content = raw_text.decode("cp1252", errors="replace")
+                ctx.warn(
+                    "text_decode",
+                    "Text record content has bytes undecodable as cp1252; "
+                    "replaced with U+FFFD (WideStrings6 not supported)",
+                )
+            if str_len == 0xFF and len(sub2) > 1 + str_len:
+                # A 1-byte Pascal length caps at 255; extra bytes mean a longer
+                # string was truncated on write.
+                ctx.warn(
+                    "text_truncated",
+                    "Text record Pascal string capped at 255 bytes; longer content truncated",
+                )
 
         return (
             cls(
@@ -611,6 +629,10 @@ class RegionRecord:
         vertices: list[tuple[float, float]] = []
         for _ in range(vertex_count):
             if vpos + 16 > len(body):
+                ctx.warn(
+                    "truncated_record",
+                    f"Region record vertex data truncated ({len(vertices)}/{vertex_count} read)",
+                )
                 break
             vx = f64(body, vpos)
             vy = f64(body, vpos + 8)
@@ -621,12 +643,21 @@ class RegionRecord:
         holes: list[list[tuple[float, float]]] = []
         for _ in range(holecount):
             if vpos + 4 > len(body):
+                ctx.warn(
+                    "truncated_record",
+                    f"Region record hole data truncated ({len(holes)}/{holecount} read)",
+                )
                 break
             hole_vc = u32(body, vpos)
             vpos += 4
             hole_verts: list[tuple[float, float]] = []
             for _ in range(hole_vc):
                 if vpos + 16 > len(body):
+                    ctx.warn(
+                        "truncated_record",
+                        f"Region record hole vertex data truncated "
+                        f"({len(hole_verts)}/{hole_vc} read)",
+                    )
                     break
                 hx = f64(body, vpos)
                 hy = f64(body, vpos + 8)
@@ -721,6 +752,10 @@ class ShapeBasedRegionRecord:
         vertices: list[ExtendedVertex] = []
         for _ in range(vertex_count):
             if vpos + EXTENDED_VERTEX_SIZE > len(body):
+                ctx.warn(
+                    "truncated_record",
+                    f"ShapeBasedRegion vertex data truncated ({len(vertices)}/{vertex_count} read)",
+                )
                 break
             is_round = bool(body[vpos])
             vx = i32(body, vpos + 1)
@@ -748,12 +783,21 @@ class ShapeBasedRegionRecord:
         holes: list[list[tuple[float, float]]] = []
         for _ in range(holecount):
             if vpos + 4 > len(body):
+                ctx.warn(
+                    "truncated_record",
+                    f"ShapeBasedRegion hole data truncated ({len(holes)}/{holecount} read)",
+                )
                 break
             hole_vc = u32(body, vpos)
             vpos += 4
             hole_verts: list[tuple[float, float]] = []
             for _ in range(hole_vc):
                 if vpos + 16 > len(body):
+                    ctx.warn(
+                        "truncated_record",
+                        f"ShapeBasedRegion hole vertex data truncated "
+                        f"({len(hole_verts)}/{hole_vc} read)",
+                    )
                     break
                 hx = f64(body, vpos)
                 hy = f64(body, vpos + 8)

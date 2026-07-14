@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import olefile
 
 from phosphor_eda.domain.project import DesignRule, DiffPair, NetClass, Stackup, StackupLayer
-from phosphor_eda.formats.altium._helpers import u32
+from phosphor_eda.formats.altium._helpers import guarded_float, guarded_int, u32
 from phosphor_eda.formats.altium.errors import require_ole_file
 from phosphor_eda.formats.altium.pcb_primitives import MIL_TO_MM, read_text_records
 from phosphor_eda.formats.altium.record_parser import parse_record_payload
@@ -51,7 +51,9 @@ def parse_altium_rules(data: bytes, ctx: ParseContext | None = None) -> list[Des
         name = props.get("name", "")
         kind = props.get("rulekind", "")
         enabled = props.get("enabled", "TRUE").upper() == "TRUE"
-        priority = int(props.get("priority", "0") or "0")
+        priority = guarded_int(
+            props.get("priority", "0") or "0", ctx=ctx, field="Rules6 priority", default=0
+        )
         scope1 = props.get("scope1expression", "")
         scope2 = props.get("scope2expression", "")
 
@@ -158,13 +160,13 @@ def _rule_value_mm(
     return None
 
 
-def parse_altium_classes(data: bytes) -> list[NetClass]:
+def parse_altium_classes(data: bytes, ctx: ParseContext | None = None) -> list[NetClass]:
     """Parse Altium Classes6 stream into NetClass objects."""
-    records = read_text_records(data)
+    records = read_text_records(data, ctx, source="Classes6/Data")
     classes: list[NetClass] = []
     for props in records:
         name = props.get("name", "")
-        kind = int(props.get("kind", "0") or "0")
+        kind = guarded_int(props.get("kind", "0") or "0", ctx=ctx, field="Classes6 kind", default=0)
         # Extract members (M0, M1, M2, ...)
         members: list[str] = []
         i = 0
@@ -204,7 +206,7 @@ def parse_altium_stackup(
     stackup = _parse_v9_stackup(board_props, ctx)
     if stackup:
         return stackup
-    return _parse_legacy_stackup(board_props)
+    return _parse_legacy_stackup(board_props, ctx)
 
 
 def _parse_v9_stackup(
@@ -263,7 +265,9 @@ def _parse_v9_stackup(
 
         if copthick_str:
             # Copper layer
-            cop_thick_mm = float(copthick_str) * MIL_TO_MM
+            cop_thick_mm = (
+                guarded_float(copthick_str, ctx=ctx, field=f"{prefix}copthick") * MIL_TO_MM
+            )
 
             side = ""
             if idx == first_copper:
@@ -288,9 +292,19 @@ def _parse_v9_stackup(
             )
         elif diel_height_str:
             # Dielectric layer (prepreg, core, or solder mask)
-            thickness_mm = float(diel_height_str) * MIL_TO_MM
-            epsilon_r = float(diel_const_str) if diel_const_str else 0.0
-            loss_tangent = float(diel_loss_str) if diel_loss_str else 0.0
+            thickness_mm = (
+                guarded_float(diel_height_str, ctx=ctx, field=f"{prefix}dielheight") * MIL_TO_MM
+            )
+            epsilon_r = (
+                guarded_float(diel_const_str, ctx=ctx, field=f"{prefix}dielconst")
+                if diel_const_str
+                else 0.0
+            )
+            loss_tangent = (
+                guarded_float(diel_loss_str, ctx=ctx, field=f"{prefix}diellosstangent")
+                if diel_loss_str
+                else 0.0
+            )
 
             # dieltype: 0=unspecified, 1=core, 2=prepreg, 3=solder_mask
             diel_type_map = {"1": "core", "2": "prepreg", "3": "solder_mask"}
@@ -316,7 +330,9 @@ def _parse_v9_stackup(
     return Stackup(layers=layers, total_thickness_mm=total)
 
 
-def _parse_legacy_stackup(board_props: dict[str, str]) -> Stackup | None:
+def _parse_legacy_stackup(
+    board_props: dict[str, str], ctx: ParseContext | None = None
+) -> Stackup | None:
     """Parse the legacy layerN + next-pointer stackup format.
 
     Used by older Altium files that lack v9_stack_layer data. Follows the
@@ -338,7 +354,11 @@ def _parse_legacy_stackup(board_props: dict[str, str]) -> Stackup | None:
 
         # Copper thickness (value may have "mil" suffix)
         cop_thick_str = _strip_mil(board_props.get(f"{prefix}copthick", ""))
-        cop_thick_mm = float(cop_thick_str) * MIL_TO_MM if cop_thick_str else 0.0
+        cop_thick_mm = (
+            guarded_float(cop_thick_str, ctx=ctx, field=f"{prefix}copthick") * MIL_TO_MM
+            if cop_thick_str
+            else 0.0
+        )
 
         # Dielectric properties
         diel_type_raw = board_props.get(f"{prefix}dieltype", "")
@@ -347,9 +367,21 @@ def _parse_legacy_stackup(board_props: dict[str, str]) -> Stackup | None:
         diel_material = board_props.get(f"{prefix}dielmaterial", "").strip()
         diel_loss_str = board_props.get(f"{prefix}diellosstangent", "")
 
-        epsilon_r = float(diel_const_str) if diel_const_str else 0.0
-        diel_height_mm = float(diel_height_str) * MIL_TO_MM if diel_height_str else 0.0
-        loss_tangent = float(diel_loss_str) if diel_loss_str else 0.0
+        epsilon_r = (
+            guarded_float(diel_const_str, ctx=ctx, field=f"{prefix}dielconst")
+            if diel_const_str
+            else 0.0
+        )
+        diel_height_mm = (
+            guarded_float(diel_height_str, ctx=ctx, field=f"{prefix}dielheight") * MIL_TO_MM
+            if diel_height_str
+            else 0.0
+        )
+        loss_tangent = (
+            guarded_float(diel_loss_str, ctx=ctx, field=f"{prefix}diellosstangent")
+            if diel_loss_str
+            else 0.0
+        )
 
         # Dielectric type mapping
         diel_type_map = {"0": "prepreg", "1": "core", "2": "prepreg"}
@@ -375,7 +407,9 @@ def _parse_legacy_stackup(board_props: dict[str, str]) -> Stackup | None:
 
         # Follow next pointer
         next_str = board_props.get(f"{prefix}next", "0")
-        next_layer = int(next_str) if next_str else 0
+        next_layer = (
+            guarded_int(next_str, ctx=ctx, field=f"{prefix}next", default=0) if next_str else 0
+        )
 
         # Add dielectric layer between this copper and the next (skip after last)
         if diel_height_mm > 0 and next_layer > 0:
@@ -441,7 +475,7 @@ def load_altium_enrichment(path: Path, ctx: ParseContext | None = None) -> Altiu
         ole.close()
 
     design_rules = parse_altium_rules(rules_data, ctx) if rules_data else []
-    net_classes = parse_altium_classes(classes_data) if classes_data else []
+    net_classes = parse_altium_classes(classes_data, ctx) if classes_data else []
     diff_pairs = parse_altium_diff_pairs(dp_data) if dp_data else []
 
     return AltiumEnrichment(

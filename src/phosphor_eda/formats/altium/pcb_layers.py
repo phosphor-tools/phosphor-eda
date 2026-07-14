@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.pcb import LayerRole, PcbLayer, PcbLayerMetadata
 from phosphor_eda.formats.altium.enums import AltiumLayer
-from phosphor_eda.formats.altium.errors import AltiumPcbParseError
 
 if TYPE_CHECKING:
     from phosphor_eda.formats.common.diagnostics import ParseContext
@@ -291,9 +290,25 @@ def altium_layer_name(num: int, layer_map: dict[int, PcbLayer]) -> str:
     return layer.name if layer else ""
 
 
-def altium_layer_ref(num: int, layer_map: dict[int, PcbLayer], *, source: str) -> PcbLayer:
+def altium_layer_ref(
+    num: int,
+    layer_map: dict[int, PcbLayer],
+    ctx: ParseContext,
+    *,
+    source: str,
+) -> PcbLayer | None:
+    """Resolve a layer number to its concrete layer, or ``None`` if unknown.
+
+    An unknown layer byte is a malformed-file condition, not a parser bug:
+    warn and return ``None`` so the caller can skip the offending primitive
+    instead of aborting the whole board.
+    """
     layer = layer_map.get(num)
     if layer is None:
-        msg = f"{source}: unknown Altium layer {num}; Board6/Data has no concrete layer name"
-        raise AltiumPcbParseError(msg)
+        ctx.warn(
+            "unknown_layer",
+            f"{source}: unknown Altium layer {num}; Board6/Data has no concrete "
+            "layer name; primitive skipped",
+        )
+        return None
     return layer

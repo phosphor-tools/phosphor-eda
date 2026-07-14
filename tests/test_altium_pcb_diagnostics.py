@@ -14,7 +14,7 @@ from phosphor_eda.formats.altium.pcb_primitives import (
     read_binary_records,
     read_text_records,
 )
-from phosphor_eda.formats.altium.pcb_streams import (
+from phosphor_eda.formats.altium.pcb_regions import (
     parse_region_kind,
 )
 from phosphor_eda.formats.common.diagnostics import ParseContext

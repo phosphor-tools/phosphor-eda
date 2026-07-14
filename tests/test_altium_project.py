@@ -73,14 +73,17 @@ def test_parse_prjpcb_maps_hierarchy_mode_to_enum(value: int, expected: AltiumHi
 
 
 @pytest.mark.parametrize("value", ["99", "unknown"])
-def test_parse_prjpcb_rejects_unknown_hierarchy_mode(value: str):
+def test_parse_prjpcb_unknown_hierarchy_mode_falls_back(value: str):
     content = textwrap.dedent(f"""\
         [Design]
         HierarchyMode={value}
     """)
 
-    with pytest.raises(ValueError, match="HierarchyMode"):
-        parse_prjpcb(content)
+    # A malformed HierarchyMode must degrade to the FLAT default rather than
+    # aborting the whole project parse.
+    project = parse_prjpcb(content)
+
+    assert project.hierarchy_mode is AltiumHierarchyMode.FLAT
 
 
 def test_parse_prjpcb_parses_connectivity_booleans():
