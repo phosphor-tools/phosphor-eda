@@ -118,6 +118,21 @@ def validate_source_refs(
                 f"{attached_local_net_id!r}"
             )
             raise ResolutionInputError(msg)
+    for bus_sheet_pin in source.bus_sheet_pins:
+        # Bus sheet pins attach to a bus group, not a local net, so only the
+        # scope references need checking.
+        if bus_sheet_pin.scope_id not in scopes:
+            msg = (
+                f"bus sheet pin {bus_sheet_pin.id!r} references unknown scope "
+                f"{bus_sheet_pin.scope_id}"
+            )
+            raise ResolutionInputError(msg)
+        if bus_sheet_pin.child_scope_id not in scopes:
+            msg = (
+                f"bus sheet pin {bus_sheet_pin.id!r} references unknown child scope "
+                f"{bus_sheet_pin.child_scope_id}"
+            )
+            raise ResolutionInputError(msg)
     for bus_entry in source.bus_entries:
         _validate_scoped_local_net_ref(
             kind="bus entry",
