@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     from phosphor_eda.render.profiler import RenderProfiler
     from phosphor_eda.render.settings import RenderSettings
 
+
 class _HasId(Protocol):
     id: str
 
