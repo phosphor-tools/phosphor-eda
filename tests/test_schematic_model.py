@@ -16,7 +16,6 @@ from phosphor_eda.domain.schematic import (
     SchematicDirectiveKind,
     ScopeId,
 )
-from phosphor_eda.formats.common.net_union import NetUnion
 from phosphor_eda.formats.common.resolved_graph import (
     ResolvedComponentInfo,
     ResolvedComponentOccurrenceInput,
@@ -26,6 +25,7 @@ from phosphor_eda.formats.common.resolved_graph import (
     ResolvedPinInput,
     build_resolved_schematic,
 )
+from phosphor_eda.formats.common.spatial import UnionFind
 
 
 def test_multi_page_logical_component_has_occurrences() -> None:
@@ -262,7 +262,7 @@ def test_resolved_graph_preserves_distinct_pin_ids_with_same_designator() -> Non
         pages=[ResolvedPageInput(id="page:root", name="Root", scope_id=scope)],
         local_nets=local_nets,
         pins=pins,
-        net_union=NetUnion(local_net.id for local_net in local_nets),
+        net_union=UnionFind(local_net.id for local_net in local_nets),
         net_factory=lambda _index, union_id, grouped_nets: ResolvedNetInput(
             id=f"net:{union_id}",
             name=next(iter(grouped_nets[0].source_names)),
@@ -320,7 +320,7 @@ def test_resolved_graph_recomputes_enrichment_when_part_is_backfilled() -> None:
         pages=[ResolvedPageInput(id="page:root", name="Root", scope_id=scope)],
         local_nets=[],
         pins=pins,
-        net_union=NetUnion(()),
+        net_union=UnionFind(()),
         net_factory=lambda net_index, _union_id, _grouped_nets: ResolvedNetInput(
             id=f"net:{net_index}",
             name="",
@@ -368,7 +368,7 @@ def test_resolved_graph_copies_local_net_directives_to_occurrences_and_net() -> 
             directives=(duplicate,),
         ),
     ]
-    net_union = NetUnion(local_net.id for local_net in local_nets)
+    net_union = UnionFind(local_net.id for local_net in local_nets)
     _ = net_union.union("local:first", "local:second")
 
     design = build_resolved_schematic(

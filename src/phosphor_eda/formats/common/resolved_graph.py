@@ -30,7 +30,7 @@ if TYPE_CHECKING:
         ScopeId,
         TitleBlock,
     )
-    from phosphor_eda.formats.common.net_union import NetUnion
+    from phosphor_eda.formats.common.spatial import UnionFind
 
 
 class ResolutionInputError(ValueError):
@@ -141,7 +141,7 @@ def build_resolved_schematic(
     pages: Iterable[ResolvedPageInput],
     local_nets: Iterable[ResolvedLocalNetInput],
     pins: Iterable[ResolvedPinInput],
-    net_union: NetUnion,
+    net_union: UnionFind[str],
     net_factory: ResolvedNetFactory,
     include_net: ResolvedNetInclusion,
     net_ordering: ResolvedNetOrdering | None = None,
@@ -198,7 +198,7 @@ def _build_pages(pages: Iterable[ResolvedPageInput]) -> dict[ScopeId, Page]:
 def _build_local_nets(
     local_nets: Iterable[ResolvedLocalNetInput],
     pages_by_scope: dict[ScopeId, Page],
-    net_union: NetUnion,
+    net_union: UnionFind[str],
 ) -> dict[str, ResolvedLocalNetInput]:
     result: dict[str, ResolvedLocalNetInput] = {}
     for local_net in local_nets:
@@ -239,7 +239,7 @@ def _validate_pins(
 def _build_nets(
     local_nets: Iterable[ResolvedLocalNetInput],
     pages_by_scope: dict[ScopeId, Page],
-    net_union: NetUnion,
+    net_union: UnionFind[str],
     net_factory: ResolvedNetFactory,
     include_net: ResolvedNetInclusion,
     pins: tuple[ResolvedPinInput, ...],
@@ -460,7 +460,7 @@ def _apply_component_info(component: Component, info: ResolvedComponentInfo | No
         component.dnp_source = DnpSource.CONVENTION if fields.dnp_convention else None
 
 
-def _require_union_id(net_union: NetUnion, local_net_id: str) -> str:
+def _require_union_id(net_union: UnionFind[str], local_net_id: str) -> str:
     try:
         return net_union.find(local_net_id)
     except KeyError as exc:

@@ -1,8 +1,8 @@
 """Shared spatial data structures for schematic wire connectivity.
 
-Used by both the Altium and KiCad parsers:
+Used across the schematic parsers and resolvers:
 
-- ``UnionFind`` — generic union-find for connectivity grouping
+- ``UnionFind`` — generic disjoint-set with an explicit, strict membership API
 - ``WireIndex`` — axis-aligned segment index with binary search (Altium)
 - ``point_on_segment`` — axis-aligned point-on-segment test
 """
@@ -10,7 +10,7 @@ Used by both the Altium and KiCad parsers:
 from __future__ import annotations
 
 import bisect
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -19,27 +19,77 @@ if TYPE_CHECKING:
 
     AxisAlignedRec = WireRec | BusRec
 
-T = TypeVar("T")
 
+class UnionFind[T]:
+    """Generic union-find (disjoint set) with path compression.
 
-class UnionFind(dict[T, T]):
-    """Generic union-find with path compression and union by arbitrary root.
+    Membership is explicit: an item must be added — via the constructor or
+    :meth:`add` — before it can be looked up. :meth:`find` and :meth:`union`
+    raise ``KeyError`` for unknown items so a stray lookup surfaces instead of
+    silently creating a singleton. Callers that want auto-insert semantics add
+    the item first. The constructor rejects duplicate items.
 
-    Subclasses dict so ``item in uf`` works for checking membership.
+    ``union(a, b)`` keeps ``a``'s root as the merged set's representative.
     """
 
-    def find(self, item: T) -> T:
-        if item not in self:
-            self[item] = item
-        while self[item] != item:
-            self[item] = self[self[item]]  # path compression
-            item = self[item]
-        return item
+    _parent: dict[T, T]
+    _ordered: list[T]
 
-    def union(self, a: T, b: T) -> None:
-        ra, rb = self.find(a), self.find(b)
-        if ra != rb:
-            self[ra] = rb
+    def __init__(self, items: Iterable[T] = ()) -> None:
+        self._parent = {}
+        self._ordered = []
+        for item in items:
+            if item in self._parent:
+                msg = f"duplicate union-find item: {item!r}"
+                raise ValueError(msg)
+            self._parent[item] = item
+            self._ordered.append(item)
+
+    def __contains__(self, item: T) -> bool:
+        return item in self._parent
+
+    def add(self, item: T) -> None:
+        """Add ``item`` as its own singleton set if not already present."""
+        if item not in self._parent:
+            self._parent[item] = item
+            self._ordered.append(item)
+
+    def find(self, item: T) -> T:
+        """Return the representative of ``item``'s set (raises if unknown)."""
+        if item not in self._parent:
+            msg = f"unknown union-find item: {item!r}"
+            raise KeyError(msg)
+        root = item
+        while self._parent[root] != root:
+            root = self._parent[root]
+        current = item
+        while self._parent[current] != current:
+            parent = self._parent[current]
+            self._parent[current] = root  # path compression
+            current = parent
+        return root
+
+    def union(self, a: T, b: T) -> bool:
+        """Merge the sets of ``a`` and ``b``; ``a``'s root wins.
+
+        Returns whether the two were in different sets (i.e. state changed).
+        """
+        root_a = self.find(a)
+        root_b = self.find(b)
+        if root_a == root_b:
+            return False
+        self._parent[root_b] = root_a
+        return True
+
+    def groups(self) -> dict[T, list[T]]:
+        """Return known items grouped by their current representative.
+
+        Groups and their members keep insertion order.
+        """
+        grouped: dict[T, list[T]] = {}
+        for item in self._ordered:
+            grouped.setdefault(self.find(item), []).append(item)
+        return grouped
 
 
 # ---------------------------------------------------------------------------
