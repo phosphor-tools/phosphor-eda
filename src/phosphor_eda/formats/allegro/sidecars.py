@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import zipfile
 from dataclasses import dataclass
 from io import BytesIO
+from pathlib import Path
 from typing import TYPE_CHECKING, TypeGuard
 
 from phosphor_eda.formats.allegro.constants import AllegroBoardUnits, allegro_unit_to_mm
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from phosphor_eda.domain.pcb_builder import PcbBuilder
 
 _PAD_SUFFIX = ".pad"
@@ -24,6 +24,11 @@ _TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
 # container and first decompressed entry to keep malformed local projects bounded.
 _MAX_PADSTACK_SIDECAR_BYTES = 64_000_000
 _MAX_ZIP_ENTRY_BYTES = 1_000_000
+# Bound the board-directory walk so a board dropped into a huge or deeply nested
+# tree cannot make discovery scan the whole subtree. Hitting either cap records
+# a diagnostic so a truncated scan is visible rather than silent.
+_MAX_SIDECAR_SCAN_DEPTH = 8
+_MAX_SIDECAR_SCAN_FILES = 10_000
 
 
 @dataclass(frozen=True)
@@ -83,10 +88,8 @@ def discover_allegro_sidecars(board_path: Path) -> AllegroSidecarSet:
     root = board_path.parent
     padstacks: list[AllegroPadstackSidecar] = []
     package_symbols: list[AllegroPackageSymbolSidecar] = []
-    diagnostics: list[AllegroSidecarDiagnostic] = []
-    for path in sorted(root.rglob("*")):
-        if path == board_path or not path.is_file():
-            continue
+    candidate_files, diagnostics = _scan_sidecar_files(root, board_path)
+    for path in candidate_files:
         suffix = path.suffix.lower()
         if suffix == _PAD_SUFFIX:
             parsed_pad, parsed_diagnostics = parse_allegro_padstack_sidecar(path)
@@ -118,6 +121,66 @@ def discover_allegro_sidecars(board_path: Path) -> AllegroSidecarSet:
         package_symbols=tuple(package_symbols),
         diagnostics=tuple(diagnostics),
     )
+
+
+def _scan_sidecar_files(
+    root: Path, board_path: Path
+) -> tuple[list[Path], list[AllegroSidecarDiagnostic]]:
+    """Walk the board directory subtree for sidecar candidates within bounds.
+
+    Prunes directories beyond ``_MAX_SIDECAR_SCAN_DEPTH`` and stops after
+    ``_MAX_SIDECAR_SCAN_FILES`` files, recording a diagnostic when either cap is
+    hit. Files are returned globally sorted to match the previous ``rglob`` order.
+    """
+    files: list[Path] = []
+    diagnostics: list[AllegroSidecarDiagnostic] = []
+    root_depth = len(root.parts)
+    depth_capped = False
+    for dirpath, dirnames, filenames in os.walk(root):
+        current = Path(dirpath)
+        if len(current.parts) - root_depth >= _MAX_SIDECAR_SCAN_DEPTH:
+            if dirnames:
+                depth_capped = True
+            dirnames.clear()
+        for filename in filenames:
+            path = current / filename
+            if path == board_path:
+                continue
+            try:
+                if not path.is_file():
+                    continue
+            except OSError:
+                # An unreadable entry shouldn't abort discovery of the rest.
+                continue
+            files.append(path)
+            if len(files) >= _MAX_SIDECAR_SCAN_FILES:
+                diagnostics.append(
+                    AllegroSidecarDiagnostic(
+                        path=root,
+                        kind="scan",
+                        code="sidecar-scan-file-cap",
+                        message=(
+                            f"sidecar discovery stopped after {_MAX_SIDECAR_SCAN_FILES} files; "
+                            "the board directory subtree may hold undiscovered sidecars"
+                        ),
+                    )
+                )
+                files.sort()
+                return files, diagnostics
+    if depth_capped:
+        diagnostics.append(
+            AllegroSidecarDiagnostic(
+                path=root,
+                kind="scan",
+                code="sidecar-scan-depth-cap",
+                message=(
+                    f"sidecar discovery pruned directories deeper than "
+                    f"{_MAX_SIDECAR_SCAN_DEPTH} levels below the board"
+                ),
+            )
+        )
+    files.sort()
+    return files, diagnostics
 
 
 def add_sidecar_board_metadata(

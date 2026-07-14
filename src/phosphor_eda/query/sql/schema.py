@@ -270,8 +270,10 @@ VIEW_DDL: dict[str, str] = {
             n.net_class,
             n.diff_pair,
             -- PCB tables key nets by board-global name; scoped nets sharing a
-            -- name share these board-level aggregates
-            COUNT(DISTINCT p.reference || '.' || p.pad_number) AS pcb_pad_count,
+            -- name share these board-level aggregates. Count distinct pad ids so
+            -- footprint-less pads (NULL reference) and shared pad numbers both
+            -- count, and the LEFT JOIN to vias cannot inflate the total.
+            COUNT(DISTINCT p.id) AS pcb_pad_count,
             COUNT(DISTINCT v.id) AS pcb_via_count,
             COALESCE((
                 SELECT SUM(c.length_mm)
@@ -296,10 +298,18 @@ VIEW_DDL: dict[str, str] = {
     """,
     "drill_histogram": """
         CREATE VIEW drill_histogram AS
-        SELECT diameter_mm AS drill_mm, COUNT(*) AS count, owner_kind AS source
+        SELECT
+            -- Slots carry no diameter (0.0); report the drilled width as the
+            -- size and keep the slot length separate so slots are not lumped
+            -- into a misleading 0.0 bucket with the diameter-less rounds.
+            CASE WHEN shape = 'slot' THEN width_mm ELSE diameter_mm END AS drill_mm,
+            COUNT(*) AS count,
+            owner_kind AS source,
+            shape,
+            CASE WHEN shape = 'slot' THEN height_mm END AS slot_length_mm
         FROM drills
-        GROUP BY diameter_mm, owner_kind
-        ORDER BY diameter_mm
+        GROUP BY drill_mm, owner_kind, shape, slot_length_mm
+        ORDER BY drill_mm, slot_length_mm
     """,
 }
 

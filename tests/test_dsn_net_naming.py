@@ -32,7 +32,12 @@ from phosphor_eda.formats.dsn.raw_models import (
     SchematicPage,
     Wire,
 )
-from phosphor_eda.formats.dsn.resolver import resolve_dsn_source
+from phosphor_eda.formats.dsn.resolver import (
+    _AUTONAME_FORM,
+    _stored_name_kind,
+    _synthesized_name,
+    resolve_dsn_source,
+)
 from phosphor_eda.formats.dsn.source import (
     DsnGlobal,
     DsnHierarchyMapping,
@@ -248,6 +253,36 @@ end_primitive;
     assert parse_pstchip_pin_number_maps(pstchip) == {"PKG_PRIMITIVE": {"1": "A1", "2": "42"}}
 
 
+def test_pstchip_accumulates_pins_across_multiple_pin_blocks(tmp_path: Path) -> None:
+    # A primitive may carry more than one ``pin ... end_pin;`` block. Earlier
+    # blocks must not be discarded and the pin index must stay continuous
+    # instead of restarting per block.
+    pstchip = tmp_path / "pstchip.dat"
+    pstchip.write_text(
+        """\
+primitive 'MULTI_BLOCK';
+  pin
+    'A':
+      PIN_NUMBER='(1)';
+    'B':
+      PIN_NUMBER='(2)';
+  end_pin;
+  pin
+    'C':
+      PIN_NUMBER='(3)';
+    'D':
+      PIN_NUMBER='(4)';
+  end_pin;
+end_primitive;
+""",
+        encoding="utf-8",
+    )
+
+    assert parse_pstchip_pin_number_maps(pstchip) == {
+        "MULTI_BLOCK": {"1": "1", "2": "2", "3": "3", "4": "4"}
+    }
+
+
 def test_scalar_pin_number_handles_empty_packaged_netlist_values() -> None:
     assert _scalar_pin_number(" , ") == ""
 
@@ -440,9 +475,19 @@ def test_synthesis_only_when_no_stored_name_exists() -> None:
         ctx=ctx,
     )
 
-    resolved = _net_named(design.nets, "N00000077")
+    resolved = _net_named(design.nets, "N$00000077")
     assert resolved.names[0].kind is NetNameKind.SYNTHESIZED
     assert any(issue.category == "dsn_net_name_synthesized" for issue in ctx.issues)
+
+
+def test_synthesized_net_name_stays_out_of_autoname_namespace() -> None:
+    # A synthesized placeholder must not look like a Capture autoname (``N\d{5,}``),
+    # or ``_stored_name_kind`` would later misclassify it as TOOL_AUTO.
+    scope = _scope("Main")
+    name = _synthesized_name("root", [_net("Main", scope, 77, "")])
+
+    assert _AUTONAME_FORM.fullmatch(name) is None
+    assert _stored_name_kind(name) is not NetNameKind.TOOL_AUTO
 
 
 def test_cross_page_stored_name_conflict_resolved_by_mapping() -> None:

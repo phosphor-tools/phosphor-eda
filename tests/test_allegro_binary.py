@@ -203,7 +203,6 @@ def test_bounded_binary_reader_rejects_negative_read_size() -> None:
         (AllegroBoardUnits.MILLIMETERS, 1_000, 0.001),
         (AllegroBoardUnits.CENTIMETERS, 1_000, 0.01),
         (AllegroBoardUnits.MICROMETERS, 1_000, 0.000001),
-        (AllegroBoardUnits.MILLIMETERS, 0, 0.0),
     ),
 )
 def test_allegro_unit_to_mm_is_the_single_board_unit_contract(
@@ -212,6 +211,12 @@ def test_allegro_unit_to_mm_is_the_single_board_unit_contract(
     expected: float,
 ) -> None:
     assert allegro_unit_to_mm(units, divisor) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("divisor", (0, -1))
+def test_allegro_unit_to_mm_rejects_non_positive_divisor(divisor: int) -> None:
+    with pytest.raises(ValueError, match="unit divisor must be positive"):
+        _ = allegro_unit_to_mm(AllegroBoardUnits.MILLIMETERS, divisor)
 
 
 @pytest.mark.parametrize(

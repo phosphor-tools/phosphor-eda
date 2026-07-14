@@ -10,6 +10,7 @@ exception types live in each format package (e.g. ``altium/errors.py``).
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import TypeVar, overload
@@ -33,6 +34,22 @@ class ParseIssue:
 
 
 E = TypeVar("E", bound=IntEnum)
+
+
+def serialize_parse_issues(issues: list[ParseIssue]) -> str:
+    """Serialize collected parse diagnostics into a compact JSON metadata value
+    so the actual messages survive rather than only their count."""
+    payload: list[dict[str, str | int]] = []
+    for issue in issues:
+        entry: dict[str, str | int] = {
+            "severity": issue.severity.name,
+            "category": issue.category,
+            "message": issue.message,
+        }
+        if issue.record_index is not None:
+            entry["record_index"] = issue.record_index
+        payload.append(entry)
+    return json.dumps(payload, separators=(",", ":"))
 
 
 def warn_optional(ctx: ParseContext | None, category: str, message: str) -> None:

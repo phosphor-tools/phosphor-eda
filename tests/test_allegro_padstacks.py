@@ -8,6 +8,7 @@ import pytest
 
 from phosphor_eda.domain.pcb import PcbDrillPlating, PcbPadType
 from phosphor_eda.formats.allegro.graph import build_allegro_object_graph
+from phosphor_eda.formats.allegro.graphics import flash_symbol_keys
 from phosphor_eda.formats.allegro.padstacks import (
     _first_copper_component,
     _pad_components,
@@ -288,3 +289,48 @@ def test_place_custom_shapes_bakes_rotation_and_translation() -> None:
     # local (1000, -1000) -> (10 - 1000, 20 - 1000) = (-990, -980).
     placed_points = [(round(x, 3), round(y, 3)) for x, y in placed[0].points]
     assert placed_points == [(10.0, 20.0), (10.0, -980.0), (-990.0, -980.0)]
+
+
+def _padstack_with_components(
+    *components: AllegroPadstackComponent,
+) -> AllegroRecordSet:
+    padstack = _record(
+        0x1C,
+        1,
+        0,
+        components=components,
+        pad_name_key=0,
+    )
+    return AllegroRecordSet(
+        header=None,
+        string_table=None,
+        records=(padstack,),
+        end_offset=0,
+    )
+
+
+def _pad_component(component_type: int, string_key: int) -> AllegroPadstackComponent:
+    return AllegroPadstackComponent(
+        index=0,
+        component_type=component_type,
+        width=1000,
+        height=1000,
+        offset_x=0,
+        offset_y=0,
+        string_key=string_key,
+    )
+
+
+def test_flash_symbol_keys_only_collects_custom_component_shape_keys() -> None:
+    """Only custom pad components reference 0x28 flash shapes.
+
+    A primitive-shape component (e.g. rect) carries string_key for other
+    purposes, so its value must not be mistaken for a flash-symbol reference.
+    """
+    record_set = _padstack_with_components(
+        _pad_component(component_type=0x16, string_key=700),  # custom
+        _pad_component(component_type=0x05, string_key=800),  # rect primitive
+        _pad_component(component_type=0x00, string_key=900),  # null pad slot
+    )
+
+    assert flash_symbol_keys(record_set) == frozenset({700})

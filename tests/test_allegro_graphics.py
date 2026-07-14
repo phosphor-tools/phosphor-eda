@@ -18,11 +18,20 @@ from phosphor_eda.domain.pcb import (
 from phosphor_eda.formats.allegro.build import build_allegro_graphics_board
 from phosphor_eda.formats.allegro.coords import BoardFrame, board_frame
 from phosphor_eda.formats.allegro.graph import build_allegro_object_graph
-from phosphor_eda.formats.allegro.graphics import extract_allegro_graphics, rectangle_primitive
+from phosphor_eda.formats.allegro.graphics import (
+    _arc_midpoint,
+    extract_allegro_graphics,
+    rectangle_primitive,
+)
 from phosphor_eda.formats.allegro.layers import AllegroLayerMap, build_allegro_layers
 from phosphor_eda.formats.allegro.parser import parse_allegro_records
 from phosphor_eda.formats.allegro.primitives import AllegroPrimitiveRole
-from phosphor_eda.formats.allegro.records import AllegroRecord, AllegroRecordSet, payload_int
+from phosphor_eda.formats.allegro.records import (
+    AllegroRecord,
+    AllegroRecordDiagnostic,
+    AllegroRecordSet,
+    payload_int,
+)
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
@@ -1145,3 +1154,31 @@ def test_allegro_graphics_skips_footprint_definition_owned_texts() -> None:
 
     texts = [primitive for primitive in graphics.artwork if isinstance(primitive.data, PcbText)]
     assert [primitive.id for primitive in texts] == ["allegro:990012200"]
+
+
+def test_arc_midpoint_emits_diagnostic_for_non_positive_radius() -> None:
+    """A degenerate arc (radius <= 0) must not silently collapse to its center."""
+    degenerate_arc = AllegroRecord(
+        tag=0x01,
+        offset=0,
+        end_offset=0,
+        key=42,
+        next_key=None,
+        payload={
+            "subtype": 0,
+            "start_x": 1000,
+            "start_y": 0,
+            "end_x": 0,
+            "end_y": 1000,
+            "center_x": 500.0,
+            "center_y": 500.0,
+            "radius": 0.0,
+        },
+    )
+    diagnostics: list[AllegroRecordDiagnostic] = []
+
+    mid_x, mid_y = _arc_midpoint(degenerate_arc, BoardFrame(1.0), diagnostics)
+
+    assert (mid_x, mid_y) == (500.0, -500.0)
+    assert [diagnostic.code for diagnostic in diagnostics] == ["degenerate-arc-radius"]
+    assert diagnostics[0].key == 42

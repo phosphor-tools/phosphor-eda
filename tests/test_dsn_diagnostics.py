@@ -10,6 +10,7 @@ from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.dsn.netlist import build_netlist
 from phosphor_eda.formats.dsn.parser import parse_dsn
 from phosphor_eda.formats.dsn.raw_models import (
+    PageNetEntry,
     ParsedDesign,
     PinConnection,
     PlacedInstance,
@@ -57,3 +58,34 @@ def test_build_netlist_warns_on_non_numeric_pin() -> None:
     page.nets = []
     _ = build_netlist(ParsedDesign(pages=[page], symbol_pin_names={"PART": ["VCC"]}), ctx)
     assert any("non-numeric pin" in issue.message for issue in ctx.issues)
+
+
+def test_build_netlist_uses_pin_net_id_when_coordinate_unmatched() -> None:
+    """A pin whose net_id names a known page net lands on it even with no wire."""
+    inst = PlacedInstance(
+        package_name="PART",
+        reference="U1",
+        pin_connections=[PinConnection(pin_number="1", pin_x=5, pin_y=5, net_id=7)],
+    )
+    page = SchematicPage(name="P", instances=[inst], nets=[PageNetEntry(name="SIG", net_id=7)])
+
+    netlist = build_netlist(ParsedDesign(pages=[page], symbol_pin_names={"PART": ["A"]}))
+
+    assert "SIG" in netlist
+    assert netlist["SIG"][0].reference == "U1"
+
+
+def test_build_netlist_warns_on_net_id_without_stored_name() -> None:
+    """A net id with no stored page-net name records a diagnostic, not silence."""
+    ctx = ParseContext()
+    inst = PlacedInstance(
+        package_name="PART",
+        reference="U1",
+        pin_connections=[PinConnection(pin_number="1", pin_x=0, pin_y=0, net_id=0)],
+    )
+    page = SchematicPage(name="P", instances=[inst])
+    page.wire_net_map = {(0, 0): {42}}
+
+    build_netlist(ParsedDesign(pages=[page], symbol_pin_names={"PART": ["A"]}), ctx)
+
+    assert any(issue.category == "dsn_netlist" for issue in ctx.issues)

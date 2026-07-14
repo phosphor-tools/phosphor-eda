@@ -16,7 +16,6 @@ from phosphor_eda.formats.dsn.binary_reader import STRUCT_PORT
 from phosphor_eda.formats.dsn.hierarchy import (
     MAX_ENTRY_DEPTH,
     build_occurrence_to_instance,
-    hierarchy_occurrences_from_entries,
     parse_hierarchy_stream,
 )
 from phosphor_eda.formats.dsn.package_netlist import (
@@ -996,6 +995,32 @@ def test_cis_groups_data_stream_warns_on_short_row() -> None:
     )
 
 
+def test_cis_group_members_keep_positional_fields_with_empty_state() -> None:
+    # Group member rows are ``state\xb0occurrence_id`` framed by ``~``. Dropping
+    # empty fields before the positional read shifted the id out of position
+    # (the same field-shift bug GroupsDataStream already fixed), so a member
+    # with an empty state was silently lost. Keep empty fields in place.
+    from phosphor_eda.formats.dsn.cis import parse_cis_variant_store
+
+    groups_payload = b"G\xb00\xb0\xb0"
+    member_payload = b"1\xb010~\xb020"
+    streams = {
+        "CIS/VariantStore/Groups/GroupsDataStream": groups_payload,
+        "CIS/VariantStore/Groups/G/G": member_payload,
+    }
+    occurrence_to_instance = {10: 100, 20: 200}
+
+    store = parse_cis_variant_store(
+        streams, {"CIS/VariantStore"}, occurrence_to_instance, ParseContext()
+    )
+
+    (group,) = store.groups
+    assert [(m.state, m.occurrence_id, m.resolved_instance_db_id) for m in group.members] == [
+        ("1", 10, 100),
+        ("", 20, 200),
+    ]
+
+
 def test_resolve_symbol_pin_structured_only_symbol_resolves() -> None:
     # A symbol with structured pins but no legacy cache names must not fail
     # the alignment check; there is nothing to disagree with.
@@ -1863,9 +1888,12 @@ def test_structured_hierarchy_occurrences_match_byte_scan(dsn: Path) -> None:
 
     byte_scan = {(occ.occurrence_id, occ.instance_db_id) for occ in raw.hierarchy_occurrences}
     structured = {
-        (occ.occurrence_id, occ.instance_db_id)
+        (entry.occurrence_id, entry.instance_db_id)
         for hierarchy in raw.hierarchies
-        for occ in hierarchy_occurrences_from_entries(hierarchy, placed)
+        for entry in hierarchy.entries
+        if entry.occurrence_id > 0
+        and entry.occurrence_id != entry.instance_db_id
+        and entry.instance_db_id in placed
     }
     assert structured == byte_scan
 

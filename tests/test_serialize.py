@@ -30,6 +30,7 @@ from phosphor_eda.domain.schematic import (
 from phosphor_eda.domain.schematic import (
     Pin as DomainPin,
 )
+from phosphor_eda.query import format as format_module
 from phosphor_eda.query.format import (
     format_bus_detail,
     format_bus_table,
@@ -49,6 +50,7 @@ from phosphor_eda.query.query import (
     filter_pages,
     find_bus,
 )
+from phosphor_eda.query.validate import Category, Finding, Severity
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -1568,3 +1570,29 @@ def test_inline_destinations_fan_out_lists_each_endpoint():
     rendered = format_component_detail(design, "U1")
     assert "R1 -> U2.1" in rendered
     assert "R1 -> U3.1" in rendered
+
+
+def test_format_validation_reports_info_findings(monkeypatch: pytest.MonkeyPatch):
+    """INFO findings get their own section and are not silently dropped."""
+    findings = [
+        Finding(Severity.ERROR, Category.EMPTY_NET, "empty net", net="N1"),
+        Finding(Severity.INFO, Category.SINGLE_PIN_NET, "single-pin note", net="N2"),
+    ]
+    monkeypatch.setattr(format_module, "validate_design", lambda _design: findings)
+
+    text = "\n".join(format_module._format_validation(_simple_design()))
+
+    assert "Info (1):" in text
+    assert "INFO   [single_pin_net]  single-pin note" in text
+    assert "No issues found." not in text
+
+
+def test_format_validation_info_only_is_not_reported_as_no_issues(monkeypatch: pytest.MonkeyPatch):
+    """A design with only INFO findings must not claim 'No issues found.'."""
+    findings = [Finding(Severity.INFO, Category.SINGLE_PIN_NET, "single-pin note", net="N2")]
+    monkeypatch.setattr(format_module, "validate_design", lambda _design: findings)
+
+    text = "\n".join(format_module._format_validation(_simple_design()))
+
+    assert "Info (1):" in text
+    assert "No issues found." not in text

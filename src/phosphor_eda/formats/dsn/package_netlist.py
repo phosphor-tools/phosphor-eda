@@ -222,15 +222,13 @@ def _parse_pstchip_pin_entries(path: Path) -> dict[str, list[tuple[int, str, str
         stripped = line.strip()
         if stripped == "pin":
             in_pin_block = True
-            current_pin_index = 0
-            current_pins = []
             continue
         if stripped == "end_pin;":
+            # A primitive can hold several pin blocks; accumulate them under one
+            # continuous index rather than letting each block overwrite the last.
             primitives[current_primitive] = list(current_pins)
             in_pin_block = False
             current_pin_name = ""
-            current_pin_index = 0
-            current_pins = []
             continue
         if not in_pin_block:
             continue

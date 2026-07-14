@@ -54,6 +54,36 @@ def test_parse_prjpcb_cross_sheet_nets():
     assert len(gnd_refs) > 20
 
 
+def test_child_listed_first_still_detects_hierarchy(tmp_path: Path):
+    """SMART hierarchy detection keys on the structural root, not project order.
+
+    The qfsae Debugger project is hierarchical (TOP owns MCU/Power/Connectors
+    through sheet symbols). Listing a child document before TOP must not flip
+    SMART detection to FLAT/GLOBAL.
+    """
+    src_dir = QFSAE_PRJPCB.parent
+    for name in ("TOP.SchDoc", "MCU.SchDoc", "Power.SchDoc", "Connectors.SchDoc"):
+        (tmp_path / name).write_bytes((src_dir / name).read_bytes())
+    prjpcb = tmp_path / "Debugger.PrjPcb"
+    prjpcb.write_text(
+        "[Design]\nHierarchyMode=0\n\n"
+        "[Document1]\nDocumentPath=MCU.SchDoc\n\n"
+        "[Document2]\nDocumentPath=TOP.SchDoc\n\n"
+        "[Document3]\nDocumentPath=Power.SchDoc\n\n"
+        "[Document4]\nDocumentPath=Connectors.SchDoc\n"
+    )
+
+    design = altium_to_design(prjpcb)
+    assert design.metadata["altium_effective_hierarchy_mode"] == "HIERARCHICAL_POWER_GLOBAL"
+
+    reference = altium_to_design(QFSAE_PRJPCB)
+    assert (
+        design.metadata["altium_effective_hierarchy_mode"]
+        == (reference.metadata["altium_effective_hierarchy_mode"])
+    )
+    assert len(design.nets) == len(reference.nets)
+
+
 def test_pimx8_cross_subdir_hierarchy_connects():
     """A hierarchical net must connect across the SCH/ subdirectory boundary.
 

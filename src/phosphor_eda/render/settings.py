@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from importlib.resources import files
 from pathlib import Path
@@ -146,6 +147,17 @@ class RenderSettings:
     highlights: list[HighlightSpec] = field(default_factory=list)
     annotations: dict[str, object] = field(default_factory=dict)
     custom_css: str = ""
+
+    def __post_init__(self) -> None:
+        # Frozen guards field rebinding, but the collection fields stay mutable.
+        # Every construction (including ``replace()``) owns private copies so no
+        # two settings instances share and mutate the same source/tokens/
+        # highlights/annotations.
+        object.__setattr__(self, "source", deepcopy(self.source))
+        object.__setattr__(self, "tokens", dict(self.tokens))
+        object.__setattr__(self, "dimming", replace(self.dimming))
+        object.__setattr__(self, "highlights", [replace(h) for h in self.highlights])
+        object.__setattr__(self, "annotations", deepcopy(self.annotations))
 
 
 DEFAULT_SIDE = "front"
@@ -870,7 +882,7 @@ def _load_render_settings_file_data(path: Path, stack: list[str]) -> dict[str, o
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
-        msg = f"Render settings file not found: {path}"
+        msg = f"Could not read {path}: {exc}"
         raise ValueError(msg) from exc
     return _load_render_settings_text_data(text, source=path, stack=stack)
 

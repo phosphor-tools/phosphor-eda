@@ -15,7 +15,6 @@ from phosphor_eda.domain.buses import (
 from phosphor_eda.domain.schematic import Bus, BusKind, NetName, NetNameKind
 from phosphor_eda.formats.altium._helpers import parse_bus_notation
 from phosphor_eda.formats.altium.project import AltiumHierarchyMode
-from phosphor_eda.formats.common.net_union import NetUnion
 from phosphor_eda.formats.common.paths import resolve_document_reference
 from phosphor_eda.formats.common.resolved_graph import (
     ResolutionInputError,
@@ -82,7 +81,7 @@ def resolve_altium_source(source: AltiumSourceDesign, ctx: ParseContext | None =
     """
     _warn_unverified_naming_options(source.project, ctx)
     local_refs = _collect_local_refs(source)
-    net_union = NetUnion(ref.local_net.id for ref in local_refs)
+    net_union = UnionFind(ref.local_net.id for ref in local_refs)
     local_net_by_id = {ref.local_net.id: ref for ref in local_refs}
     pin_occurrences = _collect_pin_occurrences(source)
     effective_mode = _effective_hierarchy_mode(source)
@@ -277,7 +276,7 @@ def _effective_hierarchy_mode(source: AltiumSourceDesign) -> AltiumHierarchyMode
     if mode is not AltiumHierarchyMode.SMART:
         return mode
 
-    root_sheet = source.sheets.get(source.root_sheet_name)
+    root_sheet = source.sheets.get(source.root_sheet_id)
     if root_sheet is not None and root_sheet.sheet_entries:
         return AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL
 
@@ -290,17 +289,17 @@ def _effective_hierarchy_mode(source: AltiumSourceDesign) -> AltiumHierarchyMode
 
 
 def _merge_repeated_logical_pins(
-    net_union: NetUnion,
+    net_union: UnionFind[str],
     pin_occurrences: Iterable[AltiumPinOccurrence],
 ) -> None:
     pin_occurrences_tuple = tuple(pin_occurrences)
-    duplicate_pin_keys = _duplicate_visible_source_pin_keys(pin_occurrences_tuple)
+    duplicate_pin_keys = _duplicate_visible_pin_keys(pin_occurrences_tuple)
     net_ids_by_pin: dict[tuple[str, str], list[str]] = {}
     for pin_occurrence in pin_occurrences_tuple:
         if not pin_occurrence.local_net_id:
             continue
         key = (
-            _source_component_identity(pin_occurrence),
+            _component_identity(pin_occurrence),
             _source_logical_pin_key(pin_occurrence, duplicate_pin_keys),
         )
         net_ids_by_pin.setdefault(key, []).append(pin_occurrence.local_net_id)
@@ -314,7 +313,7 @@ def _merge_repeated_logical_pins(
 def _merge_source_names(
     source: AltiumSourceDesign,
     local_refs: Iterable[_LocalNetRef],
-    net_union: NetUnion,
+    net_union: UnionFind[str],
     effective_mode: AltiumHierarchyMode,
 ) -> None:
     if effective_mode in (
@@ -337,7 +336,7 @@ def _merge_hierarchy(
     source: AltiumSourceDesign,
     local_refs: Iterable[_LocalNetRef],
     local_net_by_id: dict[str, _LocalNetRef],
-    net_union: NetUnion,
+    net_union: UnionFind[str],
     effective_mode: AltiumHierarchyMode,
     ctx: ParseContext | None,
 ) -> None:
@@ -399,7 +398,7 @@ def _merge_hierarchy(
 
 def _merge_bus_members(
     source: AltiumSourceDesign,
-    net_union: NetUnion,
+    net_union: UnionFind[str],
     known_source_files: list[str],
     child_sheets_by_file: dict[str, list[AltiumSheetSource]],
     repeated_child_files: set[str],
@@ -463,7 +462,7 @@ def _merge_bus_members(
                     ctx,
                 ):
                     child_interface = _note(child_sheet.id, bus_name, tuple(members))
-                    interface_union.union(parent_interface, child_interface)
+                    _merge_interfaces(interface_union, parent_interface, child_interface)
 
     for bundle in _bundle_interfaces(seen_interfaces, interface_union):
         member_names: set[str] = set()
@@ -479,7 +478,7 @@ def _merge_bus_members(
 def _merge_harness_members(
     source: AltiumSourceDesign,
     local_refs: Iterable[_LocalNetRef],
-    net_union: NetUnion,
+    net_union: UnionFind[str],
     known_source_files: list[str],
     child_sheets_by_file: dict[str, list[AltiumSheetSource]],
     repeated_child_files: set[str],
@@ -554,7 +553,7 @@ def _merge_harness_members(
             continue
         seen_interfaces.update(interfaces)
         for interface in interfaces[1:]:
-            interface_union.union(interfaces[0], interface)
+            _merge_interfaces(interface_union, interfaces[0], interface)
 
     for bundle in _bundle_interfaces(seen_interfaces, interface_union):
         nets_by_member = _seed_harness_member_groups(bundle, members_by_interface, labels_by_sheet)
@@ -742,14 +741,14 @@ def _child_bus_member_net_ids(source: AltiumSourceDesign) -> dict[tuple[str, str
     return _fold_child_label_net_ids(source, _child_port_net_ids(source))
 
 
-def _union_all(net_union: NetUnion, net_ids: Iterable[str]) -> None:
+def _union_all(net_union: UnionFind[str], net_ids: Iterable[str]) -> None:
     """Union every id (deduped, order-preserving) into the first."""
     deduped = list(dict.fromkeys(net_ids))
     for net_id in deduped[1:]:
         _ = net_union.union(deduped[0], net_id)
 
 
-def _merge_by_source_name(net_union: NetUnion, ids_by_name: dict[str, list[str]]) -> None:
+def _merge_by_source_name(net_union: UnionFind[str], ids_by_name: dict[str, list[str]]) -> None:
     for ids in ids_by_name.values():
         _union_all(net_union, ids)
 
@@ -757,6 +756,17 @@ def _merge_by_source_name(net_union: NetUnion, ids_by_name: dict[str, list[str]]
 def _sheet_symbols_by_id(source: AltiumSourceDesign) -> dict[str, AltiumSheetSymbol]:
     """Index every sheet symbol by its (globally unique) id for O(1) lookup."""
     return {symbol.id: symbol for sheet in source.sheets.values() for symbol in sheet.sheet_symbols}
+
+
+def _merge_interfaces(
+    interface_union: UnionFind[tuple[str, str]],
+    a: tuple[str, str],
+    b: tuple[str, str],
+) -> None:
+    """Auto-insert both interfaces and union them, keeping ``b`` as the root."""
+    interface_union.add(a)
+    interface_union.add(b)
+    interface_union.union(b, a)
 
 
 def _bundle_interfaces(
@@ -770,6 +780,7 @@ def _bundle_interfaces(
     """
     bundles: dict[tuple[str, str], list[tuple[str, str]]] = {}
     for interface in sorted(seen_interfaces):
+        interface_union.add(interface)
         bundles.setdefault(interface_union.find(interface), []).append(interface)
     return list(bundles.values())
 
@@ -1180,22 +1191,12 @@ def _duplicate_visible_pin_keys(
     return {key for key, count in counts.items() if count > 1}
 
 
-def _duplicate_visible_source_pin_keys(
-    pin_occurrences: Iterable[AltiumPinOccurrence],
-) -> set[tuple[str, str]]:
-    counts: dict[tuple[str, str], int] = {}
-    for pin_occurrence in pin_occurrences:
-        key = (_source_component_identity(pin_occurrence), pin_occurrence.pin_designator)
-        counts[key] = counts.get(key, 0) + 1
-    return {key for key, count in counts.items() if count > 1}
-
-
 def _source_logical_pin_key(
     pin_occurrence: AltiumPinOccurrence,
     duplicate_pin_keys: set[tuple[str, str]],
 ) -> str:
     if (
-        _source_component_identity(pin_occurrence),
+        _component_identity(pin_occurrence),
         pin_occurrence.pin_designator,
     ) not in duplicate_pin_keys:
         return pin_occurrence.pin_designator
@@ -1527,16 +1528,6 @@ def _dedupe(names: Iterable[str]) -> list[str]:
 
 
 def _component_identity(pin_occurrence: AltiumPinOccurrence) -> str:
-    source_id = pin_occurrence.component_source_id
-    if source_id:
-        return source_id
-    occurrence_source_id = _component_occurrence_source_id(pin_occurrence)
-    if occurrence_source_id:
-        return f"{pin_occurrence.scope_id}:{occurrence_source_id}"
-    return f"{pin_occurrence.scope_id}:pin-owner:{pin_occurrence.id}"
-
-
-def _source_component_identity(pin_occurrence: AltiumPinOccurrence) -> str:
     source_id = pin_occurrence.component_source_id
     if source_id:
         return source_id

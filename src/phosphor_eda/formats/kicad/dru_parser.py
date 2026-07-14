@@ -29,7 +29,10 @@ _LAYER_RE = re.compile(r"^\s*\(layer\s+(\w+)\)")
 _CONDITION_RE = re.compile(r'^\s*\(condition\s+"(.+)"\)')
 # Match the constraint kind, then collect all qualifier/value pairs
 _CONSTRAINT_KIND_RE = re.compile(r"^\s*\(constraint\s+(\w+)\b")
-_CONSTRAINT_VALUE_RE = re.compile(r"\((opt|min|max)\s+([\d.]+)mm\)")
+# Values may be suffixed with any KiCad length unit (or none — treated as mm).
+_CONSTRAINT_VALUE_RE = re.compile(r"\((opt|min|max)\s+([\d.]+)(mm|mil|in|um)?\)")
+# Conversion factors from each accepted unit to millimetres.
+_UNIT_TO_MM = {"": 1.0, "mm": 1.0, "um": 0.001, "mil": 0.0254, "in": 25.4}
 
 
 def parse_kicad_dru(path: Path) -> list[DesignRule]:
@@ -46,10 +49,11 @@ def parse_kicad_dru(path: Path) -> list[DesignRule]:
     current_name = ""
     current_layer = ""
     current_condition = ""
-    constraints: list[tuple[str, str, float]] = []  # (kind, qualifier, value)
+    current_kind = ""  # constraint kind whose value list may wrap across lines
+    constraints: list[tuple[str, str, float]] = []  # (kind, qualifier, value_mm)
 
     def _flush() -> None:
-        nonlocal current_name, current_layer, current_condition, constraints
+        nonlocal current_name, current_layer, current_condition, current_kind, constraints
         if current_name and constraints:
             # Group qualifiers by constraint kind so min/opt/max from one
             # constraint line produce a single rule with all values set.
@@ -73,6 +77,7 @@ def parse_kicad_dru(path: Path) -> list[DesignRule]:
         current_name = ""
         current_layer = ""
         current_condition = ""
+        current_kind = ""
         constraints = []
 
     for line in text.splitlines():
@@ -97,21 +102,26 @@ def parse_kicad_dru(path: Path) -> list[DesignRule]:
         layer_match = _LAYER_RE.match(stripped)
         if layer_match:
             current_layer = layer_match.group(1)
+            current_kind = ""
             continue
 
         # Condition
         cond_match = _CONDITION_RE.match(stripped)
         if cond_match:
             current_condition = cond_match.group(1)
+            current_kind = ""
             continue
 
-        # Constraint (skip commented ones) — collect all qualifiers on a line
+        # A constraint kind opens a value list that may continue onto later
+        # lines, so remember the kind and collect values on this and each
+        # following line until the next constraint/layer/condition/rule.
         constraint_match = _CONSTRAINT_KIND_RE.match(stripped)
         if constraint_match:
-            kind = constraint_match.group(1)
-            for qualifier, value_str in _CONSTRAINT_VALUE_RE.findall(stripped):
-                constraints.append((kind, qualifier, float(value_str)))
-            continue
+            current_kind = constraint_match.group(1)
+
+        if current_kind:
+            for qualifier, value_str, unit in _CONSTRAINT_VALUE_RE.findall(stripped):
+                constraints.append((current_kind, qualifier, float(value_str) * _UNIT_TO_MM[unit]))
 
     # Flush last rule
     _flush()

@@ -13,6 +13,19 @@ if TYPE_CHECKING:
     from phosphor_eda.formats.kicad.source import KiCadPoint
 
 
+def _merge(uf: UnionFind[KiCadPoint], a: KiCadPoint, b: KiCadPoint) -> None:
+    """Auto-insert both points and union them, keeping ``b`` as the root."""
+    uf.add(a)
+    uf.add(b)
+    uf.union(b, a)
+
+
+def _root(uf: UnionFind[KiCadPoint], point: KiCadPoint) -> KiCadPoint:
+    """Auto-insert ``point`` if unseen, then return its representative."""
+    uf.add(point)
+    return uf.find(point)
+
+
 @dataclass(slots=True)
 class WireGraph:
     uf: UnionFind[KiCadPoint]
@@ -32,7 +45,7 @@ class WireGraph:
         return point_touches_segments(point, self.segments)
 
     def find(self, point: KiCadPoint) -> KiCadPoint:
-        return self.uf.find(point)
+        return _root(self.uf, point)
 
     def root_to_points(self) -> dict[KiCadPoint, set[KiCadPoint]]:
         return group_wire_points(self.uf, self.points)
@@ -57,24 +70,23 @@ class BusGraph:
         return point_touches_segments(point, self.segments)
 
     def find(self, point: KiCadPoint) -> KiCadPoint:
-        return self.uf.find(point)
+        return _root(self.uf, point)
 
     def root_to_points(self) -> dict[KiCadPoint, set[KiCadPoint]]:
         return group_wire_points(self.uf, self.points)
 
 
-def build_wire_graph(data: SExpNode) -> WireGraph:
-    graph = WireGraph(uf=UnionFind(), segments=[], points=set())
-
-    for wire_node in sexp.find_all(data[1:], "wire"):
-        pts_node = sexp.find(wire_node[1:], "pts")
+def _build_graph[GraphT: (WireGraph, BusGraph)](
+    data: SExpNode, *, edge_tag: str, graph: GraphT
+) -> GraphT:
+    """Populate *graph* from the ``edge_tag`` segments and junctions in *data*."""
+    for edge_node in sexp.find_all(data[1:], edge_tag):
+        pts_node = sexp.find(edge_node[1:], "pts")
         if pts_node is None:
             continue
-        points: list[KiCadPoint] = []
-        for xy in sexp.find_all(pts_node[1:], "xy"):
-            points.append((round(sexp.num(xy, 1), 4), round(sexp.num(xy, 2), 4)))
+        points = points_from_pts_node(pts_node)
         for index in range(len(points) - 1):
-            graph.uf.union(points[index], points[index + 1])
+            _merge(graph.uf, points[index], points[index + 1])
             graph.segments.append((points[index], points[index + 1]))
             graph.points.add(points[index])
             graph.points.add(points[index + 1])
@@ -85,30 +97,18 @@ def build_wire_graph(data: SExpNode) -> WireGraph:
             graph.connect_point(point_from_at(at_node), merge_all=True)
 
     return graph
+
+
+def build_wire_graph(data: SExpNode) -> WireGraph:
+    return _build_graph(
+        data, edge_tag="wire", graph=WireGraph(uf=UnionFind(), segments=[], points=set())
+    )
 
 
 def build_bus_graph(data: SExpNode) -> BusGraph:
-    graph = BusGraph(uf=UnionFind(), segments=[], points=set())
-
-    for bus_node in sexp.find_all(data[1:], "bus"):
-        pts_node = sexp.find(bus_node[1:], "pts")
-        if pts_node is None:
-            continue
-        points: list[KiCadPoint] = []
-        for xy in sexp.find_all(pts_node[1:], "xy"):
-            points.append((round(sexp.num(xy, 1), 4), round(sexp.num(xy, 2), 4)))
-        for index in range(len(points) - 1):
-            graph.uf.union(points[index], points[index + 1])
-            graph.segments.append((points[index], points[index + 1]))
-            graph.points.add(points[index])
-            graph.points.add(points[index + 1])
-
-    for junc in sexp.find_all(data[1:], "junction"):
-        at_node = sexp.find(junc[1:], "at")
-        if at_node is not None:
-            graph.connect_point(point_from_at(at_node), merge_all=True)
-
-    return graph
+    return _build_graph(
+        data, edge_tag="bus", graph=BusGraph(uf=UnionFind(), segments=[], points=set())
+    )
 
 
 def point_from_at(at_node: SExpNode) -> KiCadPoint:
@@ -141,12 +141,12 @@ def connect_point(
     wire_points.add(point)
     for wp in wire_points:
         if wp != point and abs(wp[0] - point[0]) < 0.01 and abs(wp[1] - point[1]) < 0.01:
-            uf.union(point, wp)
+            _merge(uf, point, wp)
             if not merge_all:
                 return
     for seg_start, seg_end in wire_segments:
         if point_on_segment(point, seg_start, seg_end, tol=0.01):
-            uf.union(point, seg_start)
+            _merge(uf, point, seg_start)
             if not merge_all:
                 return
 
@@ -157,5 +157,5 @@ def group_wire_points(
 ) -> dict[KiCadPoint, set[KiCadPoint]]:
     root_to_points: dict[KiCadPoint, set[KiCadPoint]] = {}
     for point in wire_points:
-        root_to_points.setdefault(uf.find(point), set()).add(point)
+        root_to_points.setdefault(_root(uf, point), set()).add(point)
     return root_to_points

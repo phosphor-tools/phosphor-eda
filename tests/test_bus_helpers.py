@@ -1,6 +1,37 @@
 """Tests for format-neutral bus expansion helpers."""
 
-from phosphor_eda.domain.buses import expand_bus_members, expand_group_bus, expand_vector_bus
+import pytest
+
+from phosphor_eda.domain.buses import (
+    MAX_VECTOR_BUS_MEMBERS,
+    BusDefinition,
+    expand_bus_members,
+    expand_group_bus,
+    expand_vector_bus,
+)
+from phosphor_eda.domain.schematic import BusKind
+
+
+def test_vector_bus_rejects_oversized_range() -> None:
+    with pytest.raises(ValueError, match="maximum"):
+        expand_vector_bus("A[0..999999999]")
+
+
+def test_vector_bus_allows_at_limit_range() -> None:
+    members = expand_vector_bus(f"A[0..{MAX_VECTOR_BUS_MEMBERS - 1}]")
+    assert members is not None
+    assert len(members) == MAX_VECTOR_BUS_MEMBERS
+
+
+def test_bus_definition_defensively_copies_metadata() -> None:
+    source_metadata = {"source_format": "kicad"}
+    definition = BusDefinition(
+        id="bus:1", name="A[0..1]", kind=BusKind.VECTOR, metadata=source_metadata
+    )
+
+    source_metadata["source_format"] = "mutated"
+
+    assert definition.metadata == {"source_format": "kicad"}
 
 
 def test_vector_bus_expands_ascending_and_descending_ranges() -> None:

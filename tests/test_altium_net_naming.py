@@ -195,7 +195,7 @@ def _resolve_single_net(
             name="test",
             project=project or AltiumProject(hierarchy_mode=AltiumHierarchyMode.FLAT),
             sheets={sheet.name: sheet for sheet in sheets},
-            root_sheet_name=sheets[0].name,
+            root_sheet_id=sheets[0].name,
         ),
         ctx,
     )
@@ -476,7 +476,7 @@ def test_append_sheet_number_to_local_nets_suffixes_label_names_on_sheet_entry_n
                     sheet_number="5",
                 )
             },
-            root_sheet_name="A",
+            root_sheet_id="A",
         )
     )
 
@@ -567,7 +567,7 @@ def test_hierarchical_bus_sheet_entries_connect_child_labels_by_member_name() ->
                 "Left": _sheet("Left", [left_child_net], left_child_pins),
                 "Right": _sheet("Right", [right_child_net], right_child_pins),
             },
-            root_sheet_name="Top",
+            root_sheet_id="Top",
         )
     )
 
@@ -644,7 +644,7 @@ def test_harness_members_connect_to_peer_sheet_labels_by_member_name() -> None:
                     [*right_port_pins, *right_member_pins],
                 ),
             },
-            root_sheet_name="Top",
+            root_sheet_id="Top",
         )
     )
 

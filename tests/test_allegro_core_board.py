@@ -581,3 +581,34 @@ def test_allegro_board_assembly_reports_via_padstack_without_drill() -> None:
     assert str(padstack_key) in board.metadata.properties["parse_diagnostic_reference_keys"].split(
         ";"
     )
+
+
+def test_allegro_board_assembly_reports_unknown_placement_side() -> None:
+    """Proves an unrecognized placement side is surfaced, not silently fronted."""
+    source = parse_allegro_records(BREAKOUT_BOARD.read_bytes(), source_name=BREAKOUT_BOARD.name)
+    base_board = build_allegro_board(source, name=BREAKOUT_BOARD.stem)
+    base_count = int(base_board.metadata.properties.get("parse_diagnostic_count", "0"))
+    component = next(record for record in source.records if record.tag == 0x07)
+    instance_key = component.payload["footprint_instance_key"]
+    assert isinstance(instance_key, int)
+    instance_record = source.by_key[instance_key]
+    assert instance_record.tag == 0x2D
+    payload = dict(instance_record.payload)
+    payload["placement_side"] = 2
+    mutated_instance = replace(instance_record, payload=MappingProxyType(payload))
+    record_set = AllegroRecordSet(
+        header=source.header,
+        string_table=source.string_table,
+        records=tuple(
+            mutated_instance if record is instance_record else record for record in source.records
+        ),
+        end_offset=source.end_offset,
+    )
+
+    board = build_allegro_board(record_set, name=BREAKOUT_BOARD.stem)
+
+    assert int(board.metadata.properties["parse_diagnostic_count"]) == base_count + 1
+    assert "unknown-placement-side" in board.metadata.properties["parse_diagnostic_codes"].split(
+        ";"
+    )
+    assert str(instance_key) in board.metadata.properties["parse_diagnostic_keys"].split(";")

@@ -10,6 +10,11 @@ from typing import TYPE_CHECKING
 from shapely import GeometryCollection, LineString, MultiLineString, MultiPolygon, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
+from phosphor_eda.domain.arc_geometry import (
+    arc_center_from_three_points,
+    arc_sweep_angle,
+    arc_to_polyline,
+)
 from phosphor_eda.domain.pcb import (
     LayerRole,
     PcbArc,
@@ -28,9 +33,6 @@ from phosphor_eda.domain.pcb import (
     PcbVia,
 )
 from phosphor_eda.geometry.pcb_geometry import (
-    arc_center_from_three_points,
-    arc_sweep_angle,
-    arc_to_polyline,
     board_outline_polygon,
     circle_path_d,
     closed_path_geometry,

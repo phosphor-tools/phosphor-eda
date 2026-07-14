@@ -165,10 +165,16 @@ def _parse_group_members(
 ) -> list[DsnCisGroupMember]:
     payload = _payload_after_optional_size(data, stream_path, store, ctx)
     members: list[DsnCisGroupMember] = []
+    # Rows are ``~``-framed ``state\xb0occurrence_id`` pairs. Keep empty fields in
+    # their positions (mirroring ``_parse_groups_data_stream``): dropping them
+    # before the positional read shifts the id out of ``fields[1]`` whenever the
+    # state is empty. A row with a blank id carries no occurrence (the trailing
+    # ``state\xb0`` padding), so skip it rather than emit a phantom member.
     for row_order, row in enumerate(payload.split(b"~")):
+        if not row:
+            continue
         fields = [_decode_cis_text(field) for field in row.split(b"\xb0")]
-        fields = [field for field in fields if field]
-        if len(fields) < 2:
+        if len(fields) < 2 or not fields[1]:
             continue
         occurrence_id = _parse_decimal(fields[1])
         if occurrence_id is None:

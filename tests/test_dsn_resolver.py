@@ -577,6 +577,7 @@ def test_source_metadata_cannot_override_resolver_owned_keys() -> None:
         metadata={
             "dsn_resolver": "spoofed",
             "parse_issue_count": "999",
+            "parse_issues": "spoofed",
         },
     )
 
@@ -584,6 +585,7 @@ def test_source_metadata_cannot_override_resolver_owned_keys() -> None:
 
     assert clean_design.metadata["dsn_resolver"] == "source"
     assert "parse_issue_count" not in clean_design.metadata
+    assert "parse_issues" not in clean_design.metadata
 
     ctx = ParseContext()
     ctx.warn("fixture_warning", "synthetic warning")

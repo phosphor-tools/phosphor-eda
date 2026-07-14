@@ -46,7 +46,7 @@ class AllegroBoardUnits(StrEnum):
 def allegro_unit_to_mm(units: AllegroBoardUnits, unit_divisor: int) -> float:
     """Return the millimeter scale for one raw Allegro coordinate unit."""
     if unit_divisor <= 0:
-        return 0.0
+        raise ValueError(f"Allegro unit divisor must be positive, got {unit_divisor}")
     if units is AllegroBoardUnits.MILS:
         return 0.0254 / unit_divisor
     if units is AllegroBoardUnits.INCHES:
@@ -74,6 +74,21 @@ MAGIC_TO_VERSION = {
     0x00140E00: AllegroVersion.V_174,
     0x00141500: AllegroVersion.V_175,
     0x00150000: AllegroVersion.V_180,
+}
+
+# Pad-component shape codes → PCB pad shape name. A pad component whose type is
+# absent from this table is a "custom" shape-symbol component: its non-zero
+# string_key references a 0x28 flash shape record rather than a primitive shape.
+PAD_COMPONENT_SHAPES = {
+    0x02: "circle",
+    0x03: "octagon",
+    0x05: "rect",
+    0x06: "rect",
+    0x07: "diamond",
+    0x0B: "oval",
+    0x0C: "oval",
+    0x1B: "roundrect",
+    0x1C: "rect",
 }
 
 BOARD_UNITS = {

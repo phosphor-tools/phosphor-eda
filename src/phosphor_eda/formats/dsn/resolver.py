@@ -21,7 +21,6 @@ from phosphor_eda.domain.schematic import (
     NetNameKind,
     Parameter,
 )
-from phosphor_eda.formats.common.net_union import NetUnion
 from phosphor_eda.formats.common.resolved_graph import (
     ResolutionInputError,
     ResolvedComponentInfo,
@@ -32,6 +31,7 @@ from phosphor_eda.formats.common.resolved_graph import (
     ResolvedPinInput,
     build_resolved_schematic,
 )
+from phosphor_eda.formats.common.spatial import UnionFind
 from phosphor_eda.formats.dsn.source import (
     dsn_component_public_id,
     dsn_name_key,
@@ -89,7 +89,7 @@ def resolve_dsn_source(source: DsnSourceDesign, ctx: ParseContext | None = None)
     local_net_ids = {ref.local_net.id for ref in local_refs}
     local_nets_by_id = {ref.local_net.id: ref.local_net for ref in local_refs}
     _validate_evidence_refs(source.pages, local_nets_by_id)
-    net_union = NetUnion(ref.local_net.id for ref in local_refs)
+    net_union = UnionFind(ref.local_net.id for ref in local_refs)
     pin_occurrences = _collect_pin_occurrences(source.pages)
 
     _merge_stored_page_net_names(source.pages, net_union, local_net_ids)
@@ -101,9 +101,10 @@ def resolve_dsn_source(source: DsnSourceDesign, ctx: ParseContext | None = None)
     name_decisions = _resolve_net_names(source, local_refs, net_union, name_evidence, ctx)
     net_properties_by_root = _collect_net_properties(source.pages, net_union)
     metadata = dict(source.metadata)
-    # The resolver owns parse_issue_count; drop any value carried in from
-    # source metadata so it cannot spoof the count set below from ctx.
+    # The resolver owns the parse diagnostic keys; drop any values carried in
+    # from source metadata so they cannot spoof the count set below from ctx.
     metadata.pop("parse_issue_count", None)
+    metadata.pop("parse_issues", None)
     metadata["dsn_resolver"] = "source"
     if ctx is not None and ctx.issues:
         metadata["parse_issue_count"] = str(len(ctx.issues))
@@ -248,7 +249,7 @@ def _collect_pin_occurrences(pages: Iterable[DsnPageSource]) -> list[DsnPinOccur
 
 
 def _merge_repeated_logical_pins(
-    net_union: NetUnion,
+    net_union: UnionFind[str],
     pin_occurrences: Iterable[DsnPinOccurrence],
     local_net_ids: set[str],
 ) -> None:
@@ -265,7 +266,7 @@ def _merge_repeated_logical_pins(
 
 def _merge_stored_page_net_names(
     pages: Iterable[DsnPageSource],
-    net_union: NetUnion,
+    net_union: UnionFind[str],
     local_net_ids: set[str],
 ) -> None:
     ids_by_name: dict[tuple[str, str], list[str]] = {}
@@ -291,7 +292,7 @@ def _merge_stored_page_net_names(
 
 def _merge_block_sheet_pins(
     source: DsnSourceDesign,
-    net_union: NetUnion,
+    net_union: UnionFind[str],
     local_net_ids: set[str],
     ctx: ParseContext | None,
 ) -> None:
@@ -356,7 +357,7 @@ def _merge_block_sheet_pins(
 
 def _merge_known_scope_off_page_connectors(
     pages: Iterable[DsnPageSource],
-    net_union: NetUnion,
+    net_union: UnionFind[str],
     local_net_ids: set[str],
 ) -> None:
     ids_by_scope_name: dict[tuple[tuple[str, ...], str], list[str]] = {}
@@ -465,7 +466,7 @@ def _off_page_scope_key(scope_id: ScopeId) -> tuple[str, ...]:
     return scope_id.path
 
 
-def _merge_ids(net_union: NetUnion, net_ids: list[str]) -> None:
+def _merge_ids(net_union: UnionFind[str], net_ids: list[str]) -> None:
     if len(net_ids) < 2:
         return
     first_id = net_ids[0]
@@ -534,7 +535,7 @@ def _local_net_inputs(
 
 def _collect_net_properties(
     pages: Iterable[DsnPageSource],
-    net_union: NetUnion,
+    net_union: UnionFind[str],
 ) -> dict[str, list[dict[str, str | int]]]:
     """Aggregate wire net-property evidence per resolved net (keyed by root id).
 
@@ -600,7 +601,7 @@ def _stored_name_kind(name: str) -> NetNameKind:
 def _resolve_net_names(
     source: DsnSourceDesign,
     local_refs: list[_LocalNetRef],
-    net_union: NetUnion,
+    net_union: UnionFind[str],
     evidence_by_local_id: dict[str, _NameEvidence],
     ctx: ParseContext | None,
 ) -> dict[str, _NetNameDecision]:
@@ -799,10 +800,15 @@ def _resolve_unnamed_groups(
 
 
 def _synthesized_name(root_id: str, group: list[DsnPageNet]) -> str:
-    """Placeholder for a net Capture stored no name for (N{page-net id:08d})."""
+    """Placeholder for a net Capture stored no name for (``N${page-net id:08d}``).
+
+    The ``$`` keeps the placeholder out of the ``N\\d{5,}`` Capture-autoname
+    namespace (``_AUTONAME_FORM``), so ``_stored_name_kind`` never misclassifies
+    a synthesized name as ``TOOL_AUTO``.
+    """
     net_ids = [local_net.net_id for local_net in group if local_net.net_id >= 0]
     if net_ids:
-        return f"N{min(net_ids):08d}"
+        return f"N${min(net_ids):08d}"
     return root_id
 
 

@@ -638,8 +638,9 @@ class TestResolveAnnotations:
         resolved = resolve_annotations(spec, board, "front", font_size_pt=12)
 
         assert resolved.font_size == pytest.approx(16.0)
-        # Board is 40 mm wide; the standard display width is 1000 px.
-        assert resolved.px_scale == pytest.approx(40.0 / 1000)
+        # Board painted extent is 40.1 mm wide (40 mm + 0.1 edge stroke); the
+        # standard display width is 1000 px.
+        assert resolved.px_scale == pytest.approx(40.1 / 1000)
 
     def test_rotation_90_maps_pointer_target_clockwise(self, board: Board) -> None:
         """Rotation turns targets clockwise about the board center (20, 10)."""
@@ -662,9 +663,10 @@ class TestResolveAnnotations:
         unrotated = resolve_annotations(spec, board, "front")
         rotated = resolve_annotations(spec, board, "front", rotation=90)
 
-        # Board is 40x20 mm; the standard display width is 1000 px.
-        assert unrotated.px_scale == pytest.approx(40.0 / 1000)
-        assert rotated.px_scale == pytest.approx(20.0 / 1000)
+        # Board painted extent is 40.1x20.1 mm (40x20 mm + 0.1 edge stroke); the
+        # standard display width is 1000 px.
+        assert unrotated.px_scale == pytest.approx(40.1 / 1000)
+        assert rotated.px_scale == pytest.approx(20.1 / 1000)
 
     def test_rotation_composes_with_back_mirror(self, board: Board) -> None:
         """Back-side targets mirror first, then rotate."""

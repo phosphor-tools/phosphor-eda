@@ -18,7 +18,11 @@ from phosphor_eda.domain.pcb import (
     PcbPolygon,
     PcbText,
 )
-from phosphor_eda.formats.allegro.constants import AllegroVersion, version_at_least
+from phosphor_eda.formats.allegro.constants import (
+    PAD_COMPONENT_SHAPES,
+    AllegroVersion,
+    version_at_least,
+)
 from phosphor_eda.formats.allegro.coords import BoardFrame, board_frame
 from phosphor_eda.formats.allegro.diagnostics import (
     drc_marker_diagnostic,
@@ -78,11 +82,16 @@ _FILLED_RECTANGLE_ROLES = (
 def extract_allegro_graphics(
     record_set: AllegroRecordSet,
     layer_map: AllegroLayerMap,
+    graph: AllegroObjectGraph | None = None,
 ) -> AllegroGraphics:
-    graph = build_allegro_object_graph(record_set)
+    # A caller that shares one object graph across extractors owns its
+    # diagnostics and counts them once; only seed them here when we built the
+    # graph ourselves, so a standalone call stays self-contained.
+    owns_graph = graph is None
+    graph = build_allegro_object_graph(record_set) if graph is None else graph
     frame = board_frame(record_set.header)
     flash_keys = flash_symbol_keys(record_set)
-    diagnostics: list[AllegroRecordDiagnostic] = list(graph.diagnostics)
+    diagnostics: list[AllegroRecordDiagnostic] = list(graph.diagnostics) if owns_graph else []
     board_profile: list[AllegroGraphicPrimitive] = []
     artwork: list[AllegroGraphicPrimitive] = []
     keepouts: list[AllegroGraphicPrimitive] = []
@@ -447,7 +456,12 @@ def _keepout_primitive(
 
 
 def flash_symbol_keys(record_set: AllegroRecordSet) -> frozenset[int]:
-    """Shape-record keys referenced as padstack flash symbols."""
+    """Shape-record keys referenced as padstack flash symbols.
+
+    Only "custom" pad components carry a shape-record ``string_key``; a component
+    whose type is a primitive shape (in ``PAD_COMPONENT_SHAPES``) uses that field
+    for other purposes, so it must not be mistaken for a flash-symbol reference.
+    """
     keys: set[int] = set()
     for record in record_set.records:
         if record.tag != 0x1C:
@@ -455,7 +469,12 @@ def flash_symbol_keys(record_set: AllegroRecordSet) -> frozenset[int]:
         components = record.payload.get("components", ())
         if isinstance(components, tuple):
             for component in components:
-                if isinstance(component, AllegroPadstackComponent) and component.string_key:
+                if (
+                    isinstance(component, AllegroPadstackComponent)
+                    and component.string_key
+                    and component.component_type != 0
+                    and component.component_type not in PAD_COMPONENT_SHAPES
+                ):
                     keys.add(component.string_key)
     return frozenset(keys)
 
@@ -554,7 +573,7 @@ def closed_path_from_segment_chain(
         elif _is_full_circle_arc(segment):
             segments.extend(_full_circle_path_segments(segment, frame))
         else:
-            mid_x, mid_y = _arc_midpoint(segment, frame)
+            mid_x, mid_y = _arc_midpoint(segment, frame, diagnostics)
             segments.append(
                 PcbPathSegment(
                     PcbPathSegmentKind.ARC,
@@ -832,6 +851,7 @@ def graphic_segment_primitives(
             frame=frame,
             layer=layer,
             roles=roles,
+            diagnostics=diagnostics,
         )
         if primitive is not None:
             primitive = replace(
@@ -849,6 +869,7 @@ def line_or_arc_primitive(
     frame: BoardFrame,
     layer: PcbLayer,
     roles: tuple[AllegroPrimitiveRole, ...],
+    diagnostics: list[AllegroRecordDiagnostic],
 ) -> AllegroGraphicPrimitive | None:
     if record.tag in {0x15, 0x16, 0x17}:
         start_x, start_y = frame.point(
@@ -892,7 +913,7 @@ def line_or_arc_primitive(
                 source_key=record.key or 0,
                 metadata=record_metadata(owner, layer),
             )
-        mid_x, mid_y = _arc_midpoint(record, frame)
+        mid_x, mid_y = _arc_midpoint(record, frame, diagnostics)
         start_x, start_y = frame.point(
             payload_int(record, "start_x"), payload_int(record, "start_y")
         )
@@ -926,7 +947,11 @@ def _is_full_circle_arc(record: AllegroRecord) -> bool:
     )
 
 
-def _arc_midpoint(record: AllegroRecord, frame: BoardFrame) -> tuple[float, float]:
+def _arc_midpoint(
+    record: AllegroRecord,
+    frame: BoardFrame,
+    diagnostics: list[AllegroRecordDiagnostic],
+) -> tuple[float, float]:
     # Midpoint is derived in the native Y-up frame (frame.length, no sign) so the
     # angle math matches Allegro; only the returned Y is flipped into the domain
     # Y-down frame at the end.
@@ -934,6 +959,16 @@ def _arc_midpoint(record: AllegroRecord, frame: BoardFrame) -> tuple[float, floa
     center_y = frame.length(payload_float(record, "center_y"))
     radius = frame.length(payload_float(record, "radius"))
     if radius <= 0.0:
+        diagnostics.append(
+            drop_diagnostic(
+                record,
+                code="degenerate-arc-radius",
+                message=(
+                    f"arc record {record.key} has non-positive radius; "
+                    "using the arc center as its midpoint"
+                ),
+            )
+        )
         return center_x, -center_y
 
     start_x = frame.length(payload_int(record, "start_x"))

@@ -65,6 +65,7 @@ _DIAG_COMPONENT_PAD_CHAIN_CYCLE = "component-pad-chain-cycle"
 _DIAG_FOOTPRINT_PAD_CHAIN_CYCLE = "footprint-pad-chain-cycle"
 _DIAG_UNRESOLVED_COMPONENT_PAD = "unresolved-component-pad"
 _DIAG_UNRESOLVED_FOOTPRINT_PAD = "unresolved-footprint-pad"
+_DIAG_UNKNOWN_PLACEMENT_SIDE = "unknown-placement-side"
 _DIAG_UNRESOLVED_FOOTPRINT_INSTANCE = "unresolved-footprint-instance"
 _DIAG_UNRESOLVED_FOOTPRINT_INSTANCE_CHAIN = "unresolved-footprint-instance-chain"
 _DIAG_UNRESOLVED_PAD_DEFINITION = "unresolved-pad-definition"
@@ -74,6 +75,7 @@ _DIAG_UNSUPPORTED_VIA_WITHOUT_DRILL = "unsupported-via-without-drill"
 _BOARD_ASSEMBLY_DIAGNOSTIC_CODES = {
     _DIAG_COMPONENT_PAD_CHAIN_CYCLE,
     _DIAG_FOOTPRINT_PAD_CHAIN_CYCLE,
+    _DIAG_UNKNOWN_PLACEMENT_SIDE,
     _DIAG_UNRESOLVED_COMPONENT_PAD,
     _DIAG_UNRESOLVED_FOOTPRINT_PAD,
     _DIAG_UNRESOLVED_FOOTPRINT_INSTANCE,
@@ -101,7 +103,7 @@ def build_allegro_board(
 ) -> Board:
     layer_map = build_allegro_layers(record_set)
     graph = build_allegro_object_graph(record_set)
-    graphics = extract_allegro_graphics(record_set, layer_map)
+    graphics = extract_allegro_graphics(record_set, layer_map, graph)
     unit_to_mm = _unit_to_mm(record_set)
     frame = BoardFrame(unit_to_mm)
     builder = PcbBuilder(
@@ -196,6 +198,7 @@ def build_allegro_board(
     _add_graphics(builder, graphics, include_copper_artwork=False)
     diagnostic_count = (
         len(layer_map.diagnostics)
+        + len(graph.diagnostics)
         + len(graphics.diagnostics)
         + len(copper.diagnostics)
         + len(build_diagnostics)
@@ -206,6 +209,7 @@ def build_allegro_board(
             builder,
             (
                 *layer_map.diagnostics,
+                *graph.diagnostics,
                 *graphics.diagnostics,
                 *copper.diagnostics,
                 *build_diagnostics,
@@ -432,6 +436,17 @@ def _add_footprints(
             refdes = f"REF_{component.key or instance_key}"
         refdes = _unique_ref(refdes, used_refs)
         side = payload_int(instance, "placement_side")
+        if side not in {0, 1}:
+            diagnostics.append(
+                build_diagnostic(
+                    instance,
+                    code=_DIAG_UNKNOWN_PLACEMENT_SIDE,
+                    message=(
+                        f"footprint instance {instance.key} has unknown placement side "
+                        f"{side}; defaulting to front copper"
+                    ),
+                )
+            )
         layer = copper_back if side == 1 else copper_front
         package_name = package.package_name if package else ""
         footprint_metadata = {
@@ -915,14 +930,16 @@ def _string(string_table: Mapping[int, str], key: int) -> str:
 def _record_center_x(record: AllegroRecord, frame: BoardFrame) -> float:
     coord_2_x = record.payload.get("coord_2_x")
     if isinstance(coord_2_x, int):
-        return (payload_int(record, "coord_x") + coord_2_x) * frame.unit_to_mm / 2.0
+        # Midpoint in native units, converted once so BoardFrame owns scaling.
+        return frame.x((payload_int(record, "coord_x") + coord_2_x) / 2.0)
     return frame.x(payload_int(record, "coord_x"))
 
 
 def _record_center_y(record: AllegroRecord, frame: BoardFrame) -> float:
     coord_2_y = record.payload.get("coord_2_y")
     if isinstance(coord_2_y, int):
-        return -((payload_int(record, "coord_y") + coord_2_y) * frame.unit_to_mm / 2.0)
+        # Midpoint in native units, converted once so BoardFrame owns negation.
+        return frame.y((payload_int(record, "coord_y") + coord_2_y) / 2.0)
     return frame.y(payload_int(record, "coord_y"))
 
 

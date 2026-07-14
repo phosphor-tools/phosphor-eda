@@ -1,8 +1,11 @@
 """Tests for KiCad source-to-public schematic resolution."""
 
+import json
+
 import pytest
 
 from phosphor_eda.domain.schematic import BusKind, Net, NetNameKind, ScopeId
+from phosphor_eda.formats.common.diagnostics import ParseContext
 from phosphor_eda.formats.common.resolved_graph import ResolutionInputError
 from phosphor_eda.formats.kicad.resolver import resolve_kicad_source, select_kicad_net_name
 from phosphor_eda.formats.kicad.source import (
@@ -562,6 +565,89 @@ def test_kicad_pin_auto_name_adds_unit_letter_only_for_multi_unit_symbols() -> N
 
     assert _net_for_reference(design.nets, "D1").name == "unconnected-(D1-K-Pad1)"
     assert _net_for_reference(design.nets, "U1").name == "unconnected-(U1A-OUT-Pad1)"
+
+
+@pytest.mark.parametrize(
+    ("unit", "expected_suffix"),
+    [(1, "A"), (26, "Z"), (27, "AA"), (52, "AZ"), (53, "BA")],
+)
+def test_kicad_multi_unit_suffix_uses_bijective_base26(unit: int, expected_suffix: str) -> None:
+    root = _scope()
+    net_id = "root:local:multi"
+    pin = _pin(
+        root,
+        net_id,
+        "U1",
+        designator="1",
+        pin_name="OUT",
+        component_unit=unit,
+        component_has_multiple_units=True,
+    )
+
+    design = resolve_kicad_source(_source([_local_net(root, "multi", pins=[pin])], [pin]))
+
+    assert (
+        _net_for_reference(design.nets, "U1").name == f"unconnected-(U1{expected_suffix}-OUT-Pad1)"
+    )
+
+
+def test_resolver_surfaces_parse_issue_messages_in_metadata() -> None:
+    ctx = ParseContext()
+    ctx.warn("sheet", "missing child sheet Foo.kicad_sch")
+    ctx.error("net", "duplicate net name BAR")
+    root = _scope()
+    net_id = "root:local:sig"
+    pin = _pin(root, net_id, "U1")
+
+    design = resolve_kicad_source(
+        _source([_local_net(root, "sig", pins=[pin])], [pin]),
+        ctx,
+    )
+
+    assert design.metadata["parse_issue_count"] == "2"
+    assert json.loads(design.metadata["parse_issues"]) == [
+        {
+            "severity": "WARNING",
+            "category": "sheet",
+            "message": "missing child sheet Foo.kicad_sch",
+        },
+        {"severity": "ERROR", "category": "net", "message": "duplicate net name BAR"},
+    ]
+
+
+def test_resolver_omits_parse_issue_metadata_when_clean() -> None:
+    root = _scope()
+    net_id = "root:local:sig"
+    pin = _pin(root, net_id, "U1")
+
+    design = resolve_kicad_source(
+        _source([_local_net(root, "sig", pins=[pin])], [pin]),
+        ParseContext(),
+    )
+
+    assert "parse_issue_count" not in design.metadata
+    assert "parse_issues" not in design.metadata
+
+
+def test_kicad_user_label_with_pad_substring_is_not_demoted() -> None:
+    # A user label that merely contains "-Pad" is not an auto-generated
+    # pad-derived net name and must win over an alphabetically later sibling.
+    root = _scope()
+    net_id = "root:local:sig"
+    pin = _pin(root, net_id, "U1")
+    net = _local_net(
+        root,
+        "sig",
+        local_labels=[
+            _local_label(root, net_id, "AAA-Pad9", index=1),
+            _local_label(root, net_id, "ZZZ", index=2),
+        ],
+        pins=[pin],
+    )
+
+    design = resolve_kicad_source(_source([net], [pin]))
+
+    assert _net_for_reference(design.nets, "U1").name == "/AAA-Pad9"
 
 
 def test_kicad_single_pin_net_uses_versioned_unconnected_auto_name() -> None:

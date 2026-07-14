@@ -14,6 +14,11 @@ if TYPE_CHECKING:
 _VECTOR_RE = re.compile(r"^(?P<prefix>.*)\[(?P<start>-?\d+)\.\.(?P<end>-?\d+)\]$")
 _GROUP_RE = re.compile(r"^(?P<prefix>[^{]*)\{(?P<body>.*)\}$")
 
+# Upper bound on members from a single vector range (repo rule: every string
+# bounded). Untrusted ``A[0..n]`` notation would otherwise allocate one string
+# per index; a bus far wider than this is malformed rather than real.
+MAX_VECTOR_BUS_MEMBERS = 8192
+
 
 @dataclass(frozen=True, slots=True)
 class BusDefinition:
@@ -24,6 +29,11 @@ class BusDefinition:
     kind: BusKind
     member_names: tuple[str, ...] = ()
     metadata: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # Copy the caller's dict so a later mutation of it cannot reach into
+        # this frozen definition (no shared mutable state between instances).
+        object.__setattr__(self, "metadata", dict(self.metadata))
 
 
 def expand_vector_bus(name: str) -> list[str] | None:
@@ -161,6 +171,13 @@ def _expand_vector_part(part: str) -> list[str] | None:
     prefix = match.group("prefix")
     start = int(match.group("start"))
     end = int(match.group("end"))
+    count = abs(end - start) + 1
+    if count > MAX_VECTOR_BUS_MEMBERS:
+        msg = (
+            f"bus vector '{part}' expands to {count} members; "
+            f"the maximum is {MAX_VECTOR_BUS_MEMBERS}"
+        )
+        raise ValueError(msg)
     step = 1 if end >= start else -1
     return [f"{prefix}{index}" for index in range(start, end + step, step)]
 

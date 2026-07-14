@@ -18,12 +18,14 @@ from phosphor_eda.domain.pcb import (
     PcbConductorKind,
     PcbDrill,
     PcbDrillPlating,
+    PcbDrillShape,
     PcbFootprint,
     PcbLayer,
     PcbLine,
     PcbNet,
     PcbPad,
     PcbPadType,
+    PcbPolygon,
     PcbVia,
     PcbViaType,
 )
@@ -73,7 +75,8 @@ from phosphor_eda.formats.dsn.raw_models import (
 from phosphor_eda.formats.dsn.to_schematic import dsn_to_design
 from phosphor_eda.formats.kicad.board import parse_kicad_pcb
 from phosphor_eda.query.project_loader import load_project
-from phosphor_eda.query.sql import load_database
+from phosphor_eda.query.sql import load_database, loader
+from phosphor_eda.query.sql.loader import _conductor_row
 
 FIXTURES = Path(__file__).parent / "fixtures"
 UPSTREAM_FIXTURES = FIXTURES.parent / "upstream"
@@ -1772,6 +1775,128 @@ def test_kicad_keepouts_are_queryable_in_sql() -> None:
         assert _count(con, "SELECT count(*) FROM keepouts") > 0
     finally:
         con.close()
+
+
+def test_polygon_conductor_length_is_null_not_zero() -> None:
+    conductor = PcbConductor(
+        id="region:1",
+        kind=PcbConductorKind.POUR_FILL,
+        layer=PcbLayer("F.Cu", (LayerRole.COPPER,)),
+        data=PcbPolygon([(0.0, 0.0), (4.0, 0.0), (4.0, 4.0)]),
+    )
+
+    row = _conductor_row(conductor)
+
+    # A filled region has no meaningful centerline length; NULL, not 0.0, is the
+    # sentinel every other undefined conductor scalar uses.
+    assert row.length is None
+
+
+def test_load_database_closes_connection_on_partial_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[duckdb.DuckDBPyConnection] = []
+    real_connect = duckdb.connect
+
+    def capturing_connect(database: str) -> duckdb.DuckDBPyConnection:
+        con = real_connect(database)
+        captured.append(con)
+        return con
+
+    def boom(_con: duckdb.DuckDBPyConnection, _project: Project) -> None:
+        raise RuntimeError("load failed")
+
+    monkeypatch.setattr(loader.duckdb, "connect", capturing_connect)
+    monkeypatch.setattr(loader, "_load_project_metadata", boom)
+
+    with pytest.raises(RuntimeError, match="load failed"):
+        loader.load_database(Project(name="partial"))
+
+    assert captured, "expected load_database to open a connection"
+    with pytest.raises(duckdb.Error):
+        captured[0].execute("SELECT 1")
+
+
+def test_net_summary_pcb_pad_count_includes_footprintless_pads() -> None:
+    # Pads without a footprint carry a NULL reference; the old
+    # reference||'.'||pad_number key discarded them and collapsed shared pad
+    # numbers. Counting distinct pad ids counts every pad on the net.
+    page = Page(id="page:main", name="Main")
+    sig = Net(id="net:sig", name="SIG", pages=[page])
+    schematic = Schematic(name="PadCount", pages=[page], nets=[sig])
+
+    builder = PcbBuilder("PadCount PCB")
+    front = builder.add_layer(PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT)))
+    net = builder.add_net(PcbNet(number=1, name="SIG"))
+    connector = builder.add_footprint(
+        PcbFootprint(reference="J1", footprint_lib="Lib", x=0.0, y=0.0, rotation=0.0, layer=front)
+    )
+    builder.add_pad_object(
+        PcbPad(
+            id="pad:J1:1",
+            number="1",
+            x=0.0,
+            y=0.0,
+            stack=PadStack.simple("rect", 1.0, 1.0),
+            pad_type=PcbPadType.SMD,
+            layers=(front,),
+            net=net,
+            footprint=connector,
+        )
+    )
+    for index in (2, 3):
+        builder.add_pad_object(
+            PcbPad(
+                id=f"pad:free:{index}",
+                number=str(index),
+                x=float(index),
+                y=0.0,
+                stack=PadStack.simple("rect", 1.0, 1.0),
+                pad_type=PcbPadType.SMD,
+                layers=(front,),
+                net=net,
+            )
+        )
+
+    con = load_database(Project(name="PadCount", schematic=schematic, boards=[builder.build()]))
+    try:
+        row = con.execute("SELECT pcb_pad_count FROM net_summary WHERE name = 'SIG'").fetchone()
+    finally:
+        con.close()
+
+    assert row is not None
+    assert row[0] == 3
+
+
+def test_drill_histogram_reports_slots_by_dimensions() -> None:
+    # Slots have diameter 0.0; they must not collapse into a misleading 0.0
+    # bucket. The histogram reports the drilled width and the slot length.
+    builder = PcbBuilder("Slot PCB")
+    front = builder.add_layer(PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT)))
+    back = builder.add_layer(PcbLayer("B.Cu", (LayerRole.COPPER, LayerRole.BACK)))
+    builder.add_drill_object(
+        PcbDrill(
+            id="drill:slot:1",
+            x=0.0,
+            y=0.0,
+            diameter=0.0,
+            shape=PcbDrillShape.SLOT,
+            width=2.0,
+            height=1.0,
+            plating=PcbDrillPlating.PLATED,
+            layers=(front, back),
+        )
+    )
+
+    con = load_database(Project(name="Slot", boards=[builder.build()]))
+    try:
+        rows = con.execute(
+            "SELECT drill_mm, shape, slot_length_mm FROM drill_histogram ORDER BY drill_mm"
+        ).fetchall()
+    finally:
+        con.close()
+
+    assert rows == [(2.0, "slot", 1.0)]
 
 
 def test_altium_typed_tables_are_populated(altium_db: duckdb.DuckDBPyConnection) -> None:

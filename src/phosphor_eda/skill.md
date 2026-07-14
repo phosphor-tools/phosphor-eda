@@ -22,10 +22,10 @@ behavior, timing, and protocol details live in reference documents. Most
 hardware questions require both the schematic and at least one reference
 document.
 
-After querying the schematic, cross-reference component specs against
-datasheets using `datasheet_search` with the manufacturer part number (from
-`show component`). The schematic tells you connectivity; the datasheet and
-reference manual tell you what it means.
+After querying the schematic, cross-reference component specs against the
+manufacturer datasheet for each part's MPN (from `show component`). The
+schematic tells you connectivity; the datasheet and reference manual tell you
+what it means.
 
 When component output includes `MPN:`, use it as the authoritative component
 identity for datasheet lookup, part review, and electrical interpretation.
@@ -89,15 +89,14 @@ and user guides cover the pin mux tables, register maps, and configuration
 details that datasheets omit. These documents frequently cover a part family
 (e.g., an entire MCU series), not just the specific model.
 
-**How to find them:** Use the `datasheet_search` tool with the manufacturer
-part number (from `show component`). It returns structured specs and direct
-PDF URLs. If the part isn't found there, check the working directory for local
-PDFs or ask the user.
+**How to find them:** Look up the manufacturer part number (from `show
+component`) to locate the datasheet or reference manual. Check the working
+directory for local PDFs first, then the manufacturer's published
+documentation, and ask the user if the document isn't available.
 
-**How to read them:** Use `open_document` with the PDF URL, then
-`grep_document` and `read_document` to navigate. For large reference manuals
-(1000+ pages), use the TOC to target specific sections rather than reading
-the whole document.
+**How to read them:** Open the PDF and navigate by its table of contents. For
+large reference manuals (1000+ pages), target specific sections rather than
+reading the whole document.
 
 ## CLI reference
 

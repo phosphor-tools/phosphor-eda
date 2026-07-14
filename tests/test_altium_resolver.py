@@ -201,7 +201,7 @@ def _source(
     allow_port_net_names: bool = False,
     allow_sheet_entry_net_names: bool = True,
     power_port_names_take_priority: bool = False,
-    root_sheet_name: str = "",
+    root_sheet_id: str = "",
 ) -> AltiumSourceDesign:
     return AltiumSourceDesign(
         name="test",
@@ -212,7 +212,7 @@ def _source(
             power_port_names_take_priority=power_port_names_take_priority,
         ),
         sheets={sheet.name: sheet for sheet in sheets},
-        root_sheet_name=root_sheet_name or sheets[0].name,
+        root_sheet_id=root_sheet_id or sheets[0].name,
     )
 
 
@@ -251,7 +251,7 @@ def test_smart_effective_mode_chooses_hierarchical_power_global_when_root_has_en
                 _sheet("Child", [child_net], child_pins, source_file="Child.SchDoc"),
             ],
             mode=AltiumHierarchyMode.SMART,
-            root_sheet_name="Top",
+            root_sheet_id="Top",
         ),
     )
 
@@ -403,7 +403,7 @@ def test_hierarchical_power_global_merges_ports_only_through_matching_sheet_entr
                 ),
             ],
             mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
-            root_sheet_name="Top",
+            root_sheet_id="Top",
         ),
     )
 
@@ -476,7 +476,7 @@ def test_hierarchical_repeated_sheet_symbols_use_specific_child_instance_scope()
                 ),
             ],
             mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
-            root_sheet_name="Top",
+            root_sheet_id="Top",
         ),
     )
 
@@ -525,7 +525,7 @@ def test_hierarchical_power_local_does_not_merge_same_name_power_ports_across_sh
                 ),
             ],
             mode=AltiumHierarchyMode.HIERARCHICAL_POWER_LOCAL,
-            root_sheet_name="Top",
+            root_sheet_id="Top",
         ),
     )
 
@@ -790,7 +790,7 @@ def test_unattached_top_level_sheet_entry_is_allowed_and_ignored():
                 _sheet("Child", [], [], source_file="Child.SchDoc"),
             ],
             mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
-            root_sheet_name="Top",
+            root_sheet_id="Top",
         )
     )
 
@@ -1027,7 +1027,7 @@ def test_hierarchy_merge_warns_on_ambiguous_child_basename():
                 _sheet("ChildB", [child_b_net], child_b_pins, source_file="B/Child.SchDoc"),
             ],
             mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
-            root_sheet_name="Top",
+            root_sheet_id="Top",
         ),
         ctx,
     )
@@ -1168,7 +1168,7 @@ def test_qualified_harness_member_labels_unify_across_hierarchy():
             [top, mcu, phy],
             mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
             allow_sheet_entry_net_names=False,
-            root_sheet_name="Top",
+            root_sheet_id="Top",
         ),
     )
 
@@ -1238,7 +1238,7 @@ def test_vector_bus_members_unify_across_multi_level_hierarchy():
             [top, mid, leafa, leafb],
             mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
             allow_sheet_entry_net_names=False,
-            root_sheet_name="Top",
+            root_sheet_id="Top",
         ),
     )
 
@@ -1308,7 +1308,7 @@ def test_bus_range_harness_members_unify_with_underscore_labels():
             [top, a, b],
             mode=AltiumHierarchyMode.HIERARCHICAL_POWER_GLOBAL,
             allow_sheet_entry_net_names=False,
-            root_sheet_name="Top",
+            root_sheet_id="Top",
         ),
     )
 

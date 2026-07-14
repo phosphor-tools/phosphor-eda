@@ -9,6 +9,7 @@ Two output styles share the same labelling/ambiguity helpers:
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import TYPE_CHECKING
 
 from phosphor_eda.domain.buses import bus_memberships
@@ -170,15 +171,13 @@ def single_line_text(value: str) -> str:
     return " ".join(value.split())
 
 
-def _component_mpn_label(comp: Component) -> str:
-    return component_mpn_label(comp)
-
-
-def _component_header(design: Schematic, comp: Component) -> str:
+def _component_header(
+    design: Schematic, comp: Component, *, ref_counts: Counter[str] | None = None
+) -> str:
     page_names = ", ".join(_page_names(comp.pages))
-    label = _component_block_label(design, comp)
+    label = _component_block_label(design, comp, ref_counts=ref_counts)
     fields: list[str] = [f"COMPONENT: {label}"]
-    mpn = _component_mpn_label(comp)
+    mpn = component_mpn_label(comp)
     if mpn:
         fields.append(f"MPN: {mpn}")
     fields.append(f"SYMBOL: {comp.part}")
@@ -210,11 +209,24 @@ def _pin_net_str(pin: Pin) -> str:
     return pin.net.name
 
 
-def _component_reference_is_ambiguous(design: Schematic, comp: Component) -> bool:
-    return sum(1 for candidate in design.components if candidate.reference == comp.reference) > 1
+def _reference_counts(design: Schematic) -> Counter[str]:
+    return Counter(candidate.reference for candidate in design.components)
 
 
-def _component_block_label(design: Schematic, comp: Component) -> str:
+def _net_name_counts(design: Schematic) -> Counter[str]:
+    return Counter(candidate.name for candidate in design.nets)
+
+
+def _component_reference_is_ambiguous(
+    design: Schematic, comp: Component, ref_counts: Counter[str] | None = None
+) -> bool:
+    counts = ref_counts if ref_counts is not None else _reference_counts(design)
+    return counts[comp.reference] > 1
+
+
+def _component_block_label(
+    design: Schematic, comp: Component, *, ref_counts: Counter[str] | None = None
+) -> str:
     """Component header reference, qualified by physical designator when needed.
 
     For a logical reference that is ambiguous across instances (Case B/C), append
@@ -223,7 +235,7 @@ def _component_block_label(design: Schematic, comp: Component) -> str:
     suffix.
     """
     designator = component_physical_designator(comp)
-    if designator and _component_reference_is_ambiguous(design, comp):
+    if designator and _component_reference_is_ambiguous(design, comp, ref_counts):
         return f"{comp.reference} [{designator}]"
     return comp.reference
 
@@ -261,26 +273,40 @@ def _pin_context_page(design: Schematic, pin: Pin, net: Net | None = None) -> st
     return "?"
 
 
-def _pin_label(design: Schematic, pin: Pin, net: Net | None = None) -> str:
+def _pin_label(
+    design: Schematic, pin: Pin, net: Net | None = None, *, ref_counts: Counter[str] | None = None
+) -> str:
     label = f"{pin.component.reference}.{pin.designator}"
-    if _component_reference_is_ambiguous(design, pin.component):
+    if _component_reference_is_ambiguous(design, pin.component, ref_counts):
         return f"{_pin_context_page(design, pin, net)}/{label}"
     return label
 
 
-def _component_label(design: Schematic, comp: Component) -> str:
-    if _component_reference_is_ambiguous(design, comp):
+def _component_label(
+    design: Schematic, comp: Component, *, ref_counts: Counter[str] | None = None
+) -> str:
+    if _component_reference_is_ambiguous(design, comp, ref_counts):
         labels = sorted({_page_label(design, page) for page in comp.pages})
         page_label = labels[0] if labels else "?"
         return f"{page_label}/{comp.reference}"
     return comp.reference
 
 
-def _net_name_is_ambiguous(design: Schematic, net: Net) -> bool:
-    return sum(1 for candidate in design.nets if candidate.name == net.name) > 1
+def _net_name_is_ambiguous(
+    design: Schematic, net: Net, name_counts: Counter[str] | None = None
+) -> bool:
+    counts = name_counts if name_counts is not None else _net_name_counts(design)
+    return counts[net.name] > 1
 
 
-def _format_pin_line(design: Schematic, pin: Pin, comp: Component, *, with_metadata: bool) -> str:
+def _format_pin_line(
+    design: Schematic,
+    pin: Pin,
+    comp: Component,
+    *,
+    with_metadata: bool,
+    ref_counts: Counter[str] | None = None,
+) -> str:
     """Render one pin line for the components section / component detail.
 
     ``with_metadata`` controls the inline ``key=value`` block shown in the full
@@ -297,7 +323,7 @@ def _format_pin_line(design: Schematic, pin: Pin, comp: Component, *, with_metad
         }
         if filtered:
             meta_str = "  " + "  ".join(f"{k}={v}" for k, v in sorted(filtered.items()))
-    dest_str = _trace_destinations(design, pin, comp)
+    dest_str = _trace_destinations(design, pin, comp, ref_counts=ref_counts)
     return f"  Pin {pin.designator:<5s}  {pin.name:<15s} -> {net_str}{meta_str}{dest_str}"
 
 
@@ -352,14 +378,17 @@ def _format_summary(design: Schematic) -> list[str]:
 
 def _format_components(design: Schematic) -> list[str]:
     lines = ["=== COMPONENTS ===", ""]
+    ref_counts = _reference_counts(design)
     for comp in sorted(design.components, key=lambda c: c.reference):
-        lines.append(_component_header(design, comp))
+        lines.append(_component_header(design, comp, ref_counts=ref_counts))
 
         for key, value in sorted(_filter_metadata(comp).items()):
             lines.append(f"  {key}: {value}")
 
         for pin in sorted(comp.pins, key=lambda p: p.designator):
-            lines.append(_format_pin_line(design, pin, comp, with_metadata=True))
+            lines.append(
+                _format_pin_line(design, pin, comp, with_metadata=True, ref_counts=ref_counts)
+            )
 
         lines.append("")
 
@@ -368,6 +397,8 @@ def _format_components(design: Schematic) -> list[str]:
 
 def _format_nets(design: Schematic) -> list[str]:
     lines = ["=== NETS ===", ""]
+    ref_counts = _reference_counts(design)
+    name_counts = _net_name_counts(design)
     for net in sorted(design.nets, key=lambda n: n.name):
         net_pages = net_page_names(net)
         if len(net_pages) > 5:
@@ -378,7 +409,7 @@ def _format_nets(design: Schematic) -> list[str]:
         alias_str = f" | Also: {', '.join(sorted(net.aliases))}" if net.aliases else ""
         lines.append(f"NET: {net.name}{alias_str} | Pages: {page_str}")
 
-        if _net_name_is_ambiguous(design, net):
+        if _net_name_is_ambiguous(design, net, name_counts):
             lines.append("  [name_not_unique: true]")
 
         for key, value in sorted(_filter_default_net_metadata(net).items()):
@@ -389,8 +420,11 @@ def _format_nets(design: Schematic) -> list[str]:
         for bus in bus_memberships(design, net):
             lines.append(f"  Bus: {bus.name} ({bus.kind.value})")
 
-        for pin in sorted(net.pins, key=lambda p: (_pin_label(design, p, net), p.designator)):
-            ref_pin = _pin_label(design, pin, net)
+        for pin in sorted(
+            net.pins,
+            key=lambda p: (_pin_label(design, p, net, ref_counts=ref_counts), p.designator),
+        ):
+            ref_pin = _pin_label(design, pin, net, ref_counts=ref_counts)
             if pin.name:
                 lines.append(f"  {ref_pin:<10s} {pin.name}")
             else:
@@ -408,6 +442,7 @@ def _format_validation(design: Schematic) -> list[str]:
 
     errors = [f for f in findings if f.severity == Severity.ERROR]
     warnings = [f for f in findings if f.severity == Severity.WARNING]
+    infos = [f for f in findings if f.severity == Severity.INFO]
 
     lines = ["=== VALIDATION ===", ""]
     if errors:
@@ -420,8 +455,10 @@ def _format_validation(design: Schematic) -> list[str]:
         for f in warnings:
             lines.append(f"  WARN   [{f.category.value}]  {f.message}")
         lines.append("")
-    if not errors and not warnings:
-        lines.append("No issues found.")
+    if infos:
+        lines.append(f"Info ({len(infos)}):")
+        for f in infos:
+            lines.append(f"  INFO   [{f.category.value}]  {f.message}")
         lines.append("")
 
     return lines
@@ -448,7 +485,9 @@ def write_design(design: Schematic, output_path: Path) -> None:
 # ---- Trace-aware inline destinations ----
 
 
-def _trace_destinations(design: Schematic, pin: Pin, comp: Component) -> str:
+def _trace_destinations(
+    design: Schematic, pin: Pin, comp: Component, *, ref_counts: Counter[str] | None = None
+) -> str:
     """Format inline destinations, tracing through 2-pin passives."""
     if pin.net is None or is_power_net(pin.net.name, pin.net):
         return ""
@@ -459,14 +498,16 @@ def _trace_destinations(design: Schematic, pin: Pin, comp: Component) -> str:
             continue
         if is_two_pin_passive(p.component):
             continue
-        parts.append(_pin_label(design, p, pin.net))
+        parts.append(_pin_label(design, p, pin.net, ref_counts=ref_counts))
 
     # Trace through passives to find active endpoints
     for tr in trace_from_net(pin.net, origin_comp=comp):
         if tr.terminal_pin is None:
             continue
-        waypoints = ", ".join(_component_label(design, w.component) for w in tr.series_path)
-        dest = _pin_label(design, tr.terminal_pin, tr.terminal_pin.net)
+        waypoints = ", ".join(
+            _component_label(design, w.component, ref_counts=ref_counts) for w in tr.series_path
+        )
+        dest = _pin_label(design, tr.terminal_pin, tr.terminal_pin.net, ref_counts=ref_counts)
         parts.append(f"{waypoints} -> {dest}")
 
     # Shunt passives on this net
@@ -479,7 +520,8 @@ def _trace_destinations(design: Schematic, pin: Pin, comp: Component) -> str:
 
         other = other_pin(p.component, p)
         if other.net is not None and is_power_net(other.net.name, other.net):
-            shunt_parts.append(f"{_component_label(design, p.component)} to {other.net.name}")
+            label = _component_label(design, p.component, ref_counts=ref_counts)
+            shunt_parts.append(f"{label} to {other.net.name}")
 
     result = ""
     if parts:

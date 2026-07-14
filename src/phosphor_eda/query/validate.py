@@ -124,20 +124,6 @@ def _all_component_pins(design: Schematic) -> list[Pin]:
     return pins
 
 
-def _find_page_by_id(design: Schematic, page_id: str) -> Page | None:
-    for page in design.pages:
-        if page.id == page_id:
-            return page
-    return None
-
-
-def _find_net_by_id(design: Schematic, net_id: str) -> Net | None:
-    for net in design.nets:
-        if net.id == net_id:
-            return net
-    return None
-
-
 def _has_component_id(page: Page, component_id: str) -> bool:
     return any(comp.id == component_id for comp in page.components)
 
@@ -156,6 +142,9 @@ def _has_net_id(page: Page, net_id: str) -> bool:
 
 def _check_identity_and_links(design: Schematic, findings: list[Finding]) -> None:
     """Check stable IDs and bidirectional object links."""
+    pages_by_id = {page.id: page for page in design.pages}
+    nets_by_id = {net.id: net for net in design.nets}
+
     _append_duplicate_id_findings(
         [(page.id, page.name) for page in design.pages],
         "Page.id",
@@ -182,7 +171,7 @@ def _check_identity_and_links(design: Schematic, findings: list[Finding]) -> Non
 
     for comp in design.components:
         for page in comp.pages:
-            target_page = _find_page_by_id(design, page.id) or page
+            target_page = pages_by_id.get(page.id, page)
             if not _has_component_id(target_page, comp.id):
                 message = (
                     f"Component.pages does not match Page.components: {comp.reference} "
@@ -215,7 +204,7 @@ def _check_identity_and_links(design: Schematic, findings: list[Finding]) -> Non
 
     for page in design.pages:
         for net in page.nets:
-            target_net = _find_net_by_id(design, net.id) or net
+            target_net = nets_by_id.get(net.id, net)
             if _has_page_id(target_net.pages, page.id):
                 continue
             message = (
@@ -233,7 +222,7 @@ def _check_identity_and_links(design: Schematic, findings: list[Finding]) -> Non
 
     for net in design.nets:
         for page in net.pages:
-            target_page = _find_page_by_id(design, page.id) or page
+            target_page = pages_by_id.get(page.id, page)
             if _has_net_id(target_page, net.id):
                 continue
             message = (
@@ -251,7 +240,7 @@ def _check_identity_and_links(design: Schematic, findings: list[Finding]) -> Non
 
     for pin in _all_component_pins(design):
         if pin.net is not None:
-            target_net = _find_net_by_id(design, pin.net.id) or pin.net
+            target_net = nets_by_id.get(pin.net.id, pin.net)
             if _has_pin_id(target_net, pin.id):
                 continue
             message = (

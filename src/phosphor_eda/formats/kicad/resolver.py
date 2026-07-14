@@ -12,11 +12,11 @@ from phosphor_eda.domain.buses import (
     expand_bus_members,
 )
 from phosphor_eda.domain.schematic import NetName, NetNameKind
+from phosphor_eda.formats.common.diagnostics import serialize_parse_issues
 from phosphor_eda.formats.common.electrical import (
     KICAD_ELECTRICAL_MAP,
     set_pin_electrical,
 )
-from phosphor_eda.formats.common.net_union import NetUnion
 from phosphor_eda.formats.common.resolved_graph import (
     ResolutionInputError,
     ResolvedComponentOccurrenceInput,
@@ -26,6 +26,7 @@ from phosphor_eda.formats.common.resolved_graph import (
     ResolvedPinInput,
     build_resolved_schematic,
 )
+from phosphor_eda.formats.common.spatial import UnionFind
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -88,7 +89,7 @@ def resolve_kicad_source(source: KiCadSourceDesign, ctx: ParseContext | None = N
     local_nets_by_id = {local_net.id: local_net for local_net in source.local_nets}
     bus_labels_by_id = {label.id: label for label in source.bus_labels}
     _validate_source_refs(source, local_nets_by_id)
-    net_union = NetUnion(local_net.id for local_net in source.local_nets)
+    net_union = UnionFind(local_net.id for local_net in source.local_nets)
 
     _merge_repeated_logical_pins(net_union, pin_occurrences, component_ids_by_source_id)
     _merge_same_scope_names(net_union, source.local_nets)
@@ -100,6 +101,7 @@ def resolve_kicad_source(source: KiCadSourceDesign, ctx: ParseContext | None = N
     metadata = {"kicad_root_source_file": source.root_source_file}
     if ctx is not None and ctx.issues:
         metadata["parse_issue_count"] = str(len(ctx.issues))
+        metadata["parse_issues"] = serialize_parse_issues(ctx.issues)
 
     design = build_resolved_schematic(
         name=source.name,
@@ -116,7 +118,6 @@ def resolve_kicad_source(source: KiCadSourceDesign, ctx: ParseContext | None = N
             pins_by_local_net_id,
             sheet_names_by_scope,
             bus_labels_by_id,
-            source.schematic_version,
             net_index,
             root_id,
             group_local_nets,
@@ -177,7 +178,7 @@ def _kicad_bus_aliases_for_scope(
 
 
 def _merge_repeated_logical_pins(
-    net_union: NetUnion,
+    net_union: UnionFind[str],
     pin_occurrences: Iterable[KiCadPinOccurrence],
     component_ids_by_source_id: dict[str, str],
 ) -> None:
@@ -193,7 +194,7 @@ def _merge_repeated_logical_pins(
         _merge_ids(net_union, net_ids)
 
 
-def _merge_same_scope_names(net_union: NetUnion, local_nets: Iterable[KiCadLocalNet]) -> None:
+def _merge_same_scope_names(net_union: UnionFind[str], local_nets: Iterable[KiCadLocalNet]) -> None:
     label_ids: dict[tuple[ScopeId, str], list[str]] = {}
 
     for local_net in local_nets:
@@ -214,7 +215,7 @@ def _merge_same_scope_names(net_union: NetUnion, local_nets: Iterable[KiCadLocal
         _merge_ids(net_union, net_ids)
 
 
-def _merge_global_labels(net_union: NetUnion, local_nets: Iterable[KiCadLocalNet]) -> None:
+def _merge_global_labels(net_union: UnionFind[str], local_nets: Iterable[KiCadLocalNet]) -> None:
     ids_by_name: dict[str, list[str]] = {}
     for local_net in local_nets:
         for label in local_net.global_labels:
@@ -226,7 +227,7 @@ def _merge_global_labels(net_union: NetUnion, local_nets: Iterable[KiCadLocalNet
         _merge_ids(net_union, net_ids)
 
 
-def _merge_power_symbols(net_union: NetUnion, local_nets: Iterable[KiCadLocalNet]) -> None:
+def _merge_power_symbols(net_union: UnionFind[str], local_nets: Iterable[KiCadLocalNet]) -> None:
     ids_by_name: dict[tuple[ScopeId | None, str], list[str]] = {}
     for local_net in local_nets:
         for symbol in local_net.power_symbols:
@@ -241,7 +242,7 @@ def _merge_power_symbols(net_union: NetUnion, local_nets: Iterable[KiCadLocalNet
 
 def _merge_bus_entry_members(
     source: KiCadSourceDesign,
-    net_union: NetUnion,
+    net_union: UnionFind[str],
     sheet_names_by_scope: dict[ScopeId, str],
     bus_labels_by_id: dict[str, KiCadBusLabel],
 ) -> None:
@@ -259,7 +260,7 @@ def _is_local_power_symbol(symbol: KiCadPowerSymbol) -> bool:
     return symbol.power_kind == "local"
 
 
-def _merge_hierarchical_sheet_pins(source: KiCadSourceDesign, net_union: NetUnion) -> None:
+def _merge_hierarchical_sheet_pins(source: KiCadSourceDesign, net_union: UnionFind[str]) -> None:
     child_hierarchical_net_ids: dict[tuple[ScopeId, str], list[str]] = {}
     for local_net in source.local_nets:
         for label in local_net.hierarchical_labels:
@@ -278,7 +279,7 @@ def _merge_hierarchical_sheet_pins(source: KiCadSourceDesign, net_union: NetUnio
             _ = net_union.union(sheet_pin.local_net_id, child_net_id)
 
 
-def _merge_ids(net_union: NetUnion, net_ids: list[str]) -> None:
+def _merge_ids(net_union: UnionFind[str], net_ids: list[str]) -> None:
     if len(net_ids) < 2:
         return
     first_id = net_ids[0]
@@ -536,7 +537,6 @@ def _kicad_net_input_for_group(
     pins_by_local_net_id: dict[str, list[KiCadPinOccurrence]],
     sheet_names_by_scope: dict[ScopeId, str],
     bus_labels_by_id: dict[str, KiCadBusLabel],
-    schematic_version: int,
     net_index: int,
     root_id: str,
     group_local_nets: tuple[ResolvedLocalNetInput, ...],
@@ -547,7 +547,6 @@ def _kicad_net_input_for_group(
         pins_by_local_net_id=pins_by_local_net_id,
         sheet_names_by_scope=sheet_names_by_scope,
         bus_labels_by_id=bus_labels_by_id,
-        schematic_version=schematic_version,
         net_index=net_index,
     )
     return ResolvedNetInput(
@@ -578,7 +577,6 @@ def select_kicad_net_name(local_nets: Iterable[KiCadLocalNet]) -> str:
         pins_by_local_net_id={},
         sheet_names_by_scope={},
         bus_labels_by_id={},
-        schematic_version=20231120,
         net_index=0,
     )
     return decision.name
@@ -590,7 +588,6 @@ def _select_kicad_net_names(
     pins_by_local_net_id: dict[str, list[KiCadPinOccurrence]],
     sheet_names_by_scope: dict[ScopeId, str],
     bus_labels_by_id: dict[str, KiCadBusLabel],
-    schematic_version: int,
     net_index: int,
 ) -> _NameDecision:
     nets = tuple(local_nets)
@@ -603,11 +600,7 @@ def _select_kicad_net_names(
             names=tuple(_net_name(candidate) for candidate in candidates),
         )
 
-    pin_candidates = _pin_name_candidates(
-        nets,
-        pins_by_local_net_id,
-        schematic_version=schematic_version,
-    )
+    pin_candidates = _pin_name_candidates(nets, pins_by_local_net_id)
     if pin_candidates:
         candidates = _dedupe_candidates(pin_candidates)
         canonical = min(candidates, key=_candidate_sort_key)
@@ -766,8 +759,6 @@ def _bus_entry_member_net_name(
 def _pin_name_candidates(
     local_nets: Iterable[KiCadLocalNet],
     pins_by_local_net_id: dict[str, list[KiCadPinOccurrence]],
-    *,
-    schematic_version: int,
 ) -> list[_NameCandidate]:
     pins = [pin for local_net in local_nets for pin in pins_by_local_net_id.get(local_net.id, [])]
     if not pins:
@@ -779,7 +770,6 @@ def _pin_name_candidates(
             name=_pin_default_net_name(
                 pin,
                 force_unconnected=force_unconnected or pin.no_connect,
-                schematic_version=schematic_version,
             ),
             kind=NetNameKind.TOOL_AUTO,
             scope=None,
@@ -815,7 +805,7 @@ def _candidate(
 
 def _candidate_sort_key(candidate: _NameCandidate) -> tuple[int, int, int, int, str, int]:
     sheet_pin_rank = 0 if candidate.sheet_pin_direction.lower() == "output" else 1
-    pad_rank = 1 if "-Pad" in candidate.name or candidate.name.endswith("-SHIELD)") else 0
+    pad_rank = 1 if _is_pad_derived_auto_name(candidate) else 0
     return (
         -candidate.priority,
         pad_rank,
@@ -824,6 +814,19 @@ def _candidate_sort_key(candidate: _NameCandidate) -> tuple[int, int, int, int, 
         candidate.name,
         candidate.source_index,
     )
+
+
+def _is_pad_derived_auto_name(candidate: _NameCandidate) -> bool:
+    """Whether a candidate is a tool-generated pin net name that fell back to
+    the pad designator (``...-PadN)``) or a connector's generic ``SHIELD`` pin.
+
+    Such names carry no user intent, so KiCad prefers a sibling pin's real net
+    name over them. Only auto-generated pin candidates qualify — a user label
+    that merely contains ``-Pad`` is never demoted.
+    """
+    if candidate.kind is not NetNameKind.TOOL_AUTO:
+        return False
+    return "-Pad" in candidate.name or candidate.name.endswith("-SHIELD)")
 
 
 def _net_name(candidate: _NameCandidate) -> NetName:
@@ -874,19 +877,14 @@ def _escape_net_name(name: str) -> str:
     return _clean_name(name).replace("\r", "").replace("\n", "")
 
 
-def _pin_default_net_name(
-    pin: KiCadPinOccurrence,
-    *,
-    force_unconnected: bool,
-    schematic_version: int,
-) -> str:
+def _pin_default_net_name(pin: KiCadPinOccurrence, *, force_unconnected: bool) -> str:
     prefix = "unconnected-(" if force_unconnected else "Net-("
     ref = _escape_net_name(pin.component_reference)
     pin_name = _escape_net_name(pin.pin_net_name)
     pad = _escape_net_name(pin.pin_designator)
 
     if force_unconnected:
-        if _unconnected_uses_pin_name_with_pad(schematic_version) and pin_name and pin_name != pad:
+        if pin_name and pin_name != pad:
             return f"{prefix}{ref}{_unit_suffix(pin)}-{pin_name}-Pad{pad})"
         return f"{prefix}{ref}-Pad{pad})"
 
@@ -896,18 +894,16 @@ def _pin_default_net_name(
 
 
 def _unit_suffix(pin: KiCadPinOccurrence) -> str:
-    if not pin.component_has_multiple_units:
+    if not pin.component_has_multiple_units or pin.component_unit <= 0:
         return ""
-    if pin.component_unit <= 0:
-        return ""
-    if pin.component_unit <= 26:
-        return chr(ord("A") + pin.component_unit - 1)
-    return str(pin.component_unit)
-
-
-def _unconnected_uses_pin_name_with_pad(schematic_version: int) -> bool:
-    _ = schematic_version
-    return True
+    # KiCad labels multi-unit symbols with bijective base-26 suffixes:
+    # 1..26 -> A..Z, 27 -> AA, 53 -> BA, like spreadsheet column names.
+    suffix = ""
+    unit = pin.component_unit
+    while unit > 0:
+        unit, remainder = divmod(unit - 1, 26)
+        suffix = chr(ord("A") + remainder) + suffix
+    return suffix
 
 
 def _synthesized_name(local_nets: Iterable[KiCadLocalNet], net_index: int) -> str:
