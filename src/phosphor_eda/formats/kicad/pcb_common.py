@@ -103,19 +103,25 @@ def item_uuid(item: SExpNode) -> str:
     return sexp.val(uuid_node) if uuid_node else ""
 
 
-def item_locked(item: SExpNode) -> bool:
-    return any(isinstance(node, sexpdata.Symbol) and node.value() == "locked" for node in item)
-
-
-def item_hidden(item: SExpNode) -> bool:
+def item_flag(item: SExpNode, flag: str) -> bool:
+    """Read a KiCad boolean property in either the bare-symbol form (``locked``)
+    or the list form (``(locked yes)`` / ``(locked no)``)."""
     for node in item:
-        if isinstance(node, sexpdata.Symbol) and node.value() == "hide":
+        if isinstance(node, sexpdata.Symbol) and node.value() == flag:
             return True
-        if isinstance(node, list) and sexp.tag(node) == "hide":
+        if isinstance(node, list) and sexp.tag(node) == flag:
             if len(node) < 2:
                 return True
             return sexp_bool(node[1], default=True)
     return False
+
+
+def item_locked(item: SExpNode) -> bool:
+    return item_flag(item, "locked")
+
+
+def item_hidden(item: SExpNode) -> bool:
+    return item_flag(item, "hide")
 
 
 def sexp_bool(value: object, *, default: bool) -> bool:
