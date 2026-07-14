@@ -65,22 +65,6 @@ def robust_union(
         return normalize_geometry(unary_union(tuple(make_valid(g) for g in geometry_tuple)))
 
 
-def robust_difference(geometry: BaseGeometry, subtractive: BaseGeometry) -> BaseGeometry:
-    """Subtract geometry using the PCB topology grid."""
-    if geometry.is_empty or subtractive.is_empty:
-        return normalize_geometry(geometry)
-    normalized_geometry = normalize_geometry(geometry)
-    normalized_subtractive = normalize_geometry(subtractive)
-    return normalize_geometry(normalized_geometry.difference(normalized_subtractive))
-
-
-def robust_intersection(left: BaseGeometry, right: BaseGeometry) -> BaseGeometry:
-    """Intersect geometries using the PCB topology grid."""
-    if left.is_empty or right.is_empty:
-        return GeometryCollection()
-    return normalize_geometry(normalize_geometry(left).intersection(normalize_geometry(right)))
-
-
 def robust_polygonize(lines: Iterable[LineString]) -> Polygon | None:
     """Polygonize near-closed linework after snapping to the PCB topology grid."""
     line_tuple = tuple(line for line in lines if not line.is_empty)

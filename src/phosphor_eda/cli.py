@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Protocol
 
 import click
 
+from phosphor_eda.domain.variant_materializer import UnknownVariantError
 from phosphor_eda.query.format import (
     format_bus_detail_for,
     format_bus_table,
@@ -120,6 +121,8 @@ def _print_skill(ctx: click.Context, _param: click.Parameter, value: bool) -> No
 )
 def main(project_file: Path | None, variant_name: str | None, base_variant: bool) -> None:
     """Query electronic schematics and PCB layouts."""
+    if variant_name and base_variant:
+        raise click.ClickException("--variant and --base-variant are mutually exclusive.")
     del project_file
     del variant_name
     del base_variant
@@ -152,6 +155,8 @@ def _load_project_or_die() -> "Project":
         )
     except click.ClickException:
         raise
+    except UnknownVariantError as exc:
+        raise click.ClickException(str(exc)) from exc
     except Exception as exc:
         raise click.ClickException(f"failed to parse {project_file}: {exc}") from exc
 
@@ -191,6 +196,8 @@ def _load_render_project_or_die(source_path: Path | None) -> "Project":
             )
     except click.ClickException:
         raise
+    except UnknownVariantError as exc:
+        raise click.ClickException(str(exc)) from exc
     except Exception as exc:
         raise click.ClickException(f"failed to parse {source_path}: {exc}") from exc
 

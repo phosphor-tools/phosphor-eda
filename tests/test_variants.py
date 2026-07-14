@@ -9,7 +9,10 @@ import phosphor_eda.cli as cli_module
 from phosphor_eda.cli import main
 from phosphor_eda.domain.project import Project
 from phosphor_eda.domain.schematic import Component, DnpSource, Parameter, PartNumber, Schematic
-from phosphor_eda.domain.variant_materializer import materialize_project_variant
+from phosphor_eda.domain.variant_materializer import (
+    UnknownVariantError,
+    materialize_project_variant,
+)
 from phosphor_eda.domain.variants import (
     Variant,
     VariantField,
@@ -165,6 +168,25 @@ def test_cli_variant_option_is_passed_to_project_loader(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.output
     assert calls == [{"variant_name": "production", "base_variant": False}]
     assert "production" in result.output
+
+
+def test_cli_unknown_variant_is_not_reported_as_parse_failure(monkeypatch, tmp_path):
+    project_path = tmp_path / "demo.kicad_pro"
+    project_path.write_text("{}", encoding="utf-8")
+
+    def fake_load_project(_path: object, **_kwargs: object) -> Project:
+        raise UnknownVariantError("unknown variant 'nope'. Valid variants: production")
+
+    monkeypatch.setattr(cli_module, "load_project", fake_load_project)
+
+    result = CliRunner().invoke(
+        main,
+        ["-P", str(project_path), "--variant", "nope", "list", "variants"],
+    )
+
+    assert result.exit_code == 1
+    assert "unknown variant 'nope'" in result.output
+    assert "failed to parse" not in result.output
 
 
 def test_cli_rejects_variant_and_base_variant_together(tmp_path):

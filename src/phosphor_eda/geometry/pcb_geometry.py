@@ -13,6 +13,7 @@ from shapely import GeometryCollection, LineString, MultiPolygon, Point, Polygon
 from shapely.affinity import rotate
 from shapely.ops import unary_union
 
+from phosphor_eda.domain.arc_geometry import arc_to_polyline
 from phosphor_eda.domain.pcb import (
     PcbArc,
     PcbCircle,
@@ -484,118 +485,6 @@ def segment_geometry(seg: PcbLine) -> tuple[LineString, Polygon]:
 # ---------------------------------------------------------------------------
 # Arc geometry
 # ---------------------------------------------------------------------------
-
-
-def arc_center_from_three_points(
-    sx: float, sy: float, mx: float, my: float, ex: float, ey: float
-) -> tuple[float, float, float]:
-    """Compute arc center and radius from three points on the arc.
-
-    Uses the circumcircle determinant formula. Returns (cx, cy, radius).
-    For degenerate (collinear) input, returns the midpoint with a large radius.
-    """
-    ax, ay = sx, sy
-    bx, by = mx, my
-    cx_p, cy_p = ex, ey
-
-    d = 2.0 * (ax * (by - cy_p) + bx * (cy_p - ay) + cx_p * (ay - by))
-
-    if abs(d) < 1e-10:
-        # Degenerate — collinear points, treat as straight line
-        mid_x = (sx + ex) / 2
-        mid_y = (sy + ey) / 2
-        dist = math.hypot(ex - sx, ey - sy)
-        return mid_x, mid_y, dist / 2 if dist > 0 else 1.0
-
-    a_sq = ax * ax + ay * ay
-    b_sq = bx * bx + by * by
-    c_sq = cx_p * cx_p + cy_p * cy_p
-    ux = (a_sq * (by - cy_p) + b_sq * (cy_p - ay) + c_sq * (ay - by)) / d
-    uy = (a_sq * (cx_p - bx) + b_sq * (ax - cx_p) + c_sq * (bx - ax)) / d
-
-    radius = math.hypot(ax - ux, ay - uy)
-    return ux, uy, radius
-
-
-def arc_sweep_angle(
-    sx: float,
-    sy: float,
-    mx: float,
-    my: float,
-    ex: float,
-    ey: float,
-    cx: float,
-    cy: float,
-) -> float:
-    """Compute signed sweep angle in degrees from start to end through mid.
-
-    Positive = counter-clockwise, negative = clockwise.
-    """
-    start_angle = math.atan2(sy - cy, sx - cx)
-    mid_angle = math.atan2(my - cy, mx - cx)
-    end_angle = math.atan2(ey - cy, ex - cx)
-
-    # Determine direction by checking if mid is between start and end CCW
-    def _normalize(a: float) -> float:
-        while a < 0:
-            a += 2 * math.pi
-        while a >= 2 * math.pi:
-            a -= 2 * math.pi
-        return a
-
-    s = _normalize(start_angle)
-    m = _normalize(mid_angle)
-    e = _normalize(end_angle)
-
-    # Check if going CCW from start passes through mid before reaching end
-    def _ccw_between(start: float, mid: float, end: float) -> bool:
-        if start <= end:
-            return start <= mid <= end
-        # Wraps around 0
-        return mid >= start or mid <= end
-
-    if _ccw_between(s, m, e):
-        # CCW direction
-        sweep = e - s
-        if sweep <= 0:
-            sweep += 2 * math.pi
-    else:
-        # CW direction
-        sweep = e - s
-        if sweep >= 0:
-            sweep -= 2 * math.pi
-
-    return math.degrees(sweep)
-
-
-def arc_to_polyline(
-    sx: float,
-    sy: float,
-    mx: float,
-    my: float,
-    ex: float,
-    ey: float,
-    num_points: int = 64,
-) -> list[tuple[float, float]]:
-    """Linearize an arc (defined by 3 points) into a polyline.
-
-    Returns a list of (x, y) coordinate pairs approximating the arc.
-    """
-    cx, cy, radius = arc_center_from_three_points(sx, sy, mx, my, ex, ey)
-    sweep_deg = arc_sweep_angle(sx, sy, mx, my, ex, ey, cx, cy)
-    sweep_rad = math.radians(sweep_deg)
-
-    start_angle = math.atan2(sy - cy, sx - cx)
-
-    points: list[tuple[float, float]] = []
-    for i in range(num_points + 1):
-        t = i / num_points
-        angle = start_angle + t * sweep_rad
-        x = cx + radius * math.cos(angle)
-        y = cy + radius * math.sin(angle)
-        points.append((x, y))
-
-    return points
 
 
 def trace_arc_geometry(arc: PcbArc) -> tuple[LineString, Polygon]:

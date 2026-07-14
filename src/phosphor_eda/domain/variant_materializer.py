@@ -22,6 +22,14 @@ if TYPE_CHECKING:
     from phosphor_eda.domain.variants import Variant, VariantTarget
 
 
+class UnknownVariantError(ValueError):
+    """Raised when a requested variant name is not defined by the project.
+
+    Distinct from a parse failure: the project loaded fine, the variant simply
+    does not exist, so callers can surface it without a "failed to parse" prefix.
+    """
+
+
 def materialize_project_variant(
     project: Project,
     *,
@@ -29,9 +37,6 @@ def materialize_project_variant(
     base_variant: bool = False,
 ) -> None:
     """Attach variant overrides and apply the selected variant in-place."""
-    if variant_name and base_variant:
-        raise ValueError("--variant and --base-variant are mutually exclusive.")
-
     if base_variant:
         selected = ""
     elif variant_name is not None:
@@ -53,7 +58,7 @@ def _variant_by_name(project: Project, name: str) -> Variant:
         if variant.name == name:
             return variant
     valid = ", ".join(variant.name for variant in project.variants) or "none"
-    raise ValueError(f"unknown variant '{name}'. Valid variants: {valid}")
+    raise UnknownVariantError(f"unknown variant '{name}'. Valid variants: {valid}")
 
 
 def _attach_and_apply_variant(

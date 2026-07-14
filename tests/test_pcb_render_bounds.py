@@ -81,3 +81,36 @@ def test_extend_shape_bounds_stroked_circle_reaches_outer_radius() -> None:
 
     assert min(xs) == pytest.approx(-5.5)
     assert max(xs) == pytest.approx(5.5)
+
+
+def test_extend_shape_bounds_thick_line_grows_by_half_width() -> None:
+    xs: list[float] = []
+    ys: list[float] = []
+
+    extend_shape_bounds(xs, ys, PcbLine(0.0, 0.0, 10.0, 0.0, 2.0))
+
+    # Round-capped stroke pads half the width (1.0) on every side, past the ends.
+    assert (min(xs), min(ys), max(xs), max(ys)) == pytest.approx((-1.0, -1.0, 11.0, 1.0))
+
+
+def test_extend_shape_bounds_arc_over_180_exceeds_three_point_hull() -> None:
+    # 270-degree unit-circle arc: start (1,0) -> mid (-.707,.707) -> end (0,-1).
+    # It crosses the +y and -x axes, which lie outside the three-point hull.
+    xs: list[float] = []
+    ys: list[float] = []
+
+    extend_shape_bounds(xs, ys, PcbArc(1.0, 0.0, -0.70710678, 0.70710678, 0.0, -1.0, 0.0))
+
+    assert (min(xs), min(ys), max(xs), max(ys)) == pytest.approx((-1.0, -1.0, 1.0, 1.0), abs=1e-6)
+    # A three-point bbox would stop at x=-0.707 and y=0.707.
+    assert min(xs) < -0.9
+    assert max(ys) > 0.9
+
+
+def test_extend_shape_bounds_thick_arc_grows_by_half_width() -> None:
+    xs: list[float] = []
+    ys: list[float] = []
+
+    extend_shape_bounds(xs, ys, PcbArc(1.0, 0.0, -0.70710678, 0.70710678, 0.0, -1.0, 0.4))
+
+    assert (min(xs), min(ys), max(xs), max(ys)) == pytest.approx((-1.2, -1.2, 1.2, 1.2), abs=1e-6)

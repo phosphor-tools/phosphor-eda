@@ -153,7 +153,8 @@ def test_pcb_domain_has_typed_collections_without_generic_geometry_api() -> None
     assert board.drills == [drill, via_drill]
     assert drill.owner is pad
     assert via_drill.owner is via
-    assert board.bbox() == (-1.0, -2.0, 4.0, 6.0)
+    # The edge-cut line's 0.1 stroke widens the box by half its width per side.
+    assert board.bbox() == pytest.approx((-1.05, -2.05, 4.05, 6.05))
 
 
 def test_pcb_bbox_falls_back_to_pad_extents_when_profile_is_absent() -> None:
@@ -182,6 +183,36 @@ def test_pcb_bbox_falls_back_to_pad_extents_when_profile_is_absent() -> None:
     )
 
     assert board.bbox() == (4.0, 5.0, 6.0, 9.0)
+
+
+def test_pcb_bbox_pad_fallback_accounts_for_pad_rotation() -> None:
+    layer = PcbLayer("F.Cu", (LayerRole.COPPER, LayerRole.FRONT))
+    # A 2x4 pad rotated 90 degrees presents a 4x2 footprint to the bbox.
+    pad = PcbPad(
+        id="pad:1",
+        number="1",
+        x=0.0,
+        y=0.0,
+        stack=PadStack.simple("rect", 2.0, 4.0),
+        pad_type=PcbPadType.SMD,
+        layers=(layer,),
+        rotation=90.0,
+    )
+    board = Board(
+        name="rotated-pad",
+        layers=[layer],
+        nets={},
+        footprints=[],
+        pads=[pad],
+        vias=[],
+        drills=[],
+        conductors=[],
+        artwork=[],
+        pours=[],
+        keepouts=[],
+    )
+
+    assert board.bbox() == pytest.approx((-2.0, -1.0, 2.0, 1.0))
 
 
 def test_pcb_bbox_is_none_for_empty_board() -> None:

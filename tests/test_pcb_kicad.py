@@ -561,7 +561,9 @@ def test_board_profile_comes_from_edge_cuts(board: Board) -> None:
     edge = board.layer_for("Edge.Cuts")
     assert edge is not None
 
-    assert board.bbox() == (91.0, 55.0, 121.0, 75.0)
+    # Edge-cut centerline spans (91,55)-(121,75); its 0.1 stroke pads the box
+    # by half its width per side.
+    assert board.bbox() == pytest.approx((90.95, 54.95, 121.05, 75.05))
     assert all(element.layer is edge for element in board.board_profile.elements)
 
 

@@ -35,7 +35,9 @@ from phosphor_eda.render.settings import (
     MAX_CUSTOM_CSS_LENGTH,
     CliOverrides,
     HighlightSpec,
+    LayerSelectionRule,
     RenderSettings,
+    SourceSelection,
     load_render_settings_file,
     load_render_settings_json,
     resolve_effective_settings,
@@ -140,9 +142,10 @@ def test_rotation_90_rotates_view_and_swaps_aspect() -> None:
     assert match is not None
     width_px, height_px = int(match.group(1)), int(match.group(2))
     vb = [float(value) for value in match.group(3).split()]
-    # 12x10 board rotated 90° is 10 wide and 12 tall, plus the 2mm padding.
-    assert vb[2] == pytest.approx(14.0)
-    assert vb[3] == pytest.approx(16.0)
+    # 12x10 board (0.1 edge stroke -> 12.1x10.1 painted) rotated 90° is 10.1
+    # wide and 12.1 tall, plus the 2mm padding per side.
+    assert vb[2] == pytest.approx(14.1)
+    assert vb[3] == pytest.approx(16.1)
     assert height_px == int(width_px * vb[3] / vb[2])
     # Rotation turns about the board center (6, 5).
     assert '<g class="board-view" transform="rotate(90 6.0000 5.0000)"' in svg
@@ -822,6 +825,14 @@ def test_render_settings_reject_oversized_custom_css() -> None:
         load_render_settings_json(json.dumps({"custom_css": oversized}))
 
 
+def test_render_settings_file_read_error_surfaces_real_cause(tmp_path: Path) -> None:
+    # A directory (not a missing file) raises a non-FileNotFound OSError; the
+    # error must report the real cause, not a misleading "file not found".
+    with pytest.raises(ValueError, match="Could not read") as excinfo:
+        load_render_settings_file(tmp_path)
+    assert "not found" not in str(excinfo.value)
+
+
 def test_render_settings_schema_advertises_custom_css_max_length() -> None:
     from phosphor_eda.render.api import render_settings_schema
 
@@ -857,6 +868,35 @@ def test_effective_settings_reject_oversized_combined_custom_css() -> None:
     overrides = CliOverrides(custom_css="b")
     with pytest.raises(ValueError, match="custom_css must be at most"):
         resolve_effective_settings(base, overrides)
+
+
+def test_render_settings_replace_does_not_share_mutable_state() -> None:
+    from dataclasses import replace
+
+    base = RenderSettings(
+        tokens={"eda.copper.front.fill": "#111111"},
+        highlights=[HighlightSpec(net="VCC")],
+        annotations={"pointers": [{"target": "U1.1", "label": "clk"}]},
+    )
+    derived = replace(base, side="back")
+
+    # Mutating the derived instance must not reach back into the base preset.
+    derived.tokens["eda.copper.front.fill"] = "#222222"
+    derived.highlights.append(HighlightSpec(net="GND"))
+    derived.annotations["pointers"] = []
+
+    assert base.tokens == {"eda.copper.front.fill": "#111111"}
+    assert base.highlights == [HighlightSpec(net="VCC")]
+    assert base.annotations == {"pointers": [{"target": "U1.1", "label": "clk"}]}
+
+
+def test_resolve_effective_settings_does_not_share_source_with_base() -> None:
+    base = RenderSettings(source=SourceSelection(exclude_components=("R*",)))
+    resolved = resolve_effective_settings(base, CliOverrides(side="front"))
+
+    resolved.source.layers.append(LayerSelectionRule())
+
+    assert base.source.layers == []
 
 
 # Documents the imperative parser rejects; the JSON schema must reject the

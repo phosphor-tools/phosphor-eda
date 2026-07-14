@@ -8,10 +8,13 @@ pours, keepouts, and the physical board profile.
 
 from __future__ import annotations
 
+import math
 import weakref
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING
+
+from phosphor_eda.domain.arc_geometry import arc_bounds
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -920,8 +923,9 @@ class Board:
                 extend_shape_bounds(xs, ys, element.data)
         if not xs:
             for pad in self.pads:
-                xs.extend([pad.x - pad.width / 2, pad.x + pad.width / 2])
-                ys.extend([pad.y - pad.height / 2, pad.y + pad.height / 2])
+                _extend_rotated_rect_bounds(
+                    xs, ys, pad.x, pad.y, pad.width, pad.height, pad.rotation
+                )
         if not xs:
             return None
         return (min(xs), min(ys), max(xs), max(ys))
@@ -935,14 +939,50 @@ class Board:
         return matches[0] if matches else None
 
 
+def _extend_rotated_rect_bounds(
+    xs: list[float],
+    ys: list[float],
+    cx: float,
+    cy: float,
+    width: float,
+    height: float,
+    rotation: float,
+) -> None:
+    """Extend ``xs``/``ys`` with a ``width``x``height`` rect about (cx, cy).
+
+    ``rotation`` follows the pad convention (clockwise degrees in the y-down
+    board frame); the four rotated corners bound the painted extent.
+    """
+    half_w = width / 2.0
+    half_h = height / 2.0
+    angle = math.radians(-rotation)
+    cos_a = math.cos(angle)
+    sin_a = math.sin(angle)
+    for dx, dy in ((-half_w, -half_h), (half_w, -half_h), (half_w, half_h), (-half_w, half_h)):
+        xs.append(cx + dx * cos_a - dy * sin_a)
+        ys.append(cy + dx * sin_a + dy * cos_a)
+
+
 def extend_shape_bounds(xs: list[float], ys: list[float], shape: object) -> None:
-    """Extend ``xs``/``ys`` with the axis-aligned extents of a PCB shape payload."""
+    """Extend ``xs``/``ys`` with the painted axis-aligned extents of a PCB shape.
+
+    Stroked lines and arcs paint half their width beyond the centerline, and an
+    arc reaches axis extremes beyond its three defining points; both are
+    included so a bounding box covers the real painted area.
+    """
     if isinstance(shape, PcbLine):
-        xs.extend([shape.start_x, shape.end_x])
-        ys.extend([shape.start_y, shape.end_y])
+        half = shape.width / 2.0
+        xs.extend([shape.start_x - half, shape.start_x + half])
+        xs.extend([shape.end_x - half, shape.end_x + half])
+        ys.extend([shape.start_y - half, shape.start_y + half])
+        ys.extend([shape.end_y - half, shape.end_y + half])
     elif isinstance(shape, PcbArc):
-        xs.extend([shape.start_x, shape.mid_x, shape.end_x])
-        ys.extend([shape.start_y, shape.mid_y, shape.end_y])
+        min_x, min_y, max_x, max_y = arc_bounds(
+            shape.start_x, shape.start_y, shape.mid_x, shape.mid_y, shape.end_x, shape.end_y
+        )
+        half = shape.width / 2.0
+        xs.extend([min_x - half, max_x + half])
+        ys.extend([min_y - half, max_y + half])
     elif isinstance(shape, PcbCircle):
         # radius is the stroke centerline; an unfilled ring paints out to
         # radius + width/2.
