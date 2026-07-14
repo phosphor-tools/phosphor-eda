@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from phosphor_eda.domain.arc_geometry import arc_to_polyline
 from phosphor_eda.domain.pcb import (
     PadStack,
     PcbDrillPlating,
@@ -14,11 +15,11 @@ from phosphor_eda.domain.pcb import (
     PcbPathSegmentKind,
     PcbPolygon,
 )
+from phosphor_eda.formats.allegro.constants import PAD_COMPONENT_SHAPES
 from phosphor_eda.formats.allegro.coords import BoardFrame
 from phosphor_eda.formats.allegro.diagnostics import build_diagnostic
 from phosphor_eda.formats.allegro.graphics import closed_path_from_segment_chain
 from phosphor_eda.formats.allegro.records import AllegroPadstackComponent, payload_int
-from phosphor_eda.geometry.pcb_geometry import arc_to_polyline
 
 if TYPE_CHECKING:
     from phosphor_eda.domain.pcb import PcbClosedPath
@@ -41,18 +42,6 @@ _PADSTACK_TYPE_SLOT = 0x30
 _PADSTACK_TYPE_NPTH = 0x80
 
 _PAD_COMPONENT_SLOT = 2
-
-_SHAPES = {
-    0x02: "circle",
-    0x03: "octagon",
-    0x05: "rect",
-    0x06: "rect",
-    0x07: "diamond",
-    0x0B: "oval",
-    0x0C: "oval",
-    0x1B: "roundrect",
-    0x1C: "rect",
-}
 
 
 @dataclass(frozen=True)
@@ -266,10 +255,10 @@ def place_custom_shapes(
 ) -> tuple[PcbPolygon, ...]:
     """Rotate and translate a padstack's pad-local flash polygons onto the board.
 
-    Custom pad shapes are stored in absolute board coordinates (matching the
-    KiCad convention), so each placed pad bakes its instance rotation and center
-    into the shared padstack geometry. The ``-rotation`` sign matches
-    ``transform_point`` and the renderer's y-down pad rotation.
+    The padstack stores flash geometry in pad-local millimeters centered on the
+    pad origin; each placed pad bakes its instance rotation and center into that
+    shared geometry to produce absolute board coordinates. The ``-rotation`` sign
+    matches ``transform_point`` and the renderer's y-down pad rotation.
     """
     if not padstack.custom_shapes:
         return ()
@@ -353,7 +342,7 @@ def _first_copper_component(
 def _component_shape(component: AllegroPadstackComponent | None) -> str:
     if component is None:
         return "circle"
-    return _SHAPES.get(component.component_type, "custom")
+    return PAD_COMPONENT_SHAPES.get(component.component_type, "custom")
 
 
 def _corner_radius_ratio(component: AllegroPadstackComponent | None) -> float:

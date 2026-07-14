@@ -420,3 +420,33 @@ def _copy_breakout_tree(tmp_path: Path) -> Path:
     copied_root = tmp_path / "opencellular-breakout"
     copytree(BREAKOUT_FIXTURE_ROOT, copied_root)
     return copied_root / BREAKOUT_BOARD_RELATIVE
+
+
+def test_sidecar_discovery_emits_diagnostic_when_depth_cap_is_hit(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    monkeypatch.setattr(allegro_sidecars, "_MAX_SIDECAR_SCAN_DEPTH", 2)
+    board_path = tmp_path / "board.brd"
+    board_path.write_bytes(b"not a real board")
+    deep_dir = tmp_path / "a" / "b" / "c"
+    deep_dir.mkdir(parents=True)
+    (deep_dir / "deep.pad").write_bytes(b"unreachable")
+
+    result = allegro_sidecars.discover_allegro_sidecars(board_path)
+
+    assert "sidecar-scan-depth-cap" in {diagnostic.code for diagnostic in result.diagnostics}
+    assert result.padstacks == ()
+
+
+def test_sidecar_discovery_emits_diagnostic_when_file_cap_is_hit(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    monkeypatch.setattr(allegro_sidecars, "_MAX_SIDECAR_SCAN_FILES", 3)
+    board_path = tmp_path / "board.brd"
+    board_path.write_bytes(b"not a real board")
+    for index in range(6):
+        (tmp_path / f"noise-{index}.txt").write_text("x")
+
+    result = allegro_sidecars.discover_allegro_sidecars(board_path)
+
+    assert "sidecar-scan-file-cap" in {diagnostic.code for diagnostic in result.diagnostics}

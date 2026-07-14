@@ -62,9 +62,13 @@ def extract_allegro_copper(
     layer_map: AllegroLayerMap,
     graph: AllegroObjectGraph | None = None,
 ) -> AllegroCopper:
-    graph = graph or build_allegro_object_graph(record_set)
+    # A caller that shares one object graph across extractors owns its
+    # diagnostics and counts them once; only seed them here when we built the
+    # graph ourselves, so a standalone call stays self-contained.
+    owns_graph = graph is None
+    graph = build_allegro_object_graph(record_set) if graph is None else graph
     frame = board_frame(record_set.header)
-    diagnostics: list[AllegroRecordDiagnostic] = list(graph.diagnostics)
+    diagnostics: list[AllegroRecordDiagnostic] = list(graph.diagnostics) if owns_graph else []
     net_items = _net_assigned_items(record_set, graph, diagnostics)
     shape_pours, shape_fills = _shape_pours_and_fills(
         record_set,
@@ -134,6 +138,7 @@ def _track_conductors(
                 frame=frame,
                 layer=layer,
                 net_key=net_key,
+                diagnostics=diagnostics,
             )
             if conductor is not None:
                 conductors.append(conductor)
@@ -418,6 +423,7 @@ def _track_conductor_primitive(
     frame: BoardFrame | None,
     layer: PcbLayer,
     net_key: int | None,
+    diagnostics: list[AllegroRecordDiagnostic],
 ) -> AllegroConductorPrimitive | None:
     if frame is None:
         return None
@@ -427,6 +433,7 @@ def _track_conductor_primitive(
         frame=frame,
         layer=layer,
         roles=(AllegroPrimitiveRole.ARTWORK,),
+        diagnostics=diagnostics,
     )
     if graphic is None:
         return None
