@@ -90,3 +90,8 @@ The repositories under `tests/upstream/` are external fixture projects managed a
 
 phosphor-eda is licensed under the [Mozilla Public License 2.0](LICENSE). Third-party fixtures
 retain their own licenses.
+
+The package bundles the [Inter](https://github.com/rsms/inter) font
+(`Inter-Regular.ttf`), which is licensed under the SIL Open Font License 1.1; its
+license text ships alongside the font as
+`src/phosphor_eda/geometry/fonts/OFL.txt`.

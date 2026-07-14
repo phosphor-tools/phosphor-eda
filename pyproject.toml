@@ -40,7 +40,7 @@ dev = [
 ]
 
 [tool.hatch.build]
-exclude = ["/tests/upstream"]
+exclude = ["/tests"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/phosphor_eda"]
